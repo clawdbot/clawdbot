@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureProfileForEmail, getUserProfileListItem } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
@@ -20,7 +22,7 @@ function createPendingProfileClient() {
 
 async function dispatchPendingProfileMethod(params: {
   client: NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
-  handler: GatewayRequestHandler;
+  handler?: GatewayRequestHandler;
   method: string;
   requestParams?: unknown;
   methodRegistry?: ReturnType<typeof createGatewayMethodRegistry>;
@@ -42,7 +44,9 @@ async function dispatchPendingProfileMethod(params: {
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
     ...(params.methodRegistry
       ? { methodRegistry: params.methodRegistry }
-      : { extraHandlers: { [params.method]: params.handler } }),
+      : params.handler
+        ? { extraHandlers: { [params.method]: params.handler } }
+        : {}),
   });
   return respond;
 }
@@ -269,5 +273,54 @@ describe("Gateway pending-profile authorization", () => {
       expect(respond, method).toHaveBeenCalledWith(true, { ok: true });
       expect(client.authenticatedGitHubIdentitySync, method).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("Gateway self-profile scope", () => {
+  it("allows read-only users.self without anonymous access or profile writes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const email = "reader@example.com";
+      const profile = ensureProfileForEmail(email);
+      const before = getUserProfileListItem(profile.id);
+      const reader = createPendingProfileClient();
+      reader.authenticatedUserId = email;
+      reader.connect.scopes = ["operator.read"];
+      const self = await dispatchPendingProfileMethod({ client: reader, method: "users.self" });
+
+      const anonymous = createPendingProfileClient();
+      delete anonymous.authenticatedUserId;
+      anonymous.connect.scopes = ["operator.read"];
+      const deniedRead = await dispatchPendingProfileMethod({
+        client: anonymous,
+        method: "users.self",
+      });
+      const deniedWrite = await dispatchPendingProfileMethod({
+        client: reader,
+        method: "users.setDisplayName",
+        requestParams: { profileId: profile.id, displayName: "Not permitted" },
+      });
+
+      expect(deniedRead).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
+      expect(deniedWrite).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.write",
+            requiredScopes: ["operator.write"],
+          },
+        }),
+      );
+      expect(getUserProfileListItem(profile.id)).toEqual(before);
+      expect(self).toHaveBeenCalledWith(true, {
+        profile: expect.objectContaining({ id: profile.id, emails: [email] }),
+      });
+    });
   });
 });

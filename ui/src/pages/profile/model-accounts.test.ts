@@ -52,11 +52,13 @@ async function mountAccounts(
     scopes = ["operator.write"],
     accounts: initialAccounts = [],
     inventoryPages,
+    gatewayUrl,
   }: {
     expiresInMs?: number;
     scopes?: string[];
     accounts?: UserModelAccount[];
     inventoryPages?: UsersListModelAccountsResult[];
+    gatewayUrl?: string;
   } = {},
 ) {
   let starts = 0;
@@ -117,8 +119,12 @@ async function mountAccounts(
     }
     return result;
   });
+  const client = createTestGatewayClient(request);
+  if (gatewayUrl) {
+    vi.spyOn(client, "gatewayUrl", "get").mockReturnValue(gatewayUrl);
+  }
   let snapshot = {
-    client: createTestGatewayClient(request),
+    client,
     phase: "connected",
     hello: { auth: { role: "operator", scopes } },
     selfUser: { id: "profile-1", name: "Ada" },
@@ -333,6 +339,9 @@ it("polls one authorization at a time and uses its recorded outcome", async () =
   await vi.advanceTimersByTimeAsync(2_000);
   await harness.accounts.updateComplete;
   expect(harness.accounts.textContent).toContain(connectedAccount.label);
+  expect(harness.accounts.querySelector(".model-accounts-notice")?.textContent).toContain(
+    "Account added.",
+  );
   expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(2);
@@ -460,19 +469,39 @@ it("stops at the operation deadline without pretending an unknown attempt expire
   ).toHaveLength(2);
 });
 
-it("lets writers save a masked token without exposing manual account links", async () => {
-  const harness = await mountAccounts(async (method, params) => {
-    expect(method).toBe("users.authConnect.token");
-    expect(params).toEqual({ profileId: "profile-1", provider: "anthropic", token: "test-token" });
-    return {
-      authProfileId: "anthropic:personal",
-      links: [{ provider: "anthropic", authProfileId: "anthropic:personal", updatedAt: 1 }],
-    };
-  });
+it("shows personal sign-in context before writers enter a masked token", async () => {
+  const harness = await mountAccounts(
+    async (method, params) => {
+      expect(method).toBe("users.authConnect.token");
+      expect(params).toEqual({
+        profileId: "profile-1",
+        provider: "anthropic",
+        token: "test-token",
+      });
+      return {
+        authProfileId: "anthropic:personal",
+        links: [{ provider: "anthropic", authProfileId: "anthropic:personal", updatedAt: 1 }],
+      };
+    },
+    {
+      gatewayUrl:
+        "wss://synthetic-user:synthetic-password@test.invalid/control?token=synthetic-query#synthetic-fragment",
+    },
+  );
   expect(harness.accounts.querySelector(".profile-auth-link-input")).toBeNull();
+  expect(harness.accounts.textContent).toContain("wss://test.invalid/control");
+  expect(harness.accounts.innerHTML).not.toContain("synthetic-");
+  expect(harness.accounts.textContent).toContain("Ada");
+  expect(harness.accounts.textContent).toContain("Personal");
+  expect(button(harness.accounts, ".profile-auth-connect-claude-submit").textContent?.trim()).toBe(
+    "Sign in",
+  );
   const token = await input(harness.accounts, ".profile-auth-connect-claude", "test-token");
   expect(token.type).toBe("password");
   button(harness.accounts, ".profile-auth-connect-claude-submit").click();
   await vi.waitFor(() => expect(harness.accounts.textContent).toContain(claudeAccount.label));
+  expect(harness.accounts.querySelector(".model-accounts-notice")?.textContent).toContain(
+    "Account added.",
+  );
   expect(token.value).toBe("");
 });

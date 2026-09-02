@@ -26,7 +26,7 @@ describe.each([
       });
 
       const reply = await engine.handle(
-        source === "command" ? "model accounts" : "Help me connect my personal account",
+        source === "command" ? "model accounts" : "Help me sign in to my personal account",
       );
 
       expect(reply.action).toBe("none");
@@ -37,7 +37,7 @@ describe.each([
       expect(reply.text).toContain(
         surface === "gateway"
           ? "Settings → Profile → Model accounts"
-          : "openclaw models accounts connect <provider>",
+          : "openclaw models accounts login <provider>",
       );
       expect(runAgentTurn).toHaveBeenCalledTimes(source === "command" ? 0 : 1);
       expect(executeOperation).not.toHaveBeenCalled();

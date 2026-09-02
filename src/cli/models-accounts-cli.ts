@@ -68,13 +68,13 @@ export function registerModelsAccountsCli(models: Command): void {
 
   addAccountOptions(
     accounts
-      .command("connect <provider>")
+      .command("login <provider>")
       .description(
-        "Connect openai (ChatGPT) or anthropic (Claude setup-token) using a secure prompt",
+        "Sign in to openai (ChatGPT) or anthropic (Claude setup-token) using a secure prompt",
       ),
   ).action(async (provider: string, _opts: unknown, command: Command) => {
     await run(command, (commands, runtime, options) =>
-      commands.modelsAccountsConnectCommand({ ...options, provider }, runtime.defaultRuntime),
+      commands.modelsAccountsLoginCommand({ ...options, provider }, runtime.defaultRuntime),
     );
   });
 

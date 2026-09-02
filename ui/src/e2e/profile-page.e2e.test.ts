@@ -511,7 +511,7 @@ suite.define(() => {
     );
   });
 
-  it("cancels and completes ChatGPT connections through their recorded gateway status", async () => {
+  it("shows personal sign-in context and cancels or completes ChatGPT through recorded gateway status", async () => {
     await suite.withPage(
       {
         ...(captureUiProof
@@ -567,7 +567,7 @@ suite.define(() => {
           },
           "users.authConnect.status": { status: "pending" },
         });
-        // Anchor on the always-rendered manual-link row: the Connect button swaps
+        // Anchor on the always-rendered manual-link row: the Sign in button swaps
         // for the flow UI once clicked, so it cannot identify the section.
         const section = page.locator("section.settings-section", {
           has: page.locator(".profile-auth-link-input"),
@@ -575,6 +575,15 @@ suite.define(() => {
         const selectedAccount = section
           .locator(".settings-row")
           .filter({ has: page.locator(".profile-auth-link-unlink") });
+        const contextRow = (title: string) =>
+          section.locator(".settings-row").filter({
+            has: page.locator(".settings-row__title", { hasText: new RegExp(`^${title}$`, "u") }),
+          });
+
+        await expect(contextRow("Gateway")).toContainText(new URL(suite.server.baseUrl).host);
+        await expect(contextRow("Person")).toContainText(testProfile.displayName);
+        await expect(contextRow("Scope")).toContainText("Personal");
+        await expect(section.locator(".profile-auth-connect-start")).toHaveText("Sign in");
 
         await expect(selectedAccount.locator(".model-accounts__id").textContent()).resolves.toBe(
           personal.label,
@@ -593,6 +602,7 @@ suite.define(() => {
         await section.locator(".profile-auth-connect-start").click();
         const openSignIn = section.locator(".profile-auth-connect-open");
         await openSignIn.waitFor({ timeout: 10_000 });
+        await expect(contextRow("Person")).toContainText(testProfile.displayName);
         await expect(openSignIn.getAttribute("href")).resolves.toBe(
           "https://auth.openai.com/oauth/authorize?state=demo-1",
         );
@@ -648,7 +658,7 @@ suite.define(() => {
         });
         await expect(section.locator(".model-accounts-flow")).toHaveCount(0);
         await expect(selectedAccount.locator(".model-accounts__id")).toHaveText(connected.label);
-        await expect(section.locator('[role="status"]')).toContainText("Model account connected.");
+        await expect(section.locator('[role="status"]')).toContainText("Account added.");
         await expect(section.locator(".profile-auth-connect-start")).toBeEnabled();
         const polls = await gateway.getRequests("users.authConnect.status");
         expect(polls.at(-1)?.params).toEqual({ profileId: testProfile.id, connectId: "connect-2" });

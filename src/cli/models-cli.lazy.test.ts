@@ -10,10 +10,11 @@ describe("models cli lazy runtime boundary", () => {
   afterEach(() => {
     vi.doUnmock("./models-cli.runtime.js");
     vi.doUnmock("../commands/models/list.status-command.js");
+    vi.doUnmock("../commands/models/accounts.js");
     vi.resetModules();
   });
 
-  it.each([{ args: [] }, { args: ["accounts"] }, { args: ["accounts", "connect"] }])(
+  it.each([{ args: [] }, { args: ["accounts"] }, { args: ["accounts", "login"] }])(
     "renders $args help without importing the models runtime",
     async ({ args }) => {
       const runtimeLoaded = vi.fn();
@@ -29,10 +30,11 @@ describe("models cli lazy runtime boundary", () => {
 
       const { registerModelsCli } = await import("./models-cli.js");
       const program = new Command();
+      const writeOut = vi.fn();
       program.exitOverride();
       program.configureOutput({
         writeErr: () => {},
-        writeOut: () => {},
+        writeOut,
       });
       registerModelsCli(program);
 
@@ -42,6 +44,11 @@ describe("models cli lazy runtime boundary", () => {
         exitCode: 0,
       });
       expect(runtimeLoaded).not.toHaveBeenCalled();
+      if (args.length === 1 && args[0] === "accounts") {
+        const help = writeOut.mock.calls.map(([text]) => String(text)).join("");
+        expect(help).toContain("login");
+        expect(help).not.toContain("connect <provider>");
+      }
     },
   );
 
@@ -79,5 +86,35 @@ describe("models cli lazy runtime boundary", () => {
       expect.objectContaining({ agent: "poe", json: true }),
       defaultRuntime,
     );
+  });
+
+  it("dispatches personal login and rejects the unshipped connect spelling", async () => {
+    const defaultRuntime = {};
+    const modelsAccountsLoginCommand = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./models-cli.runtime.js", () => ({
+      defaultRuntime,
+      resolveModelAgentOption: () => undefined,
+      runModelsCommand: async (action: () => Promise<void>) => await action(),
+    }));
+    vi.doMock("../commands/models/accounts.js", () => ({ modelsAccountsLoginCommand }));
+
+    const { registerModelsCli } = await import("./models-cli.js");
+    const program = new Command()
+      .enablePositionalOptions()
+      .exitOverride()
+      .configureOutput({ writeErr: () => {}, writeOut: () => {} });
+    registerModelsCli(program);
+
+    await program.parseAsync(
+      ["models", "accounts", "login", "openai", "--url", "wss://personal.example", "--json"],
+      { from: "user" },
+    );
+    expect(modelsAccountsLoginCommand).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ provider: "openai", url: "wss://personal.example", json: true }),
+      defaultRuntime,
+    );
+    await expect(
+      program.parseAsync(["models", "accounts", "connect", "openai"], { from: "user" }),
+    ).rejects.toMatchObject({ exitCode: 1 });
   });
 });

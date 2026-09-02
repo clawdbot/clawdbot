@@ -6,12 +6,11 @@ import type {
   UsersAuthConnectStatusResult,
   UsersListModelAccountsResult,
   UsersSelectModelAccountResult,
-  UsersSelfResult,
   UsersUnlinkAuthProfileResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
-import { GatewayClientRequestError, type GatewayClient } from "../../gateway/client.js";
+import type { GatewayClient } from "../../gateway/client.js";
 import { openUrl } from "../../infra/browser-open.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -26,22 +25,6 @@ export type ModelsAccountsOptions = ModelsAccountsGatewayOptions & { json?: bool
 
 const SESSION_DEFAULT_NOTE =
   "This default applies to new sessions. Existing sessions keep their selected account.";
-
-function personalAccountAccessError(error: unknown): never {
-  if (error instanceof GatewayClientRequestError && error.gatewayCode === "FORBIDDEN") {
-    throw new Error(
-      "Personal model accounts require a signed-in person with access to this Gateway. Use a configured identity-authenticated connection (Tailscale Serve or a trusted proxy), or manage accounts from Profile in the Control UI. Shared Gateway credentials and device pairing alone do not identify a person; ask an administrator if access is denied.",
-    );
-  }
-  throw error;
-}
-
-async function requirePerson(client: GatewayClient, signal: AbortSignal): Promise<string> {
-  const { profile } = await client
-    .request<UsersSelfResult>("users.self", {}, { signal })
-    .catch(personalAccountAccessError);
-  return profile.id;
-}
 
 async function readAccountSecret(
   message: string,
@@ -153,7 +136,7 @@ async function connectOpenAI(
     if (cancelled.status === "connected" || error instanceof ExitError) {
       return cancelled;
     }
-    throw new Error("Sign-in did not complete. Re-run `openclaw models accounts connect openai`.", {
+    throw new Error("Sign-in did not complete. Re-run `openclaw models accounts login openai`.", {
       cause: error,
     });
   } finally {
@@ -166,22 +149,20 @@ export async function modelsAccountsListCommand(
   options: ModelsAccountsOptions & { cursor?: string },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  await withModelsAccountsGateway(options, "read", async (client, signal) => {
-    const result = await client
-      .request<UsersListModelAccountsResult>(
-        "users.listModelAccounts",
-        options.cursor ? { cursor: options.cursor } : {},
-        { signal },
-      )
-      .catch(personalAccountAccessError);
+  await withModelsAccountsGateway(options, "read", runtime, async ({ client, signal }) => {
+    const result = await client.request<UsersListModelAccountsResult>(
+      "users.listModelAccounts",
+      options.cursor ? { cursor: options.cursor } : {},
+      { signal },
+    );
     if (options.json) {
       writeRuntimeJson(runtime, result);
       return;
     }
-    runtime.log(`Personal model accounts for ${sanitizeTerminalText(result.profileId)}:`);
+    runtime.log("Personal model accounts:");
     if (result.accounts.length === 0) {
       runtime.log(
-        "No saved accounts on this page. Use `openclaw models accounts connect <provider>`.",
+        "No saved accounts on this page. Use `openclaw models accounts login <provider>`.",
       );
     }
     for (const account of result.accounts) {
@@ -198,105 +179,119 @@ export async function modelsAccountsListCommand(
   });
 }
 
-export async function modelsAccountsConnectCommand(
+export async function modelsAccountsLoginCommand(
   options: ModelsAccountsOptions & { provider: string },
   runtime: RuntimeEnv,
 ): Promise<void> {
   const provider = options.provider.trim().toLowerCase();
   if (provider !== "openai" && provider !== "anthropic") {
-    throw new Error("Personal account connect supports openai (ChatGPT) and anthropic (Claude).");
+    throw new Error("Personal account login supports openai (ChatGPT) and anthropic (Claude).");
   }
   if (!isTerminalInteractive(process.stderr)) {
     throw new Error(
-      "Personal account connect requires an interactive terminal for hidden input. Run this command in a terminal, or use Profile in the Control UI. Never paste a token or redirect URL into chat or command arguments.",
+      "Personal account login requires an interactive terminal for hidden input. Run this command in a terminal, or use Profile in the Control UI. Never paste a token or redirect URL into chat or command arguments.",
     );
   }
-  await withModelsAccountsGateway(options, "write", async (client, signal) => {
-    const profileId = await requirePerson(client, signal);
-    runtime.error(`Connecting a personal account for ${sanitizeTerminalText(profileId)}.`);
-    let result: UsersAuthConnectStatusResult;
-    if (provider === "openai") {
-      result = await connectOpenAI(client, profileId, signal, runtime);
-    } else {
-      runtime.error(
-        "Run `claude setup-token` in another terminal, then paste its token below. Do not send it in chat.",
-      );
-      const token = await readAccountSecret(
-        "Claude setup-token (hidden)",
-        signal,
-        validateAnthropicSetupToken,
-      );
-      signal.throwIfAborted();
-      const saved = await client.request<UsersAuthConnectResult>("users.authConnect.token", {
-        profileId,
-        provider,
-        token,
-      });
-      result = { status: "connected", ...saved };
-    }
-    if (options.json) {
-      writeRuntimeJson(runtime, { profileId, provider, ...result });
-    }
-    if (result.status === "connected") {
-      if (!options.json) {
-        runtime.log(
-          `Connected ${sanitizeTerminalText(result.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
+  await withModelsAccountsGateway(
+    options,
+    "write",
+    runtime,
+    async ({ client, signal, profile }) => {
+      const profileId = profile.id;
+      let result: UsersAuthConnectStatusResult;
+      if (provider === "openai") {
+        result = await connectOpenAI(client, profileId, signal, runtime);
+      } else {
+        runtime.error(
+          "Run `claude setup-token` in another terminal, then paste its token below. Do not send it in chat.",
         );
+        const token = await readAccountSecret(
+          "Claude setup-token (hidden)",
+          signal,
+          validateAnthropicSetupToken,
+        );
+        signal.throwIfAborted();
+        const saved = await client.request<UsersAuthConnectResult>("users.authConnect.token", {
+          profileId,
+          provider,
+          token,
+        });
+        result = { status: "connected", ...saved };
       }
-      return;
-    }
-    if (result.status === "cancelled") {
-      runtime.error("Personal account sign-in cancelled.");
-      throw new ExitError(130);
-    }
-    if (options.json) {
-      throw new ExitError(1);
-    }
-    const reason = result.status === "failed" ? ` (${result.reason})` : "";
-    throw new Error(
-      `Personal account sign-in ${result.status}${reason}. Re-run the connect command.`,
-    );
-  });
+      if (options.json) {
+        writeRuntimeJson(runtime, { profileId, provider, ...result });
+      }
+      if (result.status === "connected") {
+        if (!options.json) {
+          runtime.log(
+            `Signed in: ${sanitizeTerminalText(result.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
+          );
+        }
+        return;
+      }
+      if (result.status === "cancelled") {
+        runtime.error("Personal account sign-in cancelled.");
+        throw new ExitError(130);
+      }
+      if (options.json) {
+        throw new ExitError(1);
+      }
+      const reason = result.status === "failed" ? ` (${result.reason})` : "";
+      throw new Error(
+        `Personal account sign-in ${result.status}${reason}. Re-run the login command.`,
+      );
+    },
+  );
 }
 
 export async function modelsAccountsUseCommand(
   options: ModelsAccountsOptions & { authProfileId: string },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  await withModelsAccountsGateway(options, "write", async (client, signal) => {
-    const profileId = await requirePerson(client, signal);
-    const result = await client.request<UsersSelectModelAccountResult>(
-      "users.selectModelAccount",
-      { profileId, authProfileId: options.authProfileId },
-      { signal },
-    );
-    if (options.json) {
-      writeRuntimeJson(runtime, { profileId, ...result });
-    } else {
-      runtime.log(
-        `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
+  await withModelsAccountsGateway(
+    options,
+    "write",
+    runtime,
+    async ({ client, signal, profile }) => {
+      const profileId = profile.id;
+      const result = await client.request<UsersSelectModelAccountResult>(
+        "users.selectModelAccount",
+        { profileId, authProfileId: options.authProfileId },
+        { signal },
       );
-    }
-  });
+      if (options.json) {
+        writeRuntimeJson(runtime, { profileId, ...result });
+      } else {
+        runtime.log(
+          `Selected ${sanitizeTerminalText(options.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
+        );
+      }
+    },
+  );
 }
 
 export async function modelsAccountsClearDefaultCommand(
   options: ModelsAccountsOptions & { provider: string },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  await withModelsAccountsGateway(options, "write", async (client, signal) => {
-    const profileId = await requirePerson(client, signal);
-    const result = await client.request<UsersUnlinkAuthProfileResult>(
-      "users.unlinkAuthProfile",
-      { profileId, provider: options.provider },
-      { signal },
-    );
-    if (options.json) {
-      writeRuntimeJson(runtime, { profileId, ...result });
-    } else {
-      runtime.log(
-        `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
+  await withModelsAccountsGateway(
+    options,
+    "write",
+    runtime,
+    async ({ client, signal, profile }) => {
+      const profileId = profile.id;
+      const result = await client.request<UsersUnlinkAuthProfileResult>(
+        "users.unlinkAuthProfile",
+        { profileId, provider: options.provider },
+        { signal },
       );
-    }
-  });
+      if (options.json) {
+        writeRuntimeJson(runtime, { profileId, ...result });
+      } else {
+        runtime.log(
+          `Cleared the ${sanitizeTerminalText(options.provider)} new-session default. Saved credentials and existing session accounts are unchanged.`,
+        );
+      }
+    },
+  );
 }

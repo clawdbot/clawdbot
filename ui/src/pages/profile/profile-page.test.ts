@@ -10,6 +10,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { ProfilePage } from "./profile-page.ts";
 
@@ -72,7 +73,7 @@ function createConnectedContext(
   selfUser: AuthenticatedUser | null = null,
 ) {
   let snapshot: ApplicationGatewaySnapshot = {
-    client: { request } as GatewayBrowserClient,
+    client: createTestGatewayClient(request),
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
@@ -207,17 +208,7 @@ it("refreshes translated copy when the locale changes while mounted", async () =
 });
 
 it("renders identity before a Usage statistics link without requesting usage data", async () => {
-  const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
-    emails: ["ada@example.test"],
-    githubIdentity: null,
-    hasAvatar: false,
-  };
+  const profile = { ...modelAccountProfile };
   const request = vi.fn(async (method: string) => {
     if (method === "users.self") {
       return { profile };
@@ -456,7 +447,7 @@ it("renders a write-access note without calling users.self for read-only viewers
   expect(page.querySelector(".identity-name-control")).toBeNull();
 });
 
-it("keeps identity UI and profile RPCs absent for unidentified connections", async () => {
+it("offers identity connection setup without profile RPCs or secret inputs for unidentified connections", async () => {
   const request = vi.fn();
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
   const provider = createApplicationContextProvider(harness.context);
@@ -467,9 +458,25 @@ it("keeps identity UI and profile RPCs absent for unidentified connections", asy
   await page.updateComplete;
   await Promise.resolve();
 
-  expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
+  expect(
+    request.mock.calls.some(
+      ([method]) =>
+        method === "users.self" ||
+        method === "users.listModelAccounts" ||
+        method.startsWith("users.authConnect."),
+    ),
+  ).toBe(false);
   expect(page.querySelector("#settings-profile-identity")).toBeNull();
   expect(page.querySelector(".profile-refresh")).toBeNull();
+  expect(
+    page.querySelector(".profile-auth-connect-start, .profile-auth-connect-claude"),
+  ).toBeNull();
+  expect(page.textContent).toContain("ws://test.invalid");
+  expect(page.textContent).toContain("Personal");
+  [...page.querySelectorAll("button")]
+    .find((button) => button.textContent?.trim() === "Connection settings")
+    ?.click();
+  expect(harness.context.navigate).toHaveBeenCalledWith("connection");
 });
 
 it("rerenders on connection transitions for unidentified connections", async () => {
@@ -591,17 +598,7 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
 });
 
 it("retries the identity bootstrap when users.self returns no profile", async () => {
-  const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
-    emails: ["ada@example.test"],
-    githubIdentity: null,
-    hasAvatar: false,
-  };
+  const profile = { ...modelAccountProfile };
   let identityRequests = 0;
   const request = vi.fn(async (method: string) => {
     if (method === "users.self") {
@@ -769,15 +766,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   let avatarRevision = "avatar-content-hash-png";
   let publishAvatarPresence: (() => void) | undefined;
   let profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
+    ...modelAccountProfile,
     emails: ["ada@example.test", "ada@work.test"],
-    githubIdentity: null,
-    hasAvatar: false,
   };
   let omitNextProfile = false;
   const request = vi.fn(async (method: string, params?: unknown) => {
@@ -855,6 +845,9 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   displayNameInput.value = "Unsaved draft";
   displayNameInput.dispatchEvent(new Event("input", { bubbles: true }));
   await page.updateComplete;
+  const accountContext = page.querySelector("openclaw-model-accounts");
+  expect(accountContext?.textContent).toContain("Augusta Ada");
+  expect(accountContext?.textContent).not.toContain("Unsaved draft");
   stubProfileAvatarProcessing();
   selectProfileAvatar(page);
   await waitForFast(() =>
@@ -1060,6 +1053,11 @@ it("uses the canonical self profile after a merge while presence still carries i
   await waitForFast(() =>
     expect(page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")?.disabled).toBe(
       false,
+    ),
+  );
+  await waitForFast(() =>
+    expect(page.querySelector("openclaw-model-accounts")?.textContent).toContain(
+      "Canonical person",
     ),
   );
   page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")!.click();

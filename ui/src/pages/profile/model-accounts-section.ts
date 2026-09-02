@@ -5,13 +5,22 @@ import type {
   UsersAuthConnectStartResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
+  renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+
+type ModelAccountsContext = {
+  gatewayUrl: string;
+  personLabel: string | null;
+  unavailableReason: "identity" | "write" | "profile";
+  onConnectionSettings: () => void;
+};
 
 export type ModelAccountsSectionProps = {
   links: UserProfileAuthLink[];
@@ -58,6 +67,15 @@ function providerLabel(provider: string): string {
 function inputValue(event: Event): string {
   // SAFETY: each @input listener below is bound to its own text input element.
   return (event.target as HTMLInputElement).value;
+}
+
+function gatewayEndpoint(gatewayUrl: string): string {
+  try {
+    const url = new URL(gatewayUrl);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return t("profilePage.modelAccounts.gatewayUnavailable");
+  }
 }
 
 function accountIdDetail(accounts: UserModelAccount[], account: UserModelAccount) {
@@ -246,8 +264,8 @@ function renderManualLinkRow(props: ModelAccountsSectionProps) {
   });
 }
 
-export function renderModelAccountsSection(props: ModelAccountsSectionProps) {
-  const rows = html`
+function renderModelAccountRows(props: ModelAccountsSectionProps) {
+  return html`
     ${props.links.length === 0
       ? renderSettingsEmpty(t("profilePage.modelAccounts.empty"))
       : props.links.map((link) => renderLinkedRow(props, link))}
@@ -318,18 +336,58 @@ export function renderModelAccountsSection(props: ModelAccountsSectionProps) {
         </div>`
       : ""}
   `;
+}
+
+export function renderModelAccountsSection(
+  context: ModelAccountsContext,
+  props: ModelAccountsSectionProps | null,
+) {
+  const rows = html`
+    ${renderSettingsRow({
+      title: t("profilePage.modelAccounts.gateway"),
+      stackedOnNarrow: true,
+      control: renderSettingsValue(gatewayEndpoint(context.gatewayUrl), { mono: true }),
+    })}
+    ${renderSettingsRow({
+      title: t("profilePage.modelAccounts.person"),
+      stackedOnNarrow: true,
+      control: renderSettingsValue(context.personLabel ?? t("profilePage.modelAccounts.noPerson")),
+    })}
+    ${renderSettingsRow({
+      title: t("profilePage.modelAccounts.scope"),
+      description: t("profilePage.modelAccounts.personalDescription"),
+      control: renderSettingsValue(t("profilePage.modelAccounts.personal")),
+    })}
+    ${props
+      ? renderModelAccountRows(props)
+      : renderSettingsRow({
+          title: t("profilePage.modelAccounts.signInUnavailable"),
+          description: t(`profilePage.modelAccounts.unavailable.${context.unavailableReason}`),
+          stacked: true,
+          control: html`
+            <button type="button" class="btn btn--sm" @click=${context.onConnectionSettings}>
+              ${t("profilePage.modelAccounts.connectionSettings")}
+            </button>
+            ${renderLearnMoreLink(
+              "https://docs.openclaw.ai/concepts/multi-user#per-person-model-accounts",
+            )}
+          `,
+        })}
+  `;
   return renderSettingsSection(
     {
       title: t("profilePage.modelAccounts.title"),
       description: t("profilePage.modelAccounts.description"),
-      actions: html`<button
-        type="button"
-        class="btn btn--sm profile-auth-accounts-refresh"
-        ?disabled=${props.inventoryLoading}
-        @click=${props.onRefresh}
-      >
-        ${t("common.refresh")}
-      </button>`,
+      actions: props
+        ? html`<button
+            type="button"
+            class="btn btn--sm profile-auth-accounts-refresh"
+            ?disabled=${props.inventoryLoading}
+            @click=${props.onRefresh}
+          >
+            ${t("common.refresh")}
+          </button>`
+        : undefined,
     },
     rows,
   );

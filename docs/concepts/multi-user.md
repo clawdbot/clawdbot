@@ -42,7 +42,9 @@ Creator source follows scheduled jobs and inherited creation policies; a require
 
 ## Per-person model accounts
 
-Each teammate can connect a model account to their Gateway profile. New sessions they start prefer that account instead of the Gateway default. This supports ChatGPT/Codex OAuth and Claude subscription tokens; it does not guarantee that every turn bills the same account.
+Each teammate can sign in to a model account for their Gateway profile. New sessions they start prefer that account instead of the Gateway default. This supports ChatGPT/Codex OAuth and Claude subscription tokens; it does not guarantee that every turn bills the same account.
+
+There are two sign-ins: the Gateway identifies **you**, then the provider authorizes **your model account**. CLI and web UI use the same personal account store on the selected Gateway. A shared server does not turn personal sign-in into shared credentials. System/agent credentials are a separate scope, managed through `models auth` on the machine running that OpenClaw installation.
 
 There are four separate pieces:
 
@@ -55,8 +57,10 @@ There are four separate pieces:
 
 Open **Settings → Profile → Model accounts** on an identified connection with `operator.write`:
 
-- **Connect ChatGPT** opens the OpenAI sign-in link. When the browser runs on the Gateway host and the callback port is available, the Gateway receives the `localhost:1455` redirect automatically. With a remote browser or occupied callback port, paste the full redirect URL into the Profile page instead. Keep the Profile connection open until it reports success.
-- **Connect Claude** takes the output of `claude setup-token` run on your own machine (`users.authConnect.token`).
+- Choose **Sign in** beside **ChatGPT** to open the OpenAI sign-in link. When the browser runs on the Gateway host and the callback port is available, the Gateway receives the `localhost:1455` redirect automatically. With a remote browser or occupied callback port, paste the full redirect URL into the Profile page instead. Keep the Profile connection open until it reports success.
+- **Claude** takes the output of `claude setup-token` run on your own machine; its **Sign in** button saves that account (`users.authConnect.token`).
+
+Before either flow, check the **Gateway**, **Person**, and **Scope: Personal** rows. The person is your saved verified profile, not an unsaved display-name edit. If the connection has no personal identity, the section explains what is missing and links to **Connection settings** instead of showing credential inputs. Use the Gateway's identity-bearing endpoint; a shared token, local connection, or paired device alone does not identify you. Browser identity does not transfer to the CLI. See [personal-account CLI setup](/cli/models#personal-model-accounts).
 
 The page lists saved accounts with friendly labels and marks the new-chat default. Select another saved account to change that default without signing in again. **Load more** continues through larger account lists. **Use Gateway defaults for new chats** clears the personal default; the saved accounts stay available.
 
@@ -66,7 +70,7 @@ In **New session** or an existing chat, open the model menu and use **Account fo
 
 The account control shows a collaborator a person-level label for someone else's personal account, not its private email, provider account label, or account id. The label describes the selection, not a billing receipt: configured shared failover accounts can still be used.
 
-The CLI uses the same Gateway operations through [`openclaw models accounts`](/cli/models#personal-model-accounts). It targets the person signed in on that Gateway connection, not `--agent` or the operating-system username.
+The CLI uses the same Gateway operations through [`openclaw models accounts`](/cli/models#personal-model-accounts). Run `openclaw models accounts login <provider>` to sign in, or `list` to inspect saved accounts. Each command shows the selected Gateway, verified person, and Personal scope. It targets that person, not `--agent` or the operating-system username.
 
 Ask OpenClaw (Custodian) requires administrator access and a working configured inference route. Ask it to manage your personal model accounts, or enter **model accounts**. In the Control UI it opens the Profile controls; in a terminal it gives the CLI commands. If Custodian is unavailable, use Profile or the CLI directly. The handoff makes no change by itself. Complete sign-in in the protected controls or hidden terminal prompt, never in the conversation. Delegated agent requests cannot open or complete the human sign-in flow.
 

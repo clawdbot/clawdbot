@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import type { IncomingHttpHeaders } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type {
@@ -7,6 +8,7 @@ import type {
   UsersListModelAccountsResult,
   UsersSelfResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -19,7 +21,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   modelsAccountsClearDefaultCommand,
-  modelsAccountsConnectCommand,
+  modelsAccountsLoginCommand,
   modelsAccountsListCommand,
   modelsAccountsUseCommand,
 } from "./accounts.js";
@@ -60,15 +62,24 @@ type Request = {
 
 async function withGateway(
   respond: (request: Request) => unknown,
-  run: (gateway: { port: string; requests: Request[]; connections: Request[] }) => Promise<void>,
+  run: (gateway: {
+    port: string;
+    url: string;
+    requests: Request[];
+    connections: Request[];
+    upgradeHeaders: IncomingHttpHeaders[];
+  }) => Promise<void>,
+  options: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
   await withOpenClawTestState(
-    { label: "personal-account-cli", scenario: "minimal" },
+    { label: "personal-account-cli", scenario: "minimal", env: options.env },
     async (state) => {
       const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
       const requests: Request[] = [];
       const connections: Request[] = [];
-      server.on("connection", (socket) => {
+      const upgradeHeaders: IncomingHttpHeaders[] = [];
+      server.on("connection", (socket, upgrade) => {
+        upgradeHeaders.push(upgrade.headers);
         sendMinimalGatewayConnectChallenge(socket);
         socket.on("message", (data) => {
           const frame = parseMinimalGatewayRequestFrame(data);
@@ -117,11 +128,19 @@ async function withGateway(
       if (!address || typeof address === "string") {
         throw new Error("Expected an ephemeral Gateway port.");
       }
-      await state.writeConfig({
-        gateway: { mode: "local", port: address.port, auth: { mode: "none" } },
-      });
+      await state.writeConfig(
+        options.config ?? {
+          gateway: { mode: "local", port: address.port, auth: { mode: "none" } },
+        },
+      );
       try {
-        await run({ port: String(address.port), requests, connections });
+        await run({
+          port: String(address.port),
+          url: `ws://127.0.0.1:${address.port}`,
+          requests,
+          connections,
+          upgradeHeaders,
+        });
       } finally {
         await closeMinimalGatewayServer(server);
       }
@@ -143,6 +162,13 @@ function runtime() {
 
 function expectJsonOutput(output: ReturnType<typeof runtime>, payload: unknown): void {
   expect(output.writeJson.mock.calls.map(([value]) => value)).toEqual([payload]);
+}
+
+function expectPersonalContext(output: ReturnType<typeof runtime>, url: string): void {
+  const diagnostics = output.error.mock.calls.map(([line]) => String(line)).join("\n");
+  expect(diagnostics).toContain("Scope: Personal");
+  expect(diagnostics).toContain(`Gateway: ${url}`);
+  expect(diagnostics).toContain(`Person: ${self.profile.displayName}`);
 }
 
 function startResult(): UsersAuthConnectStartResult {
@@ -206,18 +232,63 @@ describe("personal model account CLI over an identified Gateway connection", () 
     };
     const output = runtime();
     await withGateway(
-      () => page,
-      async ({ port, requests, connections }) => {
+      ({ method }) => (method === "users.listModelAccounts" ? page : undefined),
+      async ({ port, url, requests, connections }) => {
         await modelsAccountsListCommand({ port, cursor: "previous-account", json: true }, output);
         expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
+          { method: "users.self", params: {} },
           { method: "users.listModelAccounts", params: { cursor: "previous-account" } },
         ]);
         expectJsonOutput(output, page);
+        expectPersonalContext(output, url);
+        expect(output.log).not.toHaveBeenCalled();
         expect(connections).toHaveLength(1);
         expect(connections[0]?.params.device).toEqual(
           expect.objectContaining({ nonce: "test-nonce" }),
         );
         expect(connections[0]?.params.scopes).toEqual(["operator.read"]);
+      },
+    );
+  });
+
+  it("uses a credential-free explicit URL without leaking ambient, configured, or other-edge auth", async () => {
+    const page = {
+      profileId: PROFILE_ID,
+      accounts: [],
+      links: [],
+    } satisfies UsersListModelAccountsResult;
+    const output = runtime();
+    await withGateway(
+      ({ method }) => (method === "users.listModelAccounts" ? page : undefined),
+      async ({ url, requests, connections, upgradeHeaders }) => {
+        await modelsAccountsListCommand({ url, json: true }, output);
+        expect(requests.map(({ method }) => method)).toEqual([
+          "users.self",
+          "users.listModelAccounts",
+        ]);
+        expect(connections).toHaveLength(1);
+        expect(connections[0]?.params.auth).toBeUndefined();
+        expect(upgradeHeaders[0]?.["x-edge-auth"]).toBeUndefined();
+        expectPersonalContext(output, url);
+        expectJsonOutput(output, page);
+      },
+      {
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "ambient-shared-token",
+          OPENCLAW_GATEWAY_PASSWORD: "ambient-shared-password",
+        },
+        config: {
+          gateway: {
+            mode: "remote",
+            auth: { mode: "token", token: "configured-local-token" },
+            remote: {
+              url: "wss://different-gateway.example/control",
+              token: "configured-remote-token",
+              password: "configured-remote-password",
+              edgeAuth: { "X-Edge-Auth": "configured-other-edge-token" },
+            },
+          },
+        },
       },
     );
   });
@@ -243,7 +314,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
       const output = runtime();
       await withGateway(
         (request) => (request.method === method ? { links: connected.links } : undefined),
-        async ({ port, requests, connections }) => {
+        async ({ port, url, requests, connections }) => {
           await run(port, output);
           expect(
             requests.map(({ method: rpc, params: args }) => ({ method: rpc, params: args })),
@@ -252,18 +323,16 @@ describe("personal model account CLI over an identified Gateway connection", () 
             { method, params },
           ]);
           expect(connections).toHaveLength(1);
+          expectPersonalContext(output, url);
           expect(output.log).toHaveBeenCalledWith(expect.stringContaining(note));
         },
       );
     },
   );
 
-  it.each([
-    { action: "connect", method: "users.self" },
-    { action: "list", method: "users.listModelAccounts" },
-  ])(
+  it.each([{ action: "login" }, { action: "list" }])(
     "guides an unidentified person through $action without prompting for provider credentials",
-    async ({ action, method }) => {
+    async ({ action }) => {
       const output = runtime();
       await withGateway(
         () => {
@@ -271,11 +340,11 @@ describe("personal model account CLI over an identified Gateway connection", () 
         },
         async ({ port, requests }) => {
           await expect(
-            action === "connect"
-              ? modelsAccountsConnectCommand({ port, provider: "openai" }, output)
+            action === "login"
+              ? modelsAccountsLoginCommand({ port, provider: "openai" }, output)
               : modelsAccountsListCommand({ port }, output),
           ).rejects.toThrow("require a signed-in person");
-          expect(requests.map((request) => request.method)).toEqual([method]);
+          expect(requests.map((request) => request.method)).toEqual(["users.self"]);
           expect(mocks.password).not.toHaveBeenCalled();
           expect(mocks.openUrl).not.toHaveBeenCalled();
         },
@@ -285,15 +354,18 @@ describe("personal model account CLI over an identified Gateway connection", () 
 
   it("sends a hidden Claude token only to the person's Gateway and reports metadata", async () => {
     const token = `sk-ant-oat01-${"synthetic".repeat(10)}`;
-    mocks.password.mockResolvedValue(token);
     const output = runtime();
     await withGateway(
       (request) =>
         request.method === "users.authConnect.token"
           ? { authProfileId: ACCOUNT_ID, links: [] }
           : undefined,
-      async ({ port, requests, connections }) => {
-        await modelsAccountsConnectCommand({ port, provider: "anthropic", json: true }, output);
+      async ({ port, url, requests, connections }) => {
+        mocks.password.mockImplementation(async () => {
+          expectPersonalContext(output, url);
+          return token;
+        });
+        await modelsAccountsLoginCommand({ port, provider: "anthropic", json: true }, output);
         expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
           { method: "users.self", params: {} },
           {
@@ -327,7 +399,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
     "rejects non-TTY %s sign-in without consuming input",
     async (provider) => {
       Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
-      await expect(modelsAccountsConnectCommand({ provider }, runtime())).rejects.toThrow(
+      await expect(modelsAccountsLoginCommand({ provider }, runtime())).rejects.toThrow(
         "requires an interactive terminal",
       );
       expect(mocks.password).not.toHaveBeenCalled();
@@ -354,7 +426,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
         return undefined;
       },
       async ({ port, requests, connections }) => {
-        await modelsAccountsConnectCommand({ port, provider: "openai", json: true }, output);
+        await modelsAccountsLoginCommand({ port, provider: "openai", json: true }, output);
         expect(connections).toHaveLength(1);
         expect(new Set(requests.map(({ socket }) => socket)).size).toBe(1);
         expect(
@@ -396,7 +468,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
               ? result
               : undefined,
         async ({ port, requests }) => {
-          const command = modelsAccountsConnectCommand(
+          const command = modelsAccountsLoginCommand(
             { port, provider: "openai", json: true },
             output,
           );
@@ -443,7 +515,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
       },
       async ({ port, connections }) => {
         const command = expect(
-          modelsAccountsConnectCommand({ port, provider: "openai" }, output),
+          modelsAccountsLoginCommand({ port, provider: "openai" }, output),
         ).rejects.toMatchObject({ code: 130 });
         const request = await received.promise;
         expect(request.params).toEqual({ profileId: PROFILE_ID, connectId: "operation-one" });
@@ -473,7 +545,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
       },
       async ({ port, requests, connections }) => {
         const command = expect(
-          modelsAccountsConnectCommand({ port, provider: "openai" }, runtime()),
+          modelsAccountsLoginCommand({ port, provider: "openai" }, runtime()),
         ).rejects.toMatchObject({ code: 130 });
         await started.promise;
         const interrupt = onSignal.mock.calls.find(([event]) => event === "SIGINT")?.[1];
@@ -513,7 +585,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
       },
       async ({ port, requests, connections }) => {
         await expect(
-          modelsAccountsConnectCommand({ port, provider: "openai" }, runtime()),
+          modelsAccountsLoginCommand({ port, provider: "openai" }, runtime()),
         ).rejects.toThrow("Could not confirm sign-in cancellation");
         expect(connections).toHaveLength(1);
         expect(new Set(requests.map(({ socket }) => socket)).size).toBe(1);

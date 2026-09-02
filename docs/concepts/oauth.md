@@ -71,8 +71,9 @@ credential overrides and auth-routing state:
 - Agent credential rows: `auth_profile_store`
 - Agent order, last-good, cooldown, and usage rows: `auth_profile_state`
 
-Personal accounts connected from Profile use private identity-scoped records in
-the shared state database: `model-accounts` owns the selected links, and each
+Personal accounts added from Profile or `models accounts login` use private
+identity-scoped records in the selected Gateway's shared state database:
+`model-accounts` owns the selected links, and each
 credential has its own `model-account:<profile-id>` record containing its secret
 and usage state. Only a selected personal profile is loaded for a run; ordinary
 shared-account reads never enumerate these records. Personal OAuth refresh
@@ -231,7 +232,13 @@ Example (session override):
 
 On a shared gateway, each verified person can save several accounts per provider
 in **Settings → Profile → Model accounts** and choose one as their new-chat
-default. The model picker in New session or an existing chat can select an
+default. The same store is available through `openclaw models accounts login <provider>`.
+Both sign-in surfaces show the Gateway, verified person, and Personal
+scope before requesting provider credentials. Gateway identity and provider
+sign-in are separate; a shared Gateway token does not identify a person. See
+[personal-account CLI setup](/cli/models#personal-model-accounts).
+
+The model picker in New session or an existing chat can select an
 account for that chat without changing the default. Ordered shared accounts
 remain same-provider failover candidates; the selection is not a billing
 guarantee. Personal credentials stay outside the shared profile list. See

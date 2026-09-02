@@ -40,6 +40,7 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
   private context!: ApplicationContext;
   @property({ attribute: false }) identityId: string | null = null;
   @property({ attribute: false }) profileId: string | null = null;
+  @property({ attribute: false }) personLabel: string | null = null;
   @state() private links: UserProfileAuthLink[] = [];
   @state() private accounts: UserModelAccount[] = [];
   @state() private nextCursor: string | undefined;
@@ -63,7 +64,11 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.unsubscribe = this.context.gateway.subscribe((snapshot) => this.applySnapshot(snapshot));
+    this.unsubscribe = this.context.gateway.subscribe((snapshot) => {
+      this.applySnapshot(snapshot);
+      // Endpoint and person context stay visible even without an authorized account target.
+      this.requestUpdate();
+    });
     this.applySnapshot(this.context.gateway.snapshot);
   }
 
@@ -370,46 +375,69 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    if (!this.target) {
+    const snapshot = this.context.gateway.snapshot;
+    if (snapshot.phase !== "connected" || !snapshot.client) {
       return nothing;
     }
-    return renderModelAccountsSection({
-      links: this.links,
-      accounts: this.accounts,
-      hasMore: Boolean(this.nextCursor),
-      inventoryLoading: this.inventoryLoading,
-      inventoryError: this.inventoryError,
-      showManualLink: this.target.canAdmin,
-      busy:
-        this.inventoryLoading || this.action !== null || this.connectFlow?.status === "exchanging",
-      cancelBusy: this.action !== null && this.action !== "complete",
-      error: this.error,
-      notice: this.notice ? t(`profilePage.modelAccounts.notices.${this.notice}`) : null,
-      statusUnavailable: this.statusUnavailable,
-      linkDraft: this.linkDraft,
-      connectFlow: this.connectFlow,
-      connectRedirectDraft: this.connectRedirectDraft,
-      claudeTokenDraft: this.claudeTokenDraft,
-      onLinkDraftInput: (value) => {
-        this.linkDraft = value;
+    const person = snapshot.selfUser?.id === this.identityId ? snapshot.selfUser : null;
+    return renderModelAccountsSection(
+      {
+        gatewayUrl: (this.target?.client ?? snapshot.client).gatewayUrl,
+        personLabel: person
+          ? this.personLabel ||
+            person.name ||
+            person.email ||
+            t("profilePage.modelAccounts.currentPerson")
+          : null,
+        unavailableReason: !person
+          ? "identity"
+          : hasOperatorWriteAccess(snapshot.hello?.auth ?? null)
+            ? "profile"
+            : "write",
+        onConnectionSettings: () => this.context.navigate("connection"),
       },
-      onLink: () => this.updateLink({ authProfileId: this.linkDraft.trim() }),
-      onUnlink: (provider) => this.updateLink({ provider }),
-      onSelectAccount: (authProfileId) => this.selectAccount(authProfileId),
-      onLoadMore: () => void this.loadAccounts(this.nextCursor),
-      onRefresh: () => void this.loadAccounts(),
-      onConnectStart: () => this.startConnect(),
-      onConnectRedirectInput: (value) => {
-        this.connectRedirectDraft = value;
-      },
-      onConnectComplete: () => this.connectStatus("complete"),
-      onConnectCancel: () => this.connectStatus("cancel"),
-      onConnectCheck: () => this.connectStatus("status"),
-      onClaudeTokenInput: (value) => {
-        this.claudeTokenDraft = value;
-      },
-      onClaudeConnect: () => this.connectClaude(),
-    });
+      this.target
+        ? {
+            links: this.links,
+            accounts: this.accounts,
+            hasMore: Boolean(this.nextCursor),
+            inventoryLoading: this.inventoryLoading,
+            inventoryError: this.inventoryError,
+            showManualLink: this.target.canAdmin,
+            busy:
+              this.inventoryLoading ||
+              this.action !== null ||
+              this.connectFlow?.status === "exchanging",
+            cancelBusy: this.action !== null && this.action !== "complete",
+            error: this.error,
+            notice: this.notice ? t(`profilePage.modelAccounts.notices.${this.notice}`) : null,
+            statusUnavailable: this.statusUnavailable,
+            linkDraft: this.linkDraft,
+            connectFlow: this.connectFlow,
+            connectRedirectDraft: this.connectRedirectDraft,
+            claudeTokenDraft: this.claudeTokenDraft,
+            onLinkDraftInput: (value) => {
+              this.linkDraft = value;
+            },
+            onLink: () => this.updateLink({ authProfileId: this.linkDraft.trim() }),
+            onUnlink: (provider) => this.updateLink({ provider }),
+            onSelectAccount: (authProfileId) => this.selectAccount(authProfileId),
+            onLoadMore: () => void this.loadAccounts(this.nextCursor),
+            onRefresh: () => void this.loadAccounts(),
+            onConnectStart: () => this.startConnect(),
+            onConnectRedirectInput: (value) => {
+              this.connectRedirectDraft = value;
+            },
+            onConnectComplete: () => this.connectStatus("complete"),
+            onConnectCancel: () => this.connectStatus("cancel"),
+            onConnectCheck: () => this.connectStatus("status"),
+            onClaudeTokenInput: (value) => {
+              this.claudeTokenDraft = value;
+            },
+            onClaudeConnect: () => this.connectClaude(),
+          }
+        : null,
+    );
   }
 }
 

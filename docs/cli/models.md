@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw models` (status/list/set/scan, aliases, fa
 read_when:
   - You want to change default models or view provider auth status
   - You want to scan available models/providers and debug auth profiles
-  - You want to connect or select a personal model account on a shared Gateway
+  - You want to sign in to or select a personal model account on a shared Gateway
 title: "Models"
 ---
 
@@ -156,25 +156,36 @@ Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list
 
 ## Personal model accounts
 
-Use `models accounts` to manage the personal accounts owned by your signed-in Gateway profile. Use `models auth` below for shared or agent-local credentials instead.
+Use `models accounts` for accounts owned by your signed-in person on the selected Gateway. The CLI and **Settings → Profile → Model accounts** use the same Gateway account store, including when the server is shared.
+
+| Scope          | Command                                            | Where the credential belongs                                        |
+| -------------- | -------------------------------------------------- | ------------------------------------------------------------------- |
+| Personal       | `models accounts login <provider>`                 | Your verified profile on the selected Gateway, which may be remote. |
+| System / agent | `models auth login --provider <id> [--agent <id>]` | The OpenClaw installation on the machine running the command.       |
+
+To configure system/agent credentials for a remote server, run `models auth` on that server with its OpenClaw state/config. Configuring a remote Gateway URL on your laptop does not make `models auth` write to the server.
 
 ```bash
 openclaw models accounts list
-openclaw models accounts connect anthropic
-openclaw models accounts connect openai
+openclaw models accounts login anthropic
+openclaw models accounts login openai
 openclaw models accounts use <account-id>
 openclaw models accounts clear-default <provider>
 ```
 
-The Gateway must verify your person on every connection. Use its configured identity-bearing WebSocket endpoint, such as [Tailscale Serve](/gateway/tailscale#tailscale-identity-headers-serve-only) or a [trusted proxy](/gateway/trusted-proxy-auth). Approve device pairing separately if requested: pairing grants device access, not personal identity. A shared Gateway token or password does not identify your person; supplying one also takes precedence over Tailscale identity authentication. A browser sign-in does not transfer its identity to the CLI. These commands do not accept `--agent` or an owner id, and they do not modify local shared auth stores or model config.
+Every account command shows **Gateway**, **Person**, and **Scope: Personal** before accessing accounts or asking for provider credentials. This context goes to stderr so `--json` output stays pipeable. The person is the Gateway's saved, verified profile, not your operating-system username or an unsaved display-name edit.
+
+Gateway access and provider sign-in are separate. The Gateway must verify your person on every connection, even on a single-user local installation. Use its configured identity-bearing WebSocket endpoint, such as [Tailscale Serve](/gateway/tailscale#tailscale-identity-headers-serve-only) or a [trusted proxy](/gateway/trusted-proxy-auth). Approve device pairing separately if requested: pairing grants device access, not personal identity. A shared Gateway token or password does not identify your person; supplying one also takes precedence over Tailscale identity authentication. A browser sign-in does not transfer its identity to the CLI. For an identity-aware edge, follow [remote edge authentication](/gateway/remote#gateway-behind-an-identity-aware-proxy).
+
+If no person is identified, the command stops before provider sign-in and explains how to use an identity-bearing endpoint. It does not infer ownership or change Gateway authentication. These commands do not accept `--agent` or an owner id, and they do not modify local shared auth stores or model config. The top-level `openclaw connect` command enrolls a node; it is not a personal-account login.
 
 `list` needs `operator.read` and returns one page of at most 50 saved accounts: id, provider, friendly label, auth type, and whether each is the new-session default. It never returns credentials. Use `--json` for structured output and `list --cursor <nextCursor>` for the next page.
 
-`connect`, `use`, and `clear-default` need `operator.write`. `connect` requires an interactive terminal. For Anthropic, run `claude setup-token` separately and paste its output into the hidden prompt. For OpenAI, follow the ChatGPT sign-in link; the command waits for the browser callback or a redirect URL pasted into its hidden prompt. Keep the command running until it reports a terminal result. Ctrl-C cancels that exact sign-in attempt; a closed connection must start a fresh attempt. Provider tokens and redirect URLs are not accepted as command arguments or through chat.
+`login`, `use`, and `clear-default` need `operator.write`. `login` requires an interactive terminal. For Anthropic, run `claude setup-token` separately and paste its output into the hidden prompt. For OpenAI, follow the ChatGPT sign-in link; the command waits for the browser callback or a redirect URL pasted into its hidden prompt. Keep the command running until it reports a terminal result. Ctrl-C cancels that exact sign-in attempt; a closed connection must start a fresh attempt. Provider tokens and redirect URLs are not accepted as command arguments or through chat.
 
 `use` selects an already-saved account for new sessions without signing in again. `clear-default` removes only the personal default for that provider: it keeps saved credentials and existing session selections. Neither operation revokes provider access. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for collaborator, fork, and failover behavior.
 
-All account subcommands accept `--url <url>`, `--port <port>`, `--token-file <path>`, `--password-file <path>`, `--timeout <ms>` (default `30000`), and `--json`. The token/password files authenticate the **Gateway**, not the provider, and do not establish a personal identity. Prefer the configured Gateway target; an explicit `--url` also follows the normal explicit-credential or stored-origin-auth requirements. Flags may precede or follow the leaf command:
+All account subcommands accept `--url <url>`, `--port <port>`, `--token-file <path>`, `--password-file <path>`, `--timeout <ms>` (default `30000`), and `--json`. The token/password files authenticate the **Gateway**, not the provider, and do not establish a personal identity. An explicit `--url` can use an identity-bearing endpoint without supplying a shared token. It does not send ambient or configured shared credentials to the override; configured edge credentials remain bound to their own endpoint. Flags may precede or follow the leaf command:
 
 ```bash
 openclaw models accounts --timeout 45000 list --json
@@ -182,6 +193,8 @@ openclaw models accounts list --timeout 45000 --json
 ```
 
 ## Auth profiles
+
+These commands manage **System / agent** credentials, not personal Gateway accounts. Before provider sign-in, `models auth login` shows the selected agent and that it is operating on the machine running OpenClaw.
 
 Before a `models auth` command changes the local auth store, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
 

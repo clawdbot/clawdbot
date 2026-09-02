@@ -493,8 +493,8 @@ export class ChatTurnRouter {
       return {
         text:
           this.options.surface === "gateway"
-            ? "Opening Settings → Profile → Model accounts. Connect or select your account there using the protected controls. Nothing has changed yet; never paste credentials into this conversation."
-            : "Run `openclaw models accounts list` to see your personal accounts, or `openclaw models accounts connect <provider>` for protected sign-in. You can also use Settings → Profile → Model accounts in the Control UI. Nothing has changed; never paste credentials into this conversation.",
+            ? "Opening Settings → Profile → Model accounts. Check the Gateway, person, and Personal scope, then sign in or select a saved account. Nothing has changed yet; never paste credentials into this conversation."
+            : "Run `openclaw models accounts list` to see your personal accounts, or `openclaw models accounts login <provider>` for protected sign-in. Check the Gateway and person shown before signing in. You can also use Settings → Profile → Model accounts in the Control UI. Nothing has changed; never paste credentials into this conversation.",
         action: "none",
         ...(this.options.surface === "gateway" ? { handoff: recordedOperation } : {}),
       };

@@ -297,7 +297,7 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     case "model-accounts":
       runtime.log(
-        "Manage your personal accounts in Settings → Profile → Model accounts, or run `openclaw models accounts list` / `openclaw models accounts connect <provider>`. Nothing has changed. Enter credentials only in the protected sign-in controls, never in chat.",
+        "Manage your personal accounts in Settings → Profile → Model accounts, or run `openclaw models accounts list` / `openclaw models accounts login <provider>`. Check the Gateway, person, and Personal scope before signing in. Nothing has changed. Enter credentials only in the protected sign-in controls, never in chat.",
       );
       return { applied: false };
     case "open-setup": {

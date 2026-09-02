@@ -151,7 +151,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["audit.list", "audit", "operator.read", "2026.7"],
   ["audit.activity.list", "audit", "operator.read", "2026.7"],
   ["users.list", "users", "operator.read", "<=2026.7"],
-  ["users.self", "users", "operator.write", "<=2026.7"],
+  ["users.self", "users", "operator.read", "<=2026.7"],
   ["users.linkEmail", "users", "operator.admin", "<=2026.7"],
   ["users.setDisplayName", "users", "operator.write", "<=2026.7"],
   ["users.setAvatar", "users", "operator.write", "<=2026.7"],

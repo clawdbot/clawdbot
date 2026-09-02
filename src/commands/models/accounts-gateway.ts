@@ -3,25 +3,26 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { UsersSelfResult } from "../../../packages/gateway-protocol/src/schema/users.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../../packages/gateway-protocol/src/version.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveGatewayLocalPortOverride } from "../../cli/gateway-port-option.js";
 import { resolveGatewayAuthOptions } from "../../cli/gateway-secret-options.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { readGatewayDispatchConfigWithShellEnvFallback } from "../../config/gateway-dispatch-config.js";
 import { resolveGatewayClientBootstrap } from "../../gateway/client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "../../gateway/client-start-readiness.js";
-import { GatewayClient } from "../../gateway/client.js";
+import { GatewayClient, GatewayClientRequestError } from "../../gateway/client.js";
+import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
   resolveEdgeAuthHeaders,
 } from "../../gateway/edge-auth.js";
-import { loadOriginDeviceToken } from "../../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresent } from "../../infra/device-identity.js";
-import { ExitError } from "../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 
 export type ModelsAccountsGatewayOptions = {
@@ -32,10 +33,17 @@ export type ModelsAccountsGatewayOptions = {
   timeout?: string;
 };
 
+type ModelsAccountsGatewayContext = {
+  client: GatewayClient;
+  signal: AbortSignal;
+  profile: UsersSelfResult["profile"];
+};
+
 export async function withModelsAccountsGateway<T>(
   options: ModelsAccountsGatewayOptions,
   access: "read" | "write",
-  run: (client: GatewayClient, signal: AbortSignal) => Promise<T>,
+  runtime: RuntimeEnv,
+  run: (context: ModelsAccountsGatewayContext) => Promise<T>,
 ): Promise<T> {
   const localPortOverride = resolveGatewayLocalPortOverride(options);
   const timeoutMs = resolveTimerTimeoutMs(
@@ -44,21 +52,14 @@ export async function withModelsAccountsGateway<T>(
   );
   const config = await readGatewayDispatchConfigWithShellEnvFallback();
   const { gatewayToken: token, gatewayPassword: password } = resolveGatewayAuthOptions(options);
-  const identity = loadDeviceIdentityIfPresent();
   const bootstrap = await resolveGatewayClientBootstrap({
     config,
     gatewayUrl: options.url,
     localPortOverride,
     explicitAuth: { token, password },
-    allowStoredOriginAuth: (gatewayScope) =>
-      Boolean(
-        identity &&
-        loadOriginDeviceToken({ gatewayScope, deviceId: identity.deviceId, role: "operator" })
-          ?.token,
-      ),
-    overrideAuthErrorHint:
-      "For personal accounts, use the configured Gateway through its identity-authenticated endpoint. URL overrides need explicit Gateway credentials or a cached device token; neither identifies a person.",
   });
+  const gatewayUrl = projectGatewayUrlForDiagnostics(bootstrap.url);
+  runtime.error(`Scope: Personal\nGateway: ${sanitizeTerminalText(gatewayUrl)}`);
   const edgeAuthHeaders = await resolveEdgeAuthHeaders({
     config,
     value: normalizeEdgeAuthHeadersConfig(
@@ -122,7 +123,40 @@ export async function withModelsAccountsGateway<T>(
     ]);
     clearTimeout(timer);
     lifetime.signal.throwIfAborted();
-    return await run(client, lifetime.signal);
+    let profile: UsersSelfResult["profile"];
+    try {
+      ({ profile } = await client.request<UsersSelfResult>(
+        "users.self",
+        {},
+        {
+          signal: lifetime.signal,
+        },
+      ));
+    } catch (error) {
+      lifetime.signal.throwIfAborted();
+      if (error instanceof GatewayClientRequestError && error.gatewayCode === "FORBIDDEN") {
+        throw new Error(
+          [
+            "Personal model accounts require a signed-in person with access to this Gateway.",
+            "Use --url with its Tailscale Serve or trusted-proxy WSS address. Omit shared Gateway token/password credentials when using Tailscale identity.",
+            "For proxy client sign-in, see https://docs.openclaw.ai/gateway/remote#gateway-behind-an-identity-aware-proxy. Browser sign-in and device pairing alone do not identify this CLI; ask an administrator if access is denied.",
+            "For shared or agent-local credentials instead, use `openclaw models auth login`.",
+          ].join("\n"),
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    // Identity lookup can await provider verification; cancellation must still
+    // retire this socket before a provider login or account mutation starts.
+    lifetime.signal.throwIfAborted();
+    const person =
+      profile.displayName?.trim() ||
+      profile.emails[0] ||
+      profile.githubIdentity?.login ||
+      profile.id;
+    runtime.error(`Person: ${sanitizeTerminalText(person)}`);
+    return await run({ client, signal: lifetime.signal, profile });
   } finally {
     clearTimeout(timer);
     process.off("SIGINT", cancel);

@@ -410,12 +410,14 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderModelAccounts() {
-    if (!this.selfUser || !this.canWrite || !this.ownProfile) {
-      return nothing;
-    }
     return html`<openclaw-model-accounts
-      .identityId=${this.selfUser.id}
-      .profileId=${this.ownProfile.id}
+      .identityId=${this.selfUser?.id ?? null}
+      .profileId=${this.ownProfile?.id ?? null}
+      .personLabel=${this.ownProfile
+        ? this.ownProfile.displayName?.trim() ||
+          this.ownProfile.emails[0] ||
+          t("profilePage.modelAccounts.currentPerson")
+        : null}
     ></openclaw-model-accounts>`;
   }
 

@@ -11,7 +11,7 @@ export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["hooks", "check"],
   ["update", "--dry-run"],
   ["models", "accounts", "list"],
-  ["models", "accounts", "connect", "openai"],
+  ["models", "accounts", "login", "openai"],
   ["models", "accounts", "use", "personal-account"],
   ["models", "accounts", "clear-default", "openai"],
 ];
@@ -22,7 +22,7 @@ export function registerColdReadCommandFixtures(program: Command, skills: Comman
     "Expected the models fixture",
   );
   const accounts = models.command("accounts");
-  for (const command of ["list", "connect", "use", "clear-default"]) {
+  for (const command of ["list", "login", "use", "clear-default"]) {
     accounts
       .command(command)
       .argument("[value]")

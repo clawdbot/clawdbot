@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsListCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAccountsConnectCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsUseCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsClearDefaultCommand: vi.fn().mockResolvedValue(undefined),
 }));
@@ -73,7 +73,7 @@ vi.mock("../commands/models/auth-list.js", () => ({
 }));
 vi.mock("../commands/models/accounts.js", () => ({
   modelsAccountsListCommand: mocks.modelsAccountsListCommand,
-  modelsAccountsConnectCommand: mocks.modelsAccountsConnectCommand,
+  modelsAccountsLoginCommand: mocks.modelsAccountsLoginCommand,
   modelsAccountsUseCommand: mocks.modelsAccountsUseCommand,
   modelsAccountsClearDefaultCommand: mocks.modelsAccountsClearDefaultCommand,
 }));
@@ -135,7 +135,7 @@ describe("models cli", () => {
     modelsSetImageCommand.mockClear();
     modelsStatusCommand.mockClear();
     mocks.modelsAccountsListCommand.mockClear();
-    mocks.modelsAccountsConnectCommand.mockClear();
+    mocks.modelsAccountsLoginCommand.mockClear();
     mocks.modelsAccountsUseCommand.mockClear();
     mocks.modelsAccountsClearDefaultCommand.mockClear();
   });
@@ -652,8 +652,8 @@ describe("models cli", () => {
       expected: { cursor: "after-account" },
     },
     {
-      args: ["connect", "openai"],
-      command: mocks.modelsAccountsConnectCommand,
+      args: ["login", "openai"],
+      command: mocks.modelsAccountsLoginCommand,
       expected: { provider: "openai" },
     },
     {
@@ -750,12 +750,12 @@ describe("models cli", () => {
         .configureOutput({ writeErr });
       registerModelsCli(program);
       await expect(
-        program.parseAsync(["models", "accounts", "connect", "openai", flag, "not-an-input"], {
+        program.parseAsync(["models", "accounts", "login", "openai", flag, "not-an-input"], {
           from: "user",
         }),
       ).rejects.toMatchObject({ code: "commander.unknownOption", exitCode: 1 });
       expect(writeErr).toHaveBeenCalledWith(expect.stringContaining(`unknown option '${flag}'`));
-      expect(mocks.modelsAccountsConnectCommand).not.toHaveBeenCalled();
+      expect(mocks.modelsAccountsLoginCommand).not.toHaveBeenCalled();
     },
   );
 });
