@@ -1131,7 +1131,10 @@ commands run against the active Gateway. Each CLI command has a two-minute
 execution limit. Stop closes admission immediately and settles all owned process
 groups; leader exit does not bypass shutdown or the bounded wait for inherited
 stdio to close. On POSIX, CLI commands use their own process groups, so concurrent
-commands do not replace the active Gateway's identity.
+commands do not replace the active Gateway's identity. CLI failures, including
+timeouts, cancellations, and stream faults, retain bounded, redacted stderr and
+stdout captured through shutdown. Packaged plugin setup errors distinguish
+`update repair --help` from `update repair`.
 
 Transport adapters drain their driver work in
 `cleanup()` and release Gateway-backed credentials in
