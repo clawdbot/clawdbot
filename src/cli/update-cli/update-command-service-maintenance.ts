@@ -43,6 +43,18 @@ import {
 
 export { UpdateCommandAbort } from "./update-command-windows-task.js";
 
+/** Wraps a stop-attempt error with the pre-stop inspected state so the caller
+ *  can populate the recovery record even when the assignment never completed. */
+export class ManagedServiceStopFailure extends Error {
+  constructor(
+    readonly inspectedState: PreManagedServiceStop,
+    cause: unknown,
+  ) {
+    super(`Managed gateway stop failed: ${String(cause)}`, { cause });
+    this.name = "ManagedServiceStopFailure";
+  }
+}
+
 const GATEWAY_SERVICE_INSPECTION_UNAVAILABLE_MESSAGE =
   "Gateway service management skipped: inspection is unavailable. Run `openclaw gateway status --deep` and restart the gateway manually when service access is restored.";
 const GATEWAY_SERVICE_INSPECTION_BLOCK_MESSAGE =
@@ -563,7 +575,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
         throw new UpdateCommandAbort();
       }
     }
-    throw err;
+    throw new ManagedServiceStopFailure({ ...inspected, stopped: true }, err);
   }
   return {
     ...inspected,

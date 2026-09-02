@@ -220,19 +220,6 @@ async function updateCommandInternal(
     return;
   }
 
-  // Persist the requested channel before any mutable work so the user's
-  // intent survives update failures (schema preflight, stop failure, etc.).
-  // finishUpdate calls persistRequestedUpdateChannel again; that is idempotent
-  // when the stored channel already matches.
-  if (
-    requestedChannel &&
-    !opts.dryRun &&
-    configSnapshot.valid &&
-    requestedChannel !== storedChannel
-  ) {
-    configSnapshot = await persistRequestedUpdateChannel({ configSnapshot, requestedChannel });
-  }
-
   const channel =
     requestedChannel ??
     storedChannel ??
@@ -577,6 +564,18 @@ async function updateCommandInternal(
       defaultRuntime.exit(0);
       return;
     }
+  }
+
+  // Persist after downgrade consent but before mutable work so the user's
+  // intent survives schema preflight, stop failure, and other pre-mutation errors.
+  // finishUpdate calls persistRequestedUpdateChannel again; idempotent when matching.
+  if (
+    requestedChannel &&
+    !opts.dryRun &&
+    configSnapshot.valid &&
+    requestedChannel !== storedChannel
+  ) {
+    configSnapshot = await persistRequestedUpdateChannel({ configSnapshot, requestedChannel });
   }
 
   if (updateInstallKind === "git" && opts.tag && !opts.json) {

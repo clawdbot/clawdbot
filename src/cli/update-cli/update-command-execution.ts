@@ -70,6 +70,7 @@ import {
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import {
+  ManagedServiceStopFailure,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   resolveUpdatedGatewayRestartPort,
@@ -255,6 +256,9 @@ export async function executeMutableUpdate(params: {
       }
       if (err instanceof GatewayServiceUpdateOwnershipError) {
         throw new UpdatePreMutationError("managed-service-preflight", err.message);
+      }
+      if (err instanceof ManagedServiceStopFailure) {
+        preManagedServiceStop = err.inspectedState;
       }
       params.stop();
       throw new UpdatePreMutationError(

@@ -23,6 +23,7 @@ import {
   resolveOwnedManagedUpdateEnv,
   resolveUpdatedInstallCommandEnv,
 } from "./update-command-service-env.js";
+import { ManagedServiceStopFailure } from "./update-command-service-maintenance.js";
 import {
   resolvePostUpdateServiceStateReadEnv,
   resolveUpdatedGatewayRestartPort,
@@ -1029,6 +1030,33 @@ describe("buildInvalidConfigPostCoreUpdateResult", () => {
     expect(built.message).toBe(
       "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
     );
+  });
+});
+
+describe("ManagedServiceStopFailure", () => {
+  it("carries the inspected stop state through the error boundary", () => {
+    const inspected = {
+      stopped: true,
+      inspected: true,
+      runtimeInspected: true,
+      running: false,
+      serviceEnv: { OPENCLAW_PROFILE: "work" } as NodeJS.ProcessEnv,
+      serviceUpdateVerdict: {
+        kind: "owned" as const,
+        root: "/usr/local/lib/openclaw",
+        fingerprint: "abc123",
+        refreshDefinition: true,
+      },
+    };
+    const cause = new Error("port 18789 still busy after stop");
+    const err = new ManagedServiceStopFailure(inspected, cause);
+
+    expect(err).toBeInstanceOf(ManagedServiceStopFailure);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.inspectedState).toEqual(inspected);
+    expect(err.inspectedState.stopped).toBe(true);
+    expect(err.inspectedState.serviceEnv).toEqual({ OPENCLAW_PROFILE: "work" });
+    expect(err.cause).toBe(cause);
   });
 });
 
