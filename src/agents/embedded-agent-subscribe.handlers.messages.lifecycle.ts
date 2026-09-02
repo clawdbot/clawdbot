@@ -142,7 +142,7 @@ export function handleMessageEnd(
   ctx.resetPartialReplyDirectives();
   const parsedText = parseReplyDirectives(trimmedText);
   // Final media is emitted after the buffered text drains, never on its first chunk.
-  recordPendingAssistantReplyDirectives(ctx.state, { ...parsedText, mediaUrls: undefined });
+  recordPendingAssistantReplyDirectives(ctx.state, parsedText);
   const cleanedText = parsedText.text;
   const { mediaUrls } = resolveSendableOutboundReplyParts(parsedText);
   const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
