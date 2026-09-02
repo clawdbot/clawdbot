@@ -374,12 +374,12 @@ describe("external plugin local dist build", () => {
         pathToFileURL(path.join(repoRoot, "dist", "extensions", pluginId, `index${extension}`))
           .href;
       const stagedDir = path.join(repoRoot, "staged", "first");
-      fs.cpSync(path.join(repoRoot, "dist", "extensions", "first"), stagedDir, { recursive: true });
-      expect(
-        execFileSync(process.execPath, [path.join(stagedDir, "node_modules/.bin/probe.cjs")], {
-          encoding: "utf8",
-        }).trim(),
-      ).toBe("1.0.0");
+      // Match installPackageDir's link-preserving copy contract. Node's native
+      // cpSync walker can traverse Windows junctions instead of preserving them.
+      await fs.promises.cp(path.join(repoRoot, "dist", "extensions", "first"), stagedDir, {
+        recursive: true,
+        verbatimSymlinks: true,
+      });
       const output = execFileSync(
         process.execPath,
         [
@@ -399,6 +399,11 @@ describe("external plugin local dist build", () => {
         { encoding: "utf8" },
       );
       expect(JSON.parse(output)).toEqual({ versions: ["1.0.0", "2.0.0", "1.0.0"], shared: true });
+      expect(
+        execFileSync(process.execPath, [path.join(stagedDir, "node_modules/.bin/probe.cjs")], {
+          encoding: "utf8",
+        }).trim(),
+      ).toBe("1.0.0");
     },
   );
 
