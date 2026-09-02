@@ -50,6 +50,10 @@ SQLite target, verifies the target exists and is usable, and reports the physica
 path it actually read. Combine it with `--agent <id>` when you must select the
 configured agent that owns the store.
 
+`--agent` and `--store` require non-blank values. Selection errors exit non-zero
+and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
+is set.
+
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event
 loop. The CLI returns the newest 100 sessions by default; pass `--limit <n>`
@@ -190,6 +194,10 @@ print before follow mode; default `80`, and `0` starts at the current end.
 `--follow` keeps watching the selected SQLite-backed sessions. Session keys use
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
 so CJK characters, combining accents, and joined emoji keep progress lines aligned.
+
+A fully qualified `--session-key` selects its agent only when `--agent`, `--store`,
+and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
+is rejected instead of selecting an inferred agent.
 
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
