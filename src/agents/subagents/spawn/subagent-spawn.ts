@@ -62,6 +62,7 @@ import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-ga
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
+import { resolveInheritedRequesterSettleWake } from "./subagent-spawn-requester-settle.js";
 import {
   createInitialSubagentSession,
   persistInitialChildSessionRuntimeModel,
@@ -87,25 +88,6 @@ function sanitizeMountPathHint(value?: string): string | undefined {
     return undefined;
   }
   return trimmed;
-}
-
-function resolveInheritedRequesterSettleWake(
-  requesterTurnRunId: string | undefined,
-  runId: string,
-) {
-  // A child spawned by a yielded requester-settle continuation must not create
-  // an independent completion delivery. The retained requester wake owns the
-  // original user's final, including across successor child generations.
-  if (!/^announce:requester-settle:.*:yield-\d+$/u.test(requesterTurnRunId ?? "")) {
-    return undefined;
-  }
-  return {
-    status: "pending" as const,
-    attemptCount: 0,
-    batchRunIds: [runId],
-    requesterYieldBatch: true as const,
-    afterRequesterYield: true as const,
-  };
 }
 
 export async function spawnSubagentDirect(
@@ -749,4 +731,3 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
     testing;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

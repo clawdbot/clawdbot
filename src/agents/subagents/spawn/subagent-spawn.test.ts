@@ -2402,7 +2402,6 @@ describe("spawnSubagentDirect seam flow", () => {
     });
   });
 
-
   it.each([
     { phase: "parent snapshot", message: "parent session unavailable" },
     { phase: "child patch", message: "invalid model: bad-model" },
