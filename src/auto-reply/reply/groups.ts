@@ -122,7 +122,7 @@ function buildMessageToolOnlyDelivery(params: {
 }): { mechanism: string; gate: string[] } {
   const { destinationLabel, responseLabel } = params;
   return {
-    mechanism: `In ${destinationLabel} the message tool with action=send is your only way to be heard; the target defaults to ${destinationLabel}. Your normal final answer is private and is never posted to ${destinationLabel}.`,
+    mechanism: `In ${destinationLabel}, message(action=send) is the only delivery path for a visible text reply; the target defaults to ${destinationLabel}. Reactions and other non-text message actions remain visible outcomes when appropriate. Your normal final answer is private and is never posted to ${destinationLabel}.`,
     gate: [
       `If this turn needs no ${responseLabel}, do not call message(action=send) and end the turn.`,
       "If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.",
@@ -151,7 +151,7 @@ export function buildGroupChatContext(params: {
     params.sourceReplyDeliveryMode === "message_tool_only"
       ? buildMessageToolOnlyDelivery({
           destinationLabel,
-          responseLabel: `visible ${sharedChatNoun === "channel" ? "channel" : "group"} response`,
+          responseLabel: `visible ${sharedChatNoun === "channel" ? "channel" : "group"} text reply`,
         })
       : undefined;
 
@@ -219,7 +219,7 @@ export function buildDirectChatContext(params: {
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     const delivery = buildMessageToolOnlyDelivery({
       destinationLabel: "this conversation",
-      responseLabel: "visible direct response",
+      responseLabel: "visible direct text reply",
     });
     lines.push(delivery.mechanism, ...delivery.gate);
     return lines.join(" ");

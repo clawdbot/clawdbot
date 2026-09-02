@@ -238,16 +238,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 14049
   },
   "openClawDeveloperInstructions": {
-    "chars": 3294,
-    "roughTokens": 824
+    "chars": 3393,
+    "roughTokens": 849
   },
   "totalTextOnly": {
-    "chars": 27240,
-    "roughTokens": 6810
+    "chars": 27339,
+    "roughTokens": 6835
   },
   "totalWithDynamicToolsJson": {
-    "chars": 83437,
-    "roughTokens": 20860
+    "chars": 83536,
+    "roughTokens": 20884
   },
   "userInputText": {
     "chars": 863,
@@ -467,7 +467,7 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 ```
 
 
-You are in a Telegram direct conversation. In this conversation the message tool with action=send is your only way to be heard; the target defaults to this conversation. Your normal final answer is private and is never posted to this conversation. If this turn needs no visible direct response, do not call message(action=send) and end the turn. If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.
+You are in a Telegram direct conversation. In this conversation, message(action=send) is the only delivery path for a visible text reply; the target defaults to this conversation. Reactions and other non-text message actions remain visible outcomes when appropriate. Your normal final answer is private and is never posted to this conversation. If this turn needs no visible direct text reply, do not call message(action=send) and end the turn. If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.
 ````
 
 ### Developer: Codex Collaboration Mode Instructions

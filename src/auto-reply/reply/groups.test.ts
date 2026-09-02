@@ -58,7 +58,12 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
       silentToken: "NO_REPLY",
     });
-    expect(toolOnlyContext).toContain("message tool with action=send is your only way to be heard");
+    expect(toolOnlyContext).toContain(
+      "message(action=send) is the only delivery path for a visible text reply",
+    );
+    expect(toolOnlyContext).toContain(
+      "Reactions and other non-text message actions remain visible outcomes when appropriate.",
+    );
     expect(toolOnlyContext).toContain("Be a good group participant");
     expect(toolOnlyContext).toContain("Avoid Markdown tables");
     expect(toolOnlyContext).toContain("wrap bare URLs");
@@ -74,9 +79,9 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
       silentToken: "NO_REPLY",
     });
-    expect(channelToolOnlyContext).toContain("visible channel response");
+    expect(channelToolOnlyContext).toContain("visible channel text reply");
     expect(channelToolOnlyContext).toContain("posted to this channel");
-    expect(channelToolOnlyContext).not.toContain("visible group response");
+    expect(channelToolOnlyContext).not.toContain("visible group text reply");
     expect(channelToolOnlyContext).not.toContain("posted to the group");
     expect(
       isolatedGroups.buildGroupIntro({
@@ -116,7 +121,12 @@ describe("group runtime loading", () => {
       sessionCtx: { ChatType: "direct", Provider: "telegram" },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(toolOnlyContext).toContain("message tool with action=send is your only way to be heard");
+    expect(toolOnlyContext).toContain(
+      "message(action=send) is the only delivery path for a visible text reply",
+    );
+    expect(toolOnlyContext).toContain(
+      "Reactions and other non-text message actions remain visible outcomes when appropriate.",
+    );
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain("NO_REPLY");
     expect(toolOnlyContext).not.toContain("Your replies are automatically sent");
@@ -137,7 +147,7 @@ describe("group runtime loading", () => {
           silentToken: "NO_REPLY",
         }),
       destination: "this group chat",
-      responseLabel: "visible group response",
+      responseLabel: "visible group text reply",
     },
     {
       name: "channel",
@@ -147,7 +157,7 @@ describe("group runtime loading", () => {
           sourceReplyDeliveryMode: "message_tool_only",
         }),
       destination: "this channel",
-      responseLabel: "visible channel response",
+      responseLabel: "visible channel text reply",
     },
     {
       name: "direct conversation",
@@ -157,16 +167,20 @@ describe("group runtime loading", () => {
           sourceReplyDeliveryMode: "message_tool_only",
         }),
       destination: "this conversation",
-      responseLabel: "visible direct response",
+      responseLabel: "visible direct text reply",
     },
   ])(
     "keeps the message_tool_only reply decision separable from its delivery path: $name",
     ({ context, destination, responseLabel }) => {
       const prompt = context();
 
-      // Mechanism: exactly one delivery path, stated as a fact about the destination.
+      // Mechanism: exactly one text-delivery path, without excluding visible
+      // reaction-only outcomes.
       expect(prompt).toContain(
-        `In ${destination} the message tool with action=send is your only way to be heard`,
+        `In ${destination}, message(action=send) is the only delivery path for a visible text reply`,
+      );
+      expect(prompt).toContain(
+        "Reactions and other non-text message actions remain visible outcomes when appropriate.",
       );
       expect(prompt).toContain(
         `Your normal final answer is private and is never posted to ${destination}.`,
@@ -194,7 +208,7 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
       silentToken: "NO_REPLY",
     });
-    const gateIndex = prompt.indexOf("If this turn needs no visible group response");
+    const gateIndex = prompt.indexOf("If this turn needs no visible group text reply");
     const selectivityIndex = prompt.lastIndexOf("Be extremely selective:");
     expect(gateIndex).toBeGreaterThan(-1);
     expect(selectivityIndex).toBeGreaterThan(gateIndex);
