@@ -9,11 +9,13 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
+  normalizeChannelId: vi.fn(),
   resolveMissingOfficialExternalChannelPluginRepairHints: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: mocks.listChannelPlugins,
+  normalizeChannelId: mocks.normalizeChannelId,
 }));
 
 vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
@@ -80,6 +82,9 @@ function createRunningWhatsappContext() {
 describe("webHandlers web.login.start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.normalizeChannelId.mockImplementation((channelId: string) =>
+      channelId === "wechat" || channelId === "weixin" ? "openclaw-weixin" : channelId,
+    );
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
   });
 
@@ -304,7 +309,7 @@ describe("webHandlers web.login.start", () => {
     );
   });
 
-  it("routes an explicit channel to its QR-login provider", async () => {
+  it("routes the explicit WeChat alias to its QR-login provider", async () => {
     const whatsappLogin = vi.fn();
     const weixinLogin = vi.fn().mockResolvedValue({
       message: "scan in WeChat",
@@ -329,7 +334,7 @@ describe("webHandlers web.login.start", () => {
       'webHandlers["web.login.start"] test invariant',
     )(
       createOptions(
-        { channel: "openclaw-weixin", accountId: "work" },
+        { channel: "wechat", accountId: "work" },
         {
           respond,
         },
@@ -354,6 +359,9 @@ describe("webHandlers web.login.start", () => {
 describe("webHandlers web.login.wait", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.normalizeChannelId.mockImplementation((channelId: string) =>
+      channelId === "wechat" || channelId === "weixin" ? "openclaw-weixin" : channelId,
+    );
     mocks.resolveMissingOfficialExternalChannelPluginRepairHints.mockReturnValue([]);
   });
 
@@ -415,7 +423,7 @@ describe("webHandlers web.login.wait", () => {
     );
   });
 
-  it("routes and correlates an explicit channel login session", async () => {
+  it("routes and correlates the explicit Weixin alias login session", async () => {
     const whatsappWait = vi.fn();
     const weixinWait = vi.fn().mockResolvedValue({ connected: true, message: "connected" });
     mocks.listChannelPlugins.mockReturnValue([
@@ -437,7 +445,7 @@ describe("webHandlers web.login.wait", () => {
     )(
       createOptions(
         {
-          channel: "openclaw-weixin",
+          channel: "weixin",
           accountId: "work",
           sessionKey: "weixin-session",
         },
@@ -447,7 +455,7 @@ describe("webHandlers web.login.wait", () => {
             id: "req-3",
             method: "web.login.wait",
             params: {
-              channel: "openclaw-weixin",
+              channel: "weixin",
               accountId: "work",
               sessionKey: "weixin-session",
             },

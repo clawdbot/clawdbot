@@ -7,7 +7,7 @@ import {
   validateWebLoginStartParams,
   validateWebLoginWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listChannelPlugins, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { formatForLog } from "../ws-log.js";
@@ -20,7 +20,10 @@ const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 const resolveWebLoginProvider = (channelId?: string) => {
   const plugins = listChannelPlugins();
   if (channelId) {
-    return plugins.find((plugin) => plugin.id === channelId) ?? null;
+    const normalizedChannelId = normalizeChannelId(channelId);
+    return normalizedChannelId
+      ? (plugins.find((plugin) => plugin.id === normalizedChannelId) ?? null)
+      : null;
   }
   return (
     plugins.find((plugin) =>
