@@ -17,6 +17,10 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import {
+  LOGIN_SHELL_PATH_CARRIER_ENV,
+  prependCarrierPathToShellPayload,
+} from "../infra/login-shell-path-carrier.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
@@ -649,9 +653,9 @@ function wrapPosixCommandWithPathPrepend(
   }
 
   // Pass the prepend string safely via a temporary environment variable.
-  env.OPENCLAW_PREPEND_PATH = pathPrepend.join(path.delimiter);
+  env[LOGIN_SHELL_PATH_CARRIER_ENV] = pathPrepend.join(path.delimiter);
 
-  return `export PATH="\${OPENCLAW_PREPEND_PATH}\${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; ${command}`;
+  return prependCarrierPathToShellPayload(command);
 }
 
 /** Starts a host or sandbox exec process and registers it for polling/backgrounding. */

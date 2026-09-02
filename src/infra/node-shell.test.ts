@@ -1,4 +1,8 @@
 // Covers platform shell argv construction.
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildNodeShellCommand, restoreLoginShellServicePath } from "./node-shell.js";
 
@@ -50,6 +54,7 @@ describe("restoreLoginShellServicePath", () => {
     for (const argv of [
       ["/bin/sh", "-lc", "echo hi"],
       ["/bin/sh", "-l", "-c", "echo hi"],
+      ["/bin/sh", "-c", "-l", "echo hi"],
       ["/usr/bin/bash", "-cl", "echo hi"],
       ["dash", "-lc", "echo hi"],
       ["/bin/zsh", "-lc", "echo hi"],
@@ -94,6 +99,33 @@ describe("restoreLoginShellServicePath", () => {
     expect(result.argv.at(-1)).toBe(rewritten("echo hi"));
     expect(result.env?.OPENCLAW_PREPEND_PATH).toBe(hostile);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps the service PATH ahead of a profile that resets it in a real login shell",
+    () => {
+      // The bug is a shell-startup interaction, so drive a real login shell
+      // against a profile that overwrites PATH the way Debian /etc/profile does.
+      const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-profile-")));
+      const serviceBin = path.join(home, "service-bin");
+      fs.mkdirSync(serviceBin);
+      fs.writeFileSync(path.join(home, ".profile"), 'PATH="/usr/local/bin:/usr/bin:/bin"\n');
+      const probe = path.join(serviceBin, "openclaw-path-probe");
+      fs.writeFileSync(probe, "#!/bin/sh\nprintf ok\n", { mode: 0o755 });
+      try {
+        const command = buildNodeShellCommand("command -v openclaw-path-probe", "linux");
+        const baseEnv = { HOME: home, PATH: `${serviceBin}:/usr/bin:/bin` };
+        const run = (argv: string[], env: Record<string, string>) =>
+          execFileSync(argv[0] ?? "", argv.slice(1), { env, encoding: "utf8" }).trim();
+
+        expect(() => run(command, baseEnv)).toThrow();
+
+        const restored = restoreLoginShellServicePath(command, baseEnv);
+        expect(run(restored.argv, restored.env ?? {})).toBe(probe);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("overrides a request-scoped carrier variable of the same name", () => {
     const result = restoreLoginShellServicePath(["/bin/sh", "-lc", "echo hi"], {
