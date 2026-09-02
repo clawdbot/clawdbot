@@ -156,6 +156,20 @@ when it will not repeat on the same date.
 
 ## Missing summaries
 
+Meeting notes use the owning agent's utility model first, then its primary model
+when needed. If no model is available, a request times out, or the model returns
+invalid output, OpenClaw saves deterministic heuristic notes instead. Model
+generation enhances the notes; it does not gate saving them. Notes include an
+overview, participants, the transcript, decisions, action items, and risks.
+Participants come from speaker labels in first-appearance order, not model guesses.
+Summary JSON records `source` as `model` or `heuristic` and, for model notes, the
+model reference used.
+
+The model receives at most 48,000 transcript characters, preserving the beginning
+and end when the middle must be omitted. Stored utterances remain intact. Use
+`transcripts summarize` (the agent tool's `summarize` action) to regenerate notes
+from the stored transcript, including after changing model configuration.
+
 The tool's `status` action lists active capture subscriptions, not historical
 notes. When a provider ends or replaces a subscription, OpenClaw records
 `stoppedAt` and stores its summary; the transcript remains available to `list`,
@@ -229,14 +243,15 @@ Meeting transcript capture is enabled by default. To opt out globally:
   notes should not be persisted on the host. An explicitly requested meeting
   `transcribe` mode keeps its existing bounded live-caption tail, but does not
   write durable rows while this setting is false.
-  Configure auto-start sources with `transcripts.autoStart`. Each entry is
-  enabled by being present; omit an entry to disable that source. `discord-voice`
-  is the bundled auto-start-capable source and requires `guildId` and
-  `channelId`. When exactly one configured Discord account has credentials and
-  voice enabled, OpenClaw selects it automatically. When multiple accounts are
-  voice-capable, OpenClaw selects a capable `channels.discord.defaultAccount`.
-  Otherwise, set `accountId` to the corresponding key under
-  `channels.discord.accounts`; an omitted account is rejected as ambiguous:
+
+Configure auto-start sources with `transcripts.autoStart`. Each entry is
+enabled by being present; omit an entry to disable that source. `discord-voice`
+is the bundled auto-start-capable source and requires `guildId` and
+`channelId`. When exactly one configured Discord account has credentials and
+voice enabled, OpenClaw selects it automatically. When multiple accounts are
+voice-capable, OpenClaw selects a capable `channels.discord.defaultAccount`.
+Otherwise, set `accountId` to the corresponding key under
+`channels.discord.accounts`; an omitted account is rejected as ambiguous:
 
 ```json
 {
@@ -247,12 +262,34 @@ Meeting transcript capture is enabled by default. To opt out globally:
         "providerId": "discord-voice",
         "accountId": "work",
         "guildId": "1234567890",
-        "channelId": "2345678901"
+        "channelId": "2345678901",
+        "whenOccupied": true
       }
     ]
   }
 }
 ```
+
+`whenOccupied` defaults to `false`: capture starts with the Gateway and continues
+until stopped. Set it to `true` to wait for humans, then capture one meeting per
+occupancy episode. It also starts when humans are already present at startup;
+bots never count. After the last human leaves, a fixed 30-second grace period
+allows short reconnects without splitting the meeting. A human returning during
+that grace cancels the stop. Otherwise, OpenClaw stops capture and generates notes.
+
+Occupancy episodes use generated IDs; an entry's `sessionId` is ignored. To
+continue a meeting across a Gateway restart, OpenClaw reopens the most recent
+session for the same provider, account, guild, and channel when it stopped within
+the last 10 minutes. The session keeps its original ID and start time, and new
+utterances append to it. A later return within that window also reuses the meeting;
+outside the window, capture gets a new ID.
+
+The provider must report occupancy. `discord-voice` supports it; an unsupported
+provider logs a warning and skips the entry instead of capturing continuously.
+Configure at most one `whenOccupied: true` entry per Discord account and guild,
+even when the channel IDs differ: a Discord bot can occupy only one voice channel
+per guild. Later conflicting entries are skipped with a warning. For the complete
+listen-only setup, see [Discord meeting notes](/channels/discord#meeting-notes).
 
 The meeting provider ids are `google-meet`, `teams`, and `zoom`. Their aliases
 are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`, and
