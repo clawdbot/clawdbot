@@ -1,11 +1,11 @@
 import Foundation
-import OpenClawKit
 import OpenClawProtocol
 import Testing
 import UIKit
 import UserNotifications
 @testable import OpenClaw
 @testable import OpenClawChatUI
+@testable import OpenClawKit
 
 @MainActor
 private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
@@ -673,6 +673,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         queuedForDelivery: false,
         transport: "sendMessage")
     var sendError: Error?
+    var sendNotificationHandler: (() async throws -> WatchNotificationSendResult)?
     var lastSent: (id: String, params: OpenClawWatchNotifyParams, gatewayStableID: String?)?
     var lastDirectNodeSetupCode: String?
     var lastSentExecApprovalPrompt: OpenClawWatchExecApprovalPromptMessage?
@@ -733,6 +734,9 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         gatewayStableID: String?) async throws -> WatchNotificationSendResult
     {
         self.lastSent = (id: id, params: params, gatewayStableID: gatewayStableID)
+        if let sendNotificationHandler {
+            return try await sendNotificationHandler()
+        }
         if let sendError {
             throw sendError
         }
@@ -7014,6 +7018,32 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(center.addCalls == 1)
     }
 
+    @Test @MainActor func `cancelled chat push cannot continue as speech after authorization`() async throws {
+        let (center, appModel) = makeNotificationModel(status: .denied)
+        let authorizationGate = NotificationAuthorizationGate()
+        center.authorizationStatusHandler = { await authorizationGate.wait() }
+        let request = try makeInvokeRequest(
+            id: "cancelled-chat-push",
+            command: OpenClawChatCommand.push.rawValue,
+            params: OpenClawChatPushParams(text: "Cancelled notification test", speak: true))
+        let invocation = Task { @MainActor in await appModel.handleInvoke(request) }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(authorizationGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let authorizationStarted = await authorizationGate.hasStarted()
+        invocation.cancel()
+        await authorizationGate.resume(returning: .denied)
+        let response = await invocation.value
+        await Task.yield()
+        TalkSystemSpeechSynthesizer.shared.stop()
+
+        #expect(authorizationStarted)
+        #expect(!response.ok)
+        #expect(response.error?.message == "node invoke cancelled")
+        #expect(center.addCalls == 0)
+    }
+
     @Test @MainActor func `handle invoke rejects invalid screen format`() async {
         let appModel = NodeAppModel()
         let params = OpenClawScreenRecordParams(format: "gif")
@@ -7119,6 +7149,76 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(payload.deliveredImmediately == false)
         #expect(payload.queuedForDelivery == true)
         #expect(payload.transport == "transferUserInfo")
+    }
+
+    @Test @MainActor func `cancelled watch notification preserves cancellation after transport`() async throws {
+        let restorePreference = overrideNotificationServingPreference(false)
+        defer { restorePreference() }
+        let (watchService, appModel) = makeWatchModel()
+        let transportGate = WatchSnapshotSendGate()
+        watchService.sendNotificationHandler = {
+            await transportGate.wait()
+            return WatchNotificationSendResult(
+                deliveredImmediately: false,
+                queuedForDelivery: true,
+                transport: "transferUserInfo")
+        }
+        let request = try makeInvokeRequest(
+            id: "cancelled-watch-notify",
+            command: OpenClawWatchCommand.notify.rawValue,
+            params: OpenClawWatchNotifyParams(title: "OpenClaw", body: "Cancelled mirror test"))
+        let invocation = Task { @MainActor in await appModel.handleInvoke(request) }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(transportGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let transportStarted = await transportGate.hasStarted()
+        invocation.cancel()
+        await transportGate.resume()
+        let response = await invocation.value
+
+        #expect(transportStarted)
+        #expect(!response.ok)
+        #expect(response.error?.message == "node invoke cancelled")
+    }
+
+    @Test @MainActor func `watch notification receipt accepts an independent phone mirror`() async throws {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
+        let center = MockBootstrapNotificationCenter()
+        let (watchService, appModel) = makeWatchModel(notificationCenter: center)
+        let mirrorGate = WatchSnapshotSendGate()
+        center.authorizationStatusHandler = {
+            await mirrorGate.wait()
+            return .authorized
+        }
+        watchService.nextSendResult = WatchNotificationSendResult(
+            deliveredImmediately: false,
+            queuedForDelivery: true,
+            transport: "transferUserInfo")
+        let request = try makeInvokeRequest(
+            id: "accepted-watch-mirror",
+            command: OpenClawWatchCommand.notify.rawValue,
+            params: OpenClawWatchNotifyParams(title: "OpenClaw", body: "Accepted mirror test"))
+        var response: BridgeInvokeResponse?
+        let invocation = Task { @MainActor in
+            response = await appModel.handleInvoke(request)
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(mirrorGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let mirrorStarted = await mirrorGate.hasStarted()
+        await waitForMainActorWork { response != nil }
+        let responseBeforeMirror = response
+        invocation.cancel()
+        await mirrorGate.resume()
+        await invocation.value
+        await waitForMainActorWork { center.addCalls == 1 }
+
+        #expect(mirrorStarted)
+        #expect(responseBeforeMirror?.ok == true)
+        #expect(center.addCalls == 1)
     }
 
     @Test @MainActor func `watch reply codec preserves prompt gateway owner`() throws {

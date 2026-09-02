@@ -125,12 +125,6 @@ fun resolveGatewayAccentArgb(config: JsonObject?): Long? {
   return parseHexColorArgb((chosen as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull)
 }
 
-fun resolvePublishedGatewayAccentArgb(
-  profileAccentArgb: Long?,
-  gatewayFallbackAccentArgb: Long?,
-  profileAccentFresh: Boolean,
-): Long? = if (profileAccentFresh) profileAccentArgb ?: gatewayFallbackAccentArgb else gatewayFallbackAccentArgb
-
 /** Converts gateway invocation throwables into protocol code/message pairs. */
 fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
   val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = "UNAVAILABLE: error")

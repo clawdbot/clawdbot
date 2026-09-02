@@ -515,12 +515,21 @@ describe("failed package update recovery safety", () => {
         { name: "global update", command: "npm", cwd: "/", durationMs: 1, exitCode: 0 },
         { name: "openclaw doctor", command: "doctor", cwd: "/", durationMs: 1, exitCode: 1 },
       ],
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      recovery: {
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+        packageRollbackVerified: true,
+      },
       durationMs: 1,
     });
     expect(failure.exitCode).toBe(1);
 
     expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.writeSentinel.mock.lastCall?.[0].result.recovery).toEqual({
+      serviceRestartSafe: false,
+      reason: "runtime-verification-failed",
+      packageRollbackVerified: true,
+    });
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Managed gateway remains stopped"));
   });
 });

@@ -339,8 +339,9 @@ class ChatControllerBranchCoordinationTest {
       assertNull(outbox.branchState("gateway-a", branchScope)?.lastActiveLeafEntryId)
       assertTrue(controller.sendMessageAwaitAcceptance("submitted head", "off", emptyList()))
       val head = outbox.load("gateway-a").single()
-      assertEquals(ChatOutboxStatus.Accepted, head.status)
       runningHead.set(head)
+      // Admission can return while the flush lane is still persisting its ACK.
+      awaitBranchProgress { outbox.load("gateway-a").single().status == ChatOutboxStatus.Accepted }
 
       // Keep the target's reconciled scope while moving its live run offscreen.
       healthy.set(false)
@@ -1075,6 +1076,8 @@ class ChatControllerBranchCoordinationTest {
 
     suspend fun admit(): ChatOutboxItem {
       assertTrue(controller.sendMessageAwaitAcceptance("retained input", "off", listOf(attachment)))
+      // Admission owns durability; a newer refresh may still own the visible snapshot.
+      awaitBranchProgress { controller.outboxItems.value.isNotEmpty() }
       return controller.outboxItems.value.single().also {
         assertEquals(ChatOutboxStatus.Queued, it.status)
         assertEquals("retained input", it.text)

@@ -126,6 +126,49 @@ class ChatControllerSessionSearchTest {
     }
 
   @Test
+  fun pagedSessionRefreshKeepsActiveSettingsAndItsQueryLimit() =
+    runTest {
+      val activeKey = "agent:main:older"
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "chat.history",
+        """{"sessionId":"older-id","messages":[],"sessionInfo":{"key":"$activeKey","modelProvider":"openai","model":"reasoner"}}""",
+      )
+      gateway.respond("sessions.list") { params ->
+        val limit = requireNotNull(paramField(params, "limit")).toInt()
+        val rows = (1..limit).map { sessionRowJson("agent:main:recent-$it", updatedAt = 500L - it) }
+        buildJsonObject {
+          put("sessions", JsonArray(rows))
+          put("totalCount", JsonPrimitive(500))
+          put("hasMore", JsonPrimitive(true))
+        }.toString()
+      }
+      val controller = newController(gateway)
+      controller.load(activeKey)
+      advanceUntilIdle()
+      assertEquals("openai/reasoner", controller.selectedModelRef.value)
+
+      // Lifecycle snapshots intentionally omit catalog-backed model fields.
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"$activeKey","agentId":"main","phase":"start","runId":"remote-run","session":{"key":"$activeKey","sessionId":"older-id","hasActiveRun":true,"activeRunIds":["remote-run"],"permissionMode":null,"permissionModePending":false}}""",
+      )
+      assertEquals("openai/reasoner", controller.selectedModelRef.value)
+
+      controller.refreshSessions(limit = 2)
+      advanceUntilIdle()
+      repeat(2) {
+        controller.handleGatewayEvent(
+          "sessions.changed",
+          """{"sessionKey":"agent:main:roster-invalidated","agentId":"main"}""",
+        )
+        advanceUntilIdle()
+        assertEquals("2", paramField(gateway.calls.last { it.method == "sessions.list" }.paramsJson, "limit"))
+        assertEquals("openai/reasoner", controller.selectedModelRef.value)
+      }
+    }
+
+  @Test
   fun fetchSessionListFallsBackToLocalFilterWhenOffline() =
     runTest {
       val gateway = ScriptedGateway(json)
@@ -263,6 +306,116 @@ class ChatControllerSessionSearchTest {
       releaseResponse.complete(sessionsListJson(sessionRowJson(key = "agent:scout:old", updatedAt = 10)))
 
       assertNull(pending.await())
+    }
+
+  @Test
+  fun rememberedUnscopedSelectionUsesCapturedOwnerOutsideRecentPage() =
+    runTest {
+      val owner = ChatAgentSessionSelectionOwner("gateway-a", "scout")
+      val gateway = ScriptedGateway(json)
+      gateway.respond("chat.history") { params ->
+        val key = requireNotNull(paramField(params, "sessionKey"))
+        val agentId = requireNotNull(paramField(params, "agentId"))
+        """{"sessionId":"$agentId-session","messages":[],"sessionInfo":{"key":"$key","sessionId":"$agentId-session","agentId":"$agentId","archived":false}}"""
+      }
+      gateway.respondWith("sessions.list", sessionsListJson(sessionRowJson("agent:scout:newer", updatedAt = 100)))
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { ChatCacheScope("gateway-a", 1) },
+        )
+      controller.switchSession("global", "scout")
+      runCurrent()
+      assertEquals("scout-session", controller.sessionId.value)
+      controller.switchSession("agent:writer:other", "writer", rememberSelection = false)
+      runCurrent()
+      val historyCalls = gateway.calls.count { it.method == "chat.history" }
+
+      val selection = requireNotNull(controller.resolveSessionSelection(owner, "agent:scout:main"))
+
+      assertEquals("global", selection.targetSessionKey)
+      assertEquals("agent:writer:other", controller.sessionKey.value)
+      assertEquals("writer", controller.sessionOwnerAgentId.value)
+      val lookup =
+        gateway.calls
+          .filter { it.method == "chat.history" }
+          .drop(historyCalls)
+          .single()
+      assertEquals("global", paramField(lookup.paramsJson, "sessionKey"))
+      assertEquals("scout", paramField(lookup.paramsJson, "agentId"))
+      assertEquals("1", paramField(lookup.paramsJson, "limit"))
+
+      controller.restoreSessionSelection(owner, selection, "agent:scout:main")
+      runCurrent()
+      assertEquals("global", controller.sessionKey.value)
+      assertEquals("scout", controller.sessionOwnerAgentId.value)
+      assertEquals("scout-session", controller.sessionId.value)
+    }
+
+  @Test
+  fun rememberedSelectionRejectsArchiveHistoryPredatingObservedSuccessor() =
+    runTest {
+      val chosenKey = "agent:scout:chosen"
+      val mainKey = "agent:scout:main"
+      val owner = ChatAgentSessionSelectionOwner("gateway-a", "scout")
+      val scope = ChatCacheScope("gateway-a", 1)
+      var sessionId = "session-before"
+      val descriptionStarted = CompletableDeferred<Unit>()
+      val releaseDescription = CompletableDeferred<Unit>()
+      var lookupArchived = true
+      val gateway = ScriptedGateway(json)
+      gateway.respond("chat.history") { params ->
+        if (paramField(params, "limit") == "1") {
+          assertEquals(chosenKey, paramField(params, "sessionKey"))
+          assertEquals("scout", paramField(params, "agentId"))
+          val response = """{"sessionId":"$sessionId","messages":[],"sessionInfo":{"key":"$chosenKey","sessionId":"$sessionId","agentId":"scout","archived":$lookupArchived}}"""
+          descriptionStarted.complete(Unit)
+          releaseDescription.await()
+          response
+        } else {
+          historyResponse(sessionId, listOf(ReplayHistoryMessage("user", sessionId, 1)))
+        }
+      }
+      gateway.respondWith("sessions.list", sessionsListJson(sessionRowJson("agent:scout:newer", updatedAt = 100)))
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = gateway::request,
+          cacheScope = { scope },
+        )
+      controller.switchSession(chosenKey, "scout")
+      runCurrent()
+      assertEquals("session-before", controller.sessionId.value)
+      val selectionGeneration = controller.selectionGeneration.value
+      val selection = async { controller.resolveSessionSelection(owner, mainKey) }
+      try {
+        runCurrent()
+        descriptionStarted.await()
+        sessionId = "session-successor"
+        controller.refresh()
+        runCurrent()
+        assertEquals(sessionId, controller.sessionId.value)
+        assertEquals(selectionGeneration, controller.selectionGeneration.value)
+
+        releaseDescription.complete(Unit)
+        controller.restoreSessionSelection(owner, requireNotNull(selection.await()), mainKey)
+        assertEquals("An older archive lookup must not replace live successor history", chosenKey, controller.sessionKey.value)
+
+        // The rejected result must not silently retire the remembered intent either.
+        controller.switchSession("agent:writer:other", "writer", rememberSelection = false)
+        runCurrent()
+        lookupArchived = false
+        val next = requireNotNull(controller.resolveSessionSelection(owner, mainKey))
+        controller.restoreSessionSelection(owner, next, mainKey)
+        runCurrent()
+        assertEquals(chosenKey, controller.sessionKey.value)
+        assertEquals("session-successor", controller.sessionId.value)
+      } finally {
+        releaseDescription.complete(Unit)
+      }
     }
 
   @Test

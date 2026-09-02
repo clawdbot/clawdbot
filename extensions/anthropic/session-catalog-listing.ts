@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
+import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-node-helpers.js";
 import {
   decodeOffset,
@@ -23,11 +24,7 @@ import {
   readTranscriptParams,
   unwrapNodePayload,
 } from "./session-catalog-parsing.js";
-import {
-  configuredClaudeConfigDir,
-  currentHomeDir,
-  gatewayClaudeScanOptions,
-} from "./session-catalog-scan.js";
+import { configuredClaudeConfigDir, gatewayClaudeScanOptions } from "./session-catalog-scan.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
@@ -59,7 +56,7 @@ export async function listLocalClaudeSessionPage(
   homeDir?: string,
   scanOptions?: { configDir?: string; includeDesktop?: boolean },
 ): Promise<ClaudeSessionCatalogPage> {
-  const resolvedHome = homeDir ?? currentHomeDir();
+  const resolvedHome = homeDir ?? resolveClaudeCatalogHomeDir();
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readListParams(value);
@@ -88,7 +85,7 @@ export async function readLocalClaudeTranscriptPage(
   homeDir?: string,
   scanOptions?: { configDir?: string; includeDesktop?: boolean },
 ): Promise<Omit<ClaudeSessionTranscriptPage, "hostId" | "label">> {
-  const resolvedHome = homeDir ?? currentHomeDir();
+  const resolvedHome = homeDir ?? resolveClaudeCatalogHomeDir();
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
@@ -235,7 +232,7 @@ export async function listClaudeSessionCatalog(params: {
                       ? { cursor: query.cursors[CLAUDE_LOCAL_SESSION_HOST_ID] }
                       : {}),
                   },
-                  currentHomeDir(),
+                  resolveClaudeCatalogHomeDir(),
                   scanOptions,
                 )),
               };
@@ -383,7 +380,7 @@ export async function readClaudeSessionTranscript(params: {
           limit: params.limit,
           ...(cursor !== undefined ? { cursor } : {}),
         },
-        currentHomeDir(),
+        resolveClaudeCatalogHomeDir(),
         gatewayClaudeScanOptions(params.allowProcessHomeFallback),
       )),
     };

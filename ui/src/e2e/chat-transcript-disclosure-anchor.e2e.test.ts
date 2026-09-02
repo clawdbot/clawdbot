@@ -483,9 +483,13 @@ suite.define(() => {
             await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
           }
           await expect.poll(() => bubble.count()).toBe(0);
-          await thread.evaluate((element, offset) => {
-            element.scrollTop = offset;
-          }, final.returnOffset);
+          // Returning is reader input: retire any still-reconciling latest command.
+          await thread.hover();
+          const returnDelta = await thread.evaluate(
+            (element, offset) => offset - element.scrollTop,
+            final.returnOffset,
+          );
+          await page.mouse.wheel(0, returnDelta);
           await bubble
             .getByText("Recovered paragraph 1.", { exact: false })
             .waitFor({ state: "visible" });

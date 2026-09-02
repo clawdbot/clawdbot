@@ -17,7 +17,7 @@ import {
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import type { AgentSessionEvent } from "../../sessions/agent-session-types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
-import { resolveEmbeddedAgentStreamFn } from "../stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "../stream-resolution.js";
 
 const mocks = vi.hoisted(() => ({
   abortable: vi.fn(),
@@ -324,12 +324,12 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         settingsManager,
         contextOverflowRecoveryOwner: "caller",
       });
-      session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+      session.agent.streamFn = resolveEmbeddedAgentStream({
         currentStreamFn: session.agent.streamFn,
         model,
         sessionId: session.sessionId,
         signal: fixture.input.runAbortController.signal,
-      });
+      }).streamFn;
       const summaryStarted = createDeferred();
       const releaseSummary = createDeferred();
       const events: EmbeddedContextAccountingEvent[] = [];

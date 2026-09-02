@@ -254,9 +254,10 @@ export function readSessionEntryCount(database: OpenClawAgentDatabase): number {
   return count;
 }
 
-export function readSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
+export function* iterateSessionEntryKeys(
+  database: OpenClawAgentDatabaseReader,
+): IterableIterator<string> {
   const db = getSessionKysely(database.db);
-  const keys: string[] = [];
   for (const row of iterateSqliteQuerySync(
     database.db,
     db
@@ -265,10 +266,9 @@ export function readSessionEntryKeys(database: OpenClawAgentDatabaseReader): str
       .orderBy("session_key", "asc"),
   )) {
     if (row.entry_json === null || parseSessionEntryRow({ entry_json: row.entry_json })) {
-      keys.push(row.session_key);
+      yield row.session_key;
     }
   }
-  return keys;
 }
 
 export function resolveLifecyclePrimaryEntry(

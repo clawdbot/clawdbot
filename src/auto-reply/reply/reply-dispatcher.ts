@@ -3,11 +3,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  findPlatformMessageRejectedError,
-  isProvenDeliveryNotSentError,
-} from "../../infra/delivery-recovery.shared.js";
-import { collectErrorGraphCandidates, toErrorObject } from "../../infra/errors.js";
+import { isRetryableDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -69,27 +66,6 @@ type ReplyDispatchCancelHandler = (
 ) => Promise<void> | void;
 
 export type { ReplyDispatchDeliveryOutcome };
-
-function isRetryableNoSendFailure(error: unknown): boolean {
-  return (
-    isProvenDeliveryNotSentError(error) &&
-    !findPlatformMessageRejectedError(error) &&
-    !collectErrorGraphCandidates(error, (candidate) => [
-      candidate.cause,
-      candidate.original,
-      candidate.error,
-      candidate.reason,
-      ...(Array.isArray(candidate.errors) ? candidate.errors : []),
-    ]).some(
-      (candidate) =>
-        isRecord(candidate) &&
-        (candidate.sentBeforeError === true ||
-          candidate.visibleReplySent === true ||
-          (isRecord(candidate.deliveryResult) &&
-            candidate.deliveryResult.visibleReplySent === true)),
-    )
-  );
-}
 
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
@@ -457,7 +433,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         })(),
       };
     } catch (error) {
-      const retryableNoSend = isRetryableNoSendFailure(error);
+      const retryableNoSend = isRetryableDeliveryNotSentError(error);
       if (retryableNoSend) {
         retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
       }

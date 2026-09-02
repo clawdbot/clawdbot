@@ -11,8 +11,8 @@ import {
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
-  isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolverCore,
+  resolveChannelConfigEnablement,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -219,6 +219,7 @@ function resolvePluginActivationState(params: {
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
   autoEnabledReason?: string;
+  channelIds?: readonly string[];
 }): PluginActivationState {
   return toPluginActivationState(
     resolvePluginActivationDecisionShared({
@@ -230,7 +231,7 @@ function resolvePluginActivationState(params: {
           plugins: params.config,
         }),
       allowBundledChannelExplicitBypassesAllowlist: true,
-      isBundledChannelEnabledByChannelConfig: isBundledChannelEnabledByChannelConfigShared,
+      resolveChannelConfigEnablement,
     }),
   );
 }
@@ -254,6 +255,7 @@ type EffectiveActivationParams = {
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
   activationSource?: PluginActivationConfigSource;
+  channelIds?: readonly string[];
 };
 
 export const resolveEffectiveEnableState = (
@@ -269,6 +271,7 @@ export function resolveEffectivePluginActivationState(params: {
   enabledByDefault?: EffectiveActivationParams["enabledByDefault"];
   activationSource?: EffectiveActivationParams["activationSource"];
   autoEnabledReason?: string;
+  channelIds?: EffectiveActivationParams["channelIds"];
 }): PluginActivationState {
   return resolvePluginActivationState(params);
 }

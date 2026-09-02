@@ -563,6 +563,30 @@ function isPackedAiRuntimeTarball(filename: string) {
   return /^openclaw-ai-[A-Za-z0-9._-]+\.tgz$/u.test(filename);
 }
 
+function runPackageTar(
+  flags: string[],
+  tarballPath: string,
+  directory: string,
+  args: string[] = [],
+  env?: NodeJS.ProcessEnv,
+) {
+  // Frozen-source harnesses use system tar without their own dependency install.
+  // Basenames avoid GNU tar's drive-as-host parsing; forward slashes prevent
+  // Windows directory separators from becoming -C backslash escapes.
+  return run(
+    "tar",
+    [...flags, path.basename(tarballPath), "-C", directory.replaceAll(path.sep, "/"), ...args],
+    path.dirname(tarballPath),
+    {
+      env,
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+        DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+      ),
+    },
+  );
+}
+
 export async function prepareBundledAiRuntimePackage(
   sourceDir: string,
   outputDir: string,
@@ -582,20 +606,7 @@ export async function prepareBundledAiRuntimePackage(
   const extractAiRuntime =
     packageOptions.extractAiRuntime ??
     ((tarballPath: string, destination: string) =>
-      // Source-ref validation runs this trusted harness outside the candidate's dependency tree.
-      // Keep extraction on the system tar contract so only the candidate checkout needs install.
-      // Use an archive basename so GNU tar cannot treat a Windows drive as a remote host.
-      run(
-        "tar",
-        ["-xzf", path.basename(tarballPath), "-C", destination, "--strip-components=1"],
-        path.dirname(tarballPath),
-        {
-          timeoutMs: resolveTimeoutMs(
-            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-          ),
-        },
-      ));
+      runPackageTar(["-xzf"], tarballPath, destination, ["--strip-components=1"]));
   const prepareManifest = packageOptions.prepareManifest ?? (async () => false);
   const restoreManifest = packageOptions.restoreManifest ?? (async () => false);
   const originalPackageJson = await fs.readFile(packageJsonPath, "utf8");
@@ -774,18 +785,9 @@ async function normalizeOpenClawTarballModes(tarballPath: string) {
   // Rewrite every entry to 0644/0755 the way a umask-022 host would have
   // packed it, keeping executable bits. Stays on the system tar contract like
   // the bundled AI runtime extraction above.
-  const timeoutMs = resolveTimeoutMs(
-    "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-    DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-  );
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
-    await run(
-      "tar",
-      ["-xzf", path.basename(tarballPath), "-C", stageDir],
-      path.dirname(tarballPath),
-      { timeoutMs },
-    );
+    await runPackageTar(["-xzf"], tarballPath, stageDir);
     let stagedFileCount = 0;
     const normalizeStagedModes = async (dir: string): Promise<void> => {
       for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
@@ -809,15 +811,13 @@ async function normalizeOpenClawTarballModes(tarballPath: string) {
     const stageRootEntries = await fs.readdir(stageDir);
     const normalizedPath = `${tarballPath}.modes-tmp`;
     await fs.rm(normalizedPath, { force: true });
-    await run(
-      "tar",
-      ["--no-xattrs", "-czf", path.basename(normalizedPath), "-C", stageDir, ...stageRootEntries],
-      path.dirname(normalizedPath),
-      {
-        // BSD tar has separate PAX xattr and AppleDouble (._*) metadata paths.
-        env: { ...process.env, COPYFILE_DISABLE: "1" },
-        timeoutMs,
-      },
+    await runPackageTar(
+      ["--no-xattrs", "-czf"],
+      normalizedPath,
+      stageDir,
+      stageRootEntries,
+      // BSD tar has separate PAX xattr and AppleDouble (._*) metadata paths.
+      { ...process.env, COPYFILE_DISABLE: "1" },
     );
     await fs.rename(normalizedPath, tarballPath);
   } finally {
@@ -977,17 +977,18 @@ export async function packOpenClawPackageForDocker(
           restoreManifest,
         },
       );
-      const packArgs =
-        packTool === "pnpm"
-          ? ["pack", "--silent", "--config.ignore-scripts=true", "--pack-destination", outputPath]
-          : [
-              "pack",
-              "--silent",
-              "--ignore-scripts",
-              "--pack-destination",
-              outputPath,
-              "--json=false",
-            ];
+      // AI staging materializes the bundled tree; pack must not inherit the
+      // source workspace's isolated linker setting for that prepared bundle.
+      const packArgs = [
+        "pack",
+        "--silent",
+        ...(packTool === "pnpm"
+          ? ["--config.ignore-scripts=true", "--config.node-linker=hoisted"]
+          : ["--ignore-scripts"]),
+        "--pack-destination",
+        outputPath,
+        ...(packTool === "npm" ? ["--json=false"] : []),
+      ];
       packOutput = await runCaptureImpl(packTool, packArgs, sourcePath, {
         timeoutMs: resolveTimeoutMs(
           "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",

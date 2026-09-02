@@ -108,7 +108,7 @@ describe("message-normalizer", () => {
     });
 
     it("normalizes mixed text, thinking, and tool content", () => {
-      const result = normalizeMessage({
+      const message = {
         role: "assistant",
         content: [
           { type: "text", text: "Here is the result" },
@@ -116,9 +116,11 @@ describe("message-normalizer", () => {
           { type: "thinking", thinking: "Checking the result." },
         ],
         timestamp: 2000,
-      });
+      };
+      const result = normalizeMessage(message);
 
       expect(result.role).toBe("toolResult");
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(false);
       expect(result.content).toHaveLength(3);
       expect(result.content[0]).toEqual({
         type: "text",

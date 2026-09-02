@@ -165,6 +165,7 @@ function resolveEffectiveRegistryPluginActivation(params: {
   return resolveEffectivePluginActivationState({
     id: params.plugin.pluginId,
     origin: params.plugin.origin,
+    channelIds: params.plugin.contributions?.channels,
     config: params.normalizedConfig,
     rootConfig: params.rootConfig,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),

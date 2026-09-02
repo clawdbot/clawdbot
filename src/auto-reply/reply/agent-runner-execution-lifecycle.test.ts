@@ -46,9 +46,7 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 
-const state = setupAgentRunnerExecutionTestState();
-// Register shared mocks before loading the execution graph. A timed-out import
-// must not resume later and consume the next case's one-shot mock.
+const state = await setupAgentRunnerExecutionTestState();
 const execution = await import("./agent-runner-execution.js");
 const { emitAgentEvent } = await import("../../infra/agent-events.js");
 const compactionTarget = {

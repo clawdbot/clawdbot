@@ -580,7 +580,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
-    - On external channels, unauthorized command-only messages are silently ignored; inline `/...` tokens are treated as plain text. Reset denials show a permission reply only when the request and reply stay in WebChat.
+    - On external channels, unauthorized text command-only messages are silently ignored; inline `/...` tokens are treated as plain text. Native `/compact` returns an authorization refusal when a channel-admitted sender cannot use the command. Reset denials show a permission reply only when the request and reply stay in WebChat.
 
   </Accordion>
   <Accordion title="Argument notes">

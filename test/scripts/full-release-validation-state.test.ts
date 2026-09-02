@@ -258,13 +258,29 @@ describe("full release execution plan", () => {
     runReleaseSoak: false,
     targetVersion: "2026.8.28-beta.1",
   };
+  const stableCoverage = {
+    coveragePolicy: "npm-stable-v1",
+    releaseProfile: "stable",
+    rerunGroup: "all",
+    runReleaseSoak: true,
+    targetVersion: "2026.8.28",
+  };
 
-  function betaPlan() {
-    const candidate = candidateBinding({ releaseProfile: "beta", releaseSoak: false });
+  function coveragePlan(coverage = betaCoverage) {
+    const request = {
+      releaseProfile: coverage.releaseProfile,
+      releaseSoak: coverage.runReleaseSoak,
+    };
+    const manifest = fullReleaseCandidateManifestFixture(candidateRequestInput(request));
+    manifest.package.version = coverage.targetVersion;
+    const candidate = buildFullReleaseCandidateBinding({
+      manifest,
+      artifact: candidateBinding(request).evidenceArtifact,
+    });
     return executionPlan(
-      { ...betaCoverage, childPhaseVersion: 3, children: {} },
+      { ...coverage, childPhaseVersion: 3, children: {} },
       {
-        ...betaCoverage,
+        ...coverage,
         attemptEvidenceVersion: 3,
         candidate,
         candidateRequest: candidate.request,
@@ -319,7 +335,7 @@ describe("full release execution plan", () => {
   });
 
   it("binds npm beta coverage to the immutable plan, version, and manifest", () => {
-    const artifact = betaPlan();
+    const artifact = coveragePlan();
     expect(validateReleaseExecutionPlanArtifact(artifact)).toMatchObject({
       coveragePolicy: "npm-beta-v1",
       targetVersion: betaCoverage.targetVersion,
@@ -353,15 +369,86 @@ describe("full release execution plan", () => {
     }
   });
 
+  it.each(["2026.8.28", "2026.8.28-1"])(
+    "retains the stable child inventory and blocking performance for npm %s",
+    (targetVersion) => {
+      const input = {
+        ...stableCoverage,
+        childPhaseVersion: 3,
+        targetVersion,
+        releasePackageSpec: `openclaw@${targetVersion}`,
+      };
+      const full = plan({ ...input, coveragePolicy: undefined });
+      const npm = plan(input);
+      expect(npm).toEqual(full);
+      for (const key of ["productPerformance", "npmTelegram"]) {
+        expect(npm.children.find((entry) => entry.key === key)).toMatchObject({
+          required: true,
+          selected: true,
+        });
+      }
+      const performance = npm.children.find((entry) => entry.key === "productPerformance");
+      const decision = classifyReleaseSnapshot({
+        children: [
+          child("productPerformance", {
+            ...performance,
+            conclusion: "failure",
+            jobs: [{ conclusion: "failure", name: "benchmark", status: "completed" }],
+            status: "completed",
+          }),
+        ],
+        releaseProfile: "stable",
+        workflowRef: "release-ci/tooling",
+      });
+      expect(decision.state).toBe("blocked_complete");
+      expect(decision.blockers).not.toHaveLength(0);
+      const artifact = coveragePlan({ ...stableCoverage, targetVersion });
+      expect(validateReleaseExecutionPlanArtifact(artifact)).toMatchObject({
+        coveragePolicy: "npm-stable-v1",
+        targetVersion,
+      });
+      expect(() => validateReleaseCoveragePolicyBinding(artifact, input)).not.toThrow();
+      for (const inputs of [{}, betaCoverage, { ...input, targetVersion: "2026.8.27" }]) {
+        expect(() => validateReleaseCoveragePolicyBinding(artifact, inputs)).toThrow(
+          /coverage policy/u,
+        );
+      }
+    },
+  );
+
+  it.each([
+    { releaseProfile: "beta" },
+    { releaseProfile: "full" },
+    { runReleaseSoak: false },
+    { runReleaseSoak: undefined },
+    { rerunGroup: "ci" },
+    { rerunGroup: "package" },
+    { targetVersion: "2026.8.33" },
+    { targetVersion: "2026.8.33-1" },
+    { targetVersion: "2026.8.28-beta.1" },
+    { targetVersion: "2026.8.28-alpha.1" },
+    { targetVersion: " 2026.8.28" },
+    { targetVersion: "2026.13.28" },
+    { candidateVersion: "2026.8.27" },
+  ])("rejects npm stable coverage outside its qualification scope: %j", (override) => {
+    expect(() => plan({ ...stableCoverage, ...override })).toThrow(/coverage policy/u);
+  });
+
   it.each([
     ["npm-beta-v1", "npm-beta", true],
     ["npm-beta-v1", "full", false],
     ["npm-beta-v1", "", false],
+    ["npm-beta-v1", "npm-stable", false],
+    ["npm-stable-v1", "npm-stable", true],
+    ["npm-stable-v1", "npm-beta", false],
+    ["npm-stable-v1", "full", false],
+    ["npm-stable-v1", "", false],
     [undefined, "npm-beta", false],
+    [undefined, "npm-stable", false],
     [undefined, "full", true],
     [undefined, "", true],
   ])(
-    "binds normal CI dispatch scope to npm beta coverage %s/%s",
+    "binds normal CI dispatch scope to release coverage %s/%s",
     (coveragePolicy, scope, accepted) => {
       const verify = () =>
         validateReleaseChildDispatchBinding({
@@ -372,8 +459,11 @@ describe("full release execution plan", () => {
           coveragePolicy,
           log: `TARGET_SHA: ${TARGET_SHA}\n${scope ? `CI_RELEASE_SCOPE: ${scope}\n` : ""}Dispatched ci.yml: https://github.com/openclaw/openclaw/actions/runs/101 (attempt 1)`,
         });
-      if (accepted) expect(verify).not.toThrow();
-      else expect(verify).toThrow(/scope/u);
+      if (accepted) {
+        expect(verify).not.toThrow();
+      } else {
+        expect(verify).toThrow(/scope/u);
+      }
     },
   );
 
@@ -387,13 +477,19 @@ describe("full release execution plan", () => {
     };
     const ordinary = plan({ ...input, telegramWaiver: "" });
     const waived = plan(input);
-    expect(waived.children.filter((child) => child.required).map((child) => child.key)).toEqual(
+    expect(
+      waived.children
+        .filter((plannedChild) => plannedChild.required)
+        .map((plannedChild) => plannedChild.key),
+    ).toEqual(
       ordinary.children
-        .filter((child) => child.required && child.key !== "npmTelegram")
-        .map((child) => child.key),
+        .filter((plannedChild) => plannedChild.required && plannedChild.key !== "npmTelegram")
+        .map((plannedChild) => plannedChild.key),
     );
     expect(waived.gates).toEqual(ordinary.gates);
-    expect(waived.children.find((child) => child.key === "npmTelegram")).toMatchObject({
+    expect(
+      waived.children.find((plannedChild) => plannedChild.key === "npmTelegram"),
+    ).toMatchObject({
       required: false,
       selected: false,
       result: "skipped",

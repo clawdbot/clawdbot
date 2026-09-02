@@ -39,6 +39,7 @@ describe("assistantGroupCanOwnActiveRunStatus", () => {
     timestamp: 1,
     isStreaming: false,
     messages: [{ key: "message:1", message }],
+    visibleContent: "text",
   });
 
   it("accepts visible replies and rejects forwarded assistant input", () => {
@@ -945,7 +946,7 @@ describe("collapseCompletedTurnWork", () => {
     },
   );
 
-  it("keeps durable context compaction inside completed work instead of treating it as the reply", () => {
+  it("renders durable context compaction as a marker, not an assistant reply", () => {
     const items = collapsedItems({
       messages: [
         userMessage("do it", 1_000),
@@ -963,16 +964,8 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
-    const work = requireWorkGroup(items[1]);
-    expect(work.groups).toHaveLength(1);
-    expect(work.groups[0]?.messages[0]?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Context compacted" }],
-      runId: "run-1",
-      __openclaw: { runtimeActivityKind: "context_compaction" },
-    });
-    expect(work.groups[0]?.messages[0]?.message).not.toHaveProperty("idempotencyKey");
+    expect(items.map((item) => item.kind)).toEqual(["group", "divider", "group"]);
+    expect(items[1]).toMatchObject({ compaction: "complete", label: "Context compacted" });
     expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({
       content: "All done.",
     });
@@ -1369,6 +1362,7 @@ describe("coalesceActivityRuns", () => {
       key: "group:assistant:reply",
       role: "assistant",
       messages: [{ key: "assistant:reply", message: assistantMessage("Done.", 3_500) }],
+      visibleContent: "text",
       timestamp: 3_500,
       isStreaming: false,
       runId: "run-2",
@@ -1423,6 +1417,7 @@ describe("coalesceActivityRuns", () => {
           ),
         },
       ],
+      visibleContent: "none",
       timestamp: 1_000 * index,
       isStreaming: false,
       runId: `hb-run-${index}`,
@@ -1456,6 +1451,7 @@ describe("coalesceActivityRuns", () => {
       key: "group:user:boundary",
       role: "user",
       messages: [{ key: "user:boundary", message: userMessage("stop", 4_000) }],
+      visibleContent: "text",
       timestamp: 4_000,
       isStreaming: false,
     };
@@ -4619,8 +4615,8 @@ describe("buildCachedChatItems", () => {
     expect(items).toHaveLength(1);
     const divider = requireRecord(items[0]);
     expect(divider.kind).toBe("divider");
-    expect(divider.label).toBe("Compacted history");
-    expect(divider.icon).toBe("foldVertical");
+    expect(divider.label).toBe("Context compacted");
+    expect(divider.compaction).toBe("complete");
     expect(divider.description).toBe("The compacted transcript is preserved as a checkpoint.");
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");
@@ -4641,7 +4637,7 @@ describe("buildCachedChatItems", () => {
 
     expect(items[0]).toMatchObject({
       kind: "divider",
-      label: "Compacted history",
+      label: "Context compacted",
       metric: "saved 875.3k tokens",
     });
   });
@@ -4707,6 +4703,7 @@ describe("tool expansion state", () => {
           message: { role: "assistant", content: "No tools in this row" },
         },
       ],
+      visibleContent: "text",
       timestamp: 1,
       isStreaming: false,
     };
@@ -4747,6 +4744,7 @@ describe("tool expansion state", () => {
           },
         },
       ],
+      visibleContent: "none",
       timestamp: 1,
       isStreaming: false,
     };
@@ -4774,6 +4772,7 @@ describe("tool expansion state", () => {
           },
         },
       ],
+      visibleContent: "text",
       timestamp: 1,
       isStreaming: false,
     };
@@ -4899,6 +4898,7 @@ describe("expansion-state render dependencies", () => {
           },
         },
       ],
+      visibleContent: "none",
       timestamp: 1,
       isStreaming: false,
     });
@@ -4983,6 +4983,7 @@ describe("expansion-state render dependencies", () => {
           },
         },
       ],
+      visibleContent: "none",
       timestamp: 1,
       isStreaming: false,
     };
@@ -4999,14 +5000,23 @@ describe("expansion-state render dependencies", () => {
 
   it("drops render versions with evicted and reset session maps", () => {
     resetChatThreadState();
+    const items = buildCachedChatItems(
+      createProps({
+        sessionKey: "evicted-session",
+        messages: [toolUseMessage("evicted-call", "read", {}, 1)],
+      }),
+    );
+    syncToolCardExpansionState("evicted-session", items, true);
     const evicted = getExpandedToolCards("evicted-session");
-    setExpansionState(evicted, "card", true);
+    expect([...evicted.values()]).toEqual([true]);
     for (let index = 0; index < 20; index += 1) {
       getExpandedToolCards(`other-session-${index}`);
     }
 
     expect(getExpandedToolCards("evicted-session")).not.toBe(evicted);
     expect(getExpansionStateVersion(getExpandedToolCards("evicted-session"))).toBe(0);
+    syncToolCardExpansionState("evicted-session", items, true);
+    expect([...getExpandedToolCards("evicted-session").values()]).toEqual([true]);
 
     setExpansionState(getExpandedUserMessages("reset-session"), "message", true);
     resetChatThreadState();

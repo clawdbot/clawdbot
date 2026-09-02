@@ -102,6 +102,8 @@ export function readMemoryDatabaseRevision(db: DatabaseSync): number {
   return row.revision;
 }
 
+export class MemoryIndexRevisionConflictError extends Error {}
+
 /** Reset derived content without replacing the shared agent database or its schema. */
 export async function resetMemoryDatabase(params: {
   targetDb: DatabaseSync;
@@ -248,7 +250,7 @@ export async function publishMemoryDatabaseTables(params: {
     runSqliteImmediateTransactionSync(params.targetDb, () => {
       const liveRevision = readMemoryDatabaseRevision(params.targetDb);
       if (liveRevision !== params.expectedRevision) {
-        throw new Error(
+        throw new MemoryIndexRevisionConflictError(
           `Memory index changed while full reindex was building ` +
             `(expected revision ${params.expectedRevision}, found ${liveRevision}); retry the full reindex.`,
         );

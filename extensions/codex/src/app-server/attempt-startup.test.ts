@@ -485,12 +485,10 @@ describe("startCodexAttemptThread", () => {
       '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
     );
 
-    const restart = result.restartContextEngineCodexThread();
-    const read = JSON.parse(await harness.waitForWrite(writesBeforeRestart));
-    expect(read.method).toBe("thread/read");
-    harness.send({ id: read.id, result: { thread: threadStartResult("thread-original").thread } });
-    await expect(restart).rejects.toThrow("codex app-server client is closed");
-    expect(harness.writes).toHaveLength(writesBeforeRestart + 1);
+    await expect(result.restartContextEngineCodexThread()).rejects.toThrow(
+      "codex app-server client is closed",
+    );
+    expect(harness.writes).toHaveLength(writesBeforeRestart);
 
     result.turnRoute.release();
     result.releaseSharedClientLease();
@@ -578,15 +576,17 @@ describe("startCodexAttemptThread", () => {
     const sibling = retainSharedCodexAppServerClientIfCurrent(harness.client);
     expect(sibling).toBeTypeOf("function");
     const before = harness.writes.length;
-    await expect(startThreadWithHarness(5_000, undefined, common).run).rejects.toMatchObject({
-      name: "CodexAdoptedThreadActiveError",
-    });
-    expect(harness.writes).toHaveLength(before);
-    const reacquired = retainSharedCodexAppServerClientIfCurrent(harness.client);
-    expect(reacquired).toBeTypeOf("function");
-    reacquired?.();
+    const refused = new AgentHarnessPreflightError("session owner revoked");
+    const attemptParams = createAttemptParams(paths);
+    const assertActive = () => {
+      throw refused;
+    };
+    const hostCapabilities = { ...attemptParams.hostCapabilities, assertActive };
+    const buildAttemptParams = () => ({ ...attemptParams, hostCapabilities });
+    await expect(
+      startThreadWithHarness(5_000, undefined, { ...common, buildAttemptParams }).run,
+    ).rejects.toBe(refused);
     sibling?.();
-    expect(harness.client.getCloseError()).toBeUndefined();
     const continued = await startThreadWithHarness(5_000, undefined, incognito).run;
     expect(continued.client).toBe(harness.client);
     expect(continued.thread.threadId).toBe(previous.thread.threadId);

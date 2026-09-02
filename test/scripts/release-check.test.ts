@@ -40,7 +40,7 @@ describe("release-check", () => {
     try {
       const toolingRoot = join(root, "tooling");
       const workflow = parse(readFileSync(".github/workflows/openclaw-npm-preflight.yml", "utf8"));
-      const checkout = workflow.jobs.verify_openclaw_npm.steps.find(
+      const checkout = workflow.jobs.check_contents_npm.steps.find(
         (step: { name?: string }) => step.name === "Checkout trusted Plugin SDK API tooling",
       );
       const sparseRoots = checkout.with["sparse-checkout"].trim().split(/\s+/u) as string[];
