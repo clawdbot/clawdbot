@@ -179,6 +179,39 @@ openclaw-chat-pane {
   -webkit-user-select: none;
 }
 
+.chat-pane__header--centered {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.chat-pane__header-leading,
+.chat-pane__header-center,
+.chat-pane__header-trailing {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.chat-pane__header-leading,
+.chat-pane__header-trailing {
+  gap: 8px;
+}
+
+/* Equal outer tracks keep the face switch on the pane centerline even when
+   either chrome cluster grows; the identity trail owns the shrinkable text. */
+.chat-pane__header-center {
+  justify-self: center;
+}
+
+.chat-pane__header-trailing {
+  margin-left: auto;
+  justify-self: end;
+}
+
+.chat-pane__header--centered .chat-pane__header-trailing {
+  margin-left: 0;
+}
+
 /* Identity trail: project, then session. One flex row owns the alignment of
    every segment, so the 26px project chip and the 12px text segments centre on
    a single line and a future parent-session segment inherits it for free. */

@@ -405,6 +405,35 @@ describe("chat pane header", () => {
     expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
   });
 
+  it("separates identity, face, and action controls into balanced header regions", () => {
+    const { container } = mountHeader({
+      placementControl: html`<span data-slot="placement"></span>`,
+      presence: html`<span data-slot="presence"></span>`,
+      faceControl: html`<span data-slot="face"></span>`,
+      sharingControl: html`<span data-slot="sharing"></span>`,
+    });
+
+    expect(container.querySelector('[data-slot="placement"]')?.parentElement?.className).toBe(
+      "chat-pane__header-leading",
+    );
+    expect(container.querySelector('[data-slot="face"]')?.parentElement?.className).toBe(
+      "chat-pane__header-center",
+    );
+    expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
+      "chat-pane__header-trailing",
+    );
+    expect(container.querySelector(".chat-pane__header--centered")).not.toBeNull();
+  });
+
+  it("uses the full header width when no face switch needs centering", () => {
+    const { container } = mountHeader();
+    expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
+    expect(container.querySelector(".chat-pane__header-center")).toBeNull();
+    expect(
+      [...container.querySelector(".chat-pane__header")!.children].map((child) => child.className),
+    ).toEqual(["chat-pane__header-leading", "chat-pane__header-trailing"]);
+  });
+
   it("leads with the project, then a separator, then the session title", () => {
     const { container } = mountHeader();
     const crumbs = container.querySelector(".chat-pane__crumbs");
