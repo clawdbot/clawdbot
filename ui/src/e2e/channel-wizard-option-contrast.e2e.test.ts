@@ -74,7 +74,7 @@ suite.define(() => {
         });
 
         expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
-        await page.locator(".channels-item", { hasText: "iMessage" }).first().click();
+        await page.locator("button.channels-item", { hasText: "iMessage" }).click();
         await page.locator(".channels-detail").getByRole("button", { name: "Run setup" }).click();
 
         const wizard = page.locator(".channels-wizard");

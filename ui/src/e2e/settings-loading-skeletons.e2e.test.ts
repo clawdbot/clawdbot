@@ -385,7 +385,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/channels`);
       await waitForControlUiRoute(page, { pathname: "/settings/channels", routeId: "channels" });
       await gateway.waitForRequest("config.schema");
-      await page.locator(".channels-item", { hasText: "WhatsApp" }).first().click();
+      await page.locator("button.channels-item", { hasText: "WhatsApp" }).click();
       await captureLoadingState(page.locator(".channels-detail"), "channels-schema");
     });
   });
