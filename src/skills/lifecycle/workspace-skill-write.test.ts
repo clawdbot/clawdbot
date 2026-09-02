@@ -5,6 +5,7 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   applyWorkspaceSkillMutation,
+  assertWorkspaceSkillSupportPathSetIsFileOnly,
   isWorkspaceSkillMutationApplied,
   isWorkspaceSkillMutationRestored,
   prepareWorkspaceSkillMutation,
@@ -204,5 +205,13 @@ describe("workspace skill mutations", () => {
       "Failed to restore the previous workspace skill state.",
     );
     await expect(fs.readFile(skillFile, "utf8")).resolves.toBe("# External edit\n");
+  });
+
+  it("rejects a support file used as a directory by a later path", () => {
+    // "scripts/a-b" sorts between the two overlapping paths, so an adjacent-pair
+    // scan never compares "scripts/a" against "scripts/a/b".
+    expect(() =>
+      assertWorkspaceSkillSupportPathSetIsFileOnly(["scripts/a", "scripts/a-b", "scripts/a/b"]),
+    ).toThrow("Support file paths cannot overlap: scripts/a and scripts/a/b");
   });
 });
