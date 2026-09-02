@@ -22,6 +22,11 @@
   border-radius: var(--radius-full);
 }
 
+.chat-pane__face-switch .settings-segmented__btn svg {
+  width: 15px;
+  height: 15px;
+}
+
 .chat-pane__face-switch .settings-segmented__btn--active {
   background: var(--panel);
 }
