@@ -57,6 +57,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
   return {
     id: "beam",
     label: "Beam",
+    visibility: "published",
     shareRoute: BEAM_SESSION_SHARE_ROUTE,
     supportsProcessHomeIsolation: true,
     async list(params) {

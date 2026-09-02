@@ -28,6 +28,7 @@ import { isDevicePairingJoinCode } from "../pairing/join-code.js";
 import { decodePairingSetupCode, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatHelpExamples } from "./help-format.js";
+import { addNodeCommandOptions } from "./node-cli/command-options.js";
 import { runNodeDaemonInstall } from "./node-cli/daemon.js";
 import { resolveNodePairGatewayPayload } from "./node-cli/gateway-options.js";
 
@@ -37,6 +38,8 @@ type ConnectCommandOptions = {
   sessionHost?: boolean;
   targetFile?: string;
   displayName?: string;
+  commands?: string[];
+  allCommands?: boolean;
 };
 
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
@@ -240,6 +243,8 @@ async function runConnectCommand(
     ...(forceWorkerRuns ? { forceWorkerRuns: true } : {}),
     ...(opts.ephemeral === true ? { ephemeral: true } : {}),
     displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
   };
 
   if (!opts.service) {
@@ -264,13 +269,18 @@ async function runConnectCommand(
       },
     });
   }
-  await runNodeDaemonInstall({ displayName: opts.displayName, force: true });
+  await runNodeDaemonInstall({
+    displayName: opts.displayName,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
+    force: true,
+  });
 }
 
 export function registerConnectCli(program: Command): void {
-  program
-    .command("connect")
-    .description("Connect this machine to an OpenClaw Gateway as a node")
+  addNodeCommandOptions(
+    program.command("connect").description("Connect this machine to an OpenClaw Gateway as a node"),
+  )
     .argument("[target]", "oc-pair URL, setup code, or HTTPS Gateway join URL")
     .option("--service", "Install and run the node host as an OS service", false)
     .option("--ephemeral", "Run as an environment-managed disposable session host", false)

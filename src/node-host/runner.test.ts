@@ -258,6 +258,15 @@ describe("runNodeHost", () => {
     );
   });
 
+  it("forwards an explicit full-surface reset to the durable config owner", async () => {
+    await expect(
+      runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789, allCommands: true }),
+    ).rejects.toThrow("event loop readiness timeout");
+    expect(mocks.configureNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ allCommands: true }),
+    );
+  });
+
   it.each([
     { runtime: "darwin", platform: "macos", deviceFamily: "Mac" },
     { runtime: "win32", platform: "windows", deviceFamily: "Windows" },

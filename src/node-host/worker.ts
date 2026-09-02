@@ -26,6 +26,8 @@ export async function runNodeHostWorker(): Promise<void> {
   // state migrators. Runtime invokes those owners here and never migrates inline.
   await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
   const nodeConfig = await loadNodeHostConfig();
+  // The private app worker is a capability superset; persisted headless
+  // command allowlists never apply here.
   const prepared = await prepareNodeHostRuntime({
     enableDuplexPluginCommands: true,
     enableWorkerRuns: true,

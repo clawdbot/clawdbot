@@ -44,6 +44,7 @@ import {
 import { catalogStartHandler } from "./session-catalog-terminal-start.js";
 import {
   filterSessionCatalogHost,
+  isPublishedCatalogVisible,
   resolveSessionCatalogVisibility,
 } from "./session-catalog-visibility.js";
 import type {
@@ -358,6 +359,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     } else {
       selected = catalogRegistrations.providers;
     }
+    const providerVisibilities = new Map(
+      selected.map((provider) => [provider.id, provider.visibility]),
+    );
     const config = context.getRuntimeConfig();
     const resolvedAgent = resolveAgentIdOrRespondError({
       rawAgentId: request.agentId,
@@ -384,10 +388,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           ...catalog,
           hosts: catalog.hosts.map((host) =>
             filterSessionCatalogHost(
-              requestEntries.projectHostSessions(host, result.instances),
+              requestEntries.projectHostSessions(
+                host,
+                result.instances,
+                providerVisibilities.get(catalog.id),
+              ),
               visibility,
               {
                 requestEntries,
+                providerVisibility: providerVisibilities.get(catalog.id),
               },
             ),
           ),
@@ -543,6 +552,20 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         agentId: authorization.agentId,
         allowProcessHomeFallback: authorization.allowProcessHomeFallback,
       });
+      // Source IO can outlive the caller's role grant; current policy owns data release.
+      if (
+        provider.visibility === "published" &&
+        !isPublishedCatalogVisible(
+          resolveSessionCatalogVisibility(client, context.getRuntimeConfig()),
+        )
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, "session catalog thread is not visible to this caller"),
+        );
+        return;
+      }
       const profiles = new Map<string, SessionActorProfileIdentity | undefined>();
       respond(true, {
         ...page,

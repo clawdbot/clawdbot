@@ -9,7 +9,8 @@ title: "Node"
 # `openclaw node`
 
 Run a **headless node host** that connects to the Gateway WebSocket and exposes
-`system.run` / `system.which` on this machine.
+`system.run` / `system.which` on this machine by default. Use `--commands` to
+restrict the advertised surface, for example to read-only session sharing.
 
 On macOS, the menu bar app already embeds this node-host runtime into its own
 node connection and adds native Mac capabilities. Use `openclaw node run` on a
@@ -97,6 +98,8 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--commands <ids>`: Persist an exact comma-separated command allowlist (repeatable); advertise only available matches and their required capabilities. Disables computer use, skills, plugin tools, MCP servers, and worker hosting. Omitting the flag preserves the saved list.
+- `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
 
@@ -155,6 +158,8 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--commands <ids>`: Persist the command allowlist for the installed service (repeatable), with the same restrictions as `node run`.
+- `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
 - `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
@@ -187,6 +192,10 @@ openclaw node uninstall
 ```
 
 Use `openclaw node run` for a foreground node host (no service).
+To remove a saved command allowlist, run `openclaw node run --all-commands`
+in the foreground, or reinstall the service with
+`openclaw node install --force --all-commands`. The reset is durable; the
+replacement service arguments no longer carry `--commands`.
 
 Service commands accept `--json` for machine-readable output.
 `node start` and `node restart` print install hints and exit nonzero when no

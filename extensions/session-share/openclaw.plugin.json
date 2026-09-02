@@ -1,0 +1,55 @@
+{
+  "id": "session-share",
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.session-share"]
+  },
+  "uiHints": {
+    "share.groups": {
+      "label": "Shared Session Groups",
+      "help": "Only sessions in these exact group names are published. Incognito, draft, and adopted catalog sessions are never shared."
+    },
+    "nodes": {
+      "label": "Paired Node Attribution",
+      "help": "Optional display attribution keyed by paired node id. Attribution never grants session access."
+    },
+    "nodes.*.owner": {
+      "label": "Default Owner",
+      "help": "Local display owner for unattributed sessions: github:<login> or profile:<profileId>."
+    },
+    "nodes.*.linkGitHubIdentities": {
+      "label": "Link GitHub Identities",
+      "help": "Trust this paired node's numeric GitHub account claims for local profile display attribution. Off by default."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "share": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["groups"],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        }
+      },
+      "nodes": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "owner": { "type": "string", "pattern": "^(github|profile):[^\\s:]+$", "maxLength": 512 },
+            "linkGitHubIdentities": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    }
+  }
+}

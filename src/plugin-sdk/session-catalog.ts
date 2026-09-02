@@ -105,11 +105,14 @@ function encodeSessionCatalogCursor(offset: number): string {
   return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
 }
 
-function optionalSessionCatalogCursor(value: unknown): string | undefined {
+function optionalSessionCatalogCursor(
+  value: unknown,
+  maxLength = MAX_CURSOR_LENGTH,
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CURSOR_LENGTH) {
+  if (typeof value !== "string" || value.length === 0 || value.length > maxLength) {
     throw new Error("cursor is invalid");
   }
   return value;
@@ -151,6 +154,8 @@ function parseSessionCatalogReadParams(
   options: {
     threadIdMaxLength: number;
     threadIdPattern: RegExp;
+    /** Native transcript cursors can carry scope and active-branch anchors beyond a simple offset. */
+    cursorMaxLength?: number;
     messages: SessionCatalogParameterMessages;
   },
 ): SessionCatalogReadParams {
@@ -165,7 +170,7 @@ function parseSessionCatalogReadParams(
   if (!threadId || !options.threadIdPattern.test(threadId)) {
     throw new Error(options.messages.invalidThreadId);
   }
-  const cursor = optionalSessionCatalogCursor(value.cursor);
+  const cursor = optionalSessionCatalogCursor(value.cursor, options.cursorMaxLength);
   return {
     threadId,
     limit: boundedSessionCatalogLimit(value.limit),

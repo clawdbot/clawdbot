@@ -56,6 +56,15 @@ export type {
   TranscriptTurnAdmission,
 } from "../config/sessions/session-accessor.js";
 export { hasPromptImageInput } from "../media/prompt-image-input.js";
+export {
+  readSessionTranscriptCatalogPage,
+  readSessionTranscriptCatalogTitle,
+  type SessionTranscriptCatalogPage,
+} from "../gateway/session-transcript-catalog.js";
+export {
+  createSessionCatalogGitHubLinker,
+  projectSessionCatalogSourceActor,
+} from "../gateway/session-catalog-identity.js";
 
 export {
   formatSessionTranscriptMemoryHitKey,

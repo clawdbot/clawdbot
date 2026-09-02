@@ -23,6 +23,12 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 type AgentEntriesConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>;
 type MutableAgentEntry = AgentEntry | AgentEntriesConfig[string];
 type AgentRosterProperty = { kind: "entries" | "list"; value: unknown };
+type AgentRosterConfig = {
+  readonly agents?: {
+    readonly entries?: Readonly<Record<string, unknown>>;
+    readonly list?: readonly unknown[];
+  };
+};
 export type ListedAgentEntry = {
   entry: AgentEntry;
   source: { kind: "entries"; key: string } | { kind: "list"; index: number };
@@ -129,7 +135,7 @@ function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined
 }
 
 /** Lists valid configured agent entries from config. */
-export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
+export function listAgentEntriesWithSource(cfg: AgentRosterConfig): ListedAgentEntry[] {
   const roster = readAgentRosterProperty(cfg);
   if (roster?.kind === "entries" && isRecord(roster.value)) {
     return Object.entries(roster.value).flatMap(([id, entry]) =>
@@ -154,7 +160,7 @@ export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntr
 }
 
 /** Lists valid configured agent entries from either supported representation. */
-export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
+export function listAgentEntries(cfg: AgentRosterConfig): AgentEntry[] {
   return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
 }
 
@@ -194,7 +200,7 @@ export function hasAgentRosterProperty(raw: unknown): boolean {
 }
 
 /** Lists unique configured agent ids. */
-export function listAgentIds(cfg: OpenClawConfig): string[] {
+export function listAgentIds(cfg: AgentRosterConfig): string[] {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
     // Match resolveDefaultAgentId's Plugin SDK compatibility for raw pre-roster configs.

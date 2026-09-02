@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/session-share",
+  "version": "2026.8.1",
+  "private": true,
+  "description": "Read-only OpenClaw sessions on paired gateways",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

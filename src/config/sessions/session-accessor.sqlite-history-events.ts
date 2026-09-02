@@ -458,27 +458,31 @@ export function readRecentSessionTranscriptHistoryEvents(
 
 export function readSessionTranscriptHistoryEventPage(
   scope: SessionTranscriptReadScope,
-  options: { maxMessages: number; offset: number },
+  options: { maxMessages: number; offset: number; readOnly?: boolean },
 ): SessionTranscriptMessageEventPage {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const history = resolveVisibleHistoryProjection(projection);
-    const offset = Math.min(
-      Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
-      history.total,
-    );
-    const maxMessages = Math.max(
-      0,
-      Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
-    );
-    const endExclusive = Math.max(0, history.total - offset);
-    const start = Math.max(0, endExclusive - maxMessages);
-    return {
-      activeLeafEntryId: projection.state.leafEventId,
-      events: readVisibleHistoryRange(projection, start, endExclusive, history),
-      displaySource: history.displaySource,
-      totalMessages: history.total,
-    };
-  });
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => {
+      const history = resolveVisibleHistoryProjection(projection);
+      const offset = Math.min(
+        Math.max(0, Math.floor(Number.isFinite(options.offset) ? options.offset : 0)),
+        history.total,
+      );
+      const maxMessages = Math.max(
+        0,
+        Math.floor(Number.isFinite(options.maxMessages) ? options.maxMessages : 0),
+      );
+      const endExclusive = Math.max(0, history.total - offset);
+      const start = Math.max(0, endExclusive - maxMessages);
+      return {
+        activeLeafEntryId: projection.state.leafEventId,
+        events: readVisibleHistoryRange(projection, start, endExclusive, history),
+        displaySource: history.displaySource,
+        totalMessages: history.total,
+      };
+    },
+    options,
+  );
 }
 
 export function readSessionTranscriptHistoryEventCount(scope: SessionTranscriptReadScope): number {

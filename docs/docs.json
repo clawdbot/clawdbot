@@ -1465,6 +1465,7 @@
                   "plugins/admin-http-rpc",
                   "plugins/geolocation",
                   "plugins/beam",
+                  "plugins/session-share",
                   "plugins/voice-call",
                   "plugins/vault",
                   "plugins/onepassword",

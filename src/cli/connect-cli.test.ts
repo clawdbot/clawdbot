@@ -51,6 +51,8 @@ function setupCode(): string {
 
 async function runConnect(args: string[]): Promise<void> {
   const program = new Command();
+  program.exitOverride();
+  program.configureOutput({ writeErr: () => undefined });
   registerConnectCli(program);
   await program.parseAsync(["connect", ...args], { from: "user" });
 }
@@ -178,8 +180,9 @@ describe("connect cli", () => {
   it.skipIf(process.platform === "win32")(
     "rejects a socket target without removing it",
     async () => {
-      const root = tempDirs.make("openclaw-connect-target-socket-");
-      const targetFile = path.join(root, "setup-code.sock");
+      // Darwin's Unix socket path limit includes the runner's temporary root.
+      const root = tempDirs.make("oc-sock-");
+      const targetFile = path.join(root, "target.sock");
       const server = net.createServer();
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
@@ -279,6 +282,55 @@ describe("connect cli", () => {
       displayName: "Service Node",
       force: true,
     });
+  });
+
+  it.each([false, true])(
+    "forwards repeatable command restrictions through connect (service=%s)",
+    async (service) => {
+      await runConnect([
+        setupCode(),
+        ...(service ? ["--service"] : []),
+        "--commands",
+        "fixture.read,fixture.list",
+        "--commands",
+        "fixture.read",
+      ]);
+      const commands = ["fixture.list", "fixture.read"];
+      expect(mocks.runNodeHost).toHaveBeenCalledWith(expect.objectContaining({ commands }));
+      if (service) {
+        expect(mocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+          expect.objectContaining({ commands, force: true }),
+        );
+      } else {
+        expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "forwards --all-commands through connect (service=%s)",
+    async (service) => {
+      await runConnect([setupCode(), "--all-commands", ...(service ? ["--service"] : [])]);
+      expect(mocks.runNodeHost).toHaveBeenCalledWith(
+        expect.objectContaining({ allCommands: true }),
+      );
+      if (service) {
+        expect(mocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+          expect.objectContaining({ allCommands: true, force: true }),
+        );
+      } else {
+        expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("rejects --all-commands with --commands before consuming the join target", async () => {
+    await expect(
+      runConnect([setupCode(), "--all-commands", "--commands", "fixture.read"]),
+    ).rejects.toThrow(/--all-commands.*--commands/);
+    expect(mocks.loadNodeHostConfig).not.toHaveBeenCalled();
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+    expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
 
   it("authenticates before persisting hosting consent and installing the service", async () => {

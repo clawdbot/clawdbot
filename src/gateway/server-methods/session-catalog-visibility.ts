@@ -21,7 +21,11 @@ import type { GatewayClient } from "./types.js";
 type SessionCatalogVisibility = { cacheKey: string } & (
   | { kind: "unrestricted" }
   | { kind: "restricted-unprofiled" }
-  | { kind: "restricted-owner"; isCreator: ReturnType<typeof prepareSessionCreatorProfile> }
+  | {
+      kind: "restricted-owner";
+      others: "none" | undefined;
+      isCreator: ReturnType<typeof prepareSessionCreatorProfile>;
+    }
   | {
       kind: "restricted-shared";
       others: "view" | "suggest" | "write";
@@ -56,7 +60,16 @@ export function resolveSessionCatalogVisibility(
   const isCreator = prepareSessionCreatorProfile(profileId, profileAliases);
   return others && others !== "none"
     ? { cacheKey, kind: "restricted-shared", others, isCreator }
-    : { cacheKey, kind: "restricted-owner", isCreator };
+    : { cacheKey, kind: "restricted-owner", others, isCreator };
+}
+
+export function isPublishedCatalogVisible(visibility: SessionCatalogVisibility): boolean {
+  // No role cap keeps adopted catalogs owner-only, but does not restrict publications.
+  return (
+    visibility.kind === "unrestricted" ||
+    visibility.kind === "restricted-shared" ||
+    (visibility.kind === "restricted-owner" && visibility.others === undefined)
+  );
 }
 
 function visibleCatalogSessionEntry(params: {
@@ -84,10 +97,14 @@ export function filterSessionCatalogHost(
   visibility: SessionCatalogVisibility,
   params: {
     requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
+    providerVisibility?: SessionCatalogProvider["visibility"];
   },
 ): SessionCatalogHost {
   if (visibility.kind === "unrestricted") {
     return host;
+  }
+  if (params.providerVisibility === "published") {
+    return isPublishedCatalogVisible(visibility) ? host : { ...host, sessions: [] };
   }
   if (visibility.kind === "restricted-unprofiled") {
     return { ...host, sessions: [] };
@@ -110,6 +127,7 @@ export async function isSessionCatalogThreadVisible(params: {
   fallbackAgentId: string;
   hostId: string;
   list: SessionCatalogProvider["list"];
+  providerVisibility?: SessionCatalogProvider["visibility"];
   listNodes: NonNullable<SessionCatalogListProviderParams["listNodes"]>;
   sourceHomeId?: string;
   threadId: string;
@@ -118,6 +136,9 @@ export async function isSessionCatalogThreadVisible(params: {
   let visibility = resolveSessionCatalogVisibility(params.client, config);
   if (visibility.kind === "unrestricted") {
     return true;
+  }
+  if (params.providerVisibility === "published" && params.access === "read") {
+    return isPublishedCatalogVisible(visibility);
   }
   if (visibility.kind === "restricted-unprofiled") {
     return false;
@@ -158,7 +179,11 @@ export async function isSessionCatalogThreadVisible(params: {
     });
     const instances = new Map();
     planningEntries.captureHostInstances(host, instances);
-    const projected = requestEntries.projectHostSessions(host, instances);
+    const projected = requestEntries.projectHostSessions(
+      host,
+      instances,
+      params.providerVisibility,
+    );
     const session = projected.sessions.find(
       (candidate) =>
         candidate.threadId === params.threadId &&

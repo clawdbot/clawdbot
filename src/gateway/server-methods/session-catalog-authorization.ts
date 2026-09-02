@@ -29,6 +29,7 @@ export async function authorizeSessionCatalogThread(params: {
     getConfig: () => params.context.getRuntimeConfig(),
     fallbackAgentId: params.agentId,
     hostId: params.request.hostId,
+    providerVisibility: params.provider.visibility,
     list: (request) =>
       listSessionCatalogProvider(params.provider, { ...request, agentId: params.agentId }),
     listNodes: createSessionCatalogRequestNodeSnapshot(),

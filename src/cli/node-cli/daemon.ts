@@ -52,6 +52,8 @@ type NodeDaemonInstallOptions = {
   nodeId?: string;
   displayName?: string;
   shareInstalledApps?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
   runtime?: string;
   force?: boolean;
   json?: boolean;
@@ -189,6 +191,8 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       nodeId: opts.nodeId,
       displayName: opts.displayName,
       installedAppsSharing: opts.shareInstalledApps,
+      commands: opts.commands,
+      allCommands: opts.allCommands,
       runtime: runtimeRaw,
       warn: (message) => {
         if (json) {

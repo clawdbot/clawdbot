@@ -12,7 +12,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SessionCatalogEntrySnapshot } from "../../plugins/session-catalog.js";
+import type {
+  SessionCatalogEntrySnapshot,
+  SessionCatalogProvider,
+} from "../../plugins/session-catalog.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -32,6 +35,7 @@ type SessionCatalogRequestEntrySnapshot = {
   projectHostSessions: (
     host: SessionCatalogHost,
     instances: SessionCatalogInstances,
+    providerVisibility?: SessionCatalogProvider["visibility"],
   ) => SessionCatalogHost;
 };
 
@@ -148,13 +152,22 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
-    projectHostSessions: (host, instances) => ({
+    projectHostSessions: (host, instances, providerVisibility) => ({
       ...host,
       sessions: host.sessions.map(
-        ({ createdActor: _providerCreatedActor, sessionKey, color: rawColor, ...session }) => {
+        ({ createdActor: providerCreatedActor, sessionKey, color: rawColor, ...session }) => {
           // Provider-supplied colors are display metadata independent of adoption identity.
           const color = typeof rawColor === "string" ? normalizeSessionColorValue(rawColor) : null;
           const colorProjection = color ? { color } : {};
+          if (providerVisibility === "published") {
+            // Publication attribution belongs to the provider. A source's session key is never
+            // a local adoption claim, even when it happens to match a Gateway session.
+            return {
+              ...session,
+              ...colorProjection,
+              ...(providerCreatedActor ? { createdActor: providerCreatedActor } : {}),
+            };
+          }
           const original = sessionKey ? instances.get(sessionKey) : undefined;
           const current = sessionKey ? entryForSession(sessionKey) : undefined;
           // Native rows remain native if their adoption was replaced or detached. Never project

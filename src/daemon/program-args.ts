@@ -253,6 +253,8 @@ export async function resolveNodeProgramArguments(params: {
   nodeId?: string;
   displayName?: string;
   installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
   dev?: boolean;
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
@@ -280,6 +282,11 @@ export async function resolveNodeProgramArguments(params: {
   }
   if (params.installedAppsSharing !== undefined) {
     args.push(params.installedAppsSharing ? "--share-installed-apps" : "--no-share-installed-apps");
+  }
+  if (params.allCommands) {
+    args.push("--all-commands");
+  } else if (params.commands !== undefined) {
+    args.push("--commands", params.commands.join(","));
   }
   return resolveCliProgramArguments({
     args,

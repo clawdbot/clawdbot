@@ -1,6 +1,7 @@
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -28,8 +29,10 @@ type ActiveTranscriptDatabase = Pick<
   | "transcript_events"
 >;
 
+type TranscriptReadDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
+
 export type CurrentTranscriptProjection = {
-  database: OpenClawAgentDatabase;
+  database: TranscriptReadDatabase;
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
   state: SessionTranscriptProjectionState;
 };
@@ -49,7 +52,7 @@ const EMPTY_PROJECTION_STATE: SessionTranscriptProjectionState = {
   needsRebuild: false,
 };
 
-export function getActiveTranscriptKysely(database: OpenClawAgentDatabase) {
+export function getActiveTranscriptKysely(database: TranscriptReadDatabase) {
   return getNodeSqliteKysely<ActiveTranscriptDatabase>(database.db);
 }
 
@@ -84,7 +87,7 @@ export function readTranscriptProjectionGeneration(
 }
 
 function readProjectionSnapshot(
-  database: OpenClawAgentDatabase,
+  database: TranscriptReadDatabase,
   sessionId: string,
 ): { latestSeq: number; state?: SessionTranscriptProjectionState } | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -126,46 +129,59 @@ function readProjectionSnapshot(
 export function withCurrentProjectionSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (projection: CurrentTranscriptProjection) => T,
+  options: { readOnly?: boolean } = {},
 ): T {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
-  const database = openOpenClawAgentDatabase(databaseOptions);
-  const result = runSqliteDeferredTransactionSync(
-    database.db,
-    () => {
-      const snapshot = readProjectionSnapshot(database, resolved.sessionId);
-      if (!snapshot) {
-        return {
-          kind: "value" as const,
-          value: read({ database, resolved, state: EMPTY_PROJECTION_STATE }),
-        };
-      }
-      if (
-        snapshot.state &&
-        !snapshot.state.needsRebuild &&
-        snapshot.state.indexedSeq === snapshot.latestSeq &&
-        !hasUnclassifiedSessionTranscriptEvents(database.db, resolved.sessionId)
-      ) {
-        return {
-          kind: "value" as const,
-          value: read({ database, resolved, state: snapshot.state }),
-        };
-      }
-      return { kind: "unavailable" as const };
-    },
-    {
-      databaseLabel: database.path,
-      operationLabel: "sessions.history.read",
-    },
-  );
-  if (result.kind === "value") {
-    return result.value;
+  const readSnapshot = (database: TranscriptReadDatabase) =>
+    runSqliteDeferredTransactionSync(
+      database.db,
+      () => {
+        const snapshot = readProjectionSnapshot(database, resolved.sessionId);
+        if (!snapshot) {
+          return {
+            kind: "value" as const,
+            value: read({ database, resolved, state: EMPTY_PROJECTION_STATE }),
+          };
+        }
+        if (
+          snapshot.state &&
+          !snapshot.state.needsRebuild &&
+          snapshot.state.indexedSeq === snapshot.latestSeq &&
+          !hasUnclassifiedSessionTranscriptEvents(database.db, resolved.sessionId)
+        ) {
+          return {
+            kind: "value" as const,
+            value: read({ database, resolved, state: snapshot.state }),
+          };
+        }
+        return { kind: "unavailable" as const };
+      },
+      {
+        databaseLabel: database.path,
+        operationLabel: "sessions.history.read",
+      },
+    );
+  const result = options.readOnly
+    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, {
+        throwOnMissingTable: true,
+      })
+    : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
+  if (!result.found) {
+    throw new Error(
+      "Session transcript storage is unavailable; open the source gateway and retry.",
+    );
   }
-  // Request latency never scales with transcript size. The maintenance owner
-  // rebuilds after this stack unwinds; callers return a retryable response.
-  startSessionTranscriptIndexReconcile({
-    ...databaseOptions,
-    preferredSessionId: resolved.sessionId,
-  });
+  if (result.value.kind === "value") {
+    return result.value.value;
+  }
+  // Only the writer lifecycle may rebuild after this stack unwinds. Read-only catalogs
+  // report unavailable and leave reconciliation to the source Gateway.
+  if (!options.readOnly) {
+    startSessionTranscriptIndexReconcile({
+      ...databaseOptions,
+      preferredSessionId: resolved.sessionId,
+    });
+  }
   throw new SessionTranscriptProjectionUnavailableError(resolved.sessionId);
 }

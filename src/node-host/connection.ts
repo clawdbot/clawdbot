@@ -136,7 +136,7 @@ export function startNodeHostConnection({
     label: string,
     isRetry = false,
   ): void => {
-    if (!gatewayHelloReceived) {
+    if (!gatewayHelloReceived || prepared.restrictedSurface) {
       return;
     }
     const connectionGeneration = gatewayConnectionGeneration;

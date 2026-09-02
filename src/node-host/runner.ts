@@ -13,6 +13,7 @@ import { GatewayClientRequestError, type GatewayReconnectPausedInfo } from "../g
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import { logInfo } from "../logger.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
@@ -50,6 +51,8 @@ type NodeHostRunOptions = {
   nodeId?: string;
   displayName?: string;
   installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
 };
 
 function writeStderrLine(message: string): void {
@@ -153,6 +156,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     fallbackDisplayName,
     gateway: plannedGateway,
     installedAppsSharing: opts.installedAppsSharing,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
   });
   const nodeId = config.nodeId;
   const displayName = config.displayName ?? fallbackDisplayName;
@@ -197,7 +202,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     forceWorkerRuns: opts.forceWorkerRuns,
     ephemeral: opts.ephemeral,
     installedAppsSharingEnabled: config.installedAppsSharing,
+    commands: config.commands,
   });
+  logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
   const { token, password } = opts.gatewayBootstrapToken
     ? {}
     : await resolveNodeHostGatewayCredentials({

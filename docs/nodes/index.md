@@ -160,6 +160,37 @@ Notes:
 - If active local `gateway.auth.*` SecretRefs are configured but unresolved, node-host auth fails closed.
 - Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
+### Restrict the node command surface
+
+Pass `--commands <ids>` to `openclaw node run`, `openclaw node install`, or
+`openclaw connect` to advertise only an explicit comma-separated list of exact
+command IDs. For example, a [Session Share](/plugins/session-share) node can
+publish sessions without exposing execution or other machine capabilities:
+
+```bash
+openclaw connect <join-url> --service \
+  --commands openclaw.sessions.list.v1,openclaw.sessions.read.v1
+```
+
+The flag is repeatable. The allowlist is saved in the node's durable machine
+state, including for installed services; omitting it on a later start keeps
+the saved list. The node advertises only commands that are both available
+and allowlisted, with only their required capabilities. Startup fails if no
+requested command is available. The Gateway pairing approval shows exactly
+the declared commands; Gateway command policy still applies to invocation.
+
+An explicit allowlist also disables computer use, skill scanning and
+publication, plugin-tool publication, MCP servers, and worker hosting. An
+allowlist does not enable a disabled plugin or make an unavailable command
+available.
+
+Restore the full default surface with `openclaw node run --all-commands` in
+the foreground or `openclaw node install --force --all-commands` for an
+installed service. When enrolling with `openclaw connect`, add `--all-commands`
+and optionally `--service`. This durably removes the saved allowlist and
+replaces the service's `--commands` arguments. Do not combine `--all-commands`
+with `--commands`.
+
 ### Start a node host (service)
 
 ```bash
@@ -457,6 +488,20 @@ Gateway loopback MCP config or Gateway skills plugin, cannot reseed from a
 Gateway transcript, and reject attachments and images. Claude Desktop rows and
 nodes that do not advertise the run command remain view-only. The macOS app
 node does not advertise this command yet, so its rows remain view-only.
+
+### OpenClaw sessions and transcripts
+
+The bundled [Session Share plugin](/plugins/session-share) publishes selected
+native OpenClaw sessions from a source Gateway to a paired receiver Gateway.
+The source node host runs as the same user with the source Gateway's state
+directory. Enable the plugin on both sides, choose source session groups, and
+connect with only `openclaw.sessions.list.v1` and
+`openclaw.sessions.read.v1` in `--commands`.
+
+The receiver shows read-only rows under the source node in **OpenClaw sessions**.
+Viewers need permission to view others' sessions on role-restricted Gateways.
+This does not permit continuation, terminal access, or worker execution on the
+source. It is separate from hosting new sessions on a node, described next.
 
 ### Host OpenClaw sessions
 

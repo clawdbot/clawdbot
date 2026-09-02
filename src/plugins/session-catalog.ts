@@ -175,6 +175,9 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
+  /** Source-operator-consented publication: roles that can view others' sessions see every row
+   * without adopting a local session. Publication grants no mutation authority. */
+  visibility?: "published";
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */

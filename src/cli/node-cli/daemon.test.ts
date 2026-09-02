@@ -183,8 +183,8 @@ describe("runNodeDaemonInstall", () => {
     );
   });
 
-  it("inherits saved TLS when the gateway endpoint is unchanged", async () => {
-    await runNodeDaemonInstall({ force: true });
+  it("inherits saved TLS and forwards explicit command restrictions to the install plan", async () => {
+    await runNodeDaemonInstall({ force: true, commands: ["fixture.list", "fixture.read"] });
 
     expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -193,8 +193,21 @@ describe("runNodeDaemonInstall", () => {
         contextPath: "/saved",
         tls: true,
         tlsFingerprint: TLS_FINGERPRINT,
+        commands: ["fixture.list", "fixture.read"],
       }),
     );
+  });
+
+  it("forwards a full-surface reset when replacing a restricted service", async () => {
+    mocks.loadNodeHostConfig.mockResolvedValue({
+      gateway: { host: "saved-gateway.local", port: 18789 },
+      commands: ["fixture.read"],
+    });
+    await runNodeDaemonInstall({ force: true, allCommands: true });
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ allCommands: true, commands: undefined }),
+    );
+    expect(mocks.service.install).toHaveBeenCalledOnce();
   });
 
   it.each([

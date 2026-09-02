@@ -47,6 +47,27 @@ npx openclaw connect https://gateway.example/j/<shortcode> --display-name "Build
 
 The node stays in the foreground until you stop it.
 
+To expose only selected commands, pass a comma-separated list of exact command
+IDs. For a [Session Share](/plugins/session-share) node:
+
+```bash
+openclaw connect <join-url> \
+  --commands openclaw.sessions.list.v1,openclaw.sessions.read.v1
+```
+
+The flag is repeatable. The allowlist is durable node state and also applies
+after `--service` installation; omitting it preserves a saved list. It filters
+available commands and their required capabilities,
+and disables computer use, skills, plugin-tool publication, MCP servers, and
+worker hosting. Startup fails when no requested command is available. The
+Gateway pairing approval shows the resulting declared commands.
+
+To restore the full default surface, use `openclaw node run --all-commands`
+for a foreground node or `openclaw node install --force --all-commands` for
+an installed service. When enrolling again, use `openclaw connect <join-url>
+--all-commands` (add `--service` for a service). This forgets the saved allowlist;
+`--all-commands` cannot be combined with `--commands`.
+
 To let that foreground process host full worker sessions, give explicit local
 consent with `--session-host`:
 
@@ -99,6 +120,16 @@ service installation does not start. The installed service advertises worker
 hosting and exact capacity from this durable consent when it starts.
 
 ## Accepted targets
+
+| Option                  | Purpose                                                                                                               |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `--commands <ids>`      | Save an exact comma-separated node command allowlist (repeatable). Applies to foreground runs and installed services. |
+| `--all-commands`        | Advertise the full default command surface and forget any saved `--commands` allowlist. Conflicts with `--commands`.  |
+| `--display-name <name>` | Set the node display name.                                                                                            |
+| `--service`             | Pair first, then install the node as a user service.                                                                  |
+| `--session-host`        | Consent to worker hosting. An explicit command allowlist disables hosting.                                            |
+| `--ephemeral`           | Run a provider-managed disposable worker node.                                                                        |
+| `--target-file <path>`  | Read a join target from a file and consume the handoff after a successful read.                                       |
 
 `openclaw connect <target>` accepts:
 

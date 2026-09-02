@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { logInfo } from "../logger.js";
 import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -39,6 +40,8 @@ export type NodeHostConfig = {
   gateway?: NodeHostGatewayConfig;
   /** Share installed macOS applications through device.apps (default: false). */
   installedAppsSharing?: boolean;
+  /** Restrict this host to these exact command ids; omission keeps the full surface. */
+  commands?: string[];
 };
 
 export const NODE_HOST_CONFIG_KEY = "nodeHost.config";
@@ -157,7 +160,17 @@ function normalizeStoredNodeHostConfig(value: unknown): NodeHostConfig {
     displayName: optionalNonEmptyString(value.displayName, "display_name"),
     gateway,
     installedAppsSharing: value.installedAppsSharing === true,
+    ...(value.commands !== undefined
+      ? { commands: normalizeNodeHostCommands(value.commands) }
+      : {}),
   };
+}
+
+function normalizeNodeHostCommands(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((id) => typeof id !== "string" || !id.trim())) {
+    throw new Error("invalid node-host commands: expected an array of non-empty command ids");
+  }
+  return [...new Set(value.map((id: string) => id.trim()))].toSorted();
 }
 
 // Own-property parity with the retired column reader: an absent Cloudflare
@@ -223,6 +236,8 @@ export async function configureNodeHost(params: {
   nowMs?: number;
   candidateNodeId?: string;
   installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
 }): Promise<NodeHostConfig> {
   const env = params.env ?? process.env;
   assertNodeHostLegacyStateMigrated(env);
@@ -231,11 +246,14 @@ export async function configureNodeHost(params: {
   const fallbackDisplayName = optionalInputString(params.fallbackDisplayName);
   const candidateNodeId = params.candidateNodeId?.trim() || crypto.randomUUID();
   const gateway = normalizeGatewayConfig(params.gateway);
+  const commands =
+    params.commands === undefined ? undefined : normalizeNodeHostCommands(params.commands);
   const updatedAtMs = params.nowMs ?? Date.now();
   if (!Number.isSafeInteger(updatedAtMs) || updatedAtMs < 0) {
     throw new Error("invalid node-host updatedAtMs: expected a non-negative integer");
   }
 
+  let clearedCommands = false;
   const config = runOpenClawStateWriteTransaction(({ db }) => {
     const stateDb = getNodeSqliteKysely<NodeHostConfigDatabase>(db);
     const stored = executeSqliteQueryTakeFirstSync(
@@ -248,12 +266,15 @@ export async function configureNodeHost(params: {
     const existing = stored
       ? normalizeStoredNodeHostConfig(JSON.parse(stored.value_json) as unknown)
       : undefined;
+    clearedCommands = params.allCommands === true && existing?.commands !== undefined;
+    const nextCommands = params.allCommands ? undefined : (commands ?? existing?.commands);
     const next: NodeHostConfig = {
       version: 1,
       nodeId: explicitNodeId ?? existing?.nodeId ?? candidateNodeId,
       displayName: explicitDisplayName ?? existing?.displayName ?? fallbackDisplayName,
       gateway,
       installedAppsSharing: params.installedAppsSharing ?? existing?.installedAppsSharing ?? false,
+      ...(nextCommands !== undefined ? { commands: nextCommands } : {}),
     };
     const valueJson = JSON.stringify(next);
     executeSqliteQuerySync(
@@ -276,5 +297,10 @@ export async function configureNodeHost(params: {
 
   // Detect a retired writer that recreated node.json while the transaction committed.
   assertNodeHostLegacyStateMigrated(env);
+  if (clearedCommands) {
+    logInfo(
+      "node-host: cleared saved command allowlist; advertising the full default command surface",
+    );
+  }
   return config;
 }

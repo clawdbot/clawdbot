@@ -39,7 +39,7 @@ function toPublicGitHubIdentity(identity: StoredGitHubIdentity): UserProfileGitH
   };
 }
 
-function selectStoredGitHubIdentities(
+export function selectStoredGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
 ): Map<string, StoredGitHubIdentity> {

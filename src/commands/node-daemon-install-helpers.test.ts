@@ -72,7 +72,7 @@ describe("buildNodeInstallPlan", () => {
     });
   });
 
-  it("resolves and forwards Bun for a managed node-host install plan", async () => {
+  it("resolves Bun and forwards command restrictions for a managed node-host install plan", async () => {
     const bunPath = "/home/test/.bun/bin/bun";
     mocks.resolvePreferredBunPath.mockResolvedValue(bunPath);
     mocks.resolveNodeProgramArguments.mockResolvedValue({
@@ -85,6 +85,7 @@ describe("buildNodeInstallPlan", () => {
       host: "127.0.0.1",
       port: 18789,
       runtime: "bun",
+      commands: ["fixture.read"],
     });
 
     expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({
@@ -92,7 +93,7 @@ describe("buildNodeInstallPlan", () => {
       runtime: "bun",
     });
     expect(mocks.resolveNodeProgramArguments).toHaveBeenCalledWith(
-      expect.objectContaining({ runtime: "bun", runtimePath: bunPath }),
+      expect.objectContaining({ runtime: "bun", runtimePath: bunPath, commands: ["fixture.read"] }),
     );
     expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
@@ -128,6 +129,24 @@ describe("buildNodeInstallPlan", () => {
       env: {},
       extraPathDirs: undefined,
     });
+  });
+
+  it("carries the full-surface reset into the managed node command", async () => {
+    mocks.resolveNodeProgramArguments.mockResolvedValue({
+      programArguments: ["node", "node-host"],
+    });
+    mocks.buildNodeServiceEnvironment.mockReturnValue({});
+    await buildNodeInstallPlan({
+      env: {},
+      host: "127.0.0.1",
+      port: 18789,
+      runtime: "node",
+      runtimePath: "/custom/node/bin/node",
+      allCommands: true,
+    });
+    expect(mocks.resolveNodeProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ allCommands: true, commands: undefined }),
+    );
   });
 
   it("marks node gateway credentials as file-backed service env", async () => {

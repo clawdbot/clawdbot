@@ -80,6 +80,26 @@ describe("session catalog SDK", () => {
         { threadIdMaxLength: 32, threadIdPattern: /^(?!-)[a-z0-9-]+$/u, messages },
       ),
     ).toThrow("bad thread");
+    const nativeCursor = "a".repeat(200);
+    const readOptions = { threadIdMaxLength: 32, threadIdPattern: /^thread-\d+$/u, messages };
+    expect(() =>
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: nativeCursor },
+        readOptions,
+      ),
+    ).toThrow("cursor is invalid");
+    expect(
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: nativeCursor },
+        { ...readOptions, cursorMaxLength: 200 },
+      ),
+    ).toEqual({ threadId: "thread-1", limit: 20, cursor: nativeCursor });
+    expect(() =>
+      sessionCatalogPaging.parseReadParams(
+        { threadId: "thread-1", cursor: `${nativeCursor}a` },
+        { ...readOptions, cursorMaxLength: 200 },
+      ),
+    ).toThrow("cursor is invalid");
   });
 
   it.each([
