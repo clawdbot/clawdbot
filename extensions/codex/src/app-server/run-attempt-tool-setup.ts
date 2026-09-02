@@ -198,6 +198,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     | undefined;
   const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
+    // Both catalogs describe one attempt; a later attempt discovers fresh connections.
+    nodeExecAvailability: {},
     params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,

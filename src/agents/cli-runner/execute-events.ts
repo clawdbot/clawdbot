@@ -309,7 +309,9 @@ export function createCliEventHandlers(params: {
       data: {
         kind: "preamble",
         itemId: `commentary-${runParams.runId}-${commentaryCounter}`,
-        phase: "update",
+        // The JSONL parser flushes a complete pre-tool text segment here.
+        // Mark its boundary so channels can safely create their first notification.
+        phase: "end",
         title: "commentary",
         status: "running",
         progressText: applyPluginTextReplacements(

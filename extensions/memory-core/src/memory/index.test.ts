@@ -23,7 +23,7 @@ import {
   type ManagerIndexFixture,
 } from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import type { MemoryIndexManager } from "./manager.js";
+import { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -1399,6 +1399,36 @@ describe("memory index", () => {
       expect(results.some((result) => result.path.endsWith("memory/2026-01-13.md"))).toBe(true);
     } finally {
       await nextManager.close?.();
+    }
+  });
+
+  it.each([
+    { name: "omitted default", purpose: undefined, dirty: true },
+    { name: "explicit default", purpose: "default", dirty: true },
+    { name: "status", purpose: "status", dirty: false },
+    { name: "CLI", purpose: "cli", dirty: false },
+    { name: "maintenance", purpose: "maintenance", dirty: false },
+  ] as const)("starts an indexed $name manager with dirty=$dirty", async ({ purpose, dirty }) => {
+    const cfg = createCfg({
+      provider: "none",
+      vectorEnabled: false,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const initial = await getFreshManager(cfg);
+    await initial.sync({ reason: "test", force: true });
+    await initial.close?.();
+
+    const next =
+      purpose === "maintenance"
+        ? await MemoryIndexManager.get({ cfg, agentId: "main", purpose })
+        : await getFreshManager(cfg, purpose);
+    if (!next) {
+      throw new Error(`Expected ${purpose ?? "default"} memory manager`);
+    }
+    try {
+      expect(next.status().dirty).toBe(dirty);
+    } finally {
+      await next.close?.();
     }
   });
 

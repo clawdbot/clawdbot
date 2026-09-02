@@ -244,13 +244,21 @@ describe("chrome MCP page parsing", () => {
     vi.unstubAllEnvs();
   });
 
-  it("passes HTTP CDP endpoints to Chrome MCP as browserUrl discovery endpoints", () => {
-    const { args } = normalizeChromeMcpOptions({ cdpUrl: "http://127.0.0.1:9222" });
+  it.each([undefined, "npx"])(
+    "uses pinned Chrome MCP for HTTP endpoints with command %s",
+    (mcpCommand) => {
+      const { command, args } = normalizeChromeMcpOptions({
+        cdpUrl: "http://127.0.0.1:9222",
+        mcpCommand,
+      });
 
-    expect(args).toContain("--browserUrl");
-    expect(args).toContain("http://127.0.0.1:9222");
-    expect(args).not.toContain("--wsEndpoint");
-  });
+      expect(command).toBe("npx");
+      expect(args.slice(0, 2)).toEqual(["-y", "chrome-devtools-mcp@1.8.0"]);
+      expect(args).toContain("--browserUrl");
+      expect(args).toContain("http://127.0.0.1:9222");
+      expect(args).not.toContain("--wsEndpoint");
+    },
+  );
 
   it("passes direct WebSocket CDP endpoints to Chrome MCP as wsEndpoint attachments", () => {
     const { args } = normalizeChromeMcpOptions({
@@ -339,8 +347,13 @@ describe("chrome MCP page parsing", () => {
     const options = normalizeChromeMcpOptions({ mcpCommand: "custom-chrome-mcp", mcpArgs });
 
     expect(options.command).toBe("custom-chrome-mcp");
-    expect(options.args.slice(-mcpArgs.length)).toEqual(mcpArgs);
-    expect(options.args).not.toContain("chrome-devtools-mcp@latest");
+    expect(options.args).toEqual([
+      "--autoConnect",
+      "--no-usage-statistics",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      ...mcpArgs,
+    ]);
   });
 
   it("keeps document-bound evaluations on one pinned target and raw snapshot uid", async () => {

@@ -10,19 +10,24 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  pollLocatorText,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const proofDir = path.join(suite.artifactDir, "new-session-transition");
-const SESSION_KEY = "agent:main:transition-proof-0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
+const SESSION_KEY = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const RUN_ID = "transition-proof-run";
 const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+function transitionProofDir() {
+  return path.join(suite.artifactDir, "new-session-transition");
+}
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
   if (!captureProofEnabled) {
     return;
   }
+  const proofDir = transitionProofDir();
   await mkdir(proofDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(proofDir, fileName) });
 }
@@ -32,9 +37,10 @@ suite.define(() => {
     { label: "desktop", viewport: { height: 900, width: 1280 } },
     { label: "mobile", viewport: { height: 844, width: 390 } },
   ])("starts a draft in the background on $label", async ({ label, viewport }) => {
+    const proofDir = captureProofEnabled ? transitionProofDir() : undefined;
     const context = await suite.browser.newContext({
       locale: "en-US",
-      ...(captureProofEnabled ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
+      ...(proofDir ? { recordVideo: { dir: proofDir, size: viewport } } : {}),
       serviceWorkers: "block",
       viewport,
     });
@@ -103,7 +109,7 @@ suite.define(() => {
       }
     } finally {
       await context.close();
-      if (captureProofEnabled && video) {
+      if (proofDir && video) {
         await rename(await video.path(), path.join(proofDir, `background-${label}.webm`));
       }
     }
@@ -209,7 +215,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the selected effort until the focused chat is ready", async () => {
+  it("opens the confirmed session before roster or reference lookup completes and preserves effort", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -227,6 +233,8 @@ suite.define(() => {
       thinkingLevel: "xhigh",
       updatedAt: Date.now(),
     };
+    const createdSessionList = createdSessionListResult(SESSION_KEY);
+    createdSessionList.sessions = createdSessionList.sessions.map((row) => ({ ...row, ...entry }));
     let releaseChatModule!: () => void;
     let chatModuleRequested = false;
     const chatModuleBlocked = new Promise<void>((resolve) => {
@@ -239,6 +247,7 @@ suite.define(() => {
     });
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-sol",
+      heldMethods: ["sessions.resolve"],
       models: [
         {
           id: "gpt-5.6-sol",
@@ -257,7 +266,7 @@ suite.define(() => {
           runId: RUN_ID,
           runStarted: true,
         },
-        "sessions.list": createdSessionListResult(SESSION_KEY),
+        "sessions.list": { ...createdSessionListResult(SESSION_KEY), count: 0, sessions: [] },
       },
     });
     try {
@@ -270,11 +279,24 @@ suite.define(() => {
       const start = page.locator(".new-session-page__start-submit");
       await message.fill("keep progress moving");
       await expect.poll(() => start.isEnabled()).toBe(true);
+      await gateway.waitForRequest("sessions.list");
+      expect(
+        await page.locator(`.sidebar-recent-session[data-session-key="${SESSION_KEY}"]`).count(),
+      ).toBe(0);
+      const listRequestsBeforeSubmit = (await gateway.getRequests("sessions.list")).length;
 
       await gateway.deferNext("sessions.create");
       await gateway.deferNext("sessions.list");
       await start.click();
       await gateway.waitForRequest("sessions.create");
+      const startup = page.locator(".new-session-page__starting");
+      const submittedPrompt = startup.locator(".chat-group.user");
+      await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
+      await pollLocatorText(submittedPrompt).toContain("keep progress moving");
+      await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
+        "Starting…",
+      );
+      await captureProof(page, "00-create-pending.png");
       await gateway.resolveDeferred("sessions.create", {
         key: SESSION_KEY,
         entry,
@@ -282,37 +304,41 @@ suite.define(() => {
         runId: RUN_ID,
         runStarted: true,
       });
-      await gateway.waitForRequest("sessions.list");
+      await gateway.waitForRequest("sessions.list", { after: listRequestsBeforeSubmit });
       await expect.poll(() => chatModuleRequested).toBe(true);
 
-      await expect.poll(() => start.getAttribute("aria-busy")).toBe("true");
-      const spinner = start.locator("svg");
-      expect(await spinner.evaluate((element) => getComputedStyle(element).animationDuration)).toBe(
-        "2.25s",
-      );
-      const initialSpinnerTransform = await spinner.evaluate(
-        (element) => getComputedStyle(element).transform,
-      );
-      await expect
-        .poll(() => spinner.evaluate((element) => getComputedStyle(element).transform))
-        .not.toBe(initialSpinnerTransform);
+      expect(await submittedPrompt.isVisible()).toBe(true);
+      expect(await submittedPrompt.count()).toBe(1);
       await captureProof(page, "01-chat-route-preparing.png");
 
       await page.evaluate(() => {
-        const frames = { invalid: 0, running: true };
+        const frames = { invalid: 0, routeAnimation: false, running: true };
         Reflect.set(globalThis, "__openclawSessionTransitionFrames", frames);
         const sample = () => {
           const outlet = document.querySelector("openclaw-router-outlet");
           const handoffCover = outlet?.classList.contains("session-route-handoff") === true;
           const newSessionVisible = Boolean(
-            document.querySelector(".new-session-page__start-submit")?.getClientRects().length,
+            document.querySelector(".new-session-page__starting")?.getClientRects().length,
           );
           const chatVisible = Boolean(
             document.querySelector(".agent-chat__composer-combobox")?.getClientRects().length,
           );
-          if (handoffCover || (!newSessionVisible && !chatVisible)) {
+          if (
+            document.activeViewTransition ||
+            handoffCover ||
+            (!newSessionVisible && !chatVisible)
+          ) {
             frames.invalid += 1;
           }
+          // The 180ms animation can finish before an RPC-side assertion runs.
+          // Observe it with the rendered frames, then retain that observation.
+          frames.routeAnimation ||= document.getAnimations().some((animation) => {
+            const effect = animation.effect as KeyframeEffect | null;
+            return (
+              effect?.target === outlet &&
+              effect.getKeyframes().every((keyframe) => keyframe.opacity === undefined)
+            );
+          });
           if (frames.running) {
             requestAnimationFrame(sample);
           }
@@ -328,17 +354,9 @@ suite.define(() => {
           page.evaluate(() => ({
             activeViewTransition: Boolean(document.activeViewTransition),
             chatSurfaceReady: Boolean(document.querySelector(".agent-chat__composer-combobox")),
-            routeAnimation: document.getAnimations().some((animation) => {
-              const effect = animation.effect as KeyframeEffect | null;
-              return (
-                effect?.target instanceof HTMLElement &&
-                effect.target.tagName === "OPENCLAW-ROUTER-OUTLET" &&
-                effect.getKeyframes().every((keyframe) => keyframe.opacity === undefined)
-              );
-            }),
           })),
         )
-        .toEqual({ activeViewTransition: false, chatSurfaceReady: true, routeAnimation: true });
+        .toEqual({ activeViewTransition: false, chatSurfaceReady: true });
       await expect
         .poll(() => page.getByText("keep progress moving", { exact: true }).count())
         .toBe(1);
@@ -348,17 +366,22 @@ suite.define(() => {
       await expect
         .poll(() => chatEffortPicker.getAttribute("data-chat-thinking-value"))
         .toBe("xhigh");
-      const invalidFrames = await page.evaluate(() => {
+      await waitForCommittedChatRoute(page);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(listRequestsBeforeSubmit + 1);
+      expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
+      const transitionFrames = await page.evaluate(() => {
         const frames = Reflect.get(globalThis, "__openclawSessionTransitionFrames") as {
           invalid: number;
+          routeAnimation: boolean;
           running: boolean;
         };
         frames.running = false;
-        return frames.invalid;
+        return { invalid: frames.invalid, routeAnimation: frames.routeAnimation };
       });
-      expect(invalidFrames).toBe(0);
+      expect(transitionFrames).toEqual({ invalid: 0, routeAnimation: true });
       await captureProof(page, "02-session-route-transition.png");
-      await gateway.resolveDeferred("sessions.list", createdSessionListResult(SESSION_KEY));
+      await gateway.resolveDeferred("sessions.list", createdSessionList);
       await gateway.resolveDeferred("chat.startup");
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();
@@ -370,6 +393,12 @@ suite.define(() => {
           ),
         )
         .toBe(true);
+      await expect
+        .poll(() => page.getByText("keep progress moving", { exact: true }).count())
+        .toBe(1);
+      await expect
+        .poll(() => chatEffortPicker.getAttribute("data-chat-thinking-value"))
+        .toBe("xhigh");
       await captureProof(page, "03-chat-route-ready.png");
     } finally {
       releaseChatModule();

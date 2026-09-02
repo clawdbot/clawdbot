@@ -9,7 +9,8 @@ import type {
 import { BrowserProfileUnavailableError } from "./errors.js";
 
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
-const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@latest"];
+// Endpoint policy below must match the launched CLI's argument grammar.
+const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@1.8.0"];
 const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
   "--no-usage-statistics",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.

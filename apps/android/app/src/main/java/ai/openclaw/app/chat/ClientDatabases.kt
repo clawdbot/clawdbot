@@ -637,13 +637,6 @@ private class DeferredChatCommandOutbox(
 
   override suspend fun loadAttachments(id: String): List<LoadedOutboxAttachment> = ready().commandOutbox.loadAttachments(id)
 
-  override suspend fun updateStatus(
-    id: String,
-    status: ChatOutboxStatus,
-    retryCount: Int,
-    lastError: String?,
-  ): Int = ready().commandOutbox.updateStatus(id, status, retryCount, lastError)
-
   override suspend fun updateStatusIfAttempt(
     id: String,
     expectedAttemptVersion: Int,
@@ -652,12 +645,6 @@ private class DeferredChatCommandOutbox(
     lastError: String?,
     expectedStatus: ChatOutboxStatus?,
   ): Int = ready().commandOutbox.updateStatusIfAttempt(id, expectedAttemptVersion, status, retryCount, lastError, expectedStatus)
-
-  override suspend fun claimForSending(
-    id: String,
-    retryCount: Int,
-    lastError: String?,
-  ): Int = ready().commandOutbox.claimForSending(id, retryCount, lastError)
 
   override suspend fun claimForSendingIfAttempt(
     id: String,
@@ -670,14 +657,6 @@ private class DeferredChatCommandOutbox(
     id: String,
     sessionKey: String,
   ) = ready().commandOutbox.pinSessionKey(id, sessionKey)
-
-  override suspend fun requeueForRetry(
-    gatewayId: String,
-    id: String,
-    nowMs: Long,
-    gatedEpoch: Long?,
-    ownerAgentId: String?,
-  ): Int = ready().commandOutbox.requeueForRetry(gatewayId, id, nowMs, gatedEpoch, ownerAgentId)
 
   override suspend fun requeueForRetryIfCurrent(
     gatewayId: String,
@@ -708,8 +687,6 @@ private class DeferredChatCommandOutbox(
 
   override suspend fun deleteIfQueued(id: String): Boolean = ready().commandOutbox.deleteIfQueued(id)
 
-  override suspend fun confirmDelivered(ids: Set<String>): Int = ready().commandOutbox.confirmDelivered(ids)
-
   override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int = ready().commandOutbox.confirmDeliveredAttempts(ids)
 
   override suspend fun branchState(
@@ -728,12 +705,6 @@ private class DeferredChatCommandOutbox(
     scope: ChatOutboxScope,
     lease: ChatOutboxMutationLease,
   ): Boolean = ready().commandOutbox.cancelSessionMutation(gatewayId, scope, lease)
-
-  override suspend fun demoteSessionMutationToReconciliation(
-    gatewayId: String,
-    scope: ChatOutboxScope,
-    lease: ChatOutboxMutationLease?,
-  ): Boolean = ready().commandOutbox.demoteSessionMutationToReconciliation(gatewayId, scope, lease)
 
   override suspend fun demoteSessionMutationToReconciliationState(
     gatewayId: String,

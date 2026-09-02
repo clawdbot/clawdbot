@@ -41,6 +41,7 @@ import {
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import {
+  isTransientMemoryIndexManagerPurpose,
   MemoryManagerRegistry,
   normalizeMemoryIndexManagerPurpose,
   resolveMemoryIndexManagerCacheKey,
@@ -49,11 +50,7 @@ import {
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
-import {
-  collectMemoryStatusAggregate,
-  resolveInitialMemoryDirty,
-  resolveStatusProviderInfo,
-} from "./manager-status-state.js";
+import { collectMemoryStatusAggregate, resolveStatusProviderInfo } from "./manager-status-state.js";
 import type { MemoryReindexRetryState } from "./manager-sync-base.js";
 import {
   enqueueMemoryTargetedSessionSync,
@@ -161,7 +158,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           });
           return {
             key,
-            transient: purpose === "status" || purpose === "cli" || purpose === "maintenance",
             create: async () => {
               const manager = new MemoryIndexManager({
                 cacheKey: key,
@@ -170,7 +166,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                 workspaceDir,
                 settings,
                 providerRequirement,
-                purpose: params.purpose,
+                purpose,
                 acquireLocalService: params.acquireLocalService,
               });
               if (params.inspectSources) {
@@ -193,14 +189,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
     providerRequirement: MemoryEmbeddingProviderRequirement;
-    purpose?: MemoryIndexManagerPurpose;
+    purpose: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }) {
     super();
     const effectiveSettings = resolveEffectiveMemorySearchSettings(params.settings);
     this.cacheKey = params.cacheKey;
     this.acquireLocalService = params.acquireLocalService;
-    this.purpose = normalizeMemoryIndexManagerPurpose(params.purpose);
+    this.purpose = params.purpose;
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
@@ -239,8 +235,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.indexIdentityDirty =
         initialIndexIdentity.status === "mismatched" ||
         (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
-      const transient =
-        params.purpose === "status" || params.purpose === "cli" || params.purpose === "maintenance";
+      const transient = isTransientMemoryIndexManagerPurpose(this.purpose);
       const invalidatedSources = new Set(
         (
           this.db
@@ -253,11 +248,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       this.memorySourceProvenanceRepairPending =
         this.sources.has("memory") && invalidatedSources.has("memory");
       this.dirty =
-        resolveInitialMemoryDirty({
-          hasMemorySource: this.sources.has("memory"),
-          statusOnly: params.purpose === "status",
-          hasIndexedMeta: Boolean(meta),
-        }) || this.memorySourceProvenanceRepairPending;
+        (this.sources.has("memory") && (!transient || !meta)) ||
+        this.memorySourceProvenanceRepairPending;
       if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
         // Migration cannot map a durable session source path back to one live
         // transcript file. Carry a full-session retry so unchanged and deleted
