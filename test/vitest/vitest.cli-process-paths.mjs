@@ -9,6 +9,7 @@ export const cliProcessTestFiles = [
   "src/cli/hooks-cli.process.test.ts",
   "src/cli/mcp-cli.import-boundary.test.ts",
   "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
+  "src/node-host/worker-exit.process.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);
