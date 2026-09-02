@@ -127,7 +127,7 @@ export function prepareWorkspacePluginRegistries(
   loadInboundRegistry?: PreparedInboundRegistryLoader,
   preferBuiltPluginArtifacts = false,
   reusableGeneration?: PreparedModelRuntimePluginGeneration,
-  configuredHarnessRuntimes?: readonly string[],
+  getConfiguredHarnessRuntimes?: () => readonly string[],
 ): {
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
@@ -137,10 +137,11 @@ export function prepareWorkspacePluginRegistries(
   if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
     return {};
   }
+  // Resolve batch facts only for a registry load; read-only and reused registries need no scan.
   const inboundPluginRegistry = input.readOnly
     ? undefined
     : (reusableGeneration?.inboundPluginRegistry ??
-      loadInboundRegistry?.(input, metadataSnapshot, configuredHarnessRuntimes));
+      loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes?.()));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   const runtimePluginRegistry =
     input.runtimePluginSelections || !baseRegistry
@@ -160,7 +161,7 @@ export function prepareWorkspacePluginRegistries(
           metadataSnapshot,
           ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
           selections: input.runtimePluginSelections,
-          configuredHarnessRuntimes,
+          configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
         })
       : baseRegistry;
   return {

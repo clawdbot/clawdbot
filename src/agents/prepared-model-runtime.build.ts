@@ -375,19 +375,22 @@ async function buildSnapshotBatch(
     );
     const preferBuiltPluginArtifacts =
       pluginGeneration?.preferBuiltPluginArtifacts ?? prepareInboundPluginRegistry;
-    const config = groupCandidates[0]!.input.config;
-    let configuredHarnessRuntimes = configuredHarnessRuntimesByConfig.get(config);
-    if (!configuredHarnessRuntimes) {
-      configuredHarnessRuntimes = collectConfiguredAgentHarnessRuntimes(config);
-      configuredHarnessRuntimesByConfig.set(config, configuredHarnessRuntimes);
-    }
+    const getConfiguredHarnessRuntimes = () => {
+      const config = groupCandidates[0]!.input.config;
+      let runtimes = configuredHarnessRuntimesByConfig.get(config);
+      if (!runtimes) {
+        runtimes = collectConfiguredAgentHarnessRuntimes(config);
+        configuredHarnessRuntimesByConfig.set(config, runtimes);
+      }
+      return runtimes;
+    };
     const prepared = await prepareWorkspaceBuildGroup(
       groupCandidates.map(({ input }) => input),
       catalogMode,
       {
         preferBuiltPluginArtifacts,
         includeCredentialProviders,
-        configuredHarnessRuntimes,
+        getConfiguredHarnessRuntimes,
       },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
