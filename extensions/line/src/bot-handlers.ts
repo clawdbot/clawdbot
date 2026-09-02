@@ -438,8 +438,9 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           timestamp: event.timestamp,
         },
       });
-      // A quote may only resolve what the ambient window actually kept, so the
-      // record that made this message agent-visible is what opens it to quotes.
+      // An empty result means the ambient window is switched off entirely, so
+      // this message was never put in front of the agent and a later quote of
+      // it must not resolve to its text.
       if (recorded.length > 0) {
         recordLineAgentVisibleMessage(account.accountId, {
           id: message.id,

@@ -173,6 +173,36 @@ describe("buildLineMessageContext quotes", () => {
     expect(context?.ctxPayload.ReplyToId).toBeUndefined();
   });
 
+  it("reads contextVisibility from the LINE channel, not only from the defaults", async () => {
+    recordLineAgentVisibleMessage(account.accountId, {
+      id: "m-quoted",
+      conversationId: "group-quote",
+      body: "staging is on 10.0.0.5",
+      senderId: "U-teammate",
+    });
+
+    const context = await buildLineMessageContext({
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["user-asking"],
+      event: quotingEvent("m-quoted", "what about this?"),
+      allMedia: [],
+      // The permissive default would keep the body; only the channel-scoped key
+      // can hide it, so this fails if LINE reads the wrong scope.
+      cfg: {
+        ...cfg,
+        channels: {
+          defaults: { contextVisibility: "all" },
+          line: { contextVisibility: "allowlist" },
+        },
+      },
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("what about this?");
+    expect(context?.ctxPayload.ReplyToBody).toBeUndefined();
+  });
+
   it("keeps a quote body from a sender the group allowlist still names", async () => {
     getUserProfileMock.mockImplementation(async (userId: string) =>
       userId === "U-teammate" ? { displayName: "Mika" } : null,

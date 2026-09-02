@@ -462,6 +462,51 @@ describe("handleLineWebhookEvents", () => {
     });
 
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    // The gate this event was admitted under has to arrive as values, not just
+    // as present fields: a quote of an older message re-reads it to decide
+    // whether that message's author still passes.
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ groupPolicy: "allowlist", groupAllowFrom: ["user-3"] }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands a per-group allowlist to the context as the gate that was applied", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "m3b", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-3" },
+      mode: "active",
+      webhookEventId: "evt-3b",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: {
+          groupPolicy: "open",
+          groups: { "group-1": { allowFrom: ["user-3"], requireMention: false } },
+        },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    // A per-group allowFrom narrows an open account to an allowlist. The quote
+    // check must see that narrowed gate, not the account-level policy.
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ groupPolicy: "allowlist", groupAllowFrom: ["user-3"] }),
+    );
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 

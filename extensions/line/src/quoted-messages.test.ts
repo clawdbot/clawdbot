@@ -44,28 +44,26 @@ describe("quoted message store", () => {
     });
   });
 
-  it("bounds a retained body so one long message cannot dominate the prompt", () => {
+  it("bounds a retained body at the platform text limit", () => {
     recordLineAgentVisibleMessage("default", {
       id: "long-1",
       conversationId: "C-room",
-      body: "x".repeat(5000),
+      body: "x".repeat(6000),
     });
 
-    // The prompt layer marks its own cuts only above this bound, so an unmarked
-    // body of exactly the bound would reach the model reading as a whole message.
-    const body = resolveLineQuotedMessage("default", "long-1", "C-room")?.body;
-    expect(body).toHaveLength(2000);
-    expect(body?.endsWith("…[truncated]")).toBe(true);
+    expect(resolveLineQuotedMessage("default", "long-1", "C-room")?.body).toHaveLength(5000);
   });
 
-  it("leaves a body that fits the bound unmarked", () => {
+  it("keeps a long body whole for the prompt layer to shorten", () => {
     recordLineAgentVisibleMessage("default", {
-      id: "exact-1",
+      id: "long-2",
       conversationId: "C-room",
-      body: "y".repeat(2000),
+      body: "y".repeat(3000),
     });
 
-    expect(resolveLineQuotedMessage("default", "exact-1", "C-room")?.body).toBe("y".repeat(2000));
+    // Cutting below the prompt's own 2000-character cap here would silently
+    // replace its head-and-tail form, which keeps the end of a long quote.
+    expect(resolveLineQuotedMessage("default", "long-2", "C-room")?.body).toBe("y".repeat(3000));
   });
 
   it("keeps accounts apart so one bot's message never addresses another", () => {
