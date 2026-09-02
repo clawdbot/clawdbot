@@ -382,6 +382,7 @@ export class DraftPlaceState {
     this.cancelRestoredFolderValidation();
     this.gatewayApprovedWorkspaceRoots = [];
     this.browser.resetProjectSearch();
+    this.browser.resetProjects(resetHostSelection);
     if (!resetHostSelection) {
       this.callbacks.requestUpdate();
       return;
@@ -389,7 +390,6 @@ export class DraftPlaceState {
     this.agentIdValue = "";
     this.agentSelectedByUser = false;
     this.folderValue = "";
-    this.browser.resetProjects();
     this.folderSelectedByUser = false;
     this.preferredWhereRestore = null;
     this.preferredProjectRestore = "";

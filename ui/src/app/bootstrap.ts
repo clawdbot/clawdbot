@@ -307,7 +307,7 @@ export function bootstrapApplication(
     hasSidebarCollapseIntent &&
       sessionRefFromPath(applicationLocation.pathname, basePath)?.namespace === "chat",
   );
-  const theme = createApplicationTheme(settings);
+  const theme = createApplicationTheme(settings, gateway);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({
     shouldOpenInControlUiBrowser: () =>

@@ -290,6 +290,8 @@ export class DraftGatewayState {
   }
 
   invalidateDiscovery(resetHostSelection: boolean, submissionOutcome: SubmissionOutcomeReason) {
+    // Retire pending results synchronously; Lit may not run hostUpdate before they settle.
+    void this.cloudProfileTask.run([null, -1, false, false, ""]);
     this.cloudProfilesValue = [];
     this.cloudProfilesReadyValue = false;
     if (resetHostSelection) {
