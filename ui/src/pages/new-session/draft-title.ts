@@ -135,9 +135,6 @@ export class NewSessionTitleController implements ReactiveController {
     this.hostUpdated();
   }
 
-  available(): boolean {
-    return this.input() !== null;
-  }
   preparedTitle(): string | undefined {
     return this.preparation.titleFor(this.input());
   }
