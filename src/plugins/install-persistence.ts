@@ -25,6 +25,7 @@ import { enablePluginInConfig } from "./enable.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import type { PluginInstallLogger } from "./install-types.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
   withoutPluginInstallRecords,
@@ -37,6 +38,7 @@ import {
 } from "./manifest-install-owner.js";
 import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./manifest-registry.js";
 import { safeRealpathSync } from "./path-safety.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
@@ -480,7 +482,7 @@ function resolvePluginConfigEnablement(params: {
   return { mode: "invalid", error: result.errors[0]?.text ?? "invalid plugin config" };
 }
 
-export async function persistPluginInstall(params: {
+type PersistPluginInstallParams = {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
@@ -492,18 +494,38 @@ export async function persistPluginInstall(params: {
   persistenceLogger?: PluginInstallLogger;
   onCommitted?: () => void;
   beforePersistentApply?: () => void;
-}): Promise<OpenClawConfig> {
+};
+
+export async function persistPluginInstall(
+  params: PersistPluginInstallParams,
+): Promise<OpenClawConfig> {
+  const installRecords = await tracePluginLifecyclePhaseAsync(
+    "install records load",
+    () => loadInstalledPluginIndexInstallRecords(),
+    { command: "install" },
+  );
+  // Keep the prior ledger for replacement cleanup, but validate published package bytes
+  // in a new generation so schema checks and slot selection cannot reuse pre-update facts.
+  try {
+    return await withPluginCache(createPluginCache(), () =>
+      persistPublishedPluginInstall(params, installRecords),
+    );
+  } finally {
+    // Enclosing batch operations must reread the ledger after this isolated mutation.
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+  }
+}
+
+async function persistPublishedPluginInstall(
+  params: PersistPluginInstallParams,
+  installRecords: Record<string, PluginInstallRecord>,
+): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
   // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
   const warn = (message: string, managementMessage: string): void => {
     params.persistenceLogger?.warn?.(managementMessage);
     runtime.log(theme.warn(message));
   };
-  const installRecords = await tracePluginLifecyclePhaseAsync(
-    "install records load",
-    () => loadInstalledPluginIndexInstallRecords(),
-    { command: "install" },
-  );
   const previousInstall = installRecords[params.pluginId];
   const replacedInstallRemoval = resolveReplacedManagedInstallRemoval({
     pluginId: params.pluginId,
