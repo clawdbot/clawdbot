@@ -1,9 +1,11 @@
+// Provides assertions for legacy config detection tests.
 import { expect } from "vitest";
 
 type SchemaParseResult<TData = unknown> =
   | { success: true; data: TData }
   | { success: false; error: { issues: Array<{ path: PropertyKey[]; message?: string }> } };
 
+/** Asserts a schema accepts config and exposes the expected normalized value. */
 export function expectSchemaConfigValue(params: {
   schema: { safeParse: (value: unknown) => SchemaParseResult };
   config: unknown;
@@ -16,29 +18,4 @@ export function expectSchemaConfigValue(params: {
     throw new Error("expected schema config to be valid");
   }
   expect(params.readValue(res.data)).toBe(params.expectedValue);
-}
-
-export function expectSchemaValid(
-  schema: { safeParse: (value: unknown) => SchemaParseResult },
-  config: unknown,
-) {
-  const res = schema.safeParse(config);
-  expect(res.success).toBe(true);
-}
-
-export function expectSchemaValidationIssue(params: {
-  schema: { safeParse: (value: unknown) => SchemaParseResult };
-  config: unknown;
-  expectedPath: string;
-  expectedMessage?: string;
-}) {
-  const res = params.schema.safeParse(params.config);
-  expect(res.success).toBe(false);
-  if (!res.success) {
-    const issue = res.error.issues[0];
-    expect(issue?.path.join(".")).toBe(params.expectedPath);
-    if (params.expectedMessage !== undefined) {
-      expect(issue?.message).toContain(params.expectedMessage);
-    }
-  }
 }

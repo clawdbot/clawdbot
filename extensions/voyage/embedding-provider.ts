@@ -1,6 +1,8 @@
+// Voyage provider module implements model/runtime integration.
 import {
   fetchRemoteEmbeddingVectors,
   normalizeEmbeddingModelWithPrefixes,
+  resolveEmbeddingEndpointUrl,
   resolveRemoteEmbeddingBearerClient,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
@@ -22,7 +24,7 @@ const VOYAGE_MAX_INPUT_TOKENS: Record<string, number> = {
   "voyage-code-3": 32000,
 };
 
-export function normalizeVoyageModel(model: string): string {
+function normalizeVoyageModel(model: string): string {
   return normalizeEmbeddingModelWithPrefixes({
     model,
     defaultModel: DEFAULT_VOYAGE_EMBEDDING_MODEL,
@@ -34,9 +36,13 @@ export async function createVoyageEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: VoyageEmbeddingClient }> {
   const client = await resolveVoyageEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  const url = resolveEmbeddingEndpointUrl(client.baseUrl, "embeddings");
 
-  const embed = async (input: string[], input_type?: "query" | "document"): Promise<number[][]> => {
+  const embedMany = async (
+    input: string[],
+    input_type?: "query" | "document",
+    signal?: AbortSignal,
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -52,6 +58,7 @@ export async function createVoyageEmbeddingProvider(
       url,
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
+      signal,
       body,
       errorPrefix: "voyage embeddings failed",
     });
@@ -62,17 +69,33 @@ export async function createVoyageEmbeddingProvider(
       id: "voyage",
       model: client.model,
       maxInputTokens: VOYAGE_MAX_INPUT_TOKENS[client.model],
-      embedQuery: async (text) => {
-        const [vec] = await embed([text], "query");
+      embed: async (input, optionsValue) => {
+        const text = typeof input === "string" ? input : input.text;
+        const [vec] = await embedMany(
+          [text],
+          optionsValue?.inputType === "query" ? "query" : "document",
+          optionsValue?.signal,
+        );
         return vec ?? [];
       },
-      embedBatch: async (texts) => embed(texts, "document"),
+      embedBatch: async (inputs, optionsLocal) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+        if (optionsLocal?.inputType === "query") {
+          return await Promise.all(
+            texts.map(async (text) => {
+              const [vec] = await embedMany([text], "query", optionsLocal.signal);
+              return vec ?? [];
+            }),
+          );
+        }
+        return await embedMany(texts, "document", optionsLocal?.signal);
+      },
     },
     client,
   };
 }
 
-export async function resolveVoyageEmbeddingClient(
+async function resolveVoyageEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<VoyageEmbeddingClient> {
   const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({

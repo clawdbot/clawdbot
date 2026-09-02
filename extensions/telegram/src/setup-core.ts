@@ -1,36 +1,51 @@
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+// Telegram plugin module implements setup core behavior.
 import {
   createEnvPatchedAccountSetupAdapter,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
+  createSetupTranslator,
+  type ChannelSetupAdapter,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramSenderUserId } from "./allow-from.js";
+import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
+
+const t = createSetupTranslator();
 
 const channel = "telegram" as const;
 
-export const TELEGRAM_TOKEN_HELP_LINES = [
-  "1) Open Telegram and chat with @BotFather",
-  "2) Run /newbot (or /mybots)",
-  "3) Copy the token (looks like 123456:ABC...)",
-  "Tip: you can also set TELEGRAM_BOT_TOKEN in your env.",
-  `Docs: ${formatDocsLink("/telegram")}`,
-  "Website: https://openclaw.ai",
-];
+export function getTelegramTokenHelpLines(): string[] {
+  return [
+    t("wizard.telegram.tokenHelpOpenBotFather"),
+    t("wizard.telegram.tokenHelpNewBot"),
+    t("wizard.telegram.tokenHelpCopyToken"),
+    // Telegram's documented BotFather Mini App deep link (core.telegram.org/bots/features);
+    // web-based alternative to the /newbot chat flow, also works on web.telegram.org.
+    t("wizard.telegram.tokenHelpWebApp", { url: "https://t.me/BotFather?startapp" }),
+    t("wizard.telegram.tokenEnvTip"),
+    t("wizard.channels.docs", { link: formatDocsLink("/telegram") }),
+    t("wizard.telegram.website", { url: "https://openclaw.ai" }),
+  ];
+}
 
-export const TELEGRAM_USER_ID_HELP_LINES = [
-  `1) DM your bot, then read from.id in \`${formatCliCommand("openclaw logs --follow")}\` (safest)`,
-  "2) Or call https://api.telegram.org/bot<bot_token>/getUpdates and read message.from.id",
-  "3) Third-party: DM @userinfobot or @getidsbot",
-  `Docs: ${formatDocsLink("/telegram")}`,
-  "Website: https://openclaw.ai",
-];
+export function getTelegramUserIdHelpLines(): string[] {
+  return [
+    t("wizard.telegram.userIdHelpLogs", {
+      command: formatCliCommand("openclaw logs --follow"),
+    }),
+    t("wizard.telegram.userIdHelpGetUpdates"),
+    t("wizard.telegram.userIdHelpThirdParty"),
+    t("wizard.channels.docs", { link: formatDocsLink("/telegram") }),
+    t("wizard.telegram.website", { url: "https://openclaw.ai" }),
+  ];
+}
 
-export function normalizeTelegramAllowFromInput(raw: string): string {
+function normalizeTelegramAllowFromInput(raw: string): string {
   return raw
     .trim()
     .replace(/^(telegram|tg):/i, "")
@@ -49,17 +64,19 @@ export async function promptTelegramAllowFromForAccount(params: {
 }) {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   const resolved = resolveTelegramAccount({ cfg: params.cfg, accountId });
-  await params.prompter.note(TELEGRAM_USER_ID_HELP_LINES.join("\n"), "Telegram user id");
+  await params.prompter.note(
+    getTelegramUserIdHelpLines().join("\n"),
+    t("wizard.telegram.userIdTitle"),
+  );
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolved.config.allowFrom ?? [],
-    message: "Telegram allowFrom (numeric sender id)",
+    message: t("wizard.telegram.allowFromPrompt"),
     placeholder: "123456789",
-    label: "Telegram allowlist",
+    label: t("wizard.telegram.allowlistTitle"),
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    invalidWithoutTokenNote:
-      "Telegram allowFrom requires numeric sender ids. DM your bot first, then copy from.id from logs or getUpdates.",
+    invalidWithoutTokenNote: t("wizard.telegram.allowFromInvalid"),
     resolveEntries: async ({ entries }) =>
       entries.map((entry) => {
         const id = parseTelegramAllowFromId(entry);
@@ -71,14 +88,44 @@ export async function promptTelegramAllowFromForAccount(params: {
     channel,
     accountId,
     patch: { dmPolicy: "allowlist", allowFrom: unique },
+    setupSurface: telegramSetupAdapter,
   });
 }
 
-export const telegramSetupAdapter: ChannelSetupAdapter = createEnvPatchedAccountSetupAdapter({
-  channelKey: channel,
-  defaultAccountOnlyEnvError: "TELEGRAM_BOT_TOKEN can only be used for the default account.",
-  missingCredentialError: "Telegram requires token or --token-file (or --use-env).",
-  hasCredentials: (input) => Boolean(input.token || input.tokenFile),
-  buildPatch: (input) =>
-    input.tokenFile ? { tokenFile: input.tokenFile } : input.token ? { botToken: input.token } : {},
+export const telegramSetupAdapter: ChannelSetupAdapter = {
+  ...createEnvPatchedAccountSetupAdapter({
+    channelKey: channel,
+    defaultAccountOnlyEnvError: "TELEGRAM_BOT_TOKEN can only be used for the default account.",
+    missingCredentialError: "Telegram requires token or --token-file (or --use-env).",
+    hasCredentials: (input) => Boolean(input.token || input.tokenFile),
+    buildPatch: (input) =>
+      input.tokenFile
+        ? { tokenFile: input.tokenFile }
+        : input.token
+          ? { botToken: input.token }
+          : {},
+  }),
+  singleAccountKeysToMove,
+  namedAccountPromotionKeys,
+};
+
+export const telegramSetupContract = defineChannelSetupContract({
+  fields: {
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "Telegram bot token" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "Telegram bot token file" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use TELEGRAM_BOT_TOKEN" },
+      envVars: ["TELEGRAM_BOT_TOKEN"],
+    },
+  },
+  legacyAdapter: telegramSetupAdapter,
 });

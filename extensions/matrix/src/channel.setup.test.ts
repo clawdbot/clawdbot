@@ -1,3 +1,4 @@
+// Matrix tests cover channel.setup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime-api.js";
 
@@ -99,26 +100,13 @@ describe("matrix setup post-write bootstrap", () => {
     values: Record<string, string | undefined>,
     run: () => Promise<T> | T,
   ) {
-    const previousEnv = Object.fromEntries(
-      Object.keys(values).map((key) => [key, process.env[key]]),
-    ) as Record<string, string | undefined>;
     for (const [key, value] of Object.entries(values)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+      vi.stubEnv(key, value);
     }
     try {
       return await run();
     } finally {
-      for (const [key, value] of Object.entries(previousEnv)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
+      vi.unstubAllEnvs();
     }
   }
 
@@ -130,6 +118,14 @@ describe("matrix setup post-write bootstrap", () => {
     installMatrixTestRuntime();
   });
 
+  it("exposes config-promotion declarations on the setup-only adapter", () => {
+    expect(matrixSetupAdapter.singleAccountKeysToMove).toEqual(
+      expect.arrayContaining(["homeserver", "accessToken", "deviceName", "rooms"]),
+    );
+    expect(matrixSetupAdapter.namedAccountPromotionKeys).toContain("homeserver");
+    expect(matrixSetupAdapter.resolveSingleAccountPromotionTarget).toBeTypeOf("function");
+  });
+
   it("bootstraps verification for newly added encrypted accounts", async () => {
     const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();
     mockBootstrapResult({ success: true, backupVersion: "7" });
@@ -138,6 +134,7 @@ describe("matrix setup post-write bootstrap", () => {
 
     expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
       accountId: "default",
+      cfg: nextCfg,
     });
     expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
     expect(log).toHaveBeenCalledWith('Matrix backup version for "default": 7');
@@ -177,6 +174,44 @@ describe("matrix setup post-write bootstrap", () => {
     expect(error).not.toHaveBeenCalled();
   });
 
+  it("bootstraps verification when setup enables encryption for an existing account", async () => {
+    const previousCfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@flurry:example.org",
+          accessToken: "token",
+          encryption: false,
+        },
+      },
+    } as CoreConfig;
+    const nextCfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@flurry:example.org",
+          accessToken: "token",
+          encryption: true,
+        },
+      },
+    } as CoreConfig;
+    mockBootstrapResult({ success: true, backupVersion: "8" });
+
+    await runAfterAccountConfigWritten({
+      previousCfg,
+      nextCfg,
+      accountId: "default",
+      input: {},
+    });
+
+    expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
+      accountId: "default",
+      cfg: nextCfg,
+    });
+    expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
+    expect(log).toHaveBeenCalledWith('Matrix backup version for "default": 8');
+  });
+
   it("logs a warning when verification bootstrap fails", async () => {
     const { previousCfg, nextCfg, accountId, input } = applyDefaultAccountConfig();
     mockBootstrapResult({
@@ -207,6 +242,7 @@ describe("matrix setup post-write bootstrap", () => {
 
         expect(verificationMocks.bootstrapMatrixVerification).toHaveBeenCalledWith({
           accountId: "default",
+          cfg: nextCfg,
         });
         expect(log).toHaveBeenCalledWith('Matrix verification bootstrap: complete for "default".');
       },

@@ -1,13 +1,34 @@
+// API-provider auth-choice tests cover built-in provider config, API keys, and provider plugin setup.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
+import { prepareAuthChoice } from "./auth-choice.apply.js";
 
 const resolvePluginProviders = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders>(),
 );
+const resolvePluginSetupProvider = vi.hoisted(() => vi.fn(() => undefined));
+const prepareAuthChoiceLoadedPluginProvider = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../plugins/provider-auth-choice.js").prepareAuthChoiceLoadedPluginProvider
+  >(),
+);
+const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../plugins/provider-install-catalog.js").resolveDeprecatedProviderInstallCatalogEntry
+  >(),
+);
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders,
+  resolvePluginSetupProvider,
+}));
+vi.mock("../plugins/provider-auth-choice.js", () => ({
+  prepareAuthChoiceLoadedPluginProvider,
+}));
+vi.mock("../plugins/provider-install-catalog.js", () => ({
+  resolveDeprecatedProviderInstallCatalogEntry,
 }));
 
 function createProvider(params: {
@@ -36,6 +57,9 @@ function createProvider(params: {
 describe("normalizeApiKeyTokenProviderAuthChoice", () => {
   afterEach(() => {
     resolvePluginProviders.mockReset();
+    prepareAuthChoiceLoadedPluginProvider.mockReset();
+    resolveDeprecatedProviderInstallCatalogEntry.mockReset();
+    vi.restoreAllMocks();
   });
 
   it("maps token provider auth through plugin token methods", () => {
@@ -86,4 +110,94 @@ describe("normalizeApiKeyTokenProviderAuthChoice", () => {
       }),
     ).toBe("token");
   });
+
+  it.each([
+    { authChoice: "apiKey", kind: "api_key" },
+    { authChoice: "token", kind: "token" },
+    { authChoice: "setup-token", kind: "token" },
+  ] as const)(
+    "resolves workspace-only $authChoice providers through interactive setup",
+    async (choice) => {
+      const workspaceDir = "/tmp/selected-agent-workspace";
+      const provider = createProvider({
+        id: "workspace-provider",
+        auth: [{ id: "workspace-auth", kind: choice.kind, choiceId: "workspace-provider-auth" }],
+      });
+      resolvePluginProviders.mockImplementation((params) =>
+        params?.workspaceDir === workspaceDir ? [provider] : [],
+      );
+      prepareAuthChoiceLoadedPluginProvider.mockImplementation(async (params) =>
+        params.authChoice === "workspace-provider-auth"
+          ? {
+              config: params.config,
+              authProfiles: [
+                {
+                  profileId: "workspace-provider:default",
+                  credential: {
+                    type: "api_key",
+                    provider: "workspace-provider",
+                    key: "fixture-workspace-key",
+                  },
+                },
+              ],
+              persistAuthProfiles: async () => {},
+            }
+          : null,
+      );
+
+      const prepared = await prepareAuthChoice({
+        authChoice: choice.authChoice,
+        config: {},
+        workspaceDir,
+        prompter: {} as never,
+        runtime: {} as never,
+        setDefaultModel: false,
+        opts: { tokenProvider: provider.id },
+      });
+
+      expect(prepared.authProfiles).toEqual([
+        {
+          profileId: "workspace-provider:default",
+          credential: {
+            type: "api_key",
+            provider: "workspace-provider",
+            key: "fixture-workspace-key",
+          },
+        },
+      ]);
+    },
+  );
+
+  it.each(["manifest", "install catalog"] as const)(
+    "resolves workspace-only deprecated auth choices from the %s",
+    async (source) => {
+      const workspaceDir = "/tmp/selected-agent-workspace";
+      vi.spyOn(
+        providerAuthChoices,
+        "resolveManifestDeprecatedProviderAuthChoice",
+      ).mockImplementation((_choice, params) =>
+        source === "manifest" && params?.workspaceDir === workspaceDir
+          ? ({ choiceId: "workspace-modern-auth" } as never)
+          : undefined,
+      );
+      resolveDeprecatedProviderInstallCatalogEntry.mockImplementation((_choice, params) =>
+        source === "install catalog" &&
+        params?.workspaceDir === workspaceDir &&
+        params.includeUntrustedWorkspacePlugins === false
+          ? ({ choiceId: "workspace-modern-auth" } as never)
+          : undefined,
+      );
+
+      await expect(
+        prepareAuthChoice({
+          authChoice: "workspace-legacy-auth",
+          config: {},
+          workspaceDir,
+          prompter: {} as never,
+          runtime: {} as never,
+          setDefaultModel: false,
+        }),
+      ).rejects.toThrow('Use "workspace-modern-auth" instead');
+    },
+  );
 });

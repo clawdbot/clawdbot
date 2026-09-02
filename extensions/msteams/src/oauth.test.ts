@@ -1,11 +1,29 @@
-import { createHash } from "node:crypto";
+// Msteams tests cover oauth plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  generatePkce,
-  generateOAuthState,
-  buildMSTeamsAuthUrl,
-  parseCallbackInput,
-} from "./oauth.flow.js";
+
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    }) => {
+      const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+      const response = await fetchImpl(params.url, params.init);
+      return {
+        response,
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
+);
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+}));
+
+import { buildMSTeamsAuthUrl } from "./oauth.flow.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_OAUTH_REDIRECT_URI,
@@ -21,28 +39,18 @@ function responseJson(body: unknown, status = 200): Response {
   });
 }
 
-describe("generatePkce", () => {
-  it("produces a 64-char hex verifier and a base64url SHA-256 challenge", () => {
-    const { verifier, challenge } = generatePkce();
-    expect(verifier).toMatch(/^[0-9a-f]{64}$/);
-    const expected = createHash("sha256").update(verifier).digest("base64url");
-    expect(challenge).toBe(expected);
-  });
-});
-
-describe("generateOAuthState", () => {
-  it("produces a 64-char hex string separate from the PKCE verifier", () => {
-    const state = generateOAuthState();
-    expect(state).toMatch(/^[0-9a-f]{64}$/);
-    const { verifier } = generatePkce();
-    expect(state).not.toBe(verifier);
-  });
-});
+function firstFetchCall(fetchSpy: ReturnType<typeof vi.fn>): [string, RequestInit] {
+  const [call] = fetchSpy.mock.calls;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call as [string, RequestInit];
+}
 
 describe("buildMSTeamsAuthUrl", () => {
   it("includes correct tenant, client_id, scopes, PKCE params, and redirect_uri", () => {
-    const { challenge } = generatePkce();
-    const state = generateOAuthState();
+    const challenge = "challenge-value";
+    const state = "state-value";
     const url = buildMSTeamsAuthUrl({
       tenantId: "my-tenant-id",
       clientId: "my-client-id",
@@ -62,19 +70,6 @@ describe("buildMSTeamsAuthUrl", () => {
     expect(parsed.searchParams.get("prompt")).toBe("consent");
   });
 
-  it("does not expose the PKCE verifier in the URL", () => {
-    const { verifier, challenge } = generatePkce();
-    const state = generateOAuthState();
-    const url = buildMSTeamsAuthUrl({
-      tenantId: "t",
-      clientId: "c",
-      challenge,
-      state,
-    });
-    expect(url).not.toContain(verifier);
-    expect(url).toContain(`state=${state}`);
-  });
-
   it("uses custom scopes when provided", () => {
     const url = buildMSTeamsAuthUrl({
       tenantId: "t",
@@ -85,51 +80,6 @@ describe("buildMSTeamsAuthUrl", () => {
     });
     const parsed = new URL(url);
     expect(parsed.searchParams.get("scope")).toBe("User.Read offline_access");
-  });
-});
-
-describe("parseCallbackInput", () => {
-  const expectedState = "expected-state-value";
-
-  it("extracts code and state from a valid callback URL", () => {
-    const input = `${MSTEAMS_OAUTH_REDIRECT_URI}?code=abc123&state=${expectedState}`;
-    const result = parseCallbackInput(input, expectedState);
-    expect(result).toEqual({ code: "abc123", state: expectedState });
-  });
-
-  it("returns error when code is missing from URL", () => {
-    const input = `${MSTEAMS_OAUTH_REDIRECT_URI}?state=${expectedState}`;
-    const result = parseCallbackInput(input, expectedState);
-    expect(result).toEqual({ error: "Missing 'code' parameter in URL" });
-  });
-
-  it("rejects bare authorization codes to prevent CSRF bypass", () => {
-    const result = parseCallbackInput("bare-code-value", expectedState);
-    expect(result).toEqual({
-      error:
-        "Paste the full redirect URL (including code and state parameters), not just the authorization code.",
-    });
-  });
-
-  it("returns error on empty input", () => {
-    const result = parseCallbackInput("", expectedState);
-    expect(result).toEqual({ error: "No input provided" });
-  });
-
-  it("returns error when state is missing from a valid URL (CSRF protection)", () => {
-    const input = `${MSTEAMS_OAUTH_REDIRECT_URI}?code=abc123`;
-    const result = parseCallbackInput(input, expectedState);
-    expect(result).toEqual({
-      error: "Missing 'state' parameter in URL. Paste the full redirect URL.",
-    });
-  });
-
-  it("rejects bare codes even when expectedState is empty", () => {
-    const result = parseCallbackInput("bare-code", "");
-    expect(result).toEqual({
-      error:
-        "Paste the full redirect URL (including code and state parameters), not just the authorization code.",
-    });
   });
 });
 
@@ -174,7 +124,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
 
     // Verify the request was well-formed
     expect(fetchSpy).toHaveBeenCalledOnce();
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const [url, init] = firstFetchCall(fetchSpy);
     expect(url).toBe(buildMSTeamsTokenEndpoint("tenant-1"));
     const body = new URLSearchParams(init.body as string);
     expect(body.get("client_id")).toBe("client-1");
@@ -183,6 +133,7 @@ describe("exchangeMSTeamsCodeForTokens", () => {
     expect(body.get("code")).toBe("auth-code");
     expect(body.get("code_verifier")).toBe("pkce-verifier");
     expect(body.get("redirect_uri")).toBe(MSTEAMS_OAUTH_REDIRECT_URI);
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
   });
 
   it("throws on a 400 error response", async () => {
@@ -202,6 +153,61 @@ describe("exchangeMSTeamsCodeForTokens", () => {
         verifier: "v",
       }),
     ).rejects.toThrow(/MSTeams token exchange failed \(400\)/);
+  });
+
+  it("reports malformed token exchange JSON with a stable OAuth error", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response("{ nope", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "bad-json",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: malformed JSON response");
+  });
+
+  it("rejects unsafe token exchange expiry values", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response('{"access_token":"at-unsafe","refresh_token":"rt-unsafe","expires_in":1e309}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "unsafe-expiry",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
+  });
+
+  it.each([
+    { label: "null", body: null },
+    { label: "array", body: [] },
+  ])("rejects a top-level $label token exchange response", async ({ body }) => {
+    fetchSpy.mockResolvedValueOnce(responseJson(body));
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "invalid-shape",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
   });
 });
 
@@ -242,7 +248,7 @@ describe("refreshMSTeamsDelegatedTokens", () => {
     expect(tokens.expiresAt).toBeGreaterThanOrEqual(now + 3300 * 1000 - 1000);
 
     // Verify the request body includes refresh_token grant type
-    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    const [, init] = firstFetchCall(fetchSpy);
     const body = new URLSearchParams(init.body as string);
     expect(body.get("grant_type")).toBe("refresh_token");
     expect(body.get("refresh_token")).toBe("original-rt");
@@ -284,5 +290,39 @@ describe("refreshMSTeamsDelegatedTokens", () => {
         refreshToken: "expired-rt",
       }),
     ).rejects.toThrow(/MSTeams token refresh failed \(401\)/);
+  });
+
+  it("reports malformed token refresh JSON with a stable OAuth error", async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response("{ nope", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(
+      refreshMSTeamsDelegatedTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        refreshToken: "bad-json",
+      }),
+    ).rejects.toThrow("MSTeams token refresh failed: malformed JSON response");
+  });
+
+  it.each([
+    { label: "null", body: null },
+    { label: "array", body: [] },
+  ])("rejects a top-level $label token refresh response", async ({ body }) => {
+    fetchSpy.mockResolvedValueOnce(responseJson(body));
+
+    await expect(
+      refreshMSTeamsDelegatedTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        refreshToken: "rt",
+      }),
+    ).rejects.toThrow("MSTeams token refresh failed: invalid token response fields");
   });
 });

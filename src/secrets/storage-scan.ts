@@ -1,50 +1,40 @@
+/** Filesystem discovery and bounded JSON readers for local secret storage audits. */
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { listAuthProfileStorePaths as listAuthProfileStorePathsFromAuthStorePaths } from "./auth-store-paths.js";
 import { parseEnvValue } from "./shared.js";
 
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
+/** Parses one .env assignment value using the shared shell-ish env parser. */
 export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
 }
 
-export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
-  return listAuthProfileStorePathsFromAuthStorePaths(config, stateDir);
-}
-
-export function listLegacyAuthJsonPaths(stateDir: string): string[] {
-  const out: string[] = [];
-  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
-  if (!fs.existsSync(agentsRoot)) {
-    return out;
-  }
-  for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(agentsRoot, entry.name, "agent", "auth.json");
-    if (fs.existsSync(candidate)) {
-      out.push(candidate);
-    }
-  }
-  return out;
+/** Lists global dotenv files that can supply secrets for the selected config and state roots. */
+export function listSecretsDotEnvPaths(params: { configPath: string; stateDir: string }): string[] {
+  const candidates = [
+    path.join(params.stateDir, ".env"),
+    path.join(path.dirname(params.configPath), ".env"),
+  ];
+  return [...new Map(candidates.map((candidate) => [path.resolve(candidate), candidate])).values()];
 }
 
 function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = process.env): string {
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   if (override) {
-    return resolveUserPath(override);
+    return resolveUserPath(override, env);
   }
+  // Storage scans must include the implicit main agent even before config has agent entries.
   return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
 }
 
+/**
+ * Lists deduplicated models.json paths that may contain materialized provider credentials.
+ * Includes active env override, implicit main agent, discovered state dirs, and configured agents.
+ */
 export function listAgentModelsJsonPaths(
   config: OpenClawConfig,
   stateDir: string,
@@ -77,11 +67,18 @@ export function listAgentModelsJsonPaths(
   return [...paths];
 }
 
-export type ReadJsonObjectOptions = {
+/** Limits for safe opportunistic JSON reads during local storage scans. */
+type ReadJsonObjectOptions = {
+  /** Reject files larger than this byte count before reading content. */
   maxBytes?: number;
+  /** Reject directories, symlinks, and other non-regular paths before JSON parsing. */
   requireRegularFile?: boolean;
 };
 
+/**
+ * Reads a JSON object if the file exists, returning parse/stat errors without throwing.
+ * Non-object JSON values are treated as absent because scanners expect record-shaped stores.
+ */
 export function readJsonObjectIfExists(filePath: string): {
   value: Record<string, unknown> | null;
   error?: string;

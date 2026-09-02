@@ -1,36 +1,34 @@
-import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isShellToolDisplayName, resolveToolDisplay } from "../agents/tool-display.js";
+/** Formats compact tool metadata labels for auto-reply progress/status messages. */
+import { formatInlineCodeSpan } from "../shared/markdown-code.js";
+import { shortenHomeInString } from "../utils.js";
 
 type ToolAggregateOptions = {
   markdown?: boolean;
 };
 
-export function shortenPath(p: string): string {
-  return shortenHomePath(p);
-}
-
-export function shortenMeta(meta: string): string {
-  if (!meta) {
-    return meta;
-  }
-  return shortenHomeInString(meta);
-}
-
-export function formatToolAggregate(
+/**
+ * Formats one grouped tool-progress label and returns the detail segment it was
+ * composed from. Callers that need both must not re-parse the label: recovering
+ * the detail by stripping the rendered prefix silently yields nothing whenever
+ * the prefix shape changes.
+ */
+export function formatToolAggregateParts(
   toolName?: string,
   metas?: string[],
   options?: ToolAggregateOptions,
-): string {
-  const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
+): { text: string; detail?: string } {
+  const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
   const display = resolveToolDisplay({ name: toolName });
-  const prefix = `${display.emoji} ${display.label}`;
+  const compactCommandSummary = filtered.length > 0 && isShellToolDisplayName(toolName);
+  const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;
   if (!filtered.length) {
-    return prefix;
+    return { text: `${display.emoji} ${display.label}` };
   }
 
   const rawSegments: string[] = [];
-  // Group by directory and brace-collapse filenames
+  // Group by directory and brace-collapse filenames to keep progress text short.
   const grouped: Record<string, string[]> = {};
   for (const m of filtered) {
     if (!isPathLike(m)) {
@@ -67,13 +65,20 @@ export function formatToolAggregate(
 
   const allSegments = [...rawSegments, ...segments];
   const meta = allSegments.join("; ");
-  return `${prefix}: ${formatMetaForDisplay(toolName, meta, options?.markdown)}`;
+  const detail = formatMetaForDisplay(toolName, meta, options?.markdown);
+  return {
+    text: compactCommandSummary ? `${prefix} ${detail}` : `${prefix}: ${detail}`,
+    detail,
+  };
 }
 
-export function formatToolPrefix(toolName?: string, meta?: string) {
-  const extra = meta?.trim() ? shortenMeta(meta) : undefined;
-  const display = resolveToolDisplay({ name: toolName, meta: extra });
-  return formatToolSummary(display);
+/** Formats one grouped tool-progress label from a tool name and metadata entries. */
+export function formatToolAggregate(
+  toolName?: string,
+  metas?: string[],
+  options?: ToolAggregateOptions,
+): string {
+  return formatToolAggregateParts(toolName, metas, options).text;
 }
 
 function formatMetaForDisplay(
@@ -134,11 +139,5 @@ function isPathLike(value: string): boolean {
 }
 
 function maybeWrapMarkdown(value: string, markdown?: boolean): string {
-  if (!markdown) {
-    return value;
-  }
-  if (value.includes("`")) {
-    return value;
-  }
-  return `\`${value}\``;
+  return markdown ? formatInlineCodeSpan(value) : value;
 }

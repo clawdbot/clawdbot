@@ -1,4 +1,6 @@
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+// Gateway control-reply text classifier.
+// Suppresses internal auto-reply tokens before they leak to chat surfaces.
+import { isSilentReplyText, SILENT_REPLY_TOKEN, stripSilentToken } from "../auto-reply/tokens.js";
 
 const SUPPRESSED_CONTROL_REPLY_TOKENS = [
   SILENT_REPLY_TOKEN,
@@ -34,6 +36,21 @@ export function isSuppressedControlReplyText(text: string): boolean {
   return SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) => isSilentReplyText(normalized, token));
 }
 
+/** Remove internal control tokens when a model appends one to visible reply text. */
+export function stripSuppressedControlReplyToken(text: string): string {
+  if (isSuppressedControlReplyText(text)) {
+    return "";
+  }
+  let stripped = text;
+  for (const token of SUPPRESSED_CONTROL_REPLY_TOKENS) {
+    const next = stripSilentToken(stripped, token);
+    if (next !== stripped.trim()) {
+      stripped = next;
+    }
+  }
+  return stripped;
+}
+
 /**
  * Return true when streamed assistant text looks like the leading fragment of a control token.
  */
@@ -57,6 +74,8 @@ export function isSuppressedControlReplyLeadFragment(text: string): boolean {
     if (token !== SILENT_REPLY_TOKEN && trimmed !== trimmed.toUpperCase()) {
       return false;
     }
+    // Bare fragments are common while streaming. Require a minimum prefix so
+    // ordinary words do not disappear just because they start like a token.
     return normalized.length >= MIN_BARE_PREFIX_LENGTH_BY_TOKEN[token];
   });
 }

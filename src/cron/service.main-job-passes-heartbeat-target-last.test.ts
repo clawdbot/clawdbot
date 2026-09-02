@@ -1,3 +1,4 @@
+// Main job heartbeat tests cover target ordering for heartbeat delivery.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
@@ -33,23 +34,50 @@ describe("cron main job passes heartbeat target=last", () => {
 
   function createCronWithSpies(params: { storePath: string; runHeartbeatOnce: RunHeartbeatOnce }) {
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const cron = new CronService({
       storePath: params.storePath,
       cronEnabled: true,
       log: logger,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runHeartbeatOnce: params.runHeartbeatOnce,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    return { cron, requestHeartbeatNow };
+    return { cron, enqueueSystemEvent, requestHeartbeat };
+  }
+
+  function requireRunHeartbeatOnceCall(
+    runHeartbeatOnce: ReturnType<typeof vi.fn<RunHeartbeatOnce>>,
+  ) {
+    const callArgs = runHeartbeatOnce.mock.calls[0]?.[0];
+    const heartbeat = callArgs?.heartbeat;
+    if (!callArgs || !heartbeat) {
+      throw new Error("expected runHeartbeatOnce call with heartbeat config");
+    }
+    return { ...callArgs, heartbeat };
+  }
+
+  function requireRequestHeartbeatCall(requestHeartbeat: ReturnType<typeof vi.fn>) {
+    const callArgs = requestHeartbeat.mock.calls[0]?.[0];
+    if (!callArgs) {
+      throw new Error("expected requestHeartbeat call");
+    }
+    return callArgs as {
+      source?: string;
+      intent?: string;
+      reason?: string;
+      agentId?: string;
+      sessionKey?: string;
+      heartbeat?: unknown;
+    };
   }
 
   async function runSingleTick(cron: CronService) {
-    await cron.start();
+    const startPromise = cron.start();
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.advanceTimersByTimeAsync(1_000);
+    await startPromise;
     cron.stop();
   }
 
@@ -82,13 +110,13 @@ describe("cron main job passes heartbeat target=last", () => {
 
     // The heartbeat config passed should include target: "last" so the
     // heartbeat runner delivers the response to the last active channel.
-    const callArgs = runHeartbeatOnce.mock.calls[0]?.[0];
-    expect(callArgs).toBeDefined();
-    expect(callArgs?.heartbeat).toBeDefined();
-    expect(callArgs?.heartbeat?.target).toBe("last");
+    const callArgs = requireRunHeartbeatOnceCall(runHeartbeatOnce);
+    expect(callArgs.heartbeat.target).toBe("last");
+    expect(callArgs.agentId).toBe("main");
+    expect(callArgs.sessionKey).toBeUndefined();
   });
 
-  it("should preserve heartbeat.target=last when wakeMode=now falls back to requestHeartbeatNow", async () => {
+  it("should preserve heartbeat.target=last when wakeMode=now falls back to requestHeartbeat", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
 
@@ -102,10 +130,10 @@ describe("cron main job passes heartbeat target=last", () => {
 
     const runHeartbeatOnce = vi.fn<RunHeartbeatOnce>(async () => ({
       status: "skipped" as const,
-      reason: "requests-in-flight",
+      reason: "cron-in-progress",
     }));
 
-    const { cron, requestHeartbeatNow } = createCronWithSpies({
+    const { cron, requestHeartbeat } = createCronWithSpies({
       storePath,
       runHeartbeatOnce,
     });
@@ -113,12 +141,13 @@ describe("cron main job passes heartbeat target=last", () => {
     await runSingleTick(cron);
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
-    expect(requestHeartbeatNow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "cron:test-main-delivery-busy",
-        heartbeat: { target: "last" },
-      }),
-    );
+    const heartbeatRequest = requireRequestHeartbeatCall(requestHeartbeat);
+    expect(heartbeatRequest.source).toBe("cron");
+    expect(heartbeatRequest.intent).toBe("immediate");
+    expect(heartbeatRequest.reason).toBe("cron:test-main-delivery-busy");
+    expect(heartbeatRequest.agentId).toBe("main");
+    expect(heartbeatRequest.sessionKey).toBeUndefined();
+    expect(heartbeatRequest.heartbeat).toEqual({ target: "last" });
   });
 
   it("should preserve heartbeat.target=last for wakeMode=next-heartbeat main jobs", async () => {
@@ -138,20 +167,27 @@ describe("cron main job passes heartbeat target=last", () => {
       durationMs: 50,
     }));
 
-    const { cron, requestHeartbeatNow } = createCronWithSpies({
+    const { cron, enqueueSystemEvent, requestHeartbeat } = createCronWithSpies({
       storePath,
       runHeartbeatOnce,
     });
 
     await runSingleTick(cron);
 
-    expect(requestHeartbeatNow).toHaveBeenCalled();
-    expect(requestHeartbeatNow).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "cron:test-next-heartbeat",
-        heartbeat: { target: "last" },
-      }),
-    );
+    expect(requestHeartbeat).toHaveBeenCalled();
+    const heartbeatRequest = requireRequestHeartbeatCall(requestHeartbeat);
+    expect(heartbeatRequest.source).toBe("cron");
+    expect(heartbeatRequest.intent).toBe("event");
+    expect(heartbeatRequest.reason).toBe("cron:test-next-heartbeat");
+    expect(heartbeatRequest.agentId).toBe("main");
+    expect(heartbeatRequest.sessionKey).toBeUndefined();
+    expect(heartbeatRequest.heartbeat).toEqual({ target: "last" });
     expect(runHeartbeatOnce).not.toHaveBeenCalled();
+    const enqueueOptions = enqueueSystemEvent.mock.calls[0]?.[1] as {
+      agentId?: string;
+      sessionKey?: string;
+    };
+    expect(enqueueOptions.agentId).toBe("main");
+    expect(enqueueOptions.sessionKey).toBeUndefined();
   });
 });

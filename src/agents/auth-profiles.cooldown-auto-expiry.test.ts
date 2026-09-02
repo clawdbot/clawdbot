@@ -1,14 +1,16 @@
-import { describe, expect, it } from "vitest";
+/**
+ * Cooldown auto-expiry regression tests for auth profile ordering.
+ * Profiles with expired cooldowns should become available and clear stale
+ * counters before the next failure can escalate.
+ */
+import { describe, expect, it, vi } from "vitest";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { isProfileInCooldown } from "./auth-profiles/usage.js";
+import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
 
-/**
- * Integration tests for cooldown auto-expiry through resolveAuthProfileOrder.
- * Verifies that profiles with expired cooldowns are treated as available and
- * have their error state reset, preventing the escalation loop described in
- * #3604, #13623, #15851, and #11972.
- */
+vi.mock("./provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+}));
 
 function makeStoreWithProfiles(): AuthProfileStore {
   return {

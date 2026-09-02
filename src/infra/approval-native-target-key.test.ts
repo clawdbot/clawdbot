@@ -1,3 +1,4 @@
+// Tests native approval target key generation.
 import { describe, expect, it } from "vitest";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
 
@@ -25,6 +26,20 @@ describe("buildChannelApprovalNativeTargetKey", () => {
       buildChannelApprovalNativeTargetKey({
         to: "room:one",
         threadId: "123",
+      }),
+    );
+  });
+
+  it("normalizes numeric thread ids through the shared route key", () => {
+    expect(
+      buildChannelApprovalNativeTargetKey({
+        to: "telegram:-100123",
+        threadId: 42.9,
+      }),
+    ).toBe(
+      buildChannelApprovalNativeTargetKey({
+        to: " telegram:-100123 ",
+        threadId: "42",
       }),
     );
   });

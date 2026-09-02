@@ -1,3 +1,4 @@
+// Tlon plugin module implements account fields behavior.
 export type TlonAccountFieldsInput = {
   ship?: string;
   url?: string;

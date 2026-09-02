@@ -1,16 +1,36 @@
+import type { OpenAICompatibleModelDiscoveryOptions } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+// Minimax provider module implements model/runtime integration.
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  DEFAULT_MINIMAX_CONTEXT_WINDOW,
   DEFAULT_MINIMAX_MAX_TOKENS,
   MINIMAX_API_BASE_URL,
   resolveMinimaxApiCost,
 } from "./model-definitions.js";
 import { MINIMAX_TEXT_MODEL_CATALOG, MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
 
-function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+export function buildMinimaxModelDiscovery(
+  authMode: "api_key" | "oauth" = "api_key",
+): OpenAICompatibleModelDiscoveryOptions {
+  return {
+    endpointPath: "v1/models",
+    // API-key discovery follows MiniMax's documented X-Api-Key contract;
+    // portal OAuth keeps the Bearer scheme used by its inference transport.
+    buildRequestHeaders: ({ apiKey, discoveryApiKey }): HeadersInit => {
+      const requestApiKey = discoveryApiKey ?? apiKey;
+      if (!requestApiKey) {
+        return {};
+      }
+      return authMode === "oauth"
+        ? { Authorization: `Bearer ${requestApiKey}` }
+        : { "X-Api-Key": requestApiKey };
+    },
+  };
+}
+
+export function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const rawHost = env.MINIMAX_API_HOST?.trim();
   if (!rawHost) {
     return MINIMAX_API_BASE_URL;
@@ -34,6 +54,7 @@ function buildMinimaxModel(params: {
   reasoning: boolean;
   input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
+  contextWindow: number;
 }): ModelDefinitionConfig {
   return {
     id: params.id,
@@ -41,7 +62,7 @@ function buildMinimaxModel(params: {
     reasoning: params.reasoning,
     input: params.input,
     cost: params.cost,
-    contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+    contextWindow: params.contextWindow,
     maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   };
 }
@@ -50,9 +71,11 @@ function buildMinimaxTextModel(params: {
   id: string;
   name: string;
   reasoning: boolean;
+  input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
+  contextWindow: number;
 }): ModelDefinitionConfig {
-  return buildMinimaxModel({ ...params, input: ["text"] });
+  return buildMinimaxModel(params);
 }
 
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
@@ -62,7 +85,9 @@ function buildMinimaxCatalog(): ModelDefinitionConfig[] {
       id,
       name: model.name,
       reasoning: model.reasoning,
+      input: [...model.input],
       cost: resolveMinimaxApiCost(id),
+      contextWindow: model.contextWindow,
     });
   });
 }

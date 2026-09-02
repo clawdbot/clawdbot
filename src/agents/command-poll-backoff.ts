@@ -1,13 +1,16 @@
+/**
+ * Exponential backoff helpers for command-output polling. Session diagnostics
+ * use this state to slow no-output polls while resetting promptly on output.
+ */
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 
-// Exponential backoff schedule for command polling
 const BACKOFF_SCHEDULE_MS = [5000, 10000, 30000, 60000];
 
 /**
  * Calculate suggested retry delay based on consecutive no-output poll count.
  * Implements exponential backoff schedule: 5s → 10s → 30s → 60s (capped).
  */
-export function calculateBackoffMs(consecutiveNoOutputPolls: number): number {
+function calculateBackoffMs(consecutiveNoOutputPolls: number): number {
   const index = Math.min(consecutiveNoOutputPolls, BACKOFF_SCHEDULE_MS.length - 1);
   return BACKOFF_SCHEDULE_MS[index] ?? 60000;
 }
@@ -43,21 +46,6 @@ export function recordCommandPoll(
 }
 
 /**
- * Get current suggested backoff for a command without modifying state.
- * Useful for checking current backoff level.
- */
-export function getCommandPollSuggestion(
-  state: SessionState,
-  commandId: string,
-): number | undefined {
-  const pollData = state.commandPollCounts?.get(commandId);
-  if (!pollData) {
-    return undefined;
-  }
-  return calculateBackoffMs(pollData.count);
-}
-
-/**
  * Reset poll count for a command (e.g., when command completes).
  */
 export function resetCommandPollCount(state: SessionState, commandId: string): void {
@@ -68,7 +56,7 @@ export function resetCommandPollCount(state: SessionState, commandId: string): v
  * Prune stale command poll records (older than 1 hour).
  * Call periodically to prevent memory bloat.
  */
-export function pruneStaleCommandPolls(state: SessionState, maxAgeMs = 3600000): void {
+export function pruneStaleCommandPollsCore(state: SessionState, maxAgeMs = 3600000): void {
   if (!state.commandPollCounts) {
     return;
   }

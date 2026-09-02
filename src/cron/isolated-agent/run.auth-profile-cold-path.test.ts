@@ -1,3 +1,4 @@
+// Auth profile cold-path tests cover auth loading for isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
@@ -9,7 +10,7 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
-  resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
 } from "./run.test-harness.js";
@@ -57,6 +58,6 @@ describe("runCronIsolatedAgentTurn auth-profile cold path", () => {
 
     expect(result.status).toBe("ok");
     expect(hasAnyAuthProfileStoreSourceMock).toHaveBeenCalledTimes(1);
-    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
   });
 });

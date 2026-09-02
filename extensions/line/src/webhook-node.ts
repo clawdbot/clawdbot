@@ -1,11 +1,13 @@
+// Line plugin module implements webhook node behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { webhook } from "@line/bot-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import type { createLineBot } from "./bot.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -27,7 +29,7 @@ type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) =
 
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
-  bot: { handleWebhook: (body: webhook.CallbackRequest) => Promise<void> };
+  bot: Pick<ReturnType<typeof createLineBot>, "handleWebhook">;
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
@@ -98,12 +100,10 @@ export function createLineNodeWebhookHandler(params: {
       }
 
       params.onRequestAuthenticated?.();
-
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
         await params.bot.handleWebhook(body);
       }
-
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ status: "ok" }));
@@ -120,7 +120,7 @@ export function createLineNodeWebhookHandler(params: {
         res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
         return;
       }
-      params.runtime.error?.(danger(`line webhook error: ${String(err)}`));
+      params.runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
       if (!res.headersSent) {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");

@@ -1,3 +1,4 @@
+// Mocks plugin-backed provider usage runtime for tests.
 import { vi } from "vitest";
 
 const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() =>
@@ -5,9 +6,14 @@ const resolveProviderUsageSnapshotWithPluginMock = vi.hoisted(() =>
     async () => null,
   ),
 );
+const resolveProviderUsageAuthWithPluginMock = vi.hoisted(() =>
+  vi.fn<typeof import("../plugins/provider-runtime.js").resolveProviderUsageAuthWithPlugin>(
+    async () => undefined,
+  ),
+);
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
+  getRuntimeConfig: () => ({}),
 }));
 
 vi.mock("../plugins/provider-runtime.js", async () => {
@@ -16,15 +22,23 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   );
   return {
     ...actual,
+    resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
     resolveProviderUsageSnapshotWithPlugin: resolveProviderUsageSnapshotWithPluginMock,
   };
 });
 
+/** Resets the plugin-backed provider usage mock to the default no-snapshot behavior. */
 export function resetProviderUsageSnapshotWithPluginMock() {
+  resolveProviderUsageAuthWithPluginMock.mockReset();
+  resolveProviderUsageAuthWithPluginMock.mockResolvedValue(undefined);
   resolveProviderUsageSnapshotWithPluginMock.mockReset();
   resolveProviderUsageSnapshotWithPluginMock.mockResolvedValue(null);
 }
 
 export function getProviderUsageSnapshotWithPluginMock() {
   return resolveProviderUsageSnapshotWithPluginMock;
+}
+
+export function getProviderUsageAuthWithPluginMock() {
+  return resolveProviderUsageAuthWithPluginMock;
 }

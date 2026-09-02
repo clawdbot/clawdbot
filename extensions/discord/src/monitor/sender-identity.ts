@@ -1,5 +1,6 @@
-import type { User } from "@buape/carbon";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Discord plugin module implements sender identity behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { User } from "../internal/discord.js";
 import type { PluralKitMessageInfo } from "../pluralkit.js";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -78,12 +79,4 @@ export function resolveDiscordSenderIdentity(params: {
     label: senderLabel,
     isPluralKit: false,
   };
-}
-
-export function resolveDiscordSenderLabel(params: {
-  author: User;
-  member?: DiscordMemberLike | null;
-  pluralkitInfo?: PluralKitMessageInfo | null;
-}): string {
-  return resolveDiscordSenderIdentity(params).label;
 }

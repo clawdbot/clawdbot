@@ -1,18 +1,19 @@
-import fs from "node:fs";
-import path from "node:path";
+// Shares bundled plugin config merge behavior across setup and runtime code.
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "./plugin-cache-files.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason?: "open" };
 
-export type BundleServerRuntimeSupport = {
+type BundleServerRuntimeSupport = {
   hasSupportedServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];
@@ -22,39 +23,35 @@ export type BundleServerRuntimeSupport = {
 export function readBundleJsonObject(params: {
   rootDir: string;
   relativePath: string;
-  onOpenFailure?: (
-    failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>,
-  ) => ReadBundleJsonResult;
+  onOpenFailure?: (failure: RootFileOpenFailure) => ReadBundleJsonResult;
 }): ReadBundleJsonResult {
-  const absolutePath = path.join(params.rootDir, params.relativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath,
-    rootPath: params.rootDir,
-    boundaryLabel: "plugin root",
+  const file = readPluginCacheFile({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
     rejectHardlinks: true,
+    maxBytes: null,
   });
-  if (!opened.ok) {
-    return params.onOpenFailure?.(opened) ?? { ok: true, raw: {} };
+  if (!file.ok && file.failurePhase !== "read") {
+    const result = params.onOpenFailure?.(file.failure) ?? { ok: true as const, raw: {} };
+    return result.ok ? result : { ...result, reason: "open" };
   }
-  try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    if (!isRecord(raw)) {
-      return { ok: false, error: `${params.relativePath} must contain a JSON object` };
-    }
-    return { ok: true, raw };
-  } catch (error) {
-    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(error)}` };
-  } finally {
-    fs.closeSync(opened.fd);
+  const parsed = file.ok
+    ? parsePluginCacheJson(file)
+    : { ok: false as const, error: file.failure.error };
+  if (!parsed.ok) {
+    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(parsed.error)}` };
   }
+  return isRecord(parsed.value)
+    ? { ok: true, raw: structuredClone(parsed.value) }
+    : { ok: false, error: `${params.relativePath} must contain a JSON object` };
 }
 
 export function resolveBundleJsonOpenFailure(params: {
-  failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>;
+  failure: RootFileOpenFailure;
   relativePath: string;
   allowMissing?: boolean;
 }): ReadBundleJsonResult {
-  return matchBoundaryFileOpenFailure(params.failure, {
+  return matchRootFileOpenFailure(params.failure, {
     path: () => {
       if (params.allowMissing) {
         return { ok: true, raw: {} };
@@ -94,12 +91,16 @@ export function inspectBundleServerRuntimeSupport<TConfig>(params: {
 export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   createEmptyConfig: () => TConfig;
   loadBundleConfig: (params: {
     pluginId: string;
     rootDir: string;
     bundleFormat: PluginBundleFormat;
   }) => { config: TConfig; diagnostics: string[] };
+  loadNativePluginConfig?: (params: {
+    record: PluginManifestRecord;
+  }) => { config: TConfig; diagnostics: string[] } | undefined;
   createDiagnostic: (pluginId: string, message: string) => TDiagnostic;
 }): { config: TConfig; diagnostics: TDiagnostic[] } {
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
@@ -107,15 +108,20 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     return { config: params.createEmptyConfig(), diagnostics: [] };
   }
 
-  const registry = loadPluginManifestRegistry({
-    workspaceDir: params.workspaceDir,
-    config: params.cfg,
-  });
+  const registry =
+    params.manifestRegistry ??
+    loadPluginManifestRegistryForPluginRegistry({
+      workspaceDir: params.workspaceDir,
+      config: params.cfg,
+      includeDisabled: true,
+    });
   const diagnostics: TDiagnostic[] = [];
   let merged = params.createEmptyConfig();
 
   for (const record of registry.plugins) {
-    if (record.format !== "bundle" || !record.bundleFormat) {
+    const canLoadBundle = record.format === "bundle" && Boolean(record.bundleFormat);
+    const canLoadNative = record.format !== "bundle" && params.loadNativePluginConfig !== undefined;
+    if (!canLoadBundle && !canLoadNative) {
       continue;
     }
     const activationState = resolveEffectivePluginActivationState({
@@ -123,16 +129,23 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
+      enabledByDefault: record.enabledByDefault,
     });
     if (!activationState.activated) {
       continue;
     }
 
-    const loaded = params.loadBundleConfig({
-      pluginId: record.id,
-      rootDir: record.rootDir,
-      bundleFormat: record.bundleFormat,
-    });
+    const loaded =
+      canLoadBundle && record.bundleFormat
+        ? params.loadBundleConfig({
+            pluginId: record.id,
+            rootDir: record.rootDir,
+            bundleFormat: record.bundleFormat,
+          })
+        : params.loadNativePluginConfig?.({ record });
+    if (!loaded) {
+      continue;
+    }
     merged = applyMergePatch(merged, loaded.config) as TConfig;
     for (const message of loaded.diagnostics) {
       diagnostics.push(params.createDiagnostic(record.id, message));

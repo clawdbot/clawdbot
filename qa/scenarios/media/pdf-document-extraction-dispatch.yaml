@@ -1,0 +1,28 @@
+title: PDF document extraction dispatch
+
+scenario:
+  id: pdf-document-extraction-dispatch
+  surface: media
+  category: media.media-intake-and-access
+  coverage:
+    primary:
+      - media.pdf-document-extraction-dispatch
+  objective: Verify PDF intake dispatches through the bundled document extractor to real clawpdf and reports disabled extraction explicitly.
+  successCriteria:
+    - The bundled document-extract plugin supplies the PDF extractor.
+    - A parseable inline PDF yields its sentinel text through real clawpdf.
+    - The document extractor runtime tags the result with extractor pdf.
+    - Disabling document extraction produces the explicit unavailable error.
+  docsRefs:
+    - docs/plugins/reference/document-extract.md
+    - docs/tools/pdf.md
+  codeRefs:
+    - src/media/pdf-extract.ts
+    - src/media/document-extractors.runtime.ts
+    - src/plugins/document-extractors.runtime.ts
+    - extensions/document-extract/document-extractor.ts
+    - test/e2e/qa-lab/media/pdf-document-extraction-dispatch.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/media/pdf-document-extraction-dispatch.e2e.test.ts
+    summary: Run a parseable inline PDF through bundled extractor discovery, real clawpdf extraction, and the disabled-plugin failure path.

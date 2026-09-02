@@ -1,15 +1,27 @@
-export function isValidTimeZone(tz: string): boolean {
+// Timestamp helpers validate time zones and format log timestamps.
+const validTimeZoneCache = new Map<string, boolean>();
+const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
+let hostTimeZone: string | undefined;
+
+function isValidTimeZone(tz: string): boolean {
+  const cached = validTimeZoneCache.get(tz);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let valid;
   try {
     new Intl.DateTimeFormat("en", { timeZone: tz }).format();
-    return true;
+    valid = true;
   } catch {
-    return false;
+    valid = false;
   }
+  validTimeZoneCache.set(tz, valid);
+  return valid;
 }
 
-export type TimestampStyle = "short" | "medium" | "long";
+type TimestampStyle = "short" | "medium" | "long";
 
-export type FormatTimestampOptions = {
+type FormatTimestampOptions = {
   style?: TimestampStyle;
   timeZone?: string;
 };
@@ -18,7 +30,7 @@ function resolveEffectiveTimeZone(timeZone?: string): string {
   const explicit = timeZone ?? process.env.TZ;
   return explicit && isValidTimeZone(explicit)
     ? explicit
-    : Intl.DateTimeFormat().resolvedOptions().timeZone;
+    : (hostTimeZone ??= Intl.DateTimeFormat().resolvedOptions().timeZone);
 }
 
 function formatOffset(offsetRaw: string): string {
@@ -26,51 +38,46 @@ function formatOffset(offsetRaw: string): string {
 }
 
 function getTimestampParts(date: Date, timeZone?: string) {
-  const fmt = new Intl.DateTimeFormat("en", {
-    timeZone: resolveEffectiveTimeZone(timeZone),
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-    fractionalSecondDigits: 3 as 1 | 2 | 3,
-    timeZoneName: "longOffset",
-  });
+  const effectiveTimeZone = resolveEffectiveTimeZone(timeZone);
+  let fmt = timestampFormatterCache.get(effectiveTimeZone);
+  if (!fmt) {
+    // Log timestamps are formatted on hot paths; Intl construction is much
+    // costlier than formatToParts, while timezone rules remain process-stable.
+    fmt = new Intl.DateTimeFormat("en", {
+      timeZone: effectiveTimeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      fractionalSecondDigits: 3 as 1 | 2 | 3,
+      timeZoneName: "longOffset",
+    });
+    timestampFormatterCache.set(effectiveTimeZone, fmt);
+  }
 
-  const parts = Object.fromEntries(fmt.formatToParts(date).map((part) => [part.type, part.value]));
-  return {
-    year: parts.year,
-    month: parts.month,
-    day: parts.day,
-    hour: parts.hour,
-    minute: parts.minute,
-    second: parts.second,
-    fractionalSecond: parts.fractionalSecond,
-    offset: formatOffset(parts.timeZoneName ?? "GMT"),
-  };
+  // Native Intl supplies the closed set of part names.
+  const parts: Record<string, string> = {};
+  for (const part of fmt.formatToParts(date)) {
+    parts[part.type] = part.value;
+  }
+  return parts;
 }
 
 export function formatTimestamp(date: Date, options?: FormatTimestampOptions): string {
   const style = options?.style ?? "medium";
   const parts = getTimestampParts(date, options?.timeZone);
+  const offset = formatOffset(parts.timeZoneName ?? "GMT");
 
   switch (style) {
     case "short":
-      return `${parts.hour}:${parts.minute}:${parts.second}${parts.offset}`;
+      return `${parts.hour}:${parts.minute}:${parts.second}${offset}`;
     case "medium":
-      return `${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${parts.offset}`;
+      return `${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${offset}`;
     case "long":
-      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${parts.offset}`;
+      return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.fractionalSecond}${offset}`;
   }
   throw new Error("Unsupported timestamp style");
-}
-
-/**
- * @deprecated Use formatTimestamp from "./timestamps.js" instead.
- * This function will be removed in a future version.
- */
-export function formatLocalIsoWithOffset(now: Date, timeZone?: string): string {
-  return formatTimestamp(now, { style: "long", timeZone });
 }

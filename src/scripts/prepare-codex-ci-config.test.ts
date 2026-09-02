@@ -1,3 +1,4 @@
+// Codex CI config script tests cover generated CI configuration files.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -20,6 +21,7 @@ describe("prepare-codex-ci-config", () => {
         "# provider/profile overrides that do not exist on CI runners.",
         'approval_policy = "never"',
         'sandbox_mode = "workspace-write"',
+        'model_reasoning_effort = "low"',
         "",
         '[projects."/tmp/openclaw-pr-sync.xph5uu"]',
         'trust_level = "trusted"',
@@ -40,6 +42,9 @@ describe("prepare-codex-ci-config", () => {
 
       await expect(fs.readFile(outputPath, "utf-8")).resolves.toContain(
         `approval_policy = "never"`,
+      );
+      await expect(fs.readFile(outputPath, "utf-8")).resolves.toContain(
+        `model_reasoning_effort = "low"`,
       );
       await expect(fs.readFile(outputPath, "utf-8")).resolves.toContain(
         `[projects."${projectPath}"]`,

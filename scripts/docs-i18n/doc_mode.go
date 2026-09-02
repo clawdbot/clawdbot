@@ -18,6 +18,14 @@ const (
 	bodyTagEnd          = "</body>"
 )
 
+type docOutputStatus int
+
+const (
+	docOutputNeedsTranslation docOutputStatus = iota
+	docOutputReady
+	docOutputNeedsPostprocess
+)
+
 func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, filePath, srcLang, tgtLang string, overwrite bool) (bool, string, error) {
 	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
 	if err != nil {
@@ -32,12 +40,15 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 
 	outputPath := filepath.Join(docsRoot, tgtLang, relPath)
 	if !overwrite {
-		skip, err := shouldSkipDoc(outputPath, currentHash)
+		status, err := classifyDocOutput(outputPath, currentHash, tgtLang)
 		if err != nil {
 			return false, "", err
 		}
-		if skip {
+		switch status {
+		case docOutputReady:
 			return true, "", nil
+		case docOutputNeedsPostprocess:
+			return true, outputPath, nil
 		}
 	}
 
@@ -66,11 +77,10 @@ func processFileDoc(ctx context.Context, translator docsTranslator, docsRoot, fi
 	}
 
 	output := updatedFront + translatedBody
+	if !sameI18NProtocolMarkers(string(content), output) {
+		return false, "", fmt.Errorf("protocol token leaked in final output: __OC_I18N_")
+	}
 	return false, outputPath, os.WriteFile(outputPath, []byte(output), 0o644)
-}
-
-func formatTaggedDocument(frontMatter, body string) string {
-	return fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s", frontmatterTagStart, frontMatter, frontmatterTagEnd, bodyTagStart, body, bodyTagEnd)
 }
 
 func parseTaggedDocument(text string) (string, string, error) {
@@ -138,31 +148,57 @@ func trimTagNewlines(value string) string {
 	return value
 }
 
-func shouldSkipDoc(outputPath string, sourceHash string) (bool, error) {
+func classifyDocOutput(outputPath string, sourceHash string, targetLang string) (docOutputStatus, error) {
 	data, err := os.ReadFile(outputPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return docOutputNeedsTranslation, nil
 		}
-		return false, err
+		return docOutputNeedsTranslation, err
 	}
 	frontMatter, _ := splitFrontMatter(string(data))
 	if frontMatter == "" {
-		return false, nil
+		return docOutputNeedsTranslation, nil
 	}
 	frontData := map[string]any{}
 	if err := yaml.Unmarshal([]byte(frontMatter), &frontData); err != nil {
-		return false, nil
+		return docOutputNeedsTranslation, nil
 	}
 	storedHash := extractSourceHash(frontData)
 	if storedHash == "" {
-		return false, nil
+		return docOutputNeedsTranslation, nil
 	}
-	return strings.EqualFold(storedHash, sourceHash), nil
+	if !strings.EqualFold(storedHash, sourceHash) {
+		return docOutputNeedsTranslation, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(targetLang), "en") {
+		return docOutputReady, nil
+	}
+	if extractPromptVersion(frontData) != promptVersion {
+		return docOutputNeedsTranslation, nil
+	}
+
+	postprocessVersion := extractPostprocessVersion(frontData)
+	if strings.EqualFold(postprocessVersion, localizedLinkPostprocessVersion) {
+		return docOutputReady, nil
+	}
+	return docOutputNeedsPostprocess, nil
+}
+
+func extractPromptVersion(frontData map[string]any) int {
+	xi, ok := extractXI18N(frontData)
+	if !ok {
+		return 0
+	}
+	value, ok := xi["prompt_version"].(int)
+	if !ok {
+		return 0
+	}
+	return value
 }
 
 func extractSourceHash(frontData map[string]any) string {
-	xi, ok := frontData["x-i18n"].(map[string]any)
+	xi, ok := extractXI18N(frontData)
 	if !ok {
 		return ""
 	}
@@ -171,6 +207,26 @@ func extractSourceHash(frontData map[string]any) string {
 		return ""
 	}
 	return strings.TrimSpace(value)
+}
+
+func extractPostprocessVersion(frontData map[string]any) string {
+	xi, ok := extractXI18N(frontData)
+	if !ok {
+		return ""
+	}
+	value, ok := xi["postprocess_version"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func extractXI18N(frontData map[string]any) (map[string]any, bool) {
+	xi, ok := frontData["x-i18n"].(map[string]any)
+	if ok {
+		return xi, true
+	}
+	return nil, false
 }
 
 func logDocChunkPlan(relPath string, blocks []string, groups [][]string) {

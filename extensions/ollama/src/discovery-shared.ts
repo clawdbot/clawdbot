@@ -1,12 +1,29 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+// Ollama plugin module implements discovery shared behavior.
+import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
+import type {
+  ModelProviderConfig,
+  ModelDefinitionConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { OLLAMA_DEFAULT_API_KEY, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
 
+/** Provider config input type — partial config without required `models`. */
+type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
+  models?: ModelDefinitionConfig[];
+};
+
 export const OLLAMA_PROVIDER_ID = "ollama";
-export const OLLAMA_DEFAULT_API_KEY = "ollama-local";
+export { OLLAMA_DEFAULT_API_KEY } from "./defaults.js";
 
 export type OllamaPluginConfig = {
   discovery?: {
+    enabled?: boolean;
+  };
+  nodeInference?: {
     enabled?: boolean;
   };
 };
@@ -14,23 +31,17 @@ export type OllamaPluginConfig = {
 type OllamaDiscoveryContext = {
   config: {
     models?: {
-      providers?: {
-        ollama?: ModelProviderConfig;
-      };
-      ollamaDiscovery?: {
-        enabled?: boolean;
-      };
+      providers?: Record<string, OllamaProviderConfigInput | undefined>;
     };
   };
   env: NodeJS.ProcessEnv;
-  resolveProviderApiKey: (providerId: string) => { apiKey?: unknown };
+  resolveProviderApiKey: (providerId: string) => {
+    apiKey?: unknown;
+    discoveryApiKey?: unknown;
+  };
 };
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readStringValue(value: unknown): string | undefined {
+function readOllamaStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }
@@ -40,22 +51,192 @@ function readStringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-export function resolveOllamaDiscoveryApiKey(params: {
-  env: NodeJS.ProcessEnv;
-  explicitApiKey?: string;
-  resolvedApiKey?: unknown;
+function isOllamaApiKeyMarker(value: string): boolean {
+  return value === "OLLAMA_API_KEY" || value === OLLAMA_DEFAULT_API_KEY;
+}
+
+export function resolveOllamaRuntimeBaseUrl(params: {
+  api?: ModelProviderConfig["api"];
+  configuredBaseUrl?: string;
+  discoveredBaseUrl: string;
 }): string {
-  const envApiKey = params.env.OLLAMA_API_KEY?.trim() ? "OLLAMA_API_KEY" : undefined;
-  const resolvedApiKey = normalizeOptionalString(params.resolvedApiKey);
-  return envApiKey ?? params.explicitApiKey ?? resolvedApiKey ?? OLLAMA_DEFAULT_API_KEY;
+  if (params.configuredBaseUrl && params.api && params.api !== "ollama") {
+    return params.configuredBaseUrl;
+  }
+  return params.discoveredBaseUrl;
+}
+
+function resolveOllamaDiscoveryAuth(params: {
+  env: NodeJS.ProcessEnv;
+  baseUrl?: string;
+  explicitApiKey?: ModelProviderConfig["apiKey"];
+  resolvedAuth: ReturnType<OllamaDiscoveryContext["resolveProviderApiKey"]>;
+}): { apiKey?: ModelProviderConfig["apiKey"]; discoveryApiKey?: string } | null {
+  const envValue = normalizeOptionalString(params.env.OLLAMA_API_KEY);
+  const resolvedApiKey = normalizeOptionalString(params.resolvedAuth.apiKey);
+  const resolvedDiscoveryApiKey = normalizeOptionalString(params.resolvedAuth.discoveryApiKey);
+  const explicitRef = coerceSecretRef(params.explicitApiKey);
+  const explicitApiKey = explicitRef
+    ? resolvedDiscoveryApiKey
+    : readOllamaStringValue(params.explicitApiKey);
+  // Only discoveryApiKey proves a SecretRef resolved. Keep its reference in
+  // config, even when the credential bytes happen to equal a local marker.
+  if (explicitRef && !explicitApiKey) {
+    return null;
+  }
+  if (explicitApiKey && (explicitRef || !isOllamaApiKeyMarker(explicitApiKey))) {
+    return { apiKey: explicitRef ?? explicitApiKey, discoveryApiKey: explicitApiKey };
+  }
+  if (!isLocalOllamaBaseUrl(params.baseUrl)) {
+    if (resolvedDiscoveryApiKey) {
+      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey };
+    }
+    if (resolvedApiKey && !isOllamaApiKeyMarker(resolvedApiKey)) {
+      return { apiKey: resolvedApiKey, discoveryApiKey: resolvedApiKey };
+    }
+    return envValue && envValue !== OLLAMA_DEFAULT_API_KEY
+      ? { apiKey: "OLLAMA_API_KEY", discoveryApiKey: envValue }
+      : {};
+  }
+  if (resolvedApiKey && resolvedApiKey !== envValue && !isOllamaApiKeyMarker(resolvedApiKey)) {
+    return { apiKey: resolvedApiKey, discoveryApiKey: resolvedDiscoveryApiKey ?? resolvedApiKey };
+  }
+  // Ambient cloud credentials must not reach local servers; synthetic local
+  // auth belongs only in config, never in HTTP discovery headers.
+  return { apiKey: OLLAMA_DEFAULT_API_KEY };
 }
 
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
 }
 
-export function hasMeaningfulExplicitOllamaConfig(
-  providerConfig: ModelProviderConfig | undefined,
+const LOCAL_OLLAMA_HOSTNAMES = new Set([
+  "localhost",
+  "0.0.0.0",
+  "::1",
+  "::",
+  "docker.orb.internal",
+  "host.docker.internal",
+  "host.orb.internal",
+]);
+const LOOPBACK_OLLAMA_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "::"]);
+
+function isIpv4PrivateRange(host: string): boolean {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return false;
+  }
+  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
+  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = octets;
+  if (a === undefined || b === undefined) {
+    return false;
+  }
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+function isIpv6LocalRange(host: string): boolean {
+  const lower = host.toLowerCase();
+  return /^fe[89ab][0-9a-f]:/.test(lower) || /^f[cd][0-9a-f]{2}:/.test(lower);
+}
+
+export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) {
+    return true;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  let host = parsed.hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  return (
+    LOCAL_OLLAMA_HOSTNAMES.has(host) ||
+    isLoopbackHost(host) ||
+    host.endsWith(".local") ||
+    isIpv4PrivateRange(host) ||
+    isIpv6LocalRange(host) ||
+    (!host.includes(".") && !host.includes(":"))
+  );
+}
+
+const HOSTED_OLLAMA_CLOUD_HOSTNAMES = new Set(["ollama.com", "api.ollama.com"]);
+
+function isHostedOllamaCloud(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) {
+    return false;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return HOSTED_OLLAMA_CLOUD_HOSTNAMES.has(host) || host.endsWith(".ollama.com");
+}
+
+function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) {
+    return true;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  let host = parsed.hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host);
+}
+
+function hasExplicitRemoteOllamaApiProvider(
+  providers: Record<string, OllamaProviderConfigInput | undefined> | undefined,
+): boolean {
+  if (!providers) {
+    return false;
+  }
+  for (const [providerId, provider] of Object.entries(providers)) {
+    if (providerId === OLLAMA_PROVIDER_ID || !provider) {
+      continue;
+    }
+    if (normalizeOptionalString(provider.api)?.toLowerCase() !== "ollama") {
+      continue;
+    }
+    const baseUrl = readProviderBaseUrl(provider);
+    if (baseUrl && !isLoopbackOllamaBaseUrl(baseUrl)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function shouldUseSyntheticOllamaAuth(
+  providerConfig: OllamaProviderConfigInput | undefined,
+): boolean {
+  // Explicit literal credentials and refs belong to configured auth, not the
+  // synthetic local no-auth path.
+  const apiKey = readOllamaStringValue(providerConfig?.apiKey);
+  if (
+    coerceSecretRef(providerConfig?.apiKey) ||
+    (apiKey && !isOllamaApiKeyMarker(apiKey)) ||
+    !hasMeaningfulExplicitOllamaConfig(providerConfig)
+  ) {
+    return false;
+  }
+  return isLocalOllamaBaseUrl(readProviderBaseUrl(providerConfig));
+}
+
+function hasMeaningfulExplicitOllamaConfig(
+  providerConfig: OllamaProviderConfigInput | undefined,
 ): boolean {
   if (!providerConfig) {
     return false;
@@ -63,10 +244,11 @@ export function hasMeaningfulExplicitOllamaConfig(
   if (Array.isArray(providerConfig.models) && providerConfig.models.length > 0) {
     return true;
   }
-  if (typeof providerConfig.baseUrl === "string" && providerConfig.baseUrl.trim()) {
-    return resolveOllamaApiBase(providerConfig.baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
+  const baseUrl = readProviderBaseUrl(providerConfig);
+  if (baseUrl) {
+    return resolveOllamaApiBase(baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
   }
-  if (readStringValue(providerConfig.apiKey)) {
+  if (readOllamaStringValue(providerConfig.apiKey)) {
     return true;
   }
   if (providerConfig.auth) {
@@ -96,39 +278,62 @@ export async function resolveOllamaDiscoveryResult(params: {
   pluginConfig: OllamaPluginConfig;
   buildProvider: (
     configuredBaseUrl?: string,
-    opts?: { quiet?: boolean },
+    opts?: { apiKey?: string; quiet?: boolean },
   ) => Promise<ModelProviderConfig>;
 }): Promise<{ provider: ModelProviderConfig } | null> {
   const explicit = params.ctx.config.models?.providers?.ollama;
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const hasMeaningfulExplicitConfig = hasMeaningfulExplicitOllamaConfig(explicit);
-  const discoveryEnabled =
-    params.pluginConfig.discovery?.enabled ?? params.ctx.config.models?.ollamaDiscovery?.enabled;
+  const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
+    params.ctx.config.models?.providers,
+  );
+  const discoveryEnabled = params.pluginConfig.discovery?.enabled;
   if (!hasExplicitModels && discoveryEnabled === false) {
     return null;
   }
-  const ollamaKey = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID).apiKey;
+  // When the base URL points to hosted Ollama Cloud, skip auto-discovery.
+  // Cloud instances are shared tenants where available models are managed
+  // by the provider; only use explicitly configured models.
+  // Remote self-hosted Ollama endpoints still auto-discover as before.
+  const configuredBaseUrl = readProviderBaseUrl(explicit);
+  if (!hasExplicitModels && configuredBaseUrl && isHostedOllamaCloud(configuredBaseUrl)) {
+    return null;
+  }
+  const resolvedOllamaAuth = params.ctx.resolveProviderApiKey(OLLAMA_PROVIDER_ID);
+  const ollamaKey = resolvedOllamaAuth.apiKey;
+  const hasOllamaDiscoveryOptIn = typeof ollamaKey === "string" && ollamaKey.trim().length > 0;
   const hasRealOllamaKey =
     typeof ollamaKey === "string" &&
     ollamaKey.trim().length > 0 &&
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
-  const explicitApiKey = readStringValue(explicit?.apiKey);
+  const auth = resolveOllamaDiscoveryAuth({
+    env: params.ctx.env,
+    baseUrl: configuredBaseUrl,
+    explicitApiKey: explicit?.apiKey,
+    resolvedAuth: resolvedOllamaAuth,
+  });
+  if (!auth) {
+    return null;
+  }
+  const { apiKey, discoveryApiKey } = auth;
   if (hasExplicitModels && explicit) {
+    const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
+    const api = explicit.api ?? "ollama";
     return {
       provider: {
         ...explicit,
-        baseUrl:
-          typeof explicit.baseUrl === "string" && explicit.baseUrl.trim()
-            ? resolveOllamaApiBase(explicit.baseUrl)
-            : OLLAMA_DEFAULT_BASE_URL,
-        api: explicit.api ?? "ollama",
-        apiKey: resolveOllamaDiscoveryApiKey({
-          env: params.ctx.env,
-          explicitApiKey,
-          resolvedApiKey: ollamaKey,
-        }),
+        models: explicit.models ?? [],
+        baseUrl: resolveOllamaRuntimeBaseUrl({ api, configuredBaseUrl, discoveredBaseUrl }),
+        api,
+        ...(apiKey ? { apiKey } : {}),
       },
     };
+  }
+  if (!hasMeaningfulExplicitConfig && hasRemoteOllamaApiProvider) {
+    return null;
+  }
+  if (!hasOllamaDiscoveryOptIn && !hasMeaningfulExplicitConfig) {
+    return null;
   }
   if (
     !hasRealOllamaKey &&
@@ -138,20 +343,35 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
 
-  const provider = await params.buildProvider(explicit?.baseUrl, {
-    quiet: !hasRealOllamaKey && !hasMeaningfulExplicitConfig,
+  const quiet = !hasRealOllamaKey && !hasMeaningfulExplicitConfig;
+  const provider = await getCachedLiveCatalogValue({
+    keyParts: [
+      OLLAMA_PROVIDER_ID,
+      "models",
+      resolveOllamaApiBase(configuredBaseUrl),
+      discoveryApiKey,
+      quiet,
+    ],
+    load: async () =>
+      await params.buildProvider(configuredBaseUrl, {
+        quiet,
+        ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
+      }),
   });
   if (provider.models?.length === 0 && !ollamaKey && !explicit?.apiKey) {
     return null;
   }
+  const api = explicit?.api ?? provider.api;
   return {
     provider: {
       ...provider,
-      apiKey: resolveOllamaDiscoveryApiKey({
-        env: params.ctx.env,
-        explicitApiKey,
-        resolvedApiKey: ollamaKey,
+      baseUrl: resolveOllamaRuntimeBaseUrl({
+        api,
+        configuredBaseUrl,
+        discoveredBaseUrl: provider.baseUrl,
       }),
+      api,
+      ...(apiKey ? { apiKey } : {}),
     },
   };
 }

@@ -1,17 +1,20 @@
+// Zalo plugin module implements session route behavior.
 import {
   buildChannelOutboundSessionRoute,
   stripChannelTargetPrefix,
   stripTargetKindPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveZaloOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const trimmed = stripChannelTargetPrefix(params.target, "zalo", "zl");
   if (!trimmed) {
     return null;
   }
-  const isGroup = normalizeLowercaseStringOrEmpty(trimmed).startsWith("group:");
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(trimmed);
+  const isGroup = normalizedTarget.startsWith("group:");
+  const recipientSessionExact = /^(?:group|user|dm):/.test(normalizedTarget);
   const peerId = stripTargetKindPrefix(trimmed);
   if (!peerId) {
     return null;
@@ -21,6 +24,7 @@ export function resolveZaloOutboundSessionRoute(params: ChannelOutboundSessionRo
     agentId: params.agentId,
     channel: "zalo",
     accountId: params.accountId,
+    recipientSessionExact,
     peer: {
       kind: isGroup ? "group" : "direct",
       id: peerId,

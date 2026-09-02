@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="stylesheet" href="katex.min.css">
+    <style>
+      html, body { margin: 0; padding: 0; overflow: hidden; background: transparent; }
+      #math { box-sizing: border-box; display: inline-block; min-width: 100%; width: max-content; padding: 2px 1px; }
+      .katex-display { margin: 0; }
+    </style>
+    <script defer src="katex.min.js"></script>
+    <script defer src="renderer.js"></script>
+  </head>
+  <body><div id="math"></div></body>
+</html>

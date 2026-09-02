@@ -1,3 +1,4 @@
+// Memory Wiki tests cover config compat plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import {
@@ -38,7 +39,7 @@ describe("memory-wiki config compatibility", () => {
     ]);
     expect(
       (
-        migration?.config.plugins?.entries?.["memory-wiki"] as {
+        migration!.config.plugins!.entries!["memory-wiki"] as {
           config?: { bridge?: Record<string, unknown> };
         }
       ).config?.bridge,
@@ -71,7 +72,7 @@ describe("memory-wiki config compatibility", () => {
     ]);
     expect(
       (
-        migration.config.plugins?.entries?.["memory-wiki"] as {
+        migration.config.plugins!.entries!["memory-wiki"] as {
           config?: { bridge?: Record<string, unknown> };
         }
       ).config?.bridge,

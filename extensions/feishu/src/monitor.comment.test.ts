@@ -1,34 +1,22 @@
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import * as dedup from "./dedup.js";
-import { monitorSingleAccount } from "./monitor.account.js";
+// Feishu tests cover monitor.comment plugin behavior.
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
+import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
 import {
   resolveDriveCommentEventTurn,
   type FeishuDriveCommentNoticeEvent,
 } from "./monitor.comment.js";
-import { setFeishuRuntime } from "./runtime.js";
-import type { ResolvedFeishuAccount } from "./types.js";
 
-const handleFeishuCommentEventMock = vi.hoisted(() => vi.fn(async () => {}));
-const createEventDispatcherMock = vi.hoisted(() => vi.fn());
+const handleFeishuCommentEventMock = vi.hoisted(() => vi.fn(async (_params?: unknown) => {}));
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
-const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
-const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
-const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
-let handlers: Record<string, (data: unknown) => Promise<void>> = {};
-let lastRuntime: ReturnType<typeof createNonExitingRuntimeEnv> | null = null;
+let lastRuntime = createNonExitingRuntimeEnv();
 const TEST_DOC_TOKEN = "ZsJfdxrBFo0RwuxteOLc1Ekvneb";
 const TEST_WIKI_TOKEN = "OtYpd5pKOoMeQzxrzkocv9KIn4H";
 
 vi.mock("./client.js", () => ({
-  createEventDispatcher: createEventDispatcherMock,
   createFeishuClient: createFeishuClientMock,
 }));
 
@@ -36,14 +24,15 @@ vi.mock("./comment-handler.js", () => ({
   handleFeishuCommentEvent: handleFeishuCommentEventMock,
 }));
 
-vi.mock("./monitor.transport.js", () => ({
-  monitorWebSocket: monitorWebSocketMock,
-  monitorWebhook: monitorWebhookMock,
-}));
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./comment-handler.js");
+  vi.resetModules();
+});
 
-vi.mock("./thread-bindings.js", () => ({
-  createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
-}));
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function buildMonitorConfig(): ClawdbotConfig {
   return {
@@ -55,43 +44,10 @@ function buildMonitorConfig(): ClawdbotConfig {
   } as ClawdbotConfig;
 }
 
-function buildMonitorAccount(): ResolvedFeishuAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    appId: "cli_test",
-    appSecret: "secret_test", // pragma: allowlist secret
-    domain: "feishu",
-    config: {
-      enabled: true,
-      connectionMode: "websocket",
-    },
-  } as ResolvedFeishuAccount;
-}
-
-function createFeishuMonitorRuntime(params?: {
-  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
-  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
-  hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
-}): PluginRuntime {
-  return {
-    channel: {
-      debounce: {
-        createInboundDebouncer: params?.createInboundDebouncer ?? createInboundDebouncer,
-        resolveInboundDebounceMs: params?.resolveInboundDebounceMs ?? resolveInboundDebounceMs,
-      },
-      text: {
-        hasControlCommand: params?.hasControlCommand ?? hasControlCommand,
-      },
-    },
-  } as unknown as PluginRuntime;
-}
-
 function makeDriveCommentEvent(
   overrides: Partial<FeishuDriveCommentNoticeEvent> = {},
 ): FeishuDriveCommentNoticeEvent {
-  return {
+  const event: FeishuDriveCommentNoticeEvent = {
     comment_id: "7623358762119646411",
     event_id: "10d9d60b990db39f96a4c2fd357fb877",
     is_mentioned: true,
@@ -109,7 +65,52 @@ function makeDriveCommentEvent(
     reply_id: "7623358762136374451",
     timestamp: "1774951528000",
     type: "drive.notice.comment_add_v1",
+  };
+  return {
+    ...event,
     ...overrides,
+    notice_meta: {
+      ...event.notice_meta,
+      ...overrides.notice_meta,
+    },
+  };
+}
+
+type ReplyFixture = {
+  id: string;
+  text: string;
+  userId?: string;
+  createTime?: number;
+  encoding?: "content" | "text";
+};
+
+type CommentFixture = {
+  id: string;
+  userId?: string;
+  createTime?: number;
+  isWhole?: boolean;
+  replies: ReplyFixture[];
+};
+
+function makeReplyPayload(reply: ReplyFixture) {
+  const textRun = reply.encoding === "content" ? { content: reply.text } : { text: reply.text };
+  return {
+    reply_id: reply.id,
+    ...(reply.userId ? { user_id: reply.userId } : {}),
+    ...(reply.createTime == null ? {} : { create_time: reply.createTime }),
+    content: {
+      elements: [{ type: "text_run", text_run: textRun }],
+    },
+  };
+}
+
+function makeCommentPayload(comment: CommentFixture) {
+  return {
+    comment_id: comment.id,
+    ...(comment.userId ? { user_id: comment.userId } : {}),
+    ...(comment.createTime == null ? {} : { create_time: comment.createTime }),
+    is_whole: comment.isWhole,
+    reply_list: { replies: comment.replies.map(makeReplyPayload) },
   };
 }
 
@@ -123,8 +124,27 @@ function makeOpenApiClient(params: {
   targetReplyText?: string;
   includeTargetReplyInBatch?: boolean;
   repliesSequence?: Array<Array<{ reply_id: string; text: string }>>;
+  batchReplies?: ReplyFixture[];
+  wholeComments?: CommentFixture[];
 }) {
   const remainingReplyBatches = [...(params.repliesSequence ?? [])];
+  const rootReply: ReplyFixture = {
+    id: "7623358762136374451",
+    text: params.rootReplyText ?? "Also send it to the agent after receiving the comment event",
+    encoding: "content",
+  };
+  const batchReplies = params.batchReplies ?? [
+    rootReply,
+    ...(params.includeTargetReplyInBatch
+      ? [
+          {
+            id: "7623359125036043462",
+            text: params.targetReplyText ?? "Please follow up on this comment",
+            encoding: "content" as const,
+          },
+        ]
+      : []),
+  ];
   return {
     request: vi.fn(async (request: { method: "GET" | "POST"; url: string; data: unknown }) => {
       if (request.url === "/open-apis/drive/v1/metas/batch_query") {
@@ -151,91 +171,34 @@ function makeOpenApiClient(params: {
                 is_whole: params.isWholeComment,
                 quote: params.quoteText ?? "im.message.receive_v1 message trigger implementation",
                 reply_list: {
-                  replies: [
-                    {
-                      reply_id: "7623358762136374451",
-                      content: {
-                        elements: [
-                          {
-                            type: "text_run",
-                            text_run: {
-                              content:
-                                params.rootReplyText ??
-                                "Also send it to the agent after receiving the comment event",
-                            },
-                          },
-                        ],
-                      },
-                    },
-                    ...(params.includeTargetReplyInBatch
-                      ? [
-                          {
-                            reply_id: "7623359125036043462",
-                            content: {
-                              elements: [
-                                {
-                                  type: "text_run",
-                                  text_run: {
-                                    content:
-                                      params.targetReplyText ?? "Please follow up on this comment",
-                                  },
-                                },
-                              ],
-                            },
-                          },
-                        ]
-                      : []),
-                  ],
+                  replies: batchReplies.map(makeReplyPayload),
                 },
               },
             ],
           },
         };
       }
+      if (request.url.includes("/comments?file_type=docx&is_whole=true")) {
+        return {
+          code: 0,
+          data: {
+            has_more: false,
+            items: (params.wholeComments ?? []).map(makeCommentPayload),
+          },
+        };
+      }
       if (request.url.includes("/replies")) {
         const replyBatch = remainingReplyBatches.shift();
-        const items = replyBatch?.map((reply) => ({
-          reply_id: reply.reply_id,
-          content: {
-            elements: [
-              {
-                type: "text_run",
-                text_run: {
-                  content: reply.text,
-                },
-              },
-            ],
-          },
-        })) ?? [
-          {
-            reply_id: "7623358762136374451",
-            content: {
-              elements: [
-                {
-                  type: "text_run",
-                  text_run: {
-                    content:
-                      params.rootReplyText ??
-                      "Also send it to the agent after receiving the comment event",
-                  },
-                },
-              ],
+        const items = (
+          replyBatch?.map((reply) => ({ id: reply.reply_id, text: reply.text })) ?? [
+            rootReply,
+            {
+              id: "7623359125036043462",
+              text: params.targetReplyText ?? "Please follow up on this comment",
+              encoding: "content" as const,
             },
-          },
-          {
-            reply_id: "7623359125036043462",
-            content: {
-              elements: [
-                {
-                  type: "text_run",
-                  text_run: {
-                    content: params.targetReplyText ?? "Please follow up on this comment",
-                  },
-                },
-              ],
-            },
-          },
-        ];
+          ]
+        ).map((reply) => makeReplyPayload({ ...reply, encoding: "content" }));
         return {
           code: 0,
           data: {
@@ -246,46 +209,63 @@ function makeOpenApiClient(params: {
       }
       throw new Error(`unexpected request: ${request.method} ${request.url}`);
     }),
+    wiki: {
+      space: {
+        getNode: vi.fn(async () => ({ code: 0, data: { node: {} } })),
+      },
+    },
   };
 }
 
-async function setupCommentMonitorHandler(): Promise<(data: unknown) => Promise<void>> {
-  const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
-    handlers = registered;
+function resolveCommentTurn(params: {
+  client?: unknown;
+  event?: FeishuDriveCommentNoticeEvent;
+  botOpenId?: string | null;
+  abortSignal?: AbortSignal;
+}) {
+  return resolveDriveCommentEventTurn({
+    cfg: buildMonitorConfig(),
+    accountId: "default",
+    event: params.event ?? makeDriveCommentEvent(),
+    botOpenId: params.botOpenId === null ? undefined : (params.botOpenId ?? "ou_bot"),
+    createClient: () => (params.client ?? makeOpenApiClient({})) as never,
+    abortSignal: params.abortSignal,
   });
-  createEventDispatcherMock.mockReturnValue({ register });
+}
+
+async function setupCommentMonitorHandler(
+  abortSignal?: AbortSignal,
+): Promise<(data: unknown) => Promise<void>> {
   lastRuntime = createNonExitingRuntimeEnv();
 
-  await monitorSingleAccount({
+  return createFeishuDriveCommentNoticeHandler({
     cfg: buildMonitorConfig(),
-    account: buildMonitorAccount(),
-    runtime: lastRuntime as RuntimeEnv,
-    botOpenIdSource: {
-      kind: "prefetched",
-      botOpenId: "ou_bot",
-    },
+    accountId: "default",
+    runtime: lastRuntime,
+    fireAndForget: true,
+    getBotOpenId: () => "ou_bot",
+    abortSignal,
   });
+}
 
-  const handler = handlers["drive.notice.comment_add_v1"];
-  if (!handler) {
-    throw new Error("missing drive.notice.comment_add_v1 handler");
+function mockCallAt(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  index: number,
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
   }
-  return handler;
+  return call;
 }
 
 describe("resolveDriveCommentEventTurn", () => {
   it("builds a real comment-turn prompt for add_comment notices", async () => {
     const client = makeOpenApiClient({ includeTargetReplyInBatch: true });
 
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
-      event: makeDriveCommentEvent(),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
-    });
+    const turn = await resolveCommentTurn({ client });
 
-    expect(turn).not.toBeNull();
     expect(turn?.senderId).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
     expect(turn?.messageId).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
     expect(turn?.fileType).toBe("docx");
@@ -384,13 +364,7 @@ describe("resolveDriveCommentEventTurn", () => {
       },
     };
 
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
-      event: makeDriveCommentEvent(),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
-    });
+    const turn = await resolveCommentTurn({ client });
 
     expect(turn?.targetReplyText).toBe(
       `请 总结下 https://www.larksuite.com/docx/${TEST_DOC_TOKEN} 和 https://www.larksuite.com/wiki/${TEST_WIKI_TOKEN}`,
@@ -419,13 +393,7 @@ describe("resolveDriveCommentEventTurn", () => {
       isWholeComment: true,
     });
 
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
-      event: makeDriveCommentEvent(),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
-    });
+    const turn = await resolveCommentTurn({ client });
 
     expect(turn?.isWholeComment).toBe(true);
     expect(turn?.prompt).toContain("This is a whole-document comment.");
@@ -433,155 +401,47 @@ describe("resolveDriveCommentEventTurn", () => {
   });
 
   it("builds a whole-comment timeline and highlights the nearest bot-authored follow-up", async () => {
-    const client = {
-      request: vi.fn(async (request: { method: "GET" | "POST"; url: string; data: unknown }) => {
-        if (request.url === "/open-apis/drive/v1/metas/batch_query") {
-          return {
-            code: 0,
-            data: {
-              metas: [
-                {
-                  doc_token: TEST_DOC_TOKEN,
-                  title: "Comment event handling request",
-                  url: `https://www.larksuite.com/docx/${TEST_DOC_TOKEN}`,
-                },
-              ],
-            },
-          };
-        }
-        if (request.url.includes("/comments/batch_query")) {
-          return {
-            code: 0,
-            data: {
-              items: [
-                {
-                  comment_id: "7623358762119646411",
-                  is_whole: true,
-                  reply_list: {
-                    replies: [
-                      {
-                        reply_id: "7623358762136374451",
-                        user_id: "ou_509d4d7ace4a9addec2312676ffcba9b",
-                        create_time: 1775531531,
-                        content: {
-                          elements: [
-                            {
-                              type: "text_run",
-                              text_run: {
-                                text: "请帮我总结这个文档",
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          };
-        }
-        if (request.url.includes("/comments?file_type=docx&is_whole=true")) {
-          return {
-            code: 0,
-            data: {
-              has_more: false,
-              items: [
-                {
-                  comment_id: "7623358762119646411",
-                  create_time: 1775531531,
-                  user_id: "ou_509d4d7ace4a9addec2312676ffcba9b",
-                  is_whole: true,
-                  reply_list: {
-                    replies: [
-                      {
-                        reply_id: "reply_a",
-                        user_id: "ou_509d4d7ace4a9addec2312676ffcba9b",
-                        create_time: 1775531531,
-                        content: {
-                          elements: [
-                            {
-                              type: "text_run",
-                              text_run: {
-                                text: "请帮我总结这个文档",
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-                {
-                  comment_id: "comment_bot_followup",
-                  create_time: 1775531540,
-                  user_id: "ou_bot",
-                  is_whole: true,
-                  reply_list: {
-                    replies: [
-                      {
-                        reply_id: "reply_b",
-                        user_id: "ou_bot",
-                        create_time: 1775531540,
-                        content: {
-                          elements: [
-                            {
-                              type: "text_run",
-                              text_run: {
-                                text: "这是刚才的总结结果",
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-                {
-                  comment_id: "comment_other_user",
-                  create_time: 1775531550,
-                  user_id: "ou_other",
-                  is_whole: true,
-                  reply_list: {
-                    replies: [
-                      {
-                        reply_id: "reply_c",
-                        user_id: "ou_other",
-                        create_time: 1775531550,
-                        content: {
-                          elements: [
-                            {
-                              type: "text_run",
-                              text_run: {
-                                text: "另一个 whole comment",
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          };
-        }
-        throw new Error(`unexpected request: ${request.method} ${request.url}`);
-      }),
-      wiki: {
-        space: {
-          getNode: vi.fn(async () => ({ code: 0, data: { node: {} } })),
+    const userId = "ou_509d4d7ace4a9addec2312676ffcba9b";
+    const client = makeOpenApiClient({
+      isWholeComment: true,
+      batchReplies: [
+        { id: "7623358762136374451", text: "请帮我总结这个文档", userId, createTime: 1775531531 },
+      ],
+      wholeComments: [
+        {
+          id: "7623358762119646411",
+          userId,
+          createTime: 1775531531,
+          isWhole: true,
+          replies: [{ id: "reply_a", text: "请帮我总结这个文档", userId, createTime: 1775531531 }],
         },
-      },
-    };
-
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
-      event: makeDriveCommentEvent(),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
+        {
+          id: "comment_bot_followup",
+          userId: "ou_bot",
+          createTime: 1775531540,
+          isWhole: true,
+          replies: [
+            { id: "reply_b", text: "这是刚才的总结结果", userId: "ou_bot", createTime: 1775531540 },
+          ],
+        },
+        {
+          id: "comment_other_user",
+          userId: "ou_other",
+          createTime: 1775531550,
+          isWhole: true,
+          replies: [
+            {
+              id: "reply_c",
+              text: "另一个 whole comment",
+              userId: "ou_other",
+              createTime: 1775531550,
+            },
+          ],
+        },
+      ],
     });
+
+    const turn = await resolveCommentTurn({ client });
 
     expect(turn?.isWholeComment).toBe(true);
     expect(turn?.prompt).toContain(
@@ -596,103 +456,27 @@ describe("resolveDriveCommentEventTurn", () => {
   });
 
   it("treats replies with missing user_id as user-authored even when bot id hints are missing", async () => {
-    const client = {
-      request: vi.fn(async (request: { method: "GET" | "POST"; url: string; data: unknown }) => {
-        if (request.url === "/open-apis/drive/v1/metas/batch_query") {
-          return {
-            code: 0,
-            data: {
-              metas: [
-                {
-                  doc_token: TEST_DOC_TOKEN,
-                  title: "Comment event handling request",
-                  url: `https://www.larksuite.com/docx/${TEST_DOC_TOKEN}`,
-                },
-              ],
-            },
-          };
-        }
-        if (request.url.includes("/comments/batch_query")) {
-          return {
-            code: 0,
-            data: {
-              items: [
-                {
-                  comment_id: "7623358762119646411",
-                  is_whole: true,
-                  reply_list: {
-                    replies: [
-                      {
-                        reply_id: "reply_missing_user",
-                        create_time: 1775531531,
-                        content: {
-                          elements: [
-                            {
-                              type: "text_run",
-                              text_run: {
-                                text: "reply without user id",
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          };
-        }
-        if (request.url.includes("/comments?file_type=docx&is_whole=true")) {
-          return {
-            code: 0,
-            data: {
-              has_more: false,
-              items: [
-                {
-                  comment_id: "7623358762119646411",
-                  create_time: 1775531531,
-                  is_whole: true,
-                  reply_list: {
-                    replies: [
-                      {
-                        reply_id: "reply_missing_user",
-                        create_time: 1775531531,
-                        content: {
-                          elements: [
-                            {
-                              type: "text_run",
-                              text_run: {
-                                text: "reply without user id",
-                              },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          };
-        }
-        throw new Error(`unexpected request: ${request.method} ${request.url}`);
-      }),
-      wiki: {
-        space: {
-          getNode: vi.fn(async () => ({ code: 0, data: { node: {} } })),
-        },
-      },
+    const missingUserReply = {
+      id: "reply_missing_user",
+      text: "reply without user id",
+      createTime: 1775531531,
     };
+    const client = makeOpenApiClient({
+      isWholeComment: true,
+      batchReplies: [missingUserReply],
+      wholeComments: [
+        {
+          id: "7623358762119646411",
+          createTime: 1775531531,
+          isWhole: true,
+          replies: [missingUserReply],
+        },
+      ],
+    });
 
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
-      event: makeDriveCommentEvent({
-        reply_id: "reply_missing_user",
-      }),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
+    const turn = await resolveCommentTurn({
+      client,
+      event: makeDriveCommentEvent({ reply_id: "reply_missing_user" }),
     });
 
     expect(turn?.prompt).toContain(
@@ -710,13 +494,7 @@ describe("resolveDriveCommentEventTurn", () => {
       batchCommentId: "different_comment_id",
     });
 
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
-      event: makeDriveCommentEvent(),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
-    });
+    const turn = await resolveCommentTurn({ client });
 
     expect(turn?.isWholeComment).toBeUndefined();
     expect(turn?.prompt).not.toContain("This is a whole-document comment.");
@@ -725,20 +503,16 @@ describe("resolveDriveCommentEventTurn", () => {
   it("preserves sender user_id for downstream allowlist checks", async () => {
     const client = makeOpenApiClient({ includeTargetReplyInBatch: true });
 
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
+    const turn = await resolveCommentTurn({
+      client,
       event: makeDriveCommentEvent({
         notice_meta: {
-          ...makeDriveCommentEvent().notice_meta,
           from_user_id: {
             open_id: "ou_509d4d7ace4a9addec2312676ffcba9b",
             user_id: "on_comment_user_1",
           },
         },
       }),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
     });
 
     expect(turn?.senderId).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
@@ -751,18 +525,12 @@ describe("resolveDriveCommentEventTurn", () => {
       targetReplyText: "Please follow up on this comment",
     });
 
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
+    const turn = await resolveCommentTurn({
+      client,
       event: makeDriveCommentEvent({
-        notice_meta: {
-          ...makeDriveCommentEvent().notice_meta,
-          notice_type: "add_reply",
-        },
+        notice_meta: { notice_type: "add_reply" },
         reply_id: "7623359125036043462",
       }),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
     });
 
     expect(turn?.prompt).toContain('The user added a reply in "Comment event handling request".');
@@ -772,18 +540,19 @@ describe("resolveDriveCommentEventTurn", () => {
     );
     expect(turn?.prompt).toContain(`file_token: ${TEST_DOC_TOKEN}`);
     expect(turn?.prompt).toContain("Event type: add_reply");
-    expect(client.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "GET",
-        url: expect.stringContaining(
-          `/comments/7623358762119646411/replies?file_type=docx&page_size=100&user_id_type=open_id`,
-        ),
-      }),
-    );
+    const replyLookup = client.request.mock.calls
+      .map(([request]) => request)
+      .find((request) => request.url.includes("/comments/7623358762119646411/replies"));
+    expect(replyLookup).toEqual({
+      method: "GET",
+      url: `/open-apis/drive/v1/files/${TEST_DOC_TOKEN}/comments/7623358762119646411/replies?file_type=docx&page_size=100&user_id_type=open_id`,
+      data: {},
+      timeout: 3000,
+    });
   });
 
   it("retries comment reply lookup when the requested reply is not immediately visible", async () => {
-    const waitMs = vi.fn(async () => {});
+    vi.useFakeTimers();
     const client = makeOpenApiClient({
       includeTargetReplyInBatch: false,
       repliesSequence: [
@@ -811,26 +580,23 @@ describe("resolveDriveCommentEventTurn", () => {
       ],
     });
 
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
+    const turnPromise = resolveCommentTurn({
+      client,
       event: makeDriveCommentEvent({
-        notice_meta: {
-          ...makeDriveCommentEvent().notice_meta,
-          notice_type: "add_reply",
-        },
+        notice_meta: { notice_type: "add_reply" },
         reply_id: "7623359125999999999",
       }),
-      botOpenId: "ou_bot",
-      createClient: () => client as never,
-      waitMs,
     });
+
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    const turn = await turnPromise;
 
     expect(turn?.targetReplyText).toBe("Insert a sentence below this paragraph");
     expect(turn?.prompt).toContain("Insert a sentence below this paragraph");
-    expect(waitMs).toHaveBeenCalledTimes(2);
-    expect(waitMs).toHaveBeenNthCalledWith(1, 1000);
-    expect(waitMs).toHaveBeenNthCalledWith(2, 1000);
+    expect(vi.getTimerCount()).toBe(0);
     expect(
       client.request.mock.calls.filter(
         ([request]: [{ method: string; url: string }]) =>
@@ -839,31 +605,97 @@ describe("resolveDriveCommentEventTurn", () => {
     ).toHaveLength(3);
   });
 
+  it("stops the comment reply retry loop when the owning abortSignal fires", async () => {
+    vi.useFakeTimers();
+    const abortController = new AbortController();
+    const client = makeOpenApiClient({
+      includeTargetReplyInBatch: false,
+      repliesSequence: [
+        [
+          {
+            reply_id: "7623358762136374451",
+            text: "Earlier assistant summary",
+          },
+        ],
+      ],
+    });
+    const turnPromise = resolveCommentTurn({
+      client,
+      event: makeDriveCommentEvent({ reply_id: "7623358762999999999" }),
+      abortSignal: abortController.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(vi.getTimerCount()).toBe(1);
+    });
+    abortController.abort();
+    const turn = await turnPromise;
+
+    expect(turn).not.toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(
+      client.request.mock.calls.filter(
+        ([request]: [{ method: string; url: string }]) =>
+          request.method === "GET" && request.url.includes("/replies"),
+      ),
+    ).toHaveLength(1);
+    expect(turn?.targetReplyText).toBeUndefined();
+  });
+
   it("ignores self-authored comment notices", async () => {
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
+    const turn = await resolveCommentTurn({
       event: makeDriveCommentEvent({
-        notice_meta: {
-          ...makeDriveCommentEvent().notice_meta,
-          from_user_id: { open_id: "ou_bot" },
-        },
+        notice_meta: { from_user_id: { open_id: "ou_bot" } },
       }),
-      botOpenId: "ou_bot",
-      createClient: () => makeOpenApiClient({}) as never,
     });
 
     expect(turn).toBeNull();
   });
 
-  it("skips comment notices when bot open_id is unavailable", async () => {
-    const turn = await resolveDriveCommentEventTurn({
-      cfg: buildMonitorConfig(),
-      accountId: "default",
-      event: makeDriveCommentEvent(),
-      botOpenId: undefined,
-      createClient: () => makeOpenApiClient({}) as never,
+  it("uses a mentioned event recipient when startup bot identity is unavailable", async () => {
+    const turn = await resolveCommentTurn({ botOpenId: null });
+
+    expect(turn?.senderId).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
+  });
+
+  it("uses the event recipient to reject self-authored cold-start notices", async () => {
+    const turn = await resolveCommentTurn({
+      event: makeDriveCommentEvent({
+        notice_meta: { from_user_id: { open_id: "ou_bot" } },
+      }),
+      botOpenId: null,
     });
+
+    expect(turn).toBeNull();
+  });
+
+  it("prefers startup bot identity over a mismatched event recipient", async () => {
+    const turn = await resolveCommentTurn({
+      event: makeDriveCommentEvent({
+        notice_meta: {
+          from_user_id: { open_id: "ou_configured_bot" },
+          to_user_id: { open_id: "ou_other_bot" },
+        },
+      }),
+      botOpenId: "ou_configured_bot",
+    });
+
+    expect(turn).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "not explicitly mentioned",
+      event: makeDriveCommentEvent({ is_mentioned: false }),
+    },
+    {
+      name: "missing recipient identity",
+      event: makeDriveCommentEvent({
+        notice_meta: { to_user_id: undefined },
+      }),
+    },
+  ])("skips a cold-start comment notice when $name", async ({ event }) => {
+    const turn = await resolveCommentTurn({ event, botOpenId: null });
 
     expect(turn).toBeNull();
   });
@@ -871,20 +703,9 @@ describe("resolveDriveCommentEventTurn", () => {
 
 describe("drive.notice.comment_add_v1 monitor handler", () => {
   beforeEach(() => {
-    handlers = {};
-    lastRuntime = null;
+    lastRuntime = createNonExitingRuntimeEnv();
     handleFeishuCommentEventMock.mockClear();
-    createEventDispatcherMock.mockReset();
     createFeishuClientMock.mockReset().mockReturnValue(makeOpenApiClient({}) as never);
-    createFeishuThreadBindingManagerMock.mockReset().mockImplementation(() => ({
-      stop: vi.fn(),
-    }));
-    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("claimed");
-    vi.spyOn(dedup, "tryBeginFeishuMessageProcessing").mockReturnValue(true);
-    vi.spyOn(dedup, "recordProcessedFeishuMessage").mockResolvedValue(true);
-    vi.spyOn(dedup, "releaseFeishuMessageProcessing").mockImplementation(() => {});
-    vi.spyOn(dedup, "hasProcessedFeishuMessage").mockResolvedValue(false);
-    setFeishuRuntime(createFeishuMonitorRuntime());
   });
 
   afterEach(() => {
@@ -892,21 +713,25 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
   });
 
   it("dispatches comment notices through handleFeishuCommentEvent", async () => {
-    const onComment = await setupCommentMonitorHandler();
+    const abortController = new AbortController();
+    const onComment = await setupCommentMonitorHandler(abortController.signal);
 
     await onComment(makeDriveCommentEvent());
 
     expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
-    expect(handleFeishuCommentEventMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        botOpenId: "ou_bot",
-        event: expect.objectContaining({
-          event_id: "10d9d60b990db39f96a4c2fd357fb877",
-          comment_id: "7623358762119646411",
-        }),
-      }),
-    );
+    const handleArgs = mockCallAt(handleFeishuCommentEventMock, 0, "Feishu comment handler")[0] as
+      | {
+          accountId?: string;
+          botOpenId?: string;
+          abortSignal?: AbortSignal;
+          event?: { comment_id?: string; event_id?: string };
+        }
+      | undefined;
+    expect(handleArgs?.accountId).toBe("default");
+    expect(handleArgs?.botOpenId).toBe("ou_bot");
+    expect(handleArgs?.abortSignal).toBe(abortController.signal);
+    expect(handleArgs?.event?.event_id).toBe("10d9d60b990db39f96a4c2fd357fb877");
+    expect(handleArgs?.event?.comment_id).toBe("7623358762119646411");
   });
 
   it("serializes same-document comment notices before invoking handleFeishuCommentEvent", async () => {
@@ -927,7 +752,9 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
         reply_id: "reply_1",
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
+    });
 
     await onComment(
       makeDriveCommentEvent({
@@ -935,78 +762,64 @@ describe("drive.notice.comment_add_v1 monitor handler", () => {
         reply_id: "reply_2",
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
     expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
 
     resolveFirst?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(2);
-    const firstCallArgs = handleFeishuCommentEventMock.mock.calls.at(0) as
-      | [{ event?: { event_id?: string } }]
-      | undefined;
-    const secondCallArgs = handleFeishuCommentEventMock.mock.calls.at(1) as
-      | [{ event?: { event_id?: string } }]
-      | undefined;
+    await vi.waitFor(() => {
+      expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(2);
+    });
+    const firstCallArgs = mockCallAt(
+      handleFeishuCommentEventMock,
+      0,
+      "first Feishu comment handler",
+    ) as [{ event?: { event_id?: string } }] | undefined;
+    const secondCallArgs = mockCallAt(
+      handleFeishuCommentEventMock,
+      1,
+      "second Feishu comment handler",
+    ) as [{ event?: { event_id?: string } }] | undefined;
     const firstCall = firstCallArgs?.[0];
     const secondCall = secondCallArgs?.[0];
     expect(firstCall?.event?.event_id).toBe("evt_1");
     expect(secondCall?.event?.event_id).toBe("evt_2");
   });
 
-  it("drops duplicate comment events before dispatch", async () => {
-    vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockResolvedValue("duplicate");
-    const onComment = await setupCommentMonitorHandler();
-
-    await onComment(makeDriveCommentEvent());
-
-    expect(handleFeishuCommentEventMock).not.toHaveBeenCalled();
-  });
-
-  it("records generic comment-handler failures so replay stays closed", async () => {
-    const onComment = await setupCommentMonitorHandler();
-    handleFeishuCommentEventMock.mockRejectedValueOnce(new Error("post-send failure"));
-
-    await onComment(makeDriveCommentEvent());
-
-    await vi.waitFor(() => {
-      expect(dedup.recordProcessedFeishuMessage).toHaveBeenCalledWith(
-        "drive-comment:10d9d60b990db39f96a4c2fd357fb877",
-        "default",
-        expect.any(Function),
-      );
-      expect(dedup.releaseFeishuMessageProcessing).toHaveBeenCalledWith(
-        "drive-comment:10d9d60b990db39f96a4c2fd357fb877",
-        "default",
-      );
-      expect(lastRuntime?.error).toHaveBeenCalledWith(
-        expect.stringContaining("error handling drive comment notice: Error: post-send failure"),
-      );
-    });
-  });
-
-  it("releases comment replay without recording when failure is explicitly retryable", async () => {
-    const onComment = await setupCommentMonitorHandler();
-    handleFeishuCommentEventMock.mockRejectedValueOnce(
-      Object.assign(new Error("retry me"), {
-        name: "FeishuRetryableSyntheticEventError",
-      }),
+  it("does not execute a queued durable comment after its claim aborts", async () => {
+    let resolveFirst!: () => void;
+    handleFeishuCommentEventMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        }),
     );
-
-    await onComment(makeDriveCommentEvent());
-
-    await vi.waitFor(() => {
-      expect(dedup.recordProcessedFeishuMessage).not.toHaveBeenCalled();
-      expect(dedup.releaseFeishuMessageProcessing).toHaveBeenCalledWith(
-        "drive-comment:10d9d60b990db39f96a4c2fd357fb877",
-        "default",
-      );
-      expect(lastRuntime?.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "error handling drive comment notice: FeishuRetryableSyntheticEventError: retry me",
-        ),
-      );
+    const controller = new AbortController();
+    const abandoned = vi.fn(async () => {});
+    const lifecycle: FeishuIngressLifecycle = {
+      abortSignal: controller.signal,
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: abandoned,
+    };
+    const onComment = createFeishuDriveCommentNoticeHandler({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      runtime: createNonExitingRuntimeEnv(),
+      fireAndForget: true,
+      getBotOpenId: () => "ou_bot",
+      resolveIngressLifecycle: (data) =>
+        (data as { event_id?: string }).event_id === "evt_queued" ? lifecycle : undefined,
     });
+
+    await onComment(makeDriveCommentEvent({ event_id: "evt_blocking" }));
+    await vi.waitFor(() => expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1));
+    const queued = onComment(makeDriveCommentEvent({ event_id: "evt_queued" }));
+    controller.abort(new Error("adoption timeout"));
+    resolveFirst();
+    await queued;
+
+    expect(handleFeishuCommentEventMock).toHaveBeenCalledTimes(1);
+    expect(abandoned).toHaveBeenCalledTimes(1);
   });
 });

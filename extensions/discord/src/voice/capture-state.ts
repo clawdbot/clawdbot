@@ -1,11 +1,12 @@
+// Discord plugin module implements capture state behavior.
 import type { Readable } from "node:stream";
 
-export type VoiceCaptureEntry = {
+type VoiceCaptureEntry = {
   generation: number;
   stream: Readable;
 };
 
-export type VoiceCaptureFinalizeTimer = {
+type VoiceCaptureFinalizeTimer = {
   generation: number;
   timer: ReturnType<typeof setTimeout>;
 };

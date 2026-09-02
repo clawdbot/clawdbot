@@ -1,0 +1,98 @@
+title: Channel baseline conversation
+
+scenario:
+  id: channel-chat-baseline
+  surface: channel
+  coverage:
+    primary:
+      - channels.mention-gating
+    secondary:
+      - channels.mention-required-qa-channel
+  objective: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
+  successCriteria:
+    - Agent replies in the shared channel transcript.
+    - Agent visible reply contains the scenario marker.
+    - Agent keeps the conversation scoped to the channel.
+    - Agent respects mention-driven group routing semantics.
+  docsRefs:
+    - docs/channels/group-messages.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/bus-state.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    transportPolicy:
+      requireGroupMention: true
+    summary: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
+    config:
+      expectedMarker: QA-CHANNEL-BASELINE-OK
+      mentionPrompt: "@openclaw qa channel baseline marker check. Reply exactly: QA-CHANNEL-BASELINE-OK"
+
+flow:
+  steps:
+    - name: ignores unmentioned channel chatter
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - call: sleep
+          args:
+            - 1200
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id: qa-room
+              kind: channel
+              title: QA Room
+            senderId: alice
+            senderName: Alice
+            text: hello team, no bot ping here
+        - waitForNoOutbound:
+            quietMs: 1200
+            sinceIndex:
+              ref: outboundStartIndex
+    - name: replies when mentioned in channel
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - sendInbound:
+            conversation:
+              id: qa-room
+              kind: channel
+              title: QA Room
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.mentionPrompt
+        - call: waitForOutboundMessage
+          saveAs: message
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'qa-room' && candidate.conversation.kind === 'channel' && !candidate.threadId && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 180000)
+        - set: matchingOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && String(candidate.text ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: matchingOutbound.length === 1
+            message:
+              expr: "`expected exactly one channel baseline marker reply, saw ${matchingOutbound.length}; transcript=${recentOutboundSummary(state)}`"
+      detailsExpr: message.text

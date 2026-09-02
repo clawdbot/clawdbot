@@ -1,8 +1,11 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+// Discord plugin module implements runtime behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDiscordActionGate } from "../accounts.js";
-import { readStringParam, type OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
@@ -52,30 +55,26 @@ const guildActions = new Set([
 
 const moderationActions = new Set(["timeout", "kick", "ban"]);
 
-const presenceActions = new Set(["setPresence"]);
-
 export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
-  options?: {
-    mediaLocalRoots?: readonly string[];
-  },
+  options?: DiscordMessagingActionOptions,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
-    return await handleDiscordMessagingAction(action, params, isActionEnabled, options, cfg);
+    return await handleDiscordMessagingAction(action, params, isActionEnabled, cfg, options);
   }
   if (guildActions.has(action)) {
     return await handleDiscordGuildAction(action, params, isActionEnabled, cfg, options);
   }
   if (moderationActions.has(action)) {
-    return await handleDiscordModerationAction(action, params, isActionEnabled);
+    return await handleDiscordModerationAction(action, params, isActionEnabled, cfg);
   }
-  if (presenceActions.has(action)) {
-    return await handleDiscordPresenceAction(action, params, isActionEnabled);
+  if (action === "setPresence") {
+    return await handleDiscordPresenceAction(action, params, isActionEnabled, cfg);
   }
   throw new Error(`Unknown action: ${action}`);
 }

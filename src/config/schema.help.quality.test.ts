@@ -1,561 +1,147 @@
+// Checks config help text quality and coverage.
+
 import { describe, expect, it } from "vitest";
-import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
+import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { FIELD_HELP } from "./schema.help.js";
+import {
+  CHANNELS_AGENTS_TARGET_KEYS,
+  ENUM_EXPECTATIONS,
+  FINAL_BACKLOG_TARGET_KEYS,
+  ROOT_SECTIONS,
+  TARGET_KEYS,
+  TOOLS_HOOKS_TARGET_KEYS,
+} from "./schema.help.quality.test-fixtures.js";
+import { buildBaseHints } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
-const ROOT_SECTIONS = [
-  "meta",
-  "env",
-  "wizard",
-  "diagnostics",
-  "logging",
-  "cli",
-  "update",
-  "browser",
-  "ui",
-  "auth",
-  "models",
-  "nodeHost",
-  "agents",
-  "tools",
-  "bindings",
-  "broadcast",
-  "audio",
-  "media",
-  "messages",
-  "commands",
-  "approvals",
-  "session",
-  "cron",
-  "hooks",
-  "web",
-  "channels",
-  "discovery",
-  "canvasHost",
-  "talk",
-  "gateway",
-  "memory",
-  "plugins",
-] as const;
-
-const TARGET_KEYS = [
-  "memory.citations",
-  "memory.backend",
-  "memory.qmd.searchMode",
-  "memory.qmd.searchTool",
-  "memory.qmd.scope",
-  "memory.qmd.includeDefaultMemory",
-  "memory.qmd.mcporter.enabled",
-  "memory.qmd.mcporter.serverName",
-  "memory.qmd.command",
-  "memory.qmd.mcporter",
-  "memory.qmd.mcporter.startDaemon",
-  "memory.qmd.paths",
-  "memory.qmd.paths.path",
-  "memory.qmd.paths.pattern",
-  "memory.qmd.paths.name",
-  "memory.qmd.sessions.enabled",
-  "memory.qmd.sessions.exportDir",
-  "memory.qmd.sessions.retentionDays",
-  "memory.qmd.update.interval",
-  "memory.qmd.update.debounceMs",
-  "memory.qmd.update.onBoot",
-  "memory.qmd.update.waitForBootSync",
-  "memory.qmd.update.embedInterval",
-  "memory.qmd.update.commandTimeoutMs",
-  "memory.qmd.update.updateTimeoutMs",
-  "memory.qmd.update.embedTimeoutMs",
-  "memory.qmd.limits.maxResults",
-  "memory.qmd.limits.maxSnippetChars",
-  "memory.qmd.limits.maxInjectedChars",
-  "memory.qmd.limits.timeoutMs",
-  "agents.defaults.memorySearch.provider",
-  "agents.defaults.memorySearch.fallback",
-  "agents.defaults.memorySearch.sources",
-  "agents.defaults.memorySearch.extraPaths",
-  "agents.defaults.memorySearch.qmd",
-  "agents.defaults.memorySearch.qmd.extraCollections",
-  "agents.defaults.memorySearch.qmd.extraCollections.path",
-  "agents.defaults.memorySearch.qmd.extraCollections.name",
-  "agents.defaults.memorySearch.qmd.extraCollections.pattern",
-  "agents.defaults.memorySearch.multimodal",
-  "agents.defaults.memorySearch.multimodal.enabled",
-  "agents.defaults.memorySearch.multimodal.modalities",
-  "agents.defaults.memorySearch.multimodal.maxFileBytes",
-  "agents.defaults.memorySearch.experimental.sessionMemory",
-  "agents.defaults.memorySearch.remote.baseUrl",
-  "agents.defaults.memorySearch.remote.apiKey",
-  "agents.defaults.memorySearch.remote.headers",
-  "agents.defaults.memorySearch.remote.batch.enabled",
-  "agents.defaults.memorySearch.remote.batch.wait",
-  "agents.defaults.memorySearch.remote.batch.concurrency",
-  "agents.defaults.memorySearch.remote.batch.pollIntervalMs",
-  "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
-  "agents.defaults.memorySearch.local.modelPath",
-  "agents.defaults.memorySearch.store.path",
-  "agents.defaults.memorySearch.outputDimensionality",
-  "agents.defaults.memorySearch.store.vector.enabled",
-  "agents.defaults.memorySearch.store.vector.extensionPath",
-  "agents.defaults.memorySearch.query.hybrid.enabled",
-  "agents.defaults.memorySearch.query.hybrid.vectorWeight",
-  "agents.defaults.memorySearch.query.hybrid.textWeight",
-  "agents.defaults.memorySearch.query.hybrid.candidateMultiplier",
-  "agents.defaults.memorySearch.query.hybrid.mmr.enabled",
-  "agents.defaults.memorySearch.query.hybrid.mmr.lambda",
-  "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled",
-  "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays",
-  "agents.defaults.memorySearch.cache.enabled",
-  "agents.defaults.memorySearch.cache.maxEntries",
-  "agents.defaults.memorySearch.sync.onSearch",
-  "agents.defaults.memorySearch.sync.watch",
-  "agents.defaults.memorySearch.sync.sessions.deltaBytes",
-  "agents.defaults.memorySearch.sync.sessions.deltaMessages",
-  "models.mode",
-  "models.providers.*.auth",
-  "models.providers.*.authHeader",
-  "models.providers.*.request",
-  "gateway.reload.mode",
-  "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
-  "gateway.controlUi.allowInsecureAuth",
-  "gateway.controlUi.dangerouslyDisableDeviceAuth",
-  "gateway.controlUi.embedSandbox",
-  "cron",
-  "cron.enabled",
-  "cron.store",
-  "cron.maxConcurrentRuns",
-  "cron.retry",
-  "cron.retry.maxAttempts",
-  "cron.retry.backoffMs",
-  "cron.retry.retryOn",
-  "cron.webhook",
-  "cron.webhookToken",
-  "cron.sessionRetention",
-  "cron.runLog",
-  "cron.runLog.maxBytes",
-  "cron.runLog.keepLines",
-  "session",
-  "session.scope",
-  "session.dmScope",
-  "session.identityLinks",
-  "session.resetTriggers",
-  "session.idleMinutes",
-  "session.reset",
-  "session.reset.mode",
-  "session.reset.atHour",
-  "session.reset.idleMinutes",
-  "session.resetByType",
-  "session.resetByType.direct",
-  "session.resetByType.dm",
-  "session.resetByType.group",
-  "session.resetByType.thread",
-  "session.resetByChannel",
-  "session.store",
-  "session.typingIntervalSeconds",
-  "session.typingMode",
-  "session.mainKey",
-  "session.sendPolicy",
-  "session.sendPolicy.default",
-  "session.sendPolicy.rules",
-  "session.sendPolicy.rules[].action",
-  "session.sendPolicy.rules[].match",
-  "session.sendPolicy.rules[].match.channel",
-  "session.sendPolicy.rules[].match.chatType",
-  "session.sendPolicy.rules[].match.keyPrefix",
-  "session.sendPolicy.rules[].match.rawKeyPrefix",
-  "session.agentToAgent",
-  "session.agentToAgent.maxPingPongTurns",
-  "session.threadBindings",
-  "session.threadBindings.enabled",
-  "session.threadBindings.idleHours",
-  "session.threadBindings.maxAgeHours",
-  "session.maintenance",
-  "session.maintenance.mode",
-  "session.maintenance.pruneAfter",
-  "session.maintenance.pruneDays",
-  "session.maintenance.maxEntries",
-  "session.maintenance.rotateBytes",
-  "session.maintenance.resetArchiveRetention",
-  "session.maintenance.maxDiskBytes",
-  "session.maintenance.highWaterBytes",
-  "approvals",
-  "approvals.exec",
-  "approvals.exec.enabled",
-  "approvals.exec.mode",
-  "approvals.exec.agentFilter",
-  "approvals.exec.sessionFilter",
-  "approvals.exec.targets",
-  "approvals.exec.targets[].channel",
-  "approvals.exec.targets[].to",
-  "approvals.exec.targets[].accountId",
-  "approvals.exec.targets[].threadId",
-  "nodeHost",
-  "nodeHost.browserProxy",
-  "nodeHost.browserProxy.enabled",
-  "nodeHost.browserProxy.allowProfiles",
-  "media",
-  "media.preserveFilenames",
-  "audio",
-  "audio.transcription",
-  "audio.transcription.command",
-  "audio.transcription.timeoutSeconds",
-  "bindings",
-  "bindings[].agentId",
-  "bindings[].match",
-  "bindings[].match.channel",
-  "bindings[].match.accountId",
-  "bindings[].match.peer",
-  "bindings[].match.peer.kind",
-  "bindings[].match.peer.id",
-  "bindings[].match.guildId",
-  "bindings[].match.teamId",
-  "bindings[].match.roles",
-  "broadcast",
-  "broadcast.strategy",
-  "broadcast.*",
-  "commands",
-  "commands.allowFrom",
-  "hooks",
-  "hooks.enabled",
-  "hooks.path",
-  "hooks.token",
-  "hooks.defaultSessionKey",
-  "hooks.allowRequestSessionKey",
-  "hooks.allowedSessionKeyPrefixes",
-  "hooks.allowedAgentIds",
-  "hooks.maxBodyBytes",
-  "hooks.transformsDir",
-  "hooks.mappings",
-  "hooks.mappings[].action",
-  "hooks.mappings[].wakeMode",
-  "hooks.mappings[].channel",
-  "hooks.mappings[].transform.module",
-  "hooks.gmail",
-  "hooks.gmail.pushToken",
-  "hooks.gmail.tailscale.mode",
-  "hooks.gmail.thinking",
-  "hooks.internal",
-  "hooks.internal.load.extraDirs",
-  "messages",
-  "messages.messagePrefix",
-  "messages.responsePrefix",
-  "messages.groupChat",
-  "messages.groupChat.mentionPatterns",
-  "messages.groupChat.historyLimit",
-  "messages.queue",
-  "messages.queue.mode",
-  "messages.queue.byChannel",
-  "messages.queue.debounceMs",
-  "messages.queue.debounceMsByChannel",
-  "messages.queue.cap",
-  "messages.queue.drop",
-  "messages.inbound",
-  "messages.inbound.byChannel",
-  "messages.removeAckAfterReply",
-  "messages.tts",
-  "channels",
-  "channels.defaults",
-  "channels.defaults.groupPolicy",
-  "channels.defaults.contextVisibility",
-  "channels.defaults.heartbeat",
-  "channels.defaults.heartbeat.showOk",
-  "channels.defaults.heartbeat.showAlerts",
-  "channels.defaults.heartbeat.useIndicator",
-  "gateway",
-  "gateway.mode",
-  "gateway.bind",
-  "gateway.auth.mode",
-  "gateway.tailscale.mode",
-  "gateway.tools.allow",
-  "gateway.tools.deny",
-  "gateway.tls.enabled",
-  "gateway.tls.autoGenerate",
-  "gateway.http",
-  "gateway.http.endpoints",
-  "browser",
-  "browser.enabled",
-  "browser.cdpUrl",
-  "browser.headless",
-  "browser.noSandbox",
-  "browser.profiles",
-  "browser.profiles.*.userDataDir",
-  "browser.profiles.*.driver",
-  "browser.profiles.*.attachOnly",
-  "tools",
-  "tools.allow",
-  "tools.deny",
-  "tools.exec",
-  "tools.exec.host",
-  "tools.exec.security",
-  "tools.exec.ask",
-  "tools.exec.node",
-  "tools.agentToAgent.enabled",
-  "tools.elevated.enabled",
-  "tools.elevated.allowFrom",
-  "tools.subagents.tools",
-  "tools.sandbox.tools",
-  "web",
-  "web.enabled",
-  "web.heartbeatSeconds",
-  "web.reconnect",
-  "web.reconnect.initialMs",
-  "web.reconnect.maxMs",
-  "web.reconnect.factor",
-  "web.reconnect.jitter",
-  "web.reconnect.maxAttempts",
-  "discovery",
-  "discovery.wideArea.domain",
-  "discovery.wideArea.enabled",
-  "discovery.mdns",
-  "discovery.mdns.mode",
-  "gateway.controlUi.embedSandbox",
-  "canvasHost",
-  "canvasHost.enabled",
-  "canvasHost.root",
-  "canvasHost.port",
-  "canvasHost.liveReload",
-  "talk",
-  "talk.interruptOnSpeech",
-  "talk.silenceTimeoutMs",
-  "meta",
-  "env",
-  "env.shellEnv",
-  "env.shellEnv.enabled",
-  "env.shellEnv.timeoutMs",
-  "env.vars",
-  "wizard",
-  "wizard.lastRunAt",
-  "wizard.lastRunVersion",
-  "wizard.lastRunCommit",
-  "wizard.lastRunCommand",
-  "wizard.lastRunMode",
-  "diagnostics",
-  "diagnostics.otel",
-  "diagnostics.cacheTrace",
-  "logging",
-  "logging.level",
-  "logging.file",
-  "logging.consoleLevel",
-  "logging.consoleStyle",
-  "logging.redactSensitive",
-  "logging.redactPatterns",
-  "update",
-  "ui",
-  "ui.assistant",
-  "plugins",
-  "plugins.enabled",
-  "plugins.allow",
-  "plugins.deny",
-  "plugins.load",
-  "plugins.load.paths",
-  "plugins.slots",
-  "plugins.entries",
-  "plugins.entries.*.enabled",
-  "plugins.entries.*.hooks",
-  "plugins.entries.*.hooks.allowPromptInjection",
-  "plugins.entries.*.subagent",
-  "plugins.entries.*.subagent.allowModelOverride",
-  "plugins.entries.*.subagent.allowedModels",
-  "plugins.entries.*.apiKey",
-  "plugins.entries.*.env",
-  "plugins.entries.*.config",
-  "plugins.installs",
-  "auth",
-  "auth.cooldowns",
-  "models",
-  "models.providers",
-  "models.providers.*.baseUrl",
-  "models.providers.*.apiKey",
-  "models.providers.*.api",
-  "models.providers.*.headers",
-  "models.providers.*.models",
-  "agents",
-  "agents.defaults",
-  "agents.list",
-  "agents.defaults.compaction",
-  "agents.defaults.compaction.mode",
-  "agents.defaults.compaction.provider",
-  "agents.defaults.compaction.reserveTokens",
-  "agents.defaults.compaction.keepRecentTokens",
-  "agents.defaults.compaction.reserveTokensFloor",
-  "agents.defaults.compaction.maxHistoryShare",
-  "agents.defaults.compaction.identifierPolicy",
-  "agents.defaults.compaction.identifierInstructions",
-  "agents.defaults.compaction.recentTurnsPreserve",
-  "agents.defaults.compaction.qualityGuard",
-  "agents.defaults.compaction.qualityGuard.enabled",
-  "agents.defaults.compaction.qualityGuard.maxRetries",
-  "agents.defaults.compaction.postCompactionSections",
-  "agents.defaults.compaction.timeoutSeconds",
-  "agents.defaults.compaction.model",
-  "agents.defaults.compaction.truncateAfterCompaction",
-  "agents.defaults.compaction.memoryFlush",
-  "agents.defaults.compaction.memoryFlush.enabled",
-  "agents.defaults.compaction.memoryFlush.softThresholdTokens",
-  "agents.defaults.compaction.memoryFlush.prompt",
-  "agents.defaults.compaction.memoryFlush.systemPrompt",
-] as const;
-
-const ENUM_EXPECTATIONS: Record<string, string[]> = {
-  "memory.citations": ['"auto"', '"on"', '"off"'],
-  "memory.backend": ['"builtin"', '"qmd"'],
-  "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],
-  "models.mode": ['"merge"', '"replace"'],
-  "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"'],
-  "gateway.reload.mode": ['"off"', '"restart"', '"hot"', '"hybrid"'],
-  "approvals.exec.mode": ['"session"', '"targets"', '"both"'],
-  "bindings[].match.peer.kind": ['"direct"', '"group"', '"channel"', '"dm"'],
-  "broadcast.strategy": ['"parallel"', '"sequential"'],
-  "hooks.mappings[].action": ['"wake"', '"agent"'],
-  "hooks.mappings[].wakeMode": ['"now"', '"next-heartbeat"'],
-  "hooks.gmail.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "hooks.gmail.thinking": ['"off"', '"minimal"', '"low"', '"medium"', '"high"'],
-  "messages.queue.mode": [
-    '"steer"',
-    '"followup"',
-    '"collect"',
-    '"steer-backlog"',
-    '"steer+backlog"',
-    '"queue"',
-    '"interrupt"',
-  ],
-  "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
-  "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
-  "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
-  "gateway.mode": ['"local"', '"remote"'],
-  "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
-  "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
-  "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"existing-session"'],
-  "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
-  "wizard.lastRunMode": ['"local"', '"remote"'],
-  "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
-  "logging.level": ['"silent"', '"fatal"', '"error"', '"warn"', '"info"', '"debug"', '"trace"'],
-  "logging.consoleLevel": [
-    '"silent"',
-    '"fatal"',
-    '"error"',
-    '"warn"',
-    '"info"',
-    '"debug"',
-    '"trace"',
-  ],
-  "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
-  "logging.redactSensitive": ['"off"', '"tools"'],
-  "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
-  "update.channel": ['"stable"', '"beta"', '"dev"'],
-  "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
-  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
+type JsonSchemaNode = {
+  properties?: Record<string, JsonSchemaNode>;
+  additionalProperties?: JsonSchemaNode | boolean;
+  items?: JsonSchemaNode | JsonSchemaNode[];
+  anyOf?: JsonSchemaNode[];
+  oneOf?: JsonSchemaNode[];
+  allOf?: JsonSchemaNode[];
 };
 
-const TOOLS_HOOKS_TARGET_KEYS = [
-  "hooks.gmail.account",
-  "hooks.gmail.allowUnsafeExternalContent",
-  "hooks.gmail.hookUrl",
-  "hooks.gmail.includeBody",
-  "hooks.gmail.label",
-  "hooks.gmail.model",
-  "hooks.gmail.serve",
-  "hooks.gmail.subscription",
-  "hooks.gmail.tailscale",
-  "hooks.gmail.topic",
-  "hooks.internal.entries",
-  "hooks.internal.installs",
-  "hooks.internal.load",
-  "hooks.mappings[].allowUnsafeExternalContent",
-  "hooks.mappings[].deliver",
-  "hooks.mappings[].id",
-  "hooks.mappings[].match",
-  "hooks.mappings[].messageTemplate",
-  "hooks.mappings[].model",
-  "hooks.mappings[].name",
-  "hooks.mappings[].textTemplate",
-  "hooks.mappings[].thinking",
-  "hooks.mappings[].transform",
-  "tools.alsoAllow",
-  "tools.byProvider",
-  "tools.exec.approvalRunningNoticeMs",
-  "tools.exec.strictInlineEval",
-  "tools.links.enabled",
-  "tools.links.maxLinks",
-  "tools.links.models",
-  "tools.links.scope",
-  "tools.links.timeoutSeconds",
-  ...MEDIA_AUDIO_FIELD_KEYS,
-  "tools.media.concurrency",
-  "tools.media.image.attachments",
-  "tools.media.image.enabled",
-  "tools.media.image.maxBytes",
-  "tools.media.image.maxChars",
-  "tools.media.image.models",
-  "tools.media.image.prompt",
-  "tools.media.image.scope",
-  "tools.media.image.timeoutSeconds",
-  "tools.media.models",
-  "tools.media.video.attachments",
-  "tools.media.video.enabled",
-  "tools.media.video.maxBytes",
-  "tools.media.video.maxChars",
-  "tools.media.video.models",
-  "tools.media.video.prompt",
-  "tools.media.video.scope",
-  "tools.media.video.timeoutSeconds",
-  "tools.profile",
-] as const;
+function collectSchemaLeafPaths(
+  schema: JsonSchemaNode,
+  path = "",
+  leaves = new Set<string>(),
+  visited = new WeakMap<object, Set<string>>(),
+): Set<string> {
+  const priorPaths = visited.get(schema);
+  if (priorPaths?.has(path)) {
+    return leaves;
+  }
+  if (priorPaths) {
+    priorPaths.add(path);
+  } else {
+    visited.set(schema, new Set([path]));
+  }
 
-const CHANNELS_AGENTS_TARGET_KEYS = [
-  "agents.defaults.memorySearch.chunking.overlap",
-  "agents.defaults.memorySearch.chunking.tokens",
-  "agents.defaults.memorySearch.enabled",
-  "agents.defaults.memorySearch.model",
-  "agents.defaults.memorySearch.query.maxResults",
-  "agents.defaults.memorySearch.query.minScore",
-  "agents.defaults.memorySearch.sync.onSessionStart",
-  "agents.defaults.memorySearch.sync.watchDebounceMs",
-  "agents.defaults.workspace",
-  "agents.list[].tools.alsoAllow",
-  "agents.list[].tools.byProvider",
-  "agents.list[].tools.profile",
-  "channels.mattermost",
-] as const;
+  let hasChildren = false;
+  for (const [key, child] of Object.entries(schema.properties ?? {})) {
+    hasChildren = true;
+    collectSchemaLeafPaths(child, path ? `${path}.${key}` : key, leaves, visited);
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    hasChildren = true;
+    collectSchemaLeafPaths(schema.additionalProperties, path ? `${path}.*` : "*", leaves, visited);
+  }
+  const items = Array.isArray(schema.items) ? schema.items : schema.items ? [schema.items] : [];
+  for (const item of items) {
+    hasChildren = true;
+    collectSchemaLeafPaths(item, path ? `${path}.*` : "*", leaves, visited);
+  }
+  for (const branches of [schema.anyOf, schema.oneOf, schema.allOf]) {
+    for (const branch of branches ?? []) {
+      hasChildren = true;
+      collectSchemaLeafPaths(branch, path, leaves, visited);
+    }
+  }
+  if (path && !hasChildren) {
+    leaves.add(path);
+  }
+  return leaves;
+}
 
-const FINAL_BACKLOG_TARGET_KEYS = [
-  "browser.evaluateEnabled",
-  "browser.remoteCdpHandshakeTimeoutMs",
-  "browser.remoteCdpTimeoutMs",
-  "browser.snapshotDefaults",
-  "browser.snapshotDefaults.mode",
-  "browser.ssrfPolicy",
-  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
-  "browser.ssrfPolicy.allowedHostnames",
-  "browser.ssrfPolicy.hostnameAllowlist",
-  "diagnostics.enabled",
-  "diagnostics.otel.enabled",
-  "diagnostics.otel.endpoint",
-  "diagnostics.otel.flushIntervalMs",
-  "diagnostics.otel.headers",
-  "diagnostics.otel.logs",
-  "diagnostics.otel.metrics",
-  "diagnostics.otel.sampleRate",
-  "diagnostics.otel.serviceName",
-  "diagnostics.otel.traces",
-  "gateway.remote.password",
-  "gateway.remote.token",
-  "skills.load.watch",
-  "skills.load.watchDebounceMs",
-  "ui.assistant.avatar",
-  "ui.assistant.name",
-  "ui.seamColor",
-] as const;
+function formatMissingTierFailure(paths: readonly string[]): string {
+  const stubs = paths.map((path) => `  ${JSON.stringify(path)}: { advanced: true },`).join("\n");
+  return [
+    `${paths.length} config path(s) have no tier declaration.`,
+    "Add common/advanced boundaries in src/config/schema.tiers.ts:",
+    "",
+    stubs,
+    "",
+    "New leaves inherit their nearest declared ancestor; use a leaf hint for exceptions.",
+  ].join("\n");
+}
+
+function titleCaseLabelSegment(segment: string): string {
+  return segment
+    .replace(/\[\]/g, "")
+    .replace(/[*_-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function createFieldLabelStub(key: string): string {
+  const segments = key.split(".").filter((segment) => segment !== "*");
+  const leaf = segments.at(-1) ?? key;
+  return titleCaseLabelSegment(leaf) || key;
+}
+
+function collectMissingLabelKeys(
+  helpKeys: readonly string[],
+  labels: Record<string, string>,
+): string[] {
+  return helpKeys.filter((key) => {
+    const label = labels[key];
+    return typeof label !== "string" || label.length === 0;
+  });
+}
+
+function formatMissingLabelFailure(missingKeys: readonly string[]): string {
+  const stubs = missingKeys
+    .map((key) => `  ${JSON.stringify(key)}: ${JSON.stringify(createFieldLabelStub(key))},`)
+    .join("\n");
+  return [
+    `${missingKeys.length} help key(s) missing from FIELD_LABELS.`,
+    "Add or adjust these entries in src/config/schema.labels.ts:",
+    "",
+    stubs,
+    "",
+    "Review generated labels before committing; they are mechanical starting points.",
+  ].join("\n");
+}
 
 describe("config help copy quality", () => {
+  function requireHelp(key: string): string {
+    const help = FIELD_HELP[key];
+    if (typeof help !== "string") {
+      throw new Error(`missing help for ${key}`);
+    }
+    return help;
+  }
+
+  function requireLabel(key: string): string {
+    const label = FIELD_LABELS[key];
+    if (typeof label !== "string") {
+      throw new Error(`missing label for ${key}`);
+    }
+    return label;
+  }
+
   function expectOperationalGuidance(
     keys: readonly string[],
     guidancePattern: RegExp,
     minLength = 80,
   ) {
     for (const key of keys) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
+      const help = requireHelp(key);
       expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
       expect(
         guidancePattern.test(help),
@@ -564,17 +150,35 @@ describe("config help copy quality", () => {
     }
   }
 
+  it("describes auto-mode collection mutation", () => {
+    const help = requireHelp("skills.workshop.autonomous.mode");
+    expect(help).toContain("daily");
+    expect(help).toContain("rewrite or drop");
+  });
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
-      expect(FIELD_LABELS[key], `missing root label for ${key}`).toBeDefined();
-      expect(FIELD_HELP[key], `missing root help for ${key}`).toBeDefined();
+      expect(requireLabel(key)).not.toHaveLength(0);
+      expect(requireHelp(key)).not.toHaveLength(0);
     }
   });
 
   it("keeps labels in parity for all help keys", () => {
-    for (const key of Object.keys(FIELD_HELP)) {
-      expect(FIELD_LABELS[key], `missing label for help key ${key}`).toBeDefined();
+    const missing = collectMissingLabelKeys(Object.keys(FIELD_HELP), FIELD_LABELS);
+    if (missing.length > 0) {
+      expect.fail(formatMissingLabelFailure(missing));
     }
+  });
+
+  it("prints copy-paste-ready label stubs for missing help labels", () => {
+    const message = formatMissingLabelFailure([
+      "gateway.push",
+      "gateway.push.apns.relay.timeoutMs",
+    ]);
+    expect(message).toContain("2 help key(s) missing from FIELD_LABELS.");
+    expect(message).toContain("src/config/schema.labels.ts");
+    expect(message).toContain(`  "gateway.push": "Push",`);
+    expect(message).toContain(`  "gateway.push.apns.relay.timeoutMs": "Timeout Ms",`);
   });
 
   it("covers the target confusing fields with non-trivial explanations", () => {
@@ -607,213 +211,164 @@ describe("config help copy quality", () => {
 
   it("documents option behavior for enum-style fields", () => {
     for (const [key, options] of Object.entries(ENUM_EXPECTATIONS)) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for enum key ${key}`).toBeDefined();
+      const help = requireHelp(key);
       for (const token of options) {
         expect(help.includes(token), `missing option ${token} in ${key}`).toBe(true);
       }
     }
   });
 
-  it("explains memory citations mode semantics", () => {
-    const help = FIELD_HELP["memory.citations"];
-    expect(help.includes('"auto"')).toBe(true);
-    expect(help.includes('"on"')).toBe(true);
-    expect(help.includes('"off"')).toBe(true);
-    expect(/always|always shows/i.test(help)).toBe(true);
-    expect(/hides|hide/i.test(help)).toBe(true);
+  it.each([
+    {
+      name: "explains memory citations mode semantics",
+      fields: [
+        ["memory.citations", ['"auto"', '"on"', '"off"', /always|always shows/i, /hides|hide/i]],
+      ],
+    },
+    {
+      name: "documents cron retention formats",
+      fields: [
+        ["cron.sessionRetention", ["24h", "7d", "1h30m", /false/i]],
+        ["cron.webhookToken", [/token|bearer/i, /secret|env|rotate/i]],
+      ],
+    },
+    {
+      name: "documents session send-policy examples and prefix semantics",
+      fields: [
+        ["session.sendPolicy.rules", ["{ action:", '"deny"', '"discord"']],
+        ["session.sendPolicy.rules[].match.keyPrefix", [/normalized/i]],
+        ["session.sendPolicy.rules[].match.rawKeyPrefix", [/raw|unnormalized/i]],
+      ],
+    },
+    {
+      name: "documents session maintenance duration/size examples and deprecations",
+      fields: [
+        ["session.maintenance.pruneAfter", ["30d", "12h"]],
+        ["session.maintenance.archiveDashboardAfter", ["7d", /false/i, "0"]],
+        ["session.maintenance.preserveRecent", ["7d", /false/i]],
+        ["session.maintenance.resetArchiveRetention", [".reset.", /false/i]],
+        ["session.maintenance.maxDiskBytes", ["500mb"]],
+        ["session.maintenance.highWaterBytes", ["80%"]],
+      ],
+    },
+    {
+      name: "documents approvals filters and target semantics",
+      fields: [
+        ["approvals.exec.sessionFilter", [/substring|regex/i, "discord:", "^agent:ops:"]],
+        ["approvals.exec.agentFilter", ["primary", "ops-agent"]],
+        [
+          "approvals.exec.targets[].to",
+          [/channel ID|user ID|thread root/i, /differs|per provider/i],
+        ],
+      ],
+    },
+    {
+      name: "documents broadcast command examples",
+      fields: [["broadcast.*", [/source peer ID/i, /destination peer IDs/i]]],
+    },
+    {
+      name: "documents hook transform safety and queue behavior options",
+      fields: [
+        ["hooks.mappings[].transform.module", [/relative/i, /path traversal|reviewed|controlled/i]],
+        ["messages.queue.mode", ['"interrupt"', '"steer"']],
+      ],
+    },
+    {
+      name: "documents gateway bind modes",
+      fields: [["gateway.bind", ['"loopback"', '"tailnet"']]],
+    },
+    {
+      name: "documents admin semantics for logging and plugins",
+      fields: [
+        ["logging.consoleStyle", ['"pretty"', '"json"']],
+        ["plugins.entries.*.apiKey", [/secret|env|credential/i]],
+        ["plugins.entries.*.env", [/scope|plugin|environment/i]],
+        ["plugins.entries.*.hooks.allowPromptInjection", ["before_prompt_build"]],
+        [
+          "plugins.entries.*.hooks.allowConversationAccess",
+          ["llm_input", "llm_output", "before_agent_finalize", "agent_end"],
+        ],
+        ["plugins.entries.*.hooks.timeoutMs", ["typed hooks", "hooks.timeouts"]],
+        ["plugins.entries.*.hooks.timeouts", ["before_prompt_build", "agent_end"]],
+      ],
+    },
+    {
+      name: "documents auth/model root semantics and provider secret handling",
+      fields: [
+        ["models.providers.*.apiKey", [/secret|env|credential/i]],
+        ["models.mode", ["SecretRef-managed", "preserve"]],
+      ],
+    },
+    {
+      name: "documents agent compaction safeguards and memory flush behavior",
+      fields: [
+        ["agents.defaults.compaction.mode", ['"default"', '"safeguard"']],
+        [
+          "agents.defaults.compaction.thinkingLevel",
+          [/session level|inherit/i, /Codex app-server|no per-operation thinking override/i],
+        ],
+        ["agents.defaults.compaction.identifierPolicy", ['"strict"', '"off"']],
+        [
+          "agents.defaults.compaction.recentTurnsPreserve",
+          [/recent.*turn|verbatim/i, /default:\s*3/i],
+        ],
+        [
+          "agents.defaults.compaction.midTurnPrecheck.enabled",
+          [/mid-turn|tool loop|default:\s*false/i],
+        ],
+        [
+          "agents.defaults.compaction.model",
+          [/provider\/model|different model|primary agent model/i, /alias/i],
+        ],
+        [
+          "agents.defaults.compaction.maxActiveTranscriptBytes",
+          [/transcript|bytes|compaction/i, /Codex app-server|native rollout|restart fresh/i],
+        ],
+        ["agents.defaults.compaction.memoryFlush.enabled", [/pre-compaction|memory flush|token/i]],
+      ],
+    },
+    {
+      name: "documents agent startup-context preload controls",
+      fields: [
+        ["agents.defaults.startupContext", [/first-turn|\/new|\/reset|daily memory/i]],
+        ["agents.defaults.startupContext.applyOn", ['"new"', '"reset"']],
+        ["agents.defaults.startupContext.dailyMemoryDays", [/today \+ yesterday|default:\s*2/i]],
+      ],
+    },
+  ] satisfies Array<{ name: string; fields: Array<[string, Array<string | RegExp>]> }>)(
+    "$name",
+    ({ fields }) => {
+      for (const [key, patterns] of fields) {
+        const help = requireHelp(key);
+        for (const pattern of patterns) {
+          const matches = typeof pattern === "string" ? help.includes(pattern) : pattern.test(help);
+          expect(matches, `missing ${String(pattern)} in ${key}`).toBe(true);
+        }
+      }
+    },
+  );
+});
+
+describe("config tier coverage", () => {
+  const response = computeBaseConfigSchemaResponse({ generatedAt: "tier-quality-test" });
+  const schema = response.schema as JsonSchemaNode;
+  const leaves = [...collectSchemaLeafPaths(schema)].toSorted();
+
+  it("requires every root section to declare a tier boundary", () => {
+    const authoredHints = buildBaseHints();
+    const missing = Object.keys(schema.properties ?? {})
+      .filter((path) => typeof authoredHints[path]?.advanced !== "boolean")
+      .toSorted();
+    expect(missing, formatMissingTierFailure(missing)).toEqual([]);
   });
 
-  it("includes concrete examples on path and interval fields", () => {
-    expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(true);
-    expect(FIELD_HELP["memory.qmd.update.interval"].includes("5m")).toBe(true);
-    expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(true);
-    expect(FIELD_HELP["agents.defaults.memorySearch.store.path"]).toContain(
-      "~/.openclaw/memory/{agentId}.sqlite",
-    );
+  it("materializes a deterministic tier on every baseline leaf", () => {
+    const missing = leaves.filter((path) => typeof response.uiHints[path]?.advanced !== "boolean");
+    expect(missing, formatMissingTierFailure(missing)).toEqual([]);
   });
 
-  it("documents cron deprecation, migration, and retention formats", () => {
-    const legacy = FIELD_HELP["cron.webhook"];
-    expect(/deprecated|legacy/i.test(legacy)).toBe(true);
-    expect(legacy.includes('delivery.mode="webhook"')).toBe(true);
-    expect(legacy.includes("delivery.to")).toBe(true);
-
-    const retention = FIELD_HELP["cron.sessionRetention"];
-    expect(retention.includes("24h")).toBe(true);
-    expect(retention.includes("7d")).toBe(true);
-    expect(retention.includes("1h30m")).toBe(true);
-    expect(/false/i.test(retention)).toBe(true);
-
-    const token = FIELD_HELP["cron.webhookToken"];
-    expect(/token|bearer/i.test(token)).toBe(true);
-    expect(/secret|env|rotate/i.test(token)).toBe(true);
-  });
-
-  it("documents session send-policy examples and prefix semantics", () => {
-    const rules = FIELD_HELP["session.sendPolicy.rules"];
-    expect(rules.includes("{ action:")).toBe(true);
-    expect(rules.includes('"deny"')).toBe(true);
-    expect(rules.includes('"discord"')).toBe(true);
-
-    const keyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"];
-    expect(/normalized/i.test(keyPrefix)).toBe(true);
-
-    const rawKeyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"];
-    expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
-  });
-
-  it("documents session maintenance duration/size examples and deprecations", () => {
-    const pruneAfter = FIELD_HELP["session.maintenance.pruneAfter"];
-    expect(pruneAfter.includes("30d")).toBe(true);
-    expect(pruneAfter.includes("12h")).toBe(true);
-
-    const rotate = FIELD_HELP["session.maintenance.rotateBytes"];
-    expect(rotate.includes("10mb")).toBe(true);
-    expect(rotate.includes("1gb")).toBe(true);
-
-    const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
-    expect(/deprecated/i.test(deprecated)).toBe(true);
-    expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
-
-    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
-    expect(resetRetention.includes(".reset.")).toBe(true);
-    expect(/false/i.test(resetRetention)).toBe(true);
-
-    const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
-    expect(maxDisk.includes("500mb")).toBe(true);
-
-    const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
-    expect(highWater.includes("80%")).toBe(true);
-  });
-
-  it("documents cron run-log retention controls", () => {
-    const runLog = FIELD_HELP["cron.runLog"];
-    expect(runLog.includes("cron/runs")).toBe(true);
-
-    const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
-    expect(maxBytes.includes("2mb")).toBe(true);
-
-    const keepLines = FIELD_HELP["cron.runLog.keepLines"];
-    expect(keepLines.includes("2000")).toBe(true);
-  });
-
-  it("documents approvals filters and target semantics", () => {
-    const sessionFilter = FIELD_HELP["approvals.exec.sessionFilter"];
-    expect(/substring|regex/i.test(sessionFilter)).toBe(true);
-    expect(sessionFilter.includes("discord:")).toBe(true);
-    expect(sessionFilter.includes("^agent:ops:")).toBe(true);
-
-    const agentFilter = FIELD_HELP["approvals.exec.agentFilter"];
-    expect(agentFilter.includes("primary")).toBe(true);
-    expect(agentFilter.includes("ops-agent")).toBe(true);
-
-    const targetTo = FIELD_HELP["approvals.exec.targets[].to"];
-    expect(/channel ID|user ID|thread root/i.test(targetTo)).toBe(true);
-    expect(/differs|per provider/i.test(targetTo)).toBe(true);
-  });
-
-  it("documents broadcast and audio command examples", () => {
-    const audioCmd = FIELD_HELP["audio.transcription.command"];
-    expect(audioCmd.includes("whisper-cli")).toBe(true);
-    expect(audioCmd.includes("{input}")).toBe(true);
-
-    const broadcastMap = FIELD_HELP["broadcast.*"];
-    expect(/source peer ID/i.test(broadcastMap)).toBe(true);
-    expect(/destination peer IDs/i.test(broadcastMap)).toBe(true);
-  });
-
-  it("documents hook transform safety and queue behavior options", () => {
-    const transformModule = FIELD_HELP["hooks.mappings[].transform.module"];
-    expect(/relative/i.test(transformModule)).toBe(true);
-    expect(/path traversal|reviewed|controlled/i.test(transformModule)).toBe(true);
-
-    const queueMode = FIELD_HELP["messages.queue.mode"];
-    expect(queueMode.includes('"interrupt"')).toBe(true);
-    expect(queueMode.includes('"steer+backlog"')).toBe(true);
-  });
-
-  it("documents gateway bind modes and web reconnect semantics", () => {
-    const bind = FIELD_HELP["gateway.bind"];
-    expect(bind.includes('"loopback"')).toBe(true);
-    expect(bind.includes('"tailnet"')).toBe(true);
-
-    const reconnect = FIELD_HELP["web.reconnect.maxAttempts"];
-    expect(/0 means no retries|no retries/i.test(reconnect)).toBe(true);
-    expect(/failure sequence|retry/i.test(reconnect)).toBe(true);
-  });
-
-  it("documents metadata/admin semantics for logging, wizard, and plugins", () => {
-    const wizardMode = FIELD_HELP["wizard.lastRunMode"];
-    expect(wizardMode.includes('"local"')).toBe(true);
-    expect(wizardMode.includes('"remote"')).toBe(true);
-
-    const consoleStyle = FIELD_HELP["logging.consoleStyle"];
-    expect(consoleStyle.includes('"pretty"')).toBe(true);
-    expect(consoleStyle.includes('"compact"')).toBe(true);
-    expect(consoleStyle.includes('"json"')).toBe(true);
-
-    const pluginApiKey = FIELD_HELP["plugins.entries.*.apiKey"];
-    expect(/secret|env|credential/i.test(pluginApiKey)).toBe(true);
-
-    const pluginEnv = FIELD_HELP["plugins.entries.*.env"];
-    expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
-
-    const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
-    expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
-    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
-    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
-  });
-
-  it("documents auth/model root semantics and provider secret handling", () => {
-    const providerKey = FIELD_HELP["models.providers.*.apiKey"];
-    expect(/secret|env|credential/i.test(providerKey)).toBe(true);
-    const modelsMode = FIELD_HELP["models.mode"];
-    expect(modelsMode.includes("SecretRef-managed")).toBe(true);
-    expect(modelsMode.includes("preserve")).toBe(true);
-
-    const authCooldowns = FIELD_HELP["auth.cooldowns"];
-    expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
-  });
-
-  it("documents agent compaction safeguards and memory flush behavior", () => {
-    const mode = FIELD_HELP["agents.defaults.compaction.mode"];
-    expect(mode.includes('"default"')).toBe(true);
-    expect(mode.includes('"safeguard"')).toBe(true);
-
-    const historyShare = FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
-    expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
-
-    const identifierPolicy = FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
-    expect(identifierPolicy.includes('"strict"')).toBe(true);
-    expect(identifierPolicy.includes('"off"')).toBe(true);
-    expect(identifierPolicy.includes('"custom"')).toBe(true);
-
-    const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
-    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
-    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
-
-    const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
-    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
-    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
-    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
-
-    const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
-    expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
-
-    const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
-    expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
-  });
-
-  it("documents agent startup-context preload controls", () => {
-    const startupContext = FIELD_HELP["agents.defaults.startupContext"];
-    expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
-
-    const applyOn = FIELD_HELP["agents.defaults.startupContext.applyOn"];
-    expect(applyOn.includes('"new"')).toBe(true);
-    expect(applyOn.includes('"reset"')).toBe(true);
-
-    const dailyMemoryDays = FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"];
-    expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
+  it("keeps the curated common leaf set reviewable", () => {
+    const common = leaves.filter((path) => response.uiHints[path]?.advanced === false);
+    expect(common).toMatchSnapshot();
   });
 });

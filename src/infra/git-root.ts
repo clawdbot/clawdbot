@@ -1,7 +1,6 @@
+// Discovers git repository roots by walking ancestor directories.
 import fs from "node:fs";
 import path from "node:path";
-
-export const DEFAULT_GIT_DISCOVERY_MAX_DEPTH = 12;
 
 function walkUpFrom<T>(
   startDir: string,
@@ -9,8 +8,7 @@ function walkUpFrom<T>(
   resolveAtDir: (dir: string) => T | null | undefined,
 ): T | null {
   let current = path.resolve(startDir);
-  const maxDepth = opts.maxDepth ?? DEFAULT_GIT_DISCOVERY_MAX_DEPTH;
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (let i = 0; opts.maxDepth === undefined || i < opts.maxDepth; i += 1) {
     const resolved = resolveAtDir(current);
     if (resolved !== null && resolved !== undefined) {
       return resolved;

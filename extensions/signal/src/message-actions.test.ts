@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Signal tests cover message actions plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendReactionsModule = await import("./send-reactions.js");
@@ -33,7 +34,7 @@ describe("signalMessageActions", () => {
   it("lists actions based on configured accounts and reaction gates", () => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg: {} as OpenClawConfig })?.actions ?? [],
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       signalMessageActions.describeMessageTool?.({
@@ -60,9 +61,66 @@ describe("signalMessageActions", () => {
     );
   });
 
-  it("skips send for plugin dispatch", () => {
+  it("supports only reactions for plugin dispatch", () => {
     expect(signalMessageActions.supportsAction?.({ action: "send" })).toBe(false);
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
+    expect(signalMessageActions.supportsAction?.({ action: "delete" })).toBe(false);
+    expect(signalMessageActions.supportsAction?.({ action: "pin" })).toBe(false);
+  });
+
+  it("keeps inherited Signal reply ids in the durable delivery context", async () => {
+    const prepared = await signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: { replyTo: "1700000000001" },
+      },
+      to: "+15550001111",
+      payload: { text: "reply" },
+      replyToId: "1700000000001",
+      replyToIdSource: "implicit",
+    });
+
+    expect(prepared).toEqual({ text: "reply" });
+  });
+
+  it("preserves explicit Signal reply ids that equal the current message", async () => {
+    const prepared = await signalMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "signal",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: { replyTo: "1700000000001" },
+        toolContext: { currentMessageId: "1700000000001", replyToMode: "first" },
+      },
+      to: "+15550001111",
+      payload: { text: "reply" },
+      replyToId: "1700000000001",
+      replyToIdSource: "explicit",
+    });
+
+    expect(prepared).toEqual({ text: "reply", replyToId: "1700000000001" });
+  });
+
+  it("preserves explicit Signal replies when implicit replies are suppressed", async () => {
+    for (const replyToMode of ["off", "batched"] as const) {
+      const prepared = await signalMessageActions.prepareSendPayload?.({
+        ctx: {
+          channel: "signal",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { replyTo: "1700000000001" },
+          toolContext: { currentMessageId: "1700000000001", replyToMode },
+        },
+        to: "+15550001111",
+        payload: { text: "reply" },
+        replyToId: "1700000000001",
+        replyToIdSource: "explicit",
+      });
+
+      expect(prepared, replyToMode).toEqual({ text: "reply", replyToId: "1700000000001" });
+    }
   });
 
   it("blocks reactions when the action gate is disabled", async () => {
@@ -96,14 +154,27 @@ describe("signalMessageActions", () => {
         name: "normalizes uuid recipients",
         cfg: { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig,
         params: {
-          recipient: "uuid:123e4567-e89b-12d3-a456-426614174000",
+          to: "uuid:123e4567-e89b-12d3-a456-426614174000",
           messageId: "123",
           emoji: "🔥",
         },
         expectedRecipient: "123e4567-e89b-12d3-a456-426614174000",
         expectedTimestamp: 123,
         expectedEmoji: "🔥",
-        expectedOptions: {},
+        expectedOptions: { accountId: "default" },
+      },
+      {
+        name: "preserves UUID case while stripping mixed-case Signal and UUID prefixes",
+        cfg: { channels: { signal: { account: "+15550001111" } } } as OpenClawConfig,
+        params: {
+          to: " SiGnAl: UuId:123E4567-E89B-12D3-A456-426614174000 ",
+          messageId: "123",
+          emoji: "🔥",
+        },
+        expectedRecipient: "123E4567-E89B-12D3-A456-426614174000",
+        expectedTimestamp: 123,
+        expectedEmoji: "🔥",
+        expectedOptions: { accountId: "default" },
       },
       {
         name: "passes groupId and targetAuthor for group reactions",
@@ -118,6 +189,7 @@ describe("signalMessageActions", () => {
         expectedTimestamp: 123,
         expectedEmoji: "✅",
         expectedOptions: {
+          accountId: "default",
           groupId: "group-id",
           targetAuthor: "uuid:123e4567-e89b-12d3-a456-426614174000",
         },
@@ -129,13 +201,19 @@ describe("signalMessageActions", () => {
         expectedRecipient: "+15559999999",
         expectedTimestamp: 1737630212345,
         expectedEmoji: "🔥",
-        expectedOptions: {},
+        expectedOptions: { accountId: "default" },
         toolContext: { currentMessageId: "1737630212345" },
       },
     ] as const;
 
     for (const testCase of cases) {
       sendReactionSignalMock.mockClear();
+      const expectedOptions = testCase.expectedOptions as {
+        accountId?: string;
+        groupId?: string;
+        targetAuthor?: string;
+        targetAuthorUuid?: string;
+      };
       await signalMessageActions.handleAction?.({
         channel: "signal",
         action: "react",
@@ -149,12 +227,97 @@ describe("signalMessageActions", () => {
         testCase.expectedRecipient,
         testCase.expectedTimestamp,
         testCase.expectedEmoji,
-        expect.objectContaining({
+        {
           cfg: testCase.cfg,
-          ...testCase.expectedOptions,
-        }),
+          accountId: expectedOptions.accountId,
+          groupId: expectedOptions.groupId,
+          targetAuthor: expectedOptions.targetAuthor,
+          targetAuthorUuid: expectedOptions.targetAuthorUuid,
+        },
       );
     }
+  });
+
+  it("binds provider reactions to the canonical target", async () => {
+    const cfg = {
+      channels: { signal: { account: "+15550001111" } },
+    } as OpenClawConfig;
+
+    const added = await signalMessageActions.handleAction?.({
+      channel: "signal",
+      action: "react",
+      params: {
+        to: "+15559999999",
+        recipient: "+15558888888",
+        messageId: "123",
+        emoji: "✅",
+      },
+      cfg,
+    });
+
+    expect(sendReactionSignalMock).toHaveBeenCalledWith(
+      "+15559999999",
+      123,
+      "✅",
+      expect.objectContaining({ accountId: "default" }),
+    );
+    expect(added?.details).toEqual({ ok: true, added: "✅" });
+
+    const removed = await signalMessageActions.handleAction?.({
+      channel: "signal",
+      action: "react",
+      params: {
+        to: "+15559999999",
+        recipient: "+15558888888",
+        messageId: "123",
+        emoji: "✅",
+        remove: true,
+      },
+      cfg,
+    });
+
+    expect(removeReactionSignalMock).toHaveBeenCalledWith(
+      "+15559999999",
+      123,
+      "✅",
+      expect.objectContaining({ accountId: "default" }),
+    );
+    expect(removed?.details).toEqual({ ok: true, removed: "✅" });
+  });
+
+  it.each([
+    {
+      name: "disabled",
+      cfg: {
+        channels: {
+          signal: {
+            account: "+15550001111",
+            accounts: { work: { enabled: false, account: "+15550002222" } },
+          },
+        },
+      },
+      accountId: "work",
+      error: /account "work" is disabled/,
+    },
+    {
+      name: "unconfigured",
+      cfg: { channels: { signal: {} } },
+      accountId: "default",
+      error: /account "default" is not configured/,
+    },
+  ])("rejects $name accounts before provider dispatch", async ({ cfg, accountId, error }) => {
+    await expect(
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "react",
+        params: { to: "+15559999999", messageId: "123", emoji: "✅" },
+        cfg: cfg as OpenClawConfig,
+        accountId,
+      }),
+    ).rejects.toThrow(error);
+
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+    expect(removeReactionSignalMock).not.toHaveBeenCalled();
   });
 
   it("rejects invalid reaction inputs before dispatch", async () => {
@@ -175,9 +338,44 @@ describe("signalMessageActions", () => {
       signalMessageActions.handleAction?.({
         channel: "signal",
         action: "react",
+        params: { to: "+15559999999", messageId: "123abc", emoji: "✅" },
+        cfg,
+      }),
+    ).rejects.toThrow(/Invalid messageId/);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+
+    for (const remove of [false, true]) {
+      await expect(
+        signalMessageActions.handleAction?.({
+          channel: "signal",
+          action: "react",
+          params: { to: "+15559999999", messageId: "123", remove },
+          cfg,
+        }),
+      ).rejects.toThrow(`Emoji required to ${remove ? "remove" : "add"} reaction.`);
+    }
+
+    await expect(
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "react",
         params: { to: "signal:group:group-id", messageId: "123", emoji: "✅" },
         cfg,
       }),
     ).rejects.toThrow(/targetAuthor/);
+
+    await expect(
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "react",
+        params: {
+          recipient: "+15559999999",
+          messageId: "123",
+          emoji: "✅",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow(/recipient.*required/);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
   });
 });

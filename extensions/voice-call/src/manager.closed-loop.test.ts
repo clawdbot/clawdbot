@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// Voice Call tests cover manager.closed loop plugin behavior.
+import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider, markCallAnswered } from "./manager.test-harness.js";
 
 function requireCall(
@@ -20,6 +21,18 @@ function requireTurnToken(provider: Awaited<ReturnType<typeof createManagerHarne
   return firstStart.turnToken;
 }
 
+function expectTranscriptWaiter(
+  manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
+  callId: string,
+) {
+  const waiters = (
+    manager as unknown as {
+      transcriptWaiters: Map<string, unknown>;
+    }
+  ).transcriptWaiters;
+  expect(waiters.has(callId)).toBe(true);
+}
+
 describe("CallManager closed-loop turns", () => {
   it("completes a closed-loop turn without live audio", async () => {
     const { manager, provider } = await createManagerHarness({
@@ -32,7 +45,10 @@ describe("CallManager closed-loop turns", () => {
     markCallAnswered(manager, started.callId, "evt-closed-loop-answered");
 
     const turnPromise = manager.continueCall(started.callId, "How can I help?");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(1);
+      expectTranscriptWaiter(manager, started.callId);
+    });
 
     manager.processEvent({
       id: "evt-closed-loop-speech",
@@ -107,11 +123,14 @@ describe("CallManager closed-loop turns", () => {
     markCallAnswered(manager, started.callId, "evt-turn-token-answered");
 
     const turnPromise = manager.continueCall(started.callId, "Prompt");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(1);
+      expectTranscriptWaiter(manager, started.callId);
+    });
 
     const expectedTurnToken = requireTurnToken(provider);
 
-    manager.processEvent({
+    const staleResult = manager.processEvent({
       id: "evt-turn-token-bad",
       type: "call.speech",
       callId: started.callId,
@@ -121,14 +140,11 @@ describe("CallManager closed-loop turns", () => {
       isFinal: true,
       turnToken: "wrong-token",
     });
+    expect(staleResult).toEqual({ kind: "ignored" });
 
-    const pendingState = await Promise.race([
-      turnPromise.then(() => "resolved"),
-      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
-    expect(pendingState).toBe("pending");
+    expectTranscriptWaiter(manager, started.callId);
 
-    manager.processEvent({
+    const finalResult = manager.processEvent({
       id: "evt-turn-token-good",
       type: "call.speech",
       callId: started.callId,
@@ -137,6 +153,11 @@ describe("CallManager closed-loop turns", () => {
       transcript: "final answer",
       isFinal: true,
       turnToken: expectedTurnToken,
+    });
+    expect(finalResult).toMatchObject({
+      kind: "final-speech",
+      transcript: "final answer",
+      waiterResolved: true,
     });
 
     const turnResult = await turnPromise;
@@ -158,7 +179,10 @@ describe("CallManager closed-loop turns", () => {
     markCallAnswered(manager, started.callId, "evt-multi-answered");
 
     const firstTurn = manager.continueCall(started.callId, "First question");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(1);
+      expectTranscriptWaiter(manager, started.callId);
+    });
     manager.processEvent({
       id: "evt-multi-speech-1",
       type: "call.speech",
@@ -171,7 +195,10 @@ describe("CallManager closed-loop turns", () => {
     await firstTurn;
 
     const secondTurn = manager.continueCall(started.callId, "Second question");
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(provider.startListeningCalls).toHaveLength(2);
+      expectTranscriptWaiter(manager, started.callId);
+    });
     manager.processEvent({
       id: "evt-multi-speech-2",
       type: "call.speech",
@@ -212,7 +239,10 @@ describe("CallManager closed-loop turns", () => {
 
     for (let i = 1; i <= 5; i++) {
       const turnPromise = manager.continueCall(started.callId, `Prompt ${i}`);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await vi.waitFor(() => {
+        expect(provider.startListeningCalls).toHaveLength(i);
+        expectTranscriptWaiter(manager, started.callId);
+      });
       manager.processEvent({
         id: `evt-loop-speech-${i}`,
         type: "call.speech",

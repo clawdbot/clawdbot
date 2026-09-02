@@ -1,6 +1,22 @@
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+/**
+ * Cookie and Web Storage helpers for Playwright-backed browser tools.
+ */
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 
+type PlaywrightCookieInput = {
+  name: string;
+  value: string;
+  url?: string;
+  domain?: string;
+  path?: string;
+  expires?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: "Lax" | "None" | "Strict";
+};
+
+/** Returns cookies visible to the target browser context. */
 export async function cookiesGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -11,20 +27,11 @@ export async function cookiesGetViaPlaywright(opts: {
   return { cookies };
 }
 
+/** Adds or replaces a cookie in the target browser context. */
 export async function cookiesSetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  cookie: {
-    name: string;
-    value: string;
-    url?: string;
-    domain?: string;
-    path?: string;
-    expires?: number;
-    httpOnly?: boolean;
-    secure?: boolean;
-    sameSite?: "Lax" | "None" | "Strict";
-  };
+  cookie: PlaywrightCookieInput;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -44,6 +51,46 @@ export async function cookiesSetViaPlaywright(opts: {
   await page.context().addCookies([cookie]);
 }
 
+/**
+ * Add cookies in bounded batches on one browser context. On a batch error, retry
+ * that batch cookie-by-cookie so one cookie Playwright rejects neither drops the
+ * whole batch nor aborts the import. Returns the count actually added so callers
+ * can report rejects instead of leaving an ambiguous partial write.
+ */
+export async function cookiesSetManyViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  cookies: PlaywrightCookieInput[];
+  signal?: AbortSignal;
+}): Promise<{ added: number }> {
+  opts.signal?.throwIfAborted();
+  const page = await getPageForTargetId(opts);
+  ensurePageState(page);
+  const context = page.context();
+  let added = 0;
+  for (let index = 0; index < opts.cookies.length; index += 500) {
+    opts.signal?.throwIfAborted();
+    const batch = opts.cookies.slice(index, index + 500);
+    try {
+      await context.addCookies(batch);
+      added += batch.length;
+    } catch {
+      for (const cookie of batch) {
+        opts.signal?.throwIfAborted();
+        try {
+          await context.addCookies([cookie]);
+          added += 1;
+        } catch {
+          // Individual cookie rejected by Playwright/Chrome; counted as not added.
+        }
+      }
+    }
+  }
+  opts.signal?.throwIfAborted();
+  return { added };
+}
+
+/** Clears cookies in the target browser context. */
 export async function cookiesClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -55,6 +102,7 @@ export async function cookiesClearViaPlaywright(opts: {
 
 type StorageKind = "local" | "session";
 
+/** Reads localStorage or sessionStorage values from the target page. */
 export async function storageGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -90,6 +138,7 @@ export async function storageGetViaPlaywright(opts: {
   return { values: values ?? {} };
 }
 
+/** Writes one localStorage or sessionStorage value on the target page. */
 export async function storageSetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -112,6 +161,7 @@ export async function storageSetViaPlaywright(opts: {
   );
 }
 
+/** Clears localStorage or sessionStorage on the target page. */
 export async function storageClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

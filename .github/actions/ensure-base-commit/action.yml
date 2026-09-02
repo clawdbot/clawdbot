@@ -13,49 +13,14 @@ runs:
     - name: Ensure base commit is available
       shell: bash
       env:
+        BASE_ACTION_PATH: ${{ github.action_path }}
         BASE_SHA: ${{ inputs.base-sha }}
         FETCH_REF: ${{ inputs.fetch-ref }}
       run: |
         set -euo pipefail
-
-        if [ -z "$BASE_SHA" ] || [[ "$BASE_SHA" =~ ^0+$ ]]; then
-          echo "No concrete base SHA available; skipping targeted fetch."
-          exit 0
+        python_command=python3
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          python_command=python
         fi
-
-        if ! [[ "$BASE_SHA" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
-          echo "::error title=ensure-base-commit invalid base sha::Refusing invalid base SHA: $BASE_SHA"
-          exit 2
-        fi
-
-        if ! git check-ref-format --branch "$FETCH_REF" >/dev/null 2>&1; then
-          echo "::error title=ensure-base-commit invalid fetch ref::Refusing invalid fetch ref: $FETCH_REF"
-          exit 2
-        fi
-
-        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
-          echo "Base commit already present: $BASE_SHA"
-          exit 0
-        fi
-
-        for deepen_by in 25 100 300; do
-          echo "Base commit missing; deepening $FETCH_REF by $deepen_by."
-          if ! git fetch --no-tags --deepen="$deepen_by" origin -- "$FETCH_REF"; then
-            echo "::warning title=ensure-base-commit fetch failed::Failed to deepen $FETCH_REF by $deepen_by while looking for $BASE_SHA"
-          fi
-          if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
-            echo "Resolved base commit after deepening: $BASE_SHA"
-            exit 0
-          fi
-        done
-
-        echo "Base commit still missing; fetching full history for $FETCH_REF."
-        if ! git fetch --no-tags origin -- "$FETCH_REF"; then
-          echo "::warning title=ensure-base-commit fetch failed::Failed to fetch full history for $FETCH_REF while looking for $BASE_SHA"
-        fi
-        if git rev-parse --verify "$BASE_SHA^{commit}" >/dev/null 2>&1; then
-          echo "Resolved base commit after full ref fetch: $BASE_SHA"
-          exit 0
-        fi
-
-        echo "Base commit still unavailable after fetch attempts: $BASE_SHA"
+        exec "$python_command" -I -S "$BASE_ACTION_PATH/../git-owner/owner.py" \
+          --policy "$BASE_ACTION_PATH/policy.py"

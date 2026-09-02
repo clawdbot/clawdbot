@@ -1,24 +1,33 @@
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type {
+  PluginManifestProviderEndpoint,
+  PluginManifestProviderRequestProvider,
+} from "../plugins/manifest.js";
+import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
+import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { normalizeProviderId } from "./provider-id.js";
 
-export type ProviderAttributionVerification =
+type ProviderAttributionVerification =
   | "vendor-documented"
   | "vendor-hidden-api-spec"
   | "vendor-sdk-hook-only"
   | "internal-runtime";
 
-export type ProviderAttributionHook =
+type ProviderAttributionHook =
   | "request-headers"
   | "default-headers"
   | "user-agent-extra"
   | "custom-user-agent";
 
+/** Product attribution policy emitted for verified provider hooks. */
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
@@ -31,11 +40,14 @@ export type ProviderAttributionPolicy = {
   headers?: Record<string, string>;
 };
 
-export type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
+type ProviderAttributionIdentity = Pick<ProviderAttributionPolicy, "product" | "version">;
 
+/** Transport family used when resolving provider-specific request policy. */
 export type ProviderRequestTransport = "stream" | "websocket" | "http" | "media-understanding";
+/** Capability family used when endpoint rules differ by media or LLM request type. */
 export type ProviderRequestCapability = "llm" | "audio" | "image" | "video" | "other";
 
+/** Normalized endpoint class used by provider policy and SSRF/attribution decisions. */
 export type ProviderEndpointClass =
   | "default"
   | "anthropic-public"
@@ -44,15 +56,19 @@ export type ProviderEndpointClass =
   | "deepseek-native"
   | "github-copilot-native"
   | "groq-native"
+  | "meta-native"
   | "mistral-public"
+  | "minimax-native"
   | "moonshot-native"
   | "modelstudio-native"
+  | "nvidia-native"
   | "openai-public"
-  | "openai-codex"
+  | "openai"
   | "opencode-native"
   | "azure-openai"
   | "openrouter"
   | "xai-native"
+  | "xiaomi-native"
   | "zai-native"
   | "google-generative-ai"
   | "google-vertex"
@@ -60,20 +76,24 @@ export type ProviderEndpointClass =
   | "custom"
   | "invalid";
 
+/** Parsed endpoint facts derived from provider id and base URL. */
 export type ProviderEndpointResolution = {
   endpointClass: ProviderEndpointClass;
   hostname?: string;
   googleVertexRegion?: string;
 };
 
+/** Raw model/provider fields accepted by policy resolution. */
 export type ProviderRequestPolicyInput = {
   provider?: string | null;
   api?: string | null;
   baseUrl?: string | null;
   transport?: ProviderRequestTransport;
   capability?: ProviderRequestCapability;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 };
 
+/** Provider policy facts consumed by transports before constructing a request. */
 export type ProviderRequestPolicyResolution = {
   provider?: string;
   policy?: ProviderAttributionPolicy;
@@ -89,16 +109,16 @@ export type ProviderRequestPolicyResolution = {
   usesExplicitProxyLikeEndpoint: boolean;
 };
 
+/** Policy input plus model compatibility fields for feature-level capability resolution. */
 export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
-  compat?: {
-    supportsStore?: boolean;
-    supportsPromptCacheKey?: boolean;
-  } | null;
+  compat?: unknown;
 };
 
+/** Known compatibility family that needs provider-specific request adjustments. */
 export type ProviderRequestCompatibilityFamily = "moonshot";
 
+/** Feature capability facts for one resolved provider/model request route. */
 export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   isKnownNativeEndpoint: boolean;
   allowsOpenAIServiceTier: boolean;
@@ -108,52 +128,35 @@ export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   allowsResponsesStore: boolean;
   shouldStripResponsesPromptCache: boolean;
   supportsNativeStreamingUsageCompat: boolean;
+  supportsOpenAICompletionsStreamingUsageCompat: boolean;
   compatibilityFamily?: ProviderRequestCompatibilityFamily;
 };
 
+function readCompatBoolean(
+  compat: unknown,
+  key: "supportsStore" | "supportsPromptCacheKey",
+): boolean | undefined {
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  return asBoolean((compat as Record<string, unknown>)[key]);
+}
+
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
+const OPENROUTER_ATTRIBUTION_CATEGORIES =
+  "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent";
 
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-const MOONSHOT_NATIVE_BASE_URLS = new Set([
-  "https://api.moonshot.ai/v1",
-  "https://api.moonshot.cn/v1",
-]);
-const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
-  "https://coding-intl.dashscope.aliyuncs.com/v1",
-  "https://coding.dashscope.aliyuncs.com/v1",
-  "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-]);
 const OPENAI_RESPONSES_APIS = new Set([
   "openai-responses",
   "azure-openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
-const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
-const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>(["xai-native"]);
-type ManifestProviderEndpointCacheEntry = {
-  endpointClass: ProviderEndpointClass;
-  hosts: readonly string[];
-  normalizedBaseUrls: readonly string[];
-};
-let manifestProviderEndpointCache: ManifestProviderEndpointCacheEntry[] | null = null;
 
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
-}
-
-function tryParseHostname(value: string): string | undefined {
-  try {
-    return normalizeOptionalLowercaseString(new URL(value).hostname);
-  } catch {
-    return undefined;
-  }
-}
-
-function isSchemelessHostnameCandidate(value: string): boolean {
-  return /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(value);
 }
 
 function resolveUrlHostname(value: unknown): string | undefined {
@@ -161,79 +164,86 @@ function resolveUrlHostname(value: unknown): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const parsedHostname = tryParseHostname(trimmed);
-  if (parsedHostname) {
-    return parsedHostname;
-  }
-  if (!isSchemelessHostnameCandidate(trimmed)) {
-    return undefined;
-  }
-  return tryParseHostname(`https://${trimmed}`);
-}
-
-function normalizeComparableBaseUrl(value: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const parsedValue =
-    tryParseHostname(trimmed) || !isSchemelessHostnameCandidate(trimmed)
-      ? trimmed
-      : `https://${trimmed}`;
+  const candidate = /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
+    ? `https://${trimmed}`
+    : trimmed;
   try {
-    const url = new URL(parsedValue);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return undefined;
-    }
-    url.hash = "";
-    url.search = "";
-    return normalizeOptionalLowercaseString(url.toString().replace(/\/+$/, ""));
+    return normalizeOptionalLowercaseString(new URL(candidate).hostname);
   } catch {
     return undefined;
   }
 }
 
-function isManifestProviderEndpointClass(value: string): value is ProviderEndpointClass {
-  return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
+type ProviderMetadataOwners = {
+  providerEndpoints: readonly PluginManifestProviderEndpoint[];
+  providerRequests: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
+};
+
+function resolveProviderMetadataOwners(
+  prepared?: PluginMetadataSnapshotOwnerMaps,
+): ProviderMetadataOwners {
+  const owners =
+    prepared ??
+    getCurrentPluginMetadataSnapshot({
+      allowWorkspaceScopedSnapshot: true,
+    })?.owners ??
+    loadPluginMetadataSnapshot({ config: {} }).owners;
+  return {
+    providerEndpoints: owners.providerEndpoints ?? [],
+    providerRequests: owners.providerRequests ?? new Map(),
+  };
 }
 
-function loadManifestProviderEndpointCache(): ManifestProviderEndpointCacheEntry[] {
-  if (!manifestProviderEndpointCache) {
-    const registry = loadPluginManifestRegistry({ cache: true });
-    const entries: ManifestProviderEndpointCacheEntry[] = [];
-    for (const plugin of registry.plugins) {
-      for (const endpoint of plugin.providerEndpoints ?? []) {
-        if (!isManifestProviderEndpointClass(endpoint.endpointClass)) {
-          continue;
-        }
-        entries.push({
-          endpointClass: endpoint.endpointClass,
-          hosts: (endpoint.hosts ?? []).map((host) => host.toLowerCase()),
-          normalizedBaseUrls: (endpoint.baseUrls ?? [])
-            .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
-            .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-        });
-      }
-    }
-    manifestProviderEndpointCache = entries;
+function resolveManifestProviderRequest(params: {
+  provider: string | undefined;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
+}): PluginManifestProviderRequestProvider | undefined {
+  return params.provider
+    ? resolveProviderMetadataOwners(params.providerMetadataOwners).providerRequests.get(
+        params.provider,
+      )
+    : undefined;
+}
+
+function hostMatchesSuffix(host: string, suffix: string): boolean {
+  if (!suffix) {
+    return false;
   }
-  return manifestProviderEndpointCache;
+  return suffix.startsWith(".") || suffix.startsWith("-")
+    ? host.endsWith(suffix)
+    : host === suffix || host.endsWith(`.${suffix}`);
+}
+
+function buildManifestEndpointResolution(
+  endpoint: PluginManifestProviderEndpoint,
+  host: string,
+): ProviderEndpointResolution {
+  const regionSuffix = endpoint.googleVertexRegionHostSuffix;
+  const googleVertexRegion =
+    endpoint.googleVertexRegion ??
+    (regionSuffix && host.endsWith(regionSuffix) ? host.slice(0, -regionSuffix.length) : undefined);
+  return {
+    endpointClass: endpoint.endpointClass as ProviderEndpointClass,
+    hostname: host,
+    ...(googleVertexRegion ? { googleVertexRegion } : {}),
+  };
 }
 
 function resolveManifestProviderEndpoint(params: {
   host: string;
   normalizedBaseUrl?: string;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 }): ProviderEndpointResolution | undefined {
-  for (const endpoint of loadManifestProviderEndpointCache()) {
-    if (endpoint.hosts.includes(params.host)) {
-      return { endpointClass: endpoint.endpointClass, hostname: params.host };
+  for (const endpoint of resolveProviderMetadataOwners(params.providerMetadataOwners)
+    .providerEndpoints) {
+    if ((endpoint.hosts ?? []).includes(params.host)) {
+      return buildManifestEndpointResolution(endpoint, params.host);
     }
-    if (
-      params.normalizedBaseUrl &&
-      endpoint.normalizedBaseUrls.includes(params.normalizedBaseUrl)
-    ) {
-      return { endpointClass: endpoint.endpointClass, hostname: params.host };
+    if ((endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix))) {
+      return buildManifestEndpointResolution(endpoint, params.host);
+    }
+    if (params.normalizedBaseUrl && (endpoint.baseUrls ?? []).includes(params.normalizedBaseUrl)) {
+      return buildManifestEndpointResolution(endpoint, params.host);
     }
   }
   return undefined;
@@ -250,6 +260,7 @@ function isLocalEndpointHost(host: string): boolean {
 
 export function resolveProviderEndpoint(
   baseUrl: string | null | undefined,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
 ): ProviderEndpointResolution {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return { endpointClass: "default" };
@@ -259,71 +270,12 @@ export function resolveProviderEndpoint(
   if (!host) {
     return { endpointClass: "invalid" };
   }
-  const normalizedBaseUrl = normalizeComparableBaseUrl(baseUrl);
-  if (normalizedBaseUrl && MOONSHOT_NATIVE_BASE_URLS.has(normalizedBaseUrl)) {
-    return { endpointClass: "moonshot-native", hostname: host };
-  }
-  if (normalizedBaseUrl && MODELSTUDIO_NATIVE_BASE_URLS.has(normalizedBaseUrl)) {
-    return { endpointClass: "modelstudio-native", hostname: host };
-  }
-  if (host === "api.openai.com") {
-    return { endpointClass: "openai-public", hostname: host };
-  }
-  if (host === "api.anthropic.com") {
-    return { endpointClass: "anthropic-public", hostname: host };
-  }
-  if (host === "api.mistral.ai") {
-    return { endpointClass: "mistral-public", hostname: host };
-  }
-  if (host === "api.cerebras.ai") {
-    return { endpointClass: "cerebras-native", hostname: host };
-  }
-  if (host === "llm.chutes.ai") {
-    return { endpointClass: "chutes-native", hostname: host };
-  }
-  if (host === "api.deepseek.com") {
-    return { endpointClass: "deepseek-native", hostname: host };
-  }
-  if (host.endsWith(".githubcopilot.com")) {
-    return { endpointClass: "github-copilot-native", hostname: host };
-  }
-  if (host === "api.groq.com") {
-    return { endpointClass: "groq-native", hostname: host };
-  }
-  if (host === "chatgpt.com") {
-    return { endpointClass: "openai-codex", hostname: host };
-  }
-  if (host === "opencode.ai" || host.endsWith(".opencode.ai")) {
-    return { endpointClass: "opencode-native", hostname: host };
-  }
-  if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
-    return { endpointClass: "openrouter", hostname: host };
-  }
-  if (host === "api.z.ai") {
-    return { endpointClass: "zai-native", hostname: host };
-  }
-  if (host.endsWith(".openai.azure.com")) {
-    return { endpointClass: "azure-openai", hostname: host };
-  }
-  if (host === "generativelanguage.googleapis.com") {
-    return { endpointClass: "google-generative-ai", hostname: host };
-  }
-  if (host === "aiplatform.googleapis.com") {
-    return {
-      endpointClass: "google-vertex",
-      hostname: host,
-      googleVertexRegion: "global",
-    };
-  }
-  const googleVertexHost = /^([a-z0-9-]+)-aiplatform\.googleapis\.com$/.exec(host);
-  if (googleVertexHost) {
-    return {
-      endpointClass: "google-vertex",
-      hostname: host,
-      googleVertexRegion: googleVertexHost[1],
-    };
-  }
-  const manifestEndpoint = resolveManifestProviderEndpoint({ host, normalizedBaseUrl });
+  const normalizedBaseUrl = normalizePluginProviderBaseUrl(baseUrl);
+  const manifestEndpoint = resolveManifestProviderEndpoint({
+    host,
+    normalizedBaseUrl,
+    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
+  });
   if (manifestEndpoint) {
     return manifestEndpoint;
   }
@@ -333,54 +285,37 @@ export function resolveProviderEndpoint(
   return { endpointClass: "custom", hostname: host };
 }
 
-function resolveKnownProviderFamily(provider: string | undefined): string {
+function resolveKnownProviderFamily(
+  provider: string | undefined,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
+): string {
+  const manifestFamily = resolveManifestProviderRequest({
+    provider,
+    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
+  })?.family;
+  if (manifestFamily) {
+    return manifestFamily;
+  }
   switch (provider) {
     case "openai":
-    case "openai-codex":
     case "azure-openai":
     case "azure-openai-responses":
       return "openai-family";
-    case "openrouter":
-      return "openrouter";
-    case "anthropic":
-      return "anthropic";
-    case "chutes":
-      return "chutes";
-    case "deepseek":
-      return "deepseek";
-    case "google":
-      return "google";
-    case "xai":
-      return "xai";
-    case "zai":
-      return "zai";
-    case "moonshot":
-    case "kimi":
-      return "moonshot";
-    case "qwen":
-    case "qwencloud":
-    case "modelstudio":
-    case "dashscope":
-      return "modelstudio";
-    case "github-copilot":
-      return "github-copilot";
-    case "groq":
-      return "groq";
-    case "mistral":
-      return "mistral";
-    case "together":
-      return "together";
     default:
       return provider || "unknown";
   }
 }
 
-export function isOpenAIResponsesApi(api: string | null | undefined): boolean {
+function isOpenAIResponsesApi(api: string | null | undefined): boolean {
   const normalizedApi = normalizeOptionalLowercaseString(api);
   return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
 }
 
-export function resolveProviderAttributionIdentity(
+function isCanonicalOrLegacyOpenAIProvider(provider: string | undefined): boolean {
+  return provider === "openai";
+}
+
+function resolveProviderAttributionIdentity(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionIdentity {
   return {
@@ -404,7 +339,43 @@ function buildOpenRouterAttributionPolicy(
     headers: {
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": identity.product,
-      "X-OpenRouter-Categories": "cli-agent",
+      "X-OpenRouter-Categories": OPENROUTER_ATTRIBUTION_CATEGORIES,
+    },
+  };
+}
+
+function buildNvidiaAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  return {
+    provider: "nvidia",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    reviewNote:
+      "NVIDIA NIM billing invoke-origin attribution header. Applied only on verified NVIDIA routes.",
+    ...resolveProviderAttributionIdentity(env),
+    headers: {
+      "X-BILLING-INVOKE-ORIGIN": OPENCLAW_ATTRIBUTION_PRODUCT,
+    },
+  };
+}
+
+function buildGoogleAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "google",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
+    reviewNote:
+      "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
+    ...identity,
+    headers: {
+      "x-goog-api-client": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
     },
   };
 }
@@ -429,17 +400,17 @@ function buildOpenAIAttributionPolicy(
   };
 }
 
-function buildOpenAICodexAttributionPolicy(
+function buildXaiAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy {
   const identity = resolveProviderAttributionIdentity(env);
   return {
-    provider: "openai-codex",
+    provider: "xai",
     enabledByDefault: true,
     verification: "vendor-hidden-api-spec",
     hook: "request-headers",
     reviewNote:
-      "OpenAI Codex ChatGPT-backed traffic supports the same hidden originator/User-Agent attribution contract.",
+      "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
     ...identity,
     headers: {
       originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
@@ -465,23 +436,19 @@ function buildSdkHookOnlyPolicy(
   };
 }
 
-export function listProviderAttributionPolicies(
+function listProviderAttributionPolicies(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy[] {
   return [
     buildOpenRouterAttributionPolicy(env),
+    buildNvidiaAttributionPolicy(env),
+    buildGoogleAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
-    buildOpenAICodexAttributionPolicy(env),
+    buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
       "default-headers",
       "Anthropic JS SDK exposes defaultHeaders, but app attribution is not yet verified.",
-      env,
-    ),
-    buildSdkHookOnlyPolicy(
-      "google",
-      "user-agent-extra",
-      "Google GenAI JS SDK exposes userAgentExtra/httpOptions, but provider-side attribution is not yet verified.",
       env,
     ),
     buildSdkHookOnlyPolicy(
@@ -505,23 +472,13 @@ export function listProviderAttributionPolicies(
   ];
 }
 
-export function resolveProviderAttributionPolicy(
+function resolveProviderAttributionPolicy(
   provider?: string | null,
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy | undefined {
   const normalized = normalizeProviderId(provider ?? "");
-  return listProviderAttributionPolicies(env).find((policy) => policy.provider === normalized);
-}
-
-export function resolveProviderAttributionHeaders(
-  provider?: string | null,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  const policy = resolveProviderAttributionPolicy(provider, env);
-  if (!policy?.enabledByDefault) {
-    return undefined;
-  }
-  return policy.headers;
+  const canonical = normalized === "openai" ? "openai" : normalized;
+  return listProviderAttributionPolicies(env).find((policy) => policy.provider === canonical);
 }
 
 export function resolveProviderRequestPolicy(
@@ -530,70 +487,71 @@ export function resolveProviderRequestPolicy(
 ): ProviderRequestPolicyResolution {
   const provider = normalizeProviderId(input.provider ?? "");
   const policy = resolveProviderAttributionPolicy(provider, env);
-  const endpointResolution = resolveProviderEndpoint(input.baseUrl);
+  const endpointResolution = resolveProviderEndpoint(input.baseUrl, input.providerMetadataOwners);
   const endpointClass = endpointResolution.endpointClass;
-  const api = normalizeOptionalLowercaseString(input.api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
-    endpointClass === "openai-codex" ||
+    endpointClass === "openai" ||
     endpointClass === "azure-openai";
   const usesOpenAIPublicAttributionHost = endpointClass === "openai-public";
-  const usesOpenAICodexAttributionHost = endpointClass === "openai-codex";
+  const usesOpenAICodexAttributionHost = endpointClass === "openai";
   const usesVerifiedOpenAIAttributionHost =
     usesOpenAIPublicAttributionHost || usesOpenAICodexAttributionHost;
+  const usesXaiNativeAttributionHost = endpointClass === "xai-native";
   const usesExplicitProxyLikeEndpoint = usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint;
 
   let attributionProvider: string | undefined;
-  if (
-    provider === "openai" &&
-    (api === "openai-completions" ||
-      api === "openai-responses" ||
-      (input.capability === "audio" && api === "openai-audio-transcriptions")) &&
-    usesOpenAIPublicAttributionHost
-  ) {
+  if (isCanonicalOrLegacyOpenAIProvider(provider) && usesVerifiedOpenAIAttributionHost) {
     attributionProvider = "openai";
-  } else if (
-    provider === "openai-codex" &&
-    (api === "openai-codex-responses" || api === "openai-responses") &&
-    usesOpenAICodexAttributionHost
-  ) {
-    attributionProvider = "openai-codex";
   } else if (provider === "openrouter" && policy?.enabledByDefault) {
     // OpenRouter attribution is documented, but only apply it to known
     // OpenRouter endpoints or the default (unset) baseUrl path.
     if (endpointClass === "openrouter" || endpointClass === "default") {
       attributionProvider = "openrouter";
     }
+  } else if (provider === "xai" && policy?.enabledByDefault) {
+    // Default (unset baseUrl) maps to api.x.ai; custom baseUrls are treated as proxies and withheld.
+    if (usesXaiNativeAttributionHost || endpointClass === "default") {
+      attributionProvider = "xai";
+    }
+  }
+  if (!attributionProvider && endpointClass === "nvidia-native") {
+    attributionProvider = "nvidia";
+  }
+  if (!attributionProvider && endpointClass === "google-generative-ai") {
+    attributionProvider = "google";
   }
 
-  const attributionHeaders = attributionProvider
-    ? resolveProviderAttributionHeaders(attributionProvider, env)
+  const attributionPolicy = attributionProvider
+    ? resolveProviderAttributionPolicy(attributionProvider, env)
+    : undefined;
+  const attributionHeaders = attributionPolicy?.enabledByDefault
+    ? attributionPolicy.headers
     : undefined;
 
   return {
     provider: provider || undefined,
-    policy,
+    policy: attributionPolicy ?? policy,
     endpointClass,
     usesConfiguredBaseUrl,
-    knownProviderFamily: resolveKnownProviderFamily(provider || undefined),
+    knownProviderFamily: resolveKnownProviderFamily(
+      provider || undefined,
+      input.providerMetadataOwners,
+    ),
     attributionProvider,
     attributionHeaders,
     allowsHiddenAttribution:
-      attributionProvider !== undefined && policy?.verification === "vendor-hidden-api-spec",
+      attributionProvider !== undefined &&
+      attributionPolicy?.verification === "vendor-hidden-api-spec",
     usesKnownNativeOpenAIEndpoint,
     usesKnownNativeOpenAIRoute:
-      endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint,
+      endpointClass === "default"
+        ? isCanonicalOrLegacyOpenAIProvider(provider)
+        : usesKnownNativeOpenAIEndpoint,
     usesVerifiedOpenAIAttributionHost,
     usesExplicitProxyLikeEndpoint,
   };
-}
-
-export function resolveProviderRequestAttributionHeaders(
-  input: ProviderRequestPolicyInput,
-  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-): Record<string, string> | undefined {
-  return resolveProviderRequestPolicy(input, env).attributionHeaders;
 }
 
 export function resolveProviderRequestCapabilities(
@@ -611,26 +569,33 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "deepseek-native" ||
     endpointClass === "github-copilot-native" ||
     endpointClass === "groq-native" ||
+    endpointClass === "meta-native" ||
     endpointClass === "mistral-public" ||
+    endpointClass === "minimax-native" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
+    endpointClass === "nvidia-native" ||
     endpointClass === "openai-public" ||
-    endpointClass === "openai-codex" ||
+    endpointClass === "openai" ||
     endpointClass === "opencode-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||
+    endpointClass === "xiaomi-native" ||
     endpointClass === "zai-native" ||
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex";
 
-  let compatibilityFamily: ProviderRequestCompatibilityFamily | undefined;
-  if (provider && MOONSHOT_COMPAT_PROVIDERS.has(provider)) {
-    compatibilityFamily = "moonshot";
-  }
+  const manifestProviderRequest = resolveManifestProviderRequest({
+    provider,
+    ...(input.providerMetadataOwners
+      ? { providerMetadataOwners: input.providerMetadataOwners }
+      : {}),
+  });
+  const compatibilityFamily = manifestProviderRequest?.compatibilityFamily;
 
   const isResponsesApi = isOpenAIResponsesApi(api);
-  const promptCacheKeySupport = input.compat?.supportsPromptCacheKey;
+  const promptCacheKeySupport = readCompatBoolean(input.compat, "supportsPromptCacheKey");
   // Default strip behavior (proxy-like endpoints with responses APIs) is
   // preserved as a safety net for providers that reject prompt_cache_key,
   // see #48155 (Volcano Engine DeepSeek). Operators running their payload
@@ -650,21 +615,22 @@ export function resolveProviderRequestCapabilities(
     ...policy,
     isKnownNativeEndpoint,
     allowsOpenAIServiceTier:
-      (provider === "openai" && api === "openai-responses" && endpointClass === "openai-public") ||
-      (provider === "openai-codex" &&
-        (api === "openai-codex-responses" || api === "openai-responses") &&
-        endpointClass === "openai-codex"),
+      (isCanonicalOrLegacyOpenAIProvider(provider) &&
+        api === "openai-responses" &&
+        endpointClass === "openai-public") ||
+      (isCanonicalOrLegacyOpenAIProvider(provider) &&
+        (api === "openai-chatgpt-responses" || api === "openai-responses") &&
+        endpointClass === "openai"),
     supportsOpenAIReasoningCompatPayload:
       provider !== undefined &&
       api !== undefined &&
       !policy.usesExplicitProxyLikeEndpoint &&
-      (provider === "openai" ||
-        provider === "openai-codex" ||
+      (isCanonicalOrLegacyOpenAIProvider(provider) ||
         provider === "azure-openai" ||
         provider === "azure-openai-responses") &&
       (api === "openai-completions" ||
         api === "openai-responses" ||
-        api === "openai-codex-responses" ||
+        api === "openai-chatgpt-responses" ||
         api === "azure-openai-responses"),
     allowsAnthropicServiceTier:
       provider === "anthropic" &&
@@ -672,9 +638,10 @@ export function resolveProviderRequestCapabilities(
       (endpointClass === "default" || endpointClass === "anthropic-public"),
     // This is intentionally the gate for emitting `store: false` on Responses
     // transports, not just a statement about vendor support in the abstract.
-    supportsResponsesStoreField: input.compat?.supportsStore !== false && isResponsesApi,
+    supportsResponsesStoreField:
+      readCompatBoolean(input.compat, "supportsStore") !== false && isResponsesApi,
     allowsResponsesStore:
-      input.compat?.supportsStore !== false &&
+      readCompatBoolean(input.compat, "supportsStore") !== false &&
       provider !== undefined &&
       isResponsesApi &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
@@ -684,6 +651,8 @@ export function resolveProviderRequestCapabilities(
     // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:
       endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
+    supportsOpenAICompletionsStreamingUsageCompat:
+      manifestProviderRequest?.openAICompletions?.supportsStreamingUsage === true,
     compatibilityFamily,
   };
 }

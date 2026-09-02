@@ -1,16 +1,31 @@
-import fs from "node:fs";
-import path from "node:path";
-import { loadConfig, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+// Telegram plugin module implements sent message cache behavior.
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getTelegramRuntime } from "./runtime.js";
+import {
+  resolveSentMessageScopeKey,
+  sentMessageEntryKey,
+  TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
+  TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
+  TTL_MS,
+  type PersistedSentMessage,
+  type SentMessageConfig,
+} from "./sent-message-cache.legacy-state.js";
 
-const TTL_MS = 24 * 60 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const TELEGRAM_SENT_MESSAGES_STATE_KEY = Symbol.for("openclaw.telegramSentMessagesState");
 
 type SentMessageStore = Map<string, Map<string, number>>;
+type SentMessagePersistentStore = PluginStateSyncKeyedStore<PersistedSentMessage>;
+
+type SentMessageBucket = {
+  scopeKey: string;
+  store: SentMessageStore;
+  nextCleanupAt: number;
+};
 
 type SentMessageState = {
-  persistedPath?: string;
-  store?: SentMessageStore;
+  bucketsByScope: Map<string, SentMessageBucket>;
 };
 
 function getSentMessageState(): SentMessageState {
@@ -19,7 +34,9 @@ function getSentMessageState(): SentMessageState {
   if (existing) {
     return existing;
   }
-  const state: SentMessageState = {};
+  const state: SentMessageState = {
+    bucketsByScope: new Map(),
+  };
   globalStore[TELEGRAM_SENT_MESSAGES_STATE_KEY] = state;
   return state;
 }
@@ -28,128 +45,135 @@ function createSentMessageStore(): SentMessageStore {
   return new Map<string, Map<string, number>>();
 }
 
-function resolveSentMessageStorePath(): string {
-  const cfg = loadConfig();
-  return `${resolveStorePath(cfg.session?.store)}.telegram-sent-messages.json`;
+function openSentMessageStore(): SentMessagePersistentStore {
+  return getTelegramRuntime().state.openSyncKeyedStore<PersistedSentMessage>({
+    namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
+    maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
+  });
 }
 
-function cleanupExpired(scopeKey: string, entry: Map<string, number>, now: number): void {
+function cleanupExpired(
+  store: SentMessageStore,
+  scopeKey: string,
+  entry: Map<string, number>,
+  now: number,
+): void {
   for (const [id, timestamp] of entry) {
-    if (now - timestamp > TTL_MS) {
+    if (now - timestamp >= TTL_MS) {
       entry.delete(id);
     }
   }
   if (entry.size === 0) {
-    getSentMessages().delete(scopeKey);
+    store.delete(scopeKey);
   }
 }
 
-function readPersistedSentMessages(filePath: string): SentMessageStore {
-  if (!fs.existsSync(filePath)) {
-    return createSentMessageStore();
+function cleanupExpiredSentMessages(store: SentMessageStore, now: number): void {
+  for (const [scopeKey, entry] of store) {
+    cleanupExpired(store, scopeKey, entry, now);
   }
+}
+
+function readPersistedSentMessages(scopeKey: string): SentMessageStore {
+  const now = Date.now();
+  const store = createSentMessageStore();
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, Record<string, number>>;
-    const now = Date.now();
-    const store = createSentMessageStore();
-    for (const [chatId, entry] of Object.entries(parsed)) {
-      const messages = new Map<string, number>();
-      for (const [messageId, timestamp] of Object.entries(entry)) {
-        if (
-          typeof timestamp === "number" &&
-          Number.isFinite(timestamp) &&
-          now - timestamp <= TTL_MS
-        ) {
-          messages.set(messageId, timestamp);
-        }
+    for (const entry of openSentMessageStore().entries()) {
+      if (entry.value.scopeKey !== scopeKey || now - entry.value.timestamp > TTL_MS) {
+        continue;
       }
-      if (messages.size > 0) {
-        store.set(chatId, messages);
+      let messages = store.get(entry.value.chatId);
+      if (!messages) {
+        messages = new Map<string, number>();
+        store.set(entry.value.chatId, messages);
       }
+      messages.set(entry.value.messageId, entry.value.timestamp);
     }
-    return store;
   } catch (error) {
     logVerbose(`telegram: failed to read sent-message cache: ${String(error)}`);
-    return createSentMessageStore();
   }
+  return store;
 }
 
-function getSentMessages(): SentMessageStore {
+type SentMessageOwner = { accountId?: string; agentId?: string };
+
+function getSentMessageBucket(
+  cfg?: SentMessageConfig,
+  owner?: SentMessageOwner,
+): SentMessageBucket {
   const state = getSentMessageState();
-  const persistedPath = resolveSentMessageStorePath();
-  if (!state.store || state.persistedPath !== persistedPath) {
-    state.store = readPersistedSentMessages(persistedPath);
-    state.persistedPath = persistedPath;
+  const scopeKey = resolveSentMessageScopeKey(cfg, owner);
+  const existing = state.bucketsByScope.get(scopeKey);
+  if (existing) {
+    return existing;
   }
-  return state.store;
+  const bucket = {
+    scopeKey,
+    store: readPersistedSentMessages(scopeKey),
+    nextCleanupAt: Date.now() + CLEANUP_INTERVAL_MS,
+  };
+  state.bucketsByScope.set(scopeKey, bucket);
+  return bucket;
 }
 
-function persistSentMessages(): void {
-  const state = getSentMessageState();
-  const store = state.store;
-  const filePath = state.persistedPath;
-  if (!store || !filePath) {
-    return;
-  }
-  const now = Date.now();
-  const serialized: Record<string, Record<string, number>> = {};
-  for (const [chatId, entry] of store) {
-    cleanupExpired(chatId, entry, now);
-    if (entry.size > 0) {
-      serialized[chatId] = Object.fromEntries(entry);
-    }
-  }
-  if (Object.keys(serialized).length === 0) {
-    fs.rmSync(filePath, { force: true });
-    return;
-  }
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(serialized), "utf-8");
-  fs.renameSync(tempPath, filePath);
+function getSentMessages(cfg?: SentMessageConfig, owner?: SentMessageOwner): SentMessageStore {
+  return getSentMessageBucket(cfg, owner).store;
 }
 
-export function recordSentMessage(chatId: number | string, messageId: number): void {
+function persistSentMessage(
+  bucket: SentMessageBucket,
+  chatId: string,
+  messageId: string,
+  timestamp: number,
+): void {
+  openSentMessageStore().register(
+    sentMessageEntryKey(bucket.scopeKey, chatId, messageId),
+    { scopeKey: bucket.scopeKey, chatId, messageId, timestamp },
+    { ttlMs: TTL_MS },
+  );
+}
+
+export function recordSentMessage(
+  chatId: number | string,
+  messageId: number,
+  cfg?: SentMessageConfig,
+  owner?: SentMessageOwner,
+): void {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
   const now = Date.now();
-  const store = getSentMessages();
+  const bucket = getSentMessageBucket(cfg, owner);
+  const { store } = bucket;
   let entry = store.get(scopeKey);
   if (!entry) {
     entry = new Map<string, number>();
     store.set(scopeKey, entry);
   }
   entry.set(idKey, now);
-  if (entry.size > 100) {
-    cleanupExpired(scopeKey, entry, now);
+  if (now >= bucket.nextCleanupAt) {
+    cleanupExpiredSentMessages(store, now);
+    bucket.nextCleanupAt = now + CLEANUP_INTERVAL_MS;
   }
   try {
-    persistSentMessages();
+    persistSentMessage(bucket, scopeKey, idKey, now);
   } catch (error) {
     logVerbose(`telegram: failed to persist sent-message cache: ${String(error)}`);
   }
 }
 
-export function wasSentByBot(chatId: number | string, messageId: number): boolean {
+export function wasSentByBot(
+  chatId: number | string,
+  messageId: number,
+  cfg?: SentMessageConfig,
+  owner?: SentMessageOwner,
+): boolean {
   const scopeKey = String(chatId);
   const idKey = String(messageId);
-  const entry = getSentMessages().get(scopeKey);
+  const store = getSentMessages(cfg, owner);
+  const entry = store.get(scopeKey);
   if (!entry) {
     return false;
   }
-  cleanupExpired(scopeKey, entry, Date.now());
+  cleanupExpired(store, scopeKey, entry, Date.now());
   return entry.has(idKey);
-}
-
-export function clearSentMessageCache(): void {
-  const state = getSentMessageState();
-  getSentMessages().clear();
-  if (state.persistedPath) {
-    fs.rmSync(state.persistedPath, { force: true });
-  }
-}
-
-export function resetSentMessageCacheForTest(): void {
-  getSentMessageState().store = undefined;
 }

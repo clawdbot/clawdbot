@@ -1,4 +1,6 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+// Normalizes abort command primitives before runtime cancellation.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "../commands-registry.types.js";
 
@@ -6,7 +8,6 @@ const ABORT_TRIGGERS = new Set([
   "stop",
   "esc",
   "abort",
-  "wait",
   "exit",
   "interrupt",
   "detente",
@@ -15,6 +16,8 @@ const ABORT_TRIGGERS = new Set([
   "arrete",
   "arrête",
   "停止",
+  "停下来",
+  "暂停",
   "やめて",
   "止めて",
   "रुको",
@@ -46,9 +49,12 @@ const ABORT_TRIGGERS = new Set([
   "please stop",
   "stop please",
 ]);
-const ABORT_MEMORY = new Map<string, boolean>();
+const ABORT_MEMORY = resolveGlobalMap<string, boolean>(
+  Symbol.for("openclaw.abortMemory"),
+  "close-and-restart",
+);
 const ABORT_MEMORY_MAX = 2000;
-const TRAILING_ABORT_PUNCTUATION_RE = /[.!?…,，。;；:：'"’”)\]}]+$/u;
+const TRAILING_ABORT_PUNCTUATION_RE = /[.!?！？…,，。;；:：'"’”)\]}]+$/u;
 
 function normalizeAbortTriggerText(text: string): string {
   return normalizeLowercaseStringOrEmpty(text)
@@ -119,12 +125,4 @@ export function setAbortMemory(key: string, value: boolean): void {
   }
   ABORT_MEMORY.set(normalized, true);
   pruneAbortMemory();
-}
-
-export function getAbortMemorySizeForTest(): number {
-  return ABORT_MEMORY.size;
-}
-
-export function resetAbortMemoryForTest(): void {
-  ABORT_MEMORY.clear();
 }

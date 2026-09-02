@@ -1,9 +1,45 @@
-import { vi } from "vitest";
-import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
-import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
+// Matrix helper module supports handler helpers behavior.
+import {
+  buildChannelInboundEventContext,
+  type PreparedInboundReply,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { vi, type Mock } from "vitest";
+import type {
+  MatrixConfig,
+  MatrixRoomConfig,
+  MatrixStreamingMode,
+  ReplyToMode,
+} from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
-import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
+import { createMatrixRoomMessageHandler } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
+
+type MatrixMonitorHandlerParams = Parameters<typeof createMatrixRoomMessageHandler>[0];
+type MatrixDispatchInboundMessage = (params: {
+  ctx: unknown;
+  cfg: unknown;
+  dispatcher: unknown;
+  replyOptions?: Record<string, unknown>;
+}) => Promise<{
+  queuedFinal: boolean;
+  counts: { final: number; block: number; tool: number };
+  settledReceipt?: {
+    anyVisibleDelivered: boolean;
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+  };
+}>;
 
 const DEFAULT_ROUTE = {
   agentId: "ops",
@@ -16,10 +52,13 @@ const DEFAULT_ROUTE = {
 
 type MatrixHandlerTestHarnessOptions = {
   accountId?: string;
+  accountConfig?: MatrixConfig;
   cfg?: unknown;
+  liveCfg?: unknown;
   client?: Partial<MatrixClient>;
   runtime?: RuntimeEnv;
   logger?: RuntimeLogger;
+  currentConfig?: () => unknown;
   logVerboseMessage?: (message: string) => void;
   allowFrom?: string[];
   allowFromResolvedEntries?: MatrixMonitorHandlerParams["allowFromResolvedEntries"];
@@ -35,10 +74,10 @@ type MatrixHandlerTestHarnessOptions = {
   dmThreadReplies?: "off" | "inbound" | "always";
   dmSessionScope?: "per-user" | "per-room";
   streaming?: MatrixStreamingMode;
+  previewToolProgressEnabled?: boolean;
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  textLimit?: number;
   mediaMaxBytes?: number;
   startupMs?: number;
   startupGraceMs?: number;
@@ -54,9 +93,7 @@ type MatrixHandlerTestHarnessOptions = {
   resolveMarkdownTableMode?: () => string;
   resolveAgentRoute?: () => typeof DEFAULT_ROUTE;
   resolveStorePath?: () => string;
-  readSessionUpdatedAt?: () => number | undefined;
   recordInboundSession?: (...args: unknown[]) => Promise<void>;
-  resolveEnvelopeFormatOptions?: () => Record<string, never>;
   formatAgentEnvelope?: ({ body }: { body: string }) => string;
   finalizeInboundContext?: (ctx: unknown) => unknown;
   createReplyDispatcherWithTyping?: (params?: {
@@ -68,18 +105,9 @@ type MatrixHandlerTestHarnessOptions = {
     markRunComplete: () => void;
   };
   resolveHumanDelayConfig?: () => undefined;
-  dispatchReplyFromConfig?: () => Promise<{
-    queuedFinal: boolean;
-    counts: { final: number; block: number; tool: number };
-  }>;
-  withReplyDispatcher?: <T>(params: {
-    dispatcher: {
-      markComplete?: () => void;
-      waitForIdle?: () => Promise<void>;
-    };
-    run: () => Promise<T>;
-    onSettled?: () => void | Promise<void>;
-  }) => Promise<T>;
+  dispatchInboundMessage?: MatrixDispatchInboundMessage;
+  runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
+  runPrepared?: MatrixRunPreparedMock;
   inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: () => boolean;
   enqueueSystemEvent?: (...args: unknown[]) => void;
@@ -89,18 +117,20 @@ type MatrixHandlerTestHarnessOptions = {
 };
 
 type MatrixHandlerTestHarness = {
-  dispatchReplyFromConfig: () => Promise<{
-    queuedFinal: boolean;
-    counts: { final: number; block: number; tool: number };
-  }>;
+  dispatchInboundMessage: MatrixDispatchInboundMessage;
   enqueueSystemEvent: (...args: unknown[]) => void;
   finalizeInboundContext: (ctx: unknown) => unknown;
   handler: ReturnType<typeof createMatrixRoomMessageHandler>;
   readAllowFromStore: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   recordInboundSession: (...args: unknown[]) => Promise<void>;
   resolveAgentRoute: () => typeof DEFAULT_ROUTE;
+  runPrepared: MatrixRunPreparedMock;
   upsertPairingRequest: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
 };
+
+type MatrixRunPreparedInput = PreparedInboundReply<unknown>;
+type MatrixRunPreparedMockFn = (turn: MatrixRunPreparedInput) => Promise<unknown>;
+type MatrixRunPreparedMock = Mock<MatrixRunPreparedMockFn>;
 
 export function createMatrixHandlerTestHarness(
   options: MatrixHandlerTestHarnessOptions = {},
@@ -110,15 +140,157 @@ export function createMatrixHandlerTestHarness(
     options.upsertPairingRequest ?? vi.fn(async () => ({ code: "ABCDEFGH", created: false }));
   const resolveAgentRoute = options.resolveAgentRoute ?? vi.fn(() => DEFAULT_ROUTE);
   const recordInboundSession = options.recordInboundSession ?? vi.fn(async () => {});
-  const finalizeInboundContext = options.finalizeInboundContext ?? vi.fn((ctx) => ctx);
-  const dispatchReplyFromConfig =
-    options.dispatchReplyFromConfig ??
+  const finalizeInboundContext =
+    options.finalizeInboundContext ??
+    vi.fn((ctx: unknown) =>
+      ctx && typeof ctx === "object"
+        ? finalizeCoreInboundContext(ctx as Record<string, unknown>)
+        : ctx,
+    );
+  const dispatchInboundMessage =
+    options.dispatchInboundMessage ??
     (async () => ({
       queuedFinal: false,
       counts: { final: 0, block: 0, tool: 0 },
     }));
+  const createReplyDispatcherWithTyping =
+    options.createReplyDispatcherWithTyping ??
+    (() => ({
+      dispatcher: {},
+      replyOptions: {},
+      markDispatchIdle: () => {},
+      markRunComplete: () => {},
+    }));
+  const dispatchInboundMessageWithBufferedDispatcher = (async ({
+    ctx,
+    cfg,
+    dispatcherOptions,
+    replyOptions,
+  }: {
+    ctx: unknown;
+    cfg: unknown;
+    dispatcherOptions: Record<string, unknown>;
+    replyOptions?: Record<string, unknown>;
+  }) => {
+    const prepared = createReplyDispatcherWithTyping(dispatcherOptions);
+    try {
+      return await dispatchInboundMessage({
+        ctx,
+        cfg,
+        dispatcher: prepared.dispatcher,
+        replyOptions: { ...replyOptions, ...prepared.replyOptions },
+      } as never);
+    } finally {
+      const dispatcher = prepared.dispatcher as {
+        markComplete?: () => void;
+        waitForIdle?: () => Promise<void>;
+      };
+      dispatcher.markComplete?.();
+      await dispatcher.waitForIdle?.();
+      await (dispatcherOptions.onSettled as (() => Promise<void> | void) | undefined)?.();
+      prepared.markRunComplete();
+      prepared.markDispatchIdle();
+    }
+  }) as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchInboundMessageWithBufferedDispatcher;
+  const createChannelInboundEnvelopeBuilder = (() => (input: { body: string }) =>
+    (options.formatAgentEnvelope ?? (({ body }: { body: string }) => body))({
+      body: input.body,
+    })) as NonNullable<MatrixMonitorHandlerParams["createChannelInboundEnvelopeBuilder"]>;
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
-  const cfgForHandler = options.cfg ?? {};
+  const runPrepared =
+    options.runPrepared ??
+    vi.fn<MatrixRunPreparedMockFn>(async (turn) => {
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+      });
+      await turn.afterRecord?.();
+      const dispatchResult = await turn.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    });
+  const defaultRun = vi.fn(
+    async (
+      params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"]>[0],
+    ) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflightResult = await params.adapter.preflight?.(input, eventClass);
+      const preflight =
+        preflightResult && "kind" in preflightResult
+          ? { admission: preflightResult }
+          : (preflightResult ?? {});
+      const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
+      if (!("route" in turn) || !("delivery" in turn)) {
+        throw new Error("expected assembled Matrix channel turn plan");
+      }
+      return await runPrepared({
+        channel: turn.channel,
+        accountId: turn.accountId,
+        routeSessionKey: turn.route.sessionKey,
+        storePath: "/tmp/matrix-sessions.json",
+        ctxPayload: turn.ctxPayload,
+        recordInboundSession,
+        afterRecord: turn.afterRecord,
+        record: turn.record,
+        history: turn.history,
+        admission: turn.admission,
+        botLoopProtection: turn.botLoopProtection,
+        runDispatch: async () =>
+          await dispatchInboundMessageWithBufferedDispatcher({
+            ctx: turn.ctxPayload,
+            cfg: turn.cfg,
+            dispatcherOptions: {
+              ...turn.dispatcherOptions,
+              // Core resolves the plan's prepared payload before any delivery branch
+              // reads it; a harness that skips that step tests a different pipeline.
+              deliver: async (
+                payload: Parameters<typeof turn.delivery.deliver>[0],
+                info: Parameters<typeof turn.delivery.deliver>[1],
+              ) => {
+                const prepared = turn.delivery.preparePayload
+                  ? await turn.delivery.preparePayload(payload, info)
+                  : payload;
+                return prepared === null ? undefined : await turn.delivery.deliver(prepared, info);
+              },
+              onError: turn.delivery.onError,
+            },
+            replyOptions: turn.replyOptions,
+            replyResolver: turn.replyResolver,
+          }),
+      });
+    },
+  );
+  const run = options.runChannelInboundEvent ?? defaultRun;
+  const dmPolicy = options.dmPolicy ?? "open";
+  const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
+  const cfgForHandler =
+    options.cfg ??
+    ({
+      channels: {
+        matrix: {
+          dm: {
+            allowFrom,
+          },
+        },
+      },
+    } as const);
 
   const handler = createMatrixRoomMessageHandler({
     client: {
@@ -128,7 +300,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        loadConfig: () => cfgForHandler,
+        current: options.currentConfig ?? (() => options.liveCfg ?? cfgForHandler),
       },
       channel: {
         pairing: {
@@ -150,47 +322,23 @@ export function createMatrixHandlerTestHarness(
           buildMentionRegexes: () => options.mentionRegexes ?? [],
         },
         session: {
-          resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),
-          readSessionUpdatedAt: options.readSessionUpdatedAt ?? (() => undefined),
           recordInboundSession,
         },
         reply: {
-          resolveEnvelopeFormatOptions: options.resolveEnvelopeFormatOptions ?? (() => ({})),
-          formatAgentEnvelope:
-            options.formatAgentEnvelope ?? (({ body }: { body: string }) => body),
-          finalizeInboundContext,
-          createReplyDispatcherWithTyping:
-            options.createReplyDispatcherWithTyping ??
-            (() => ({
-              dispatcher: {},
-              replyOptions: {},
-              markDispatchIdle: () => {},
-              markRunComplete: () => {},
-            })),
-          resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
-          dispatchReplyFromConfig,
-          withReplyDispatcher:
-            options.withReplyDispatcher ??
-            (async <T>(params: {
-              dispatcher: {
-                markComplete?: () => void;
-                waitForIdle?: () => Promise<void>;
-              };
-              run: () => Promise<T>;
-              onSettled?: () => void | Promise<void>;
-            }) => {
-              const { dispatcher, run, onSettled } = params;
-              try {
-                return await run();
-              } finally {
-                dispatcher.markComplete?.();
-                try {
-                  await dispatcher.waitForIdle?.();
-                } finally {
-                  await onSettled?.();
-                }
-              }
-            }),
+          settleReplyDispatcher: async ({
+            dispatcher,
+            onSettled,
+          }: Parameters<
+            MatrixMonitorHandlerParams["core"]["channel"]["reply"]["settleReplyDispatcher"]
+          >[0]) => {
+            dispatcher.markComplete?.();
+            await dispatcher.waitForIdle?.();
+            await onSettled?.();
+          },
+        },
+        inbound: {
+          buildContext: buildChannelInboundEventContext,
+          run,
         },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),
@@ -202,6 +350,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
+    accountConfig: options.accountConfig,
     runtime:
       options.runtime ??
       ({
@@ -215,7 +364,7 @@ export function createMatrixHandlerTestHarness(
         error: () => {},
       } as RuntimeLogger),
     logVerboseMessage: options.logVerboseMessage ?? (() => {}),
-    allowFrom: options.allowFrom ?? [],
+    allowFrom,
     allowFromResolvedEntries: options.allowFromResolvedEntries,
     groupAllowFrom: options.groupAllowFrom ?? [],
     groupAllowFromResolvedEntries: options.groupAllowFromResolvedEntries,
@@ -228,10 +377,10 @@ export function createMatrixHandlerTestHarness(
     dmThreadReplies: options.dmThreadReplies,
     dmSessionScope: options.dmSessionScope,
     streaming: options.streaming ?? "off",
+    previewToolProgressEnabled: options.previewToolProgressEnabled ?? false,
     blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
-    dmPolicy: options.dmPolicy ?? "open",
-    textLimit: options.textLimit ?? 8_000,
+    dmPolicy,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,
     startupGraceMs: options.startupGraceMs ?? 0,
@@ -244,17 +393,22 @@ export function createMatrixHandlerTestHarness(
     getMemberDisplayName: options.getMemberDisplayName ?? (async () => "sender"),
     needsRoomAliasesForConfig: options.needsRoomAliasesForConfig ?? false,
     resolveLiveUserAllowlist: options.resolveLiveUserAllowlist,
+    resolveStorePath: options.resolveStorePath ?? (() => "/tmp/session-store"),
+    createChannelInboundEnvelopeBuilder,
+    finalizeInboundContext,
+    resolveHumanDelayConfig: options.resolveHumanDelayConfig ?? (() => undefined),
     historyLimit: options.historyLimit ?? 0,
   });
 
   return {
-    dispatchReplyFromConfig,
+    dispatchInboundMessage,
     enqueueSystemEvent,
     finalizeInboundContext,
     handler,
     readAllowFromStore,
     recordInboundSession,
     resolveAgentRoute,
+    runPrepared,
     upsertPairingRequest,
   };
 }

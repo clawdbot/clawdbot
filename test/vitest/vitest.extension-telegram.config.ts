@@ -1,27 +1,16 @@
+import { createExtensionVitestConfig } from "./vitest.extension-config.ts";
+// Vitest extension telegram config wires the extension telegram test shard.
 import { telegramExtensionTestRoots } from "./vitest.extension-telegram-paths.mjs";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
-import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
-
-export function loadIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
 
 export function createExtensionTelegramVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  return createScopedVitestConfig(
-    loadIncludePatternsFromEnv(env) ??
-      telegramExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
-    {
-      dir: "extensions",
-      env,
-      name: "extension-telegram",
-      passWithNoTests: true,
-      setupFiles: ["test/setup.extensions.ts"],
-    },
-  );
+  return createExtensionVitestConfig("telegram", telegramExtensionTestRoots, env, {
+    fileParallelism: false,
+    // Conflicting module mocks need a fresh graph per file. Pair with the
+    // one-file process limit so isolate never re-imports inside one worker.
+    isolate: true,
+  });
 }
 
 export default createExtensionTelegramVitestConfig();

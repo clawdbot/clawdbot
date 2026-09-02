@@ -1,3 +1,4 @@
+// Discord plugin module implements guilds behavior.
 import { fetchDiscord } from "./api.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 
@@ -10,11 +11,13 @@ export type DiscordGuildSummary = {
 export async function listGuilds(
   token: string,
   fetcher: typeof fetch,
+  options?: { timeoutMs?: number },
 ): Promise<DiscordGuildSummary[]> {
   const raw = await fetchDiscord<Array<{ id?: string; name?: string }>>(
     "/users/@me/guilds",
     token,
     fetcher,
+    options,
   );
   return raw
     .filter(

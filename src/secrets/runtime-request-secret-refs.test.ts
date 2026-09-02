@@ -1,4 +1,11 @@
+/** Tests request-scoped secret ref resolution for runtime operations. */
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { getRuntimeConfigSnapshotRefreshHandler } from "../config/runtime-snapshot.js";
+import { activateSecretsRuntimeSnapshot, getActiveSecretsRuntimeSnapshot } from "./runtime.js";
 import {
   asConfig,
   loadAuthStoreWithProfiles,
@@ -6,6 +13,21 @@ import {
 } from "./runtime.test-support.ts";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+
+async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+  try {
+    await fs.writeFile(tempPath, content, "utf8");
+    await fs.chmod(tempPath, mode);
+    await fs.rename(tempPath, filePath);
+  } catch (err) {
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw err;
+  }
+}
 
 describe("secrets runtime snapshot request secret refs", () => {
   it("can skip auth-profile SecretRef resolution when includeAuthStoreRefs is false", async () => {
@@ -38,8 +60,132 @@ describe("secrets runtime snapshot request secret refs", () => {
       loadAuthStore,
     });
 
-    expect(snapshot.authStores).toEqual([]);
+    expect(snapshot.authStores).toStrictEqual([]);
   });
+
+  it("can skip auth-profile SecretRef resolution during active runtime refresh", async () => {
+    const initialEnvVar = `OPENCLAW_INITIAL_AUTH_PROFILE_SECRET_${Date.now()}`;
+    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
+    delete process.env[missingEnvVar];
+
+    let useMissingProfileRef = false;
+    let loadAuthStoreCalls = 0;
+    const loadAuthStore = () => {
+      loadAuthStoreCalls += 1;
+      return loadAuthStoreWithProfiles({
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          tokenRef: {
+            source: "env",
+            provider: "default",
+            id: useMissingProfileRef ? missingEnvVar : initialEnvVar,
+          },
+        },
+      });
+    };
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      env: { [initialEnvVar]: "sk-initial" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(loadAuthStoreCalls).toBe(1);
+    setRuntimeAuthProfileStoreSnapshot(
+      loadAuthStoreWithProfiles({
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          token: "sk-live",
+        },
+      }),
+      "/tmp/openclaw-agent-main",
+    );
+
+    useMissingProfileRef = true;
+    const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+    if (!refreshHandler) {
+      throw new Error("Expected active runtime refresh handler");
+    }
+    await expect(
+      refreshHandler.refresh({
+        sourceConfig: asConfig({ gateway: { port: 19001 } }),
+        includeAuthStoreRefs: false,
+      }),
+    ).resolves.toBe(true);
+    expect(loadAuthStoreCalls).toBe(1);
+    const profile = getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[
+      "custom:token"
+    ] as { token?: string } | undefined;
+    expect(profile?.token).toBe("sk-live");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reuses preflighted exec SecretRef snapshots during active runtime refresh",
+    async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-runtime-exec-preflight-"));
+      try {
+        const execLogPath = path.join(root, "exec-calls.log");
+        const execScriptPath = path.join(root, "resolver.sh");
+        await writeSecureFile(
+          execScriptPath,
+          [
+            "#!/bin/sh",
+            `printf 'x\\n' >> ${JSON.stringify(execLogPath)}`,
+            "cat >/dev/null",
+            'printf \'{"protocolVersion":1,"values":{"gateway/token":"exec-gateway-token"}}\'',
+          ].join("\n"),
+          0o700,
+        );
+
+        const config = asConfig({
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: execScriptPath,
+                jsonOnly: true,
+                timeoutMs: 20_000,
+                noOutputTimeoutMs: 10_000,
+              },
+            },
+          },
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "exec", provider: "execmain", id: "gateway/token" },
+            },
+          },
+        });
+        const snapshot = await prepareSecretsRuntimeSnapshot({
+          config,
+          agentDirs: [path.join(root, "agent")],
+          loadAuthStore: () => ({ version: 1, profiles: {} }),
+        });
+        activateSecretsRuntimeSnapshot(snapshot);
+        await fs.writeFile(execLogPath, "", "utf8");
+
+        const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+        if (!refreshHandler?.preflight) {
+          throw new Error("Expected active runtime refresh preflight handler");
+        }
+        const preflightResult = await refreshHandler.preflight({ sourceConfig: config });
+        await expect(
+          refreshHandler.refresh({ sourceConfig: config, preflightResult }),
+        ).resolves.toBe(true);
+
+        const execCalls = (await fs.readFile(execLogPath, "utf8")).split("\n").filter(Boolean);
+        expect(execCalls).toHaveLength(1);
+        expect(getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth?.token).toBe(
+          "exec-gateway-token",
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("resolves model provider request secret refs for headers, auth, and tls material", async () => {
     const config = asConfig({
@@ -137,6 +283,24 @@ describe("secrets runtime snapshot request secret refs", () => {
                   },
                 },
               },
+              {
+                provider: "deepgram",
+                capabilities: ["audio"],
+                request: {
+                  auth: {
+                    mode: "header",
+                    headerName: "x-api-key",
+                    value: { source: "env", provider: "default", id: "MEDIA_AUDIO_MODEL_KEY" },
+                  },
+                  proxy: {
+                    mode: "explicit-proxy",
+                    url: "http://proxy.example:8080",
+                    tls: {
+                      ca: { source: "env", provider: "default", id: "MEDIA_AUDIO_PROXY_CA" },
+                    },
+                  },
+                },
+              },
             ],
             audio: {
               enabled: true,
@@ -152,25 +316,6 @@ describe("secrets runtime snapshot request secret refs", () => {
                   cert: { source: "env", provider: "default", id: "MEDIA_AUDIO_CERT" },
                 },
               },
-              models: [
-                {
-                  provider: "deepgram",
-                  request: {
-                    auth: {
-                      mode: "header",
-                      headerName: "x-api-key",
-                      value: { source: "env", provider: "default", id: "MEDIA_AUDIO_MODEL_KEY" },
-                    },
-                    proxy: {
-                      mode: "explicit-proxy",
-                      url: "http://proxy.example:8080",
-                      tls: {
-                        ca: { source: "env", provider: "default", id: "MEDIA_AUDIO_PROXY_CA" },
-                      },
-                    },
-                  },
-                },
-              ],
             },
           },
         },
@@ -206,7 +351,7 @@ describe("secrets runtime snapshot request secret refs", () => {
         value: "shared-model-key",
       },
     });
-    expect(snapshot.config.tools?.media?.audio?.models?.[0]?.request).toEqual({
+    expect(snapshot.config.tools?.media?.models?.[1]?.request).toEqual({
       auth: {
         mode: "header",
         headerName: "x-api-key",

@@ -1,3 +1,4 @@
-import { describeAnthropicProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
+// Anthropic tests cover provider runtime.contract plugin behavior.
+import { describeAnthropicProviderRuntimeContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeAnthropicProviderRuntimeContract(() => import("./index.js"));

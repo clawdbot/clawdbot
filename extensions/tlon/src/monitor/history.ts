@@ -1,5 +1,8 @@
+// Tlon plugin module implements history behavior.
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-import { asRecord, extractMessageText, formatErrorMessage } from "./utils.js";
+import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractMessageText } from "./utils.js";
 
 /**
  * Format a number as @ud (with dots every 3 digits from the right)
@@ -20,7 +23,7 @@ function formatUd(id: string | number): string {
   return chunks.toReversed().join(".");
 }
 
-export type TlonHistoryEntry = {
+type TlonHistoryEntry = {
   author: string;
   content: string;
   timestamp: number;
@@ -63,7 +66,7 @@ export function cacheMessage(channelNest: string, message: TlonHistoryEntry) {
   }
 }
 
-export async function fetchChannelHistory(
+async function fetchChannelHistory(
   api: { scry: (path: string) => Promise<unknown> },
   channelNest: string,
   count = 50,

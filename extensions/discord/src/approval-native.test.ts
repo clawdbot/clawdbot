@@ -1,13 +1,12 @@
+// Discord tests cover approval native plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { splitChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
-import {
-  createDiscordNativeApprovalAdapter,
-  getDiscordApprovalCapability,
-  shouldHandleDiscordApprovalRequest,
-} from "./approval-native.js";
+import { getDiscordApprovalCapability } from "./approval-native.js";
+import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 const NATIVE_APPROVAL_CFG = {
@@ -15,6 +14,20 @@ const NATIVE_APPROVAL_CFG = {
     ownerAllowFrom: ["discord:555555555"],
   },
 } as const;
+const NATIVE_DELIVERY_CFG = {
+  ...NATIVE_APPROVAL_CFG,
+  channels: {
+    discord: {
+      execApprovals: {
+        enabled: true,
+      },
+    },
+  },
+} as const;
+
+function createDiscordNativeApprovalAdapter() {
+  return splitChannelApprovalCapability(getDiscordApprovalCapability());
+}
 
 function writeStore(store: Record<string, unknown>) {
   fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
@@ -22,23 +35,35 @@ function writeStore(store: Record<string, unknown>) {
 }
 
 describe("createDiscordNativeApprovalAdapter", () => {
+  it("subscribes the native runtime to system-agent approval events", () => {
+    expect(getDiscordApprovalCapability().nativeRuntime?.eventKinds).toContain("system-agent");
+  });
+
   it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
-    const adapter = createDiscordNativeApprovalAdapter({
-      enabled: false,
-      approvers: ["555555555"],
-      target: "channel",
-    } as never);
+    const adapter = createDiscordNativeApprovalAdapter();
+    const cfg = {
+      ...NATIVE_APPROVAL_CFG,
+      channels: {
+        discord: {
+          execApprovals: {
+            enabled: false,
+            approvers: ["555555555"],
+            target: "channel",
+          },
+        },
+      },
+    } as const;
 
     expect(
       adapter.auth?.getActionAvailabilityState?.({
-        cfg: NATIVE_APPROVAL_CFG as never,
+        cfg: cfg as never,
         accountId: "main",
         action: "approve",
       }),
     ).toEqual({ kind: "enabled" });
     expect(
       adapter.native?.describeDeliveryCapabilities({
-        cfg: NATIVE_APPROVAL_CFG as never,
+        cfg: cfg as never,
         accountId: "main",
         approvalKind: "exec",
         request: {
@@ -88,6 +113,33 @@ describe("createDiscordNativeApprovalAdapter", () => {
     ).toBe(true);
   });
 
+  it("reports each configured account as a raw candidate for coordinator selection", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:123"] },
+      channels: {
+        discord: {
+          accounts: {
+            default: { token: "token-default", execApprovals: { enabled: true } },
+            ops: { token: "token-ops", execApprovals: { enabled: true } },
+          },
+        },
+      },
+    } as const;
+    const request = {
+      id: "approval-unbound",
+      request: { command: "pwd", turnSourceChannel: "discord" },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    } as const;
+
+    expect(
+      shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "default", request }),
+    ).toBe(true);
+    expect(
+      shouldHandleDiscordApprovalRequest({ cfg: cfg as never, accountId: "ops", request }),
+    ).toBe(true);
+  });
+
   it("describes the correct Discord exec-approval setup path", () => {
     const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
       channel: "discord",
@@ -115,7 +167,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: NATIVE_APPROVAL_CFG as never,
+      cfg: NATIVE_DELIVERY_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -139,7 +191,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: NATIVE_APPROVAL_CFG as never,
+      cfg: NATIVE_DELIVERY_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -148,6 +200,56 @@ describe("createDiscordNativeApprovalAdapter", () => {
           title: "Plugin approval",
           description: "Let plugin proceed",
           sessionKey: "agent:main:discord:dm:123456789",
+          turnSourceChannel: "discord",
+          turnSourceTo: "123456789",
+          turnSourceAccountId: "main",
+        },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+    });
+
+    expect(target).toBeNull();
+  });
+
+  it("falls back to approver DMs for canonical Discord direct sessions", async () => {
+    const adapter = createDiscordNativeApprovalAdapter();
+
+    const target = await adapter.native?.resolveOriginTarget?.({
+      cfg: NATIVE_DELIVERY_CFG as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request: {
+        id: "abc",
+        request: {
+          title: "Plugin approval",
+          description: "Let plugin proceed",
+          sessionKey: "agent:main:discord:direct:123456789",
+          turnSourceChannel: "discord",
+          turnSourceTo: "123456789",
+          turnSourceAccountId: "main",
+        },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+    });
+
+    expect(target).toBeNull();
+  });
+
+  it("falls back to approver DMs for account-scoped Discord direct sessions", async () => {
+    const adapter = createDiscordNativeApprovalAdapter();
+
+    const target = await adapter.native?.resolveOriginTarget?.({
+      cfg: NATIVE_DELIVERY_CFG as never,
+      accountId: "main",
+      approvalKind: "plugin",
+      request: {
+        id: "abc",
+        request: {
+          title: "Plugin approval",
+          description: "Let plugin proceed",
+          sessionKey: "agent:main:discord:default:direct:123456789",
           turnSourceChannel: "discord",
           turnSourceTo: "123456789",
           turnSourceAccountId: "main",
@@ -175,7 +277,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
     const target = await adapter.native?.resolveOriginTarget?.({
       cfg: {
-        ...NATIVE_APPROVAL_CFG,
+        ...NATIVE_DELIVERY_CFG,
         session: { store: STORE_PATH },
       } as never,
       accountId: "main",
@@ -202,7 +304,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: NATIVE_APPROVAL_CFG as never,
+      cfg: NATIVE_DELIVERY_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -227,8 +329,8 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: NATIVE_APPROVAL_CFG as never,
-      accountId: "main",
+      cfg: NATIVE_DELIVERY_CFG as never,
+      accountId: "default",
       approvalKind: "plugin",
       request: {
         id: "abc",
@@ -249,7 +351,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: NATIVE_APPROVAL_CFG as never,
+      cfg: NATIVE_DELIVERY_CFG as never,
       accountId: "main",
       approvalKind: "plugin",
       request: {
@@ -275,8 +377,8 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
-      cfg: NATIVE_APPROVAL_CFG as never,
-      accountId: "main",
+      cfg: NATIVE_DELIVERY_CFG as never,
+      accountId: "default",
       approvalKind: "plugin",
       request: {
         id: "abc",

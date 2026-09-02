@@ -1,3 +1,4 @@
+// Discord plugin module implements targets behavior.
 import {
   parseDiscordTarget,
   type DiscordTarget,

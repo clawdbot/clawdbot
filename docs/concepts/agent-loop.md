@@ -2,168 +2,164 @@
 summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
-title: "Agent Loop"
+  - You are changing session queueing, writer claims, or transcript write fencing
+title: "Agent loop"
 ---
 
-# Agent Loop (OpenClaw)
-
-An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
-tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
-into actions and a final reply, while keeping session state consistent.
-
-In OpenClaw, a loop is a single, serialized run per session that emits lifecycle and stream events
-as the model thinks, calls tools, and streams output. This doc explains how that authentic loop is
-wired end-to-end.
+The agent loop is the serialized, per-session run that turns a message into
+actions and a reply: intake, context assembly, model inference, tool
+execution, streaming, persistence.
 
 ## Entry points
 
 - Gateway RPC: `agent` and `agent.wait`.
-- CLI: `agent` command.
+- CLI: `openclaw agent`.
 
-## How it works (high-level)
+## Run sequence
 
-1. `agent` RPC validates params, resolves session (sessionKey/sessionId), persists session metadata, returns `{ runId, acceptedAt }` immediately.
-2. `agentCommand` runs the agent:
-   - resolves model + thinking/verbose/trace defaults
-   - loads skills snapshot
-   - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
-   - emits **lifecycle end/error** if the embedded loop does not emit one
-3. `runEmbeddedPiAgent`:
-   - serializes runs via per-session + global queues
-   - resolves model + auth profile and builds the pi session
-   - subscribes to pi events and streams assistant/tool deltas
-   - enforces timeout -> aborts run if exceeded
-   - returns payloads + usage metadata
-4. `subscribeEmbeddedPiSession` bridges pi-agent-core events to OpenClaw `agent` stream:
-   - tool events => `stream: "tool"`
-   - assistant deltas => `stream: "assistant"`
-   - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
-5. `agent.wait` uses `waitForAgentRun`:
-   - waits for **lifecycle end/error** for `runId`
-   - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
+1. `agent` RPC validates params, resolves the session (`sessionKey`/`sessionId`), persists session metadata, and returns `{ runId, acceptedAt }` immediately.
+2. `agentCommand` runs the turn: resolves model + thinking/verbose/trace defaults, loads the skills snapshot, calls `runEmbeddedAgent`, and emits a fallback **lifecycle end/error** if the embedded loop did not already emit one.
+3. `runEmbeddedAgent`: serializes runs via per-session and global queues, resolves model + auth profile, builds the OpenClaw session, subscribes to runtime events, streams assistant/tool deltas, enforces the run timeout (aborting on expiry), and returns payloads plus usage metadata. For Codex app-server turns it also aborts an accepted turn that stops producing app-server progress before a terminal event.
+4. `subscribeEmbeddedAgentSession` bridges runtime events to the `agent` stream: tool events to `stream: "tool"`, assistant deltas to `stream: "assistant"`, lifecycle events to `stream: "lifecycle"` (`phase: "start" | "end" | "error"`).
+5. `agent.wait` (`waitForAgentRun`) waits for **lifecycle end/error** on a `runId` and returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`.
 
-## Queueing + concurrency
+## Queueing and concurrency
 
-- Runs are serialized per session key (session lane) and optionally through a global lane.
-- This prevents tool/session races and keeps session history consistent.
-- Messaging channels can choose queue modes (collect/steer/followup) that feed this lane system.
-  See [Command Queue](/concepts/queue).
+Runs are serialized per session key (session lane) and optionally through a global lane, preventing tool/session races. Messaging channels choose a queue mode (steer/followup/collect/interrupt) that feeds this lane system; see [Command Queue](/concepts/queue).
 
-## Session + workspace preparation
+Before streaming, an admitted run records its durable `activeWriterRunId` claim. Every transcript append or rewrite supplies `expectedWriterRunId`, and the synchronous commit transaction verifies that it still matches the active claim. A superseded run therefore cannot commit stale transcript data. The SQLite writer queue orders per-agent mutations, while the Gateway state-directory lock prevents another Gateway or `openclaw agent --local` process from owning the same state directory concurrently.
+
+## Session and workspace preparation
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
-- Bootstrap/context files are resolved and injected into the system prompt report.
-- A session write lock is acquired; `SessionManager` is opened and prepared before streaming.
+- Bootstrap/context files are resolved and injected into the system prompt.
+- The session transcript target and writer claim are prepared before streaming starts. Later rewrites, compaction, and truncation use the same in-transaction writer-claim fence.
 
-## Prompt assembly + system prompt
+## Prompt assembly
 
-- System prompt is built from OpenClaw’s base prompt, skills prompt, bootstrap context, and per-run overrides.
-- Model-specific limits and compaction reserve tokens are enforced.
-- See [System prompt](/concepts/system-prompt) for what the model sees.
+System prompt is built from OpenClaw's base prompt, skills prompt, bootstrap context, and per-run overrides. Model-specific limits and compaction reserve tokens are enforced. See [System prompt](/concepts/system-prompt) for what the model sees.
 
-## Hook points (where you can intercept)
+## Hooks
 
-OpenClaw has two hook systems:
+OpenClaw has two in-process hook systems:
 
-- **Internal hooks** (Gateway hooks): event-driven scripts for commands and lifecycle events.
-- **Plugin hooks**: extension points inside the agent/tool lifecycle and gateway pipeline.
+- **Internal hooks**: `HOOK.md` scripts for command and lifecycle events such as `command:new`.
+- **Plugin hooks**: typed `api.on(...)` handlers inside the agent/tool lifecycle and Gateway pipeline, such as `before_tool_call`.
+
+[HTTP webhooks](/automation/cron-jobs#webhooks) are separate: they accept external requests that trigger work, rather than subscribing to agent-loop events.
 
 ### Internal hooks (Gateway hooks)
 
-- **`agent:bootstrap`**: runs while building bootstrap files before the system prompt is finalized.
-  Use this to add/remove bootstrap context files.
-- **Command hooks**: `/new`, `/reset`, `/stop`, and other command events (see Hooks doc).
+- **`agent:bootstrap`**: runs while building bootstrap files before the system prompt is finalized. Use it to add or remove bootstrap context files.
+- **Command hooks**: core emits `command:new`, `command:reset`, and `command:stop`. Other command names do not automatically become hook events.
 
 See [Hooks](/automation/hooks) for setup and examples.
 
-### Plugin hooks (agent + gateway lifecycle)
+### Plugin hooks
 
 These run inside the agent loop or gateway pipeline:
 
-- **`before_model_resolve`**: runs pre-session (no `messages`) to deterministically override provider/model before model resolution.
-- **`before_prompt_build`**: runs after session load (with `messages`) to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext` before prompt submission. Use `prependContext` for per-turn dynamic text and system-context fields for stable guidance that should sit in system prompt space.
-- **`before_agent_start`**: legacy compatibility hook that may run in either phase; prefer the explicit hooks above.
-- **`before_agent_reply`**: runs after inline actions and before the LLM call, letting a plugin claim the turn and return a synthetic reply or silence the turn entirely.
-- **`agent_end`**: inspect the final message list and run metadata after completion.
-- **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
-- **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
-- **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
-- **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
-- **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
-- **`session_start` / `session_end`**: session lifecycle boundaries.
-- **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
+| Hook                                                    | Runs                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `before_model_resolve`                                  | Pre-session (no `messages`), to deterministically override provider/model before resolution.                                                                                                                                                                                                                                                                                                                        |
+| `before_prompt_build`                                   | After session load (with `messages`), to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext`, or, on supported runtimes with a turn-scoped submitted tool surface, narrow it with `toolsAllow`. An empty `toolsAllow` submits no optional tools; omitted leaves the host-resolved surface unchanged. Unsupported runtimes reject restrictive values instead of ignoring them. |
+| `before_agent_reply`                                    | After inline actions, before the LLM call. Lets a plugin claim the turn and return a synthetic reply or silence it entirely.                                                                                                                                                                                                                                                                                        |
+| `agent_end`                                             | After completion, with the final message list and run metadata.                                                                                                                                                                                                                                                                                                                                                     |
+| `before_compaction` / `after_compaction`                | Observe compaction cycles; these hooks do not rewrite or veto compaction.                                                                                                                                                                                                                                                                                                                                           |
+| `before_tool_call` / `after_tool_call`                  | Intercept tool params/results.                                                                                                                                                                                                                                                                                                                                                                                      |
+| `before_install`                                        | After operator install policy runs, on staged skill/plugin install material, when plugin hooks are loaded in the current process.                                                                                                                                                                                                                                                                                   |
+| `tool_result_persist`                                   | Synchronously transforms tool results before they are written to an OpenClaw-owned session transcript.                                                                                                                                                                                                                                                                                                              |
+| `message_received` / `message_sending` / `message_sent` | Inbound and outbound message hooks.                                                                                                                                                                                                                                                                                                                                                                                 |
+| `session_start` / `session_end`                         | Session lifecycle boundaries.                                                                                                                                                                                                                                                                                                                                                                                       |
+| `gateway_start` / `gateway_stop`                        | Gateway lifecycle events.                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Hook decision rules for outbound/tool guards:
 
-- `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
-- `before_tool_call`: `{ block: false }` is a no-op and does not clear a prior block.
-- `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
-- `before_install`: `{ block: false }` is a no-op and does not clear a prior block.
-- `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
-- `message_sending`: `{ cancel: false }` is a no-op and does not clear a prior cancel.
+- `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers. `{ block: false }` is a no-op and does not clear a prior block.
+- `before_install`: same terminal/no-op semantics as above. Use `security.installPolicy`, not `before_install`, for operator-owned install allow/warn/block decisions that must cover CLI install and update paths.
+- `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers. `{ cancel: false }` is a no-op and does not clear a prior cancel.
 
-See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook API and registration details.
+See [Plugin hooks](/plugins/hooks) for the hook API and registration details.
 
-## Streaming + partial replies
+Harnesses can adapt these hooks. The Codex app-server harness keeps OpenClaw plugin hooks as the compatibility contract for documented mirrored surfaces; Codex native hooks are a separate, lower-level Codex mechanism.
 
-- Assistant deltas are streamed from pi-agent-core and emitted as `assistant` events.
-- Block streaming can emit partial replies either on `text_end` or `message_end`.
-- Reasoning streaming can be emitted as a separate stream or as block replies.
+## Streaming
+
+- Assistant deltas stream from the agent runtime as `assistant` events.
+- Block streaming can emit partial replies on `text_end` or `message_end`.
+- Reasoning streaming can be a separate stream or block replies.
 - See [Streaming](/concepts/streaming) for chunking and block reply behavior.
 
-## Tool execution + messaging tools
+## Tool execution
 
-- Tool start/update/end events are emitted on the `tool` stream.
+- Tool start/update/end events emit on the `tool` stream.
 - Tool results are sanitized for size and image payloads before logging/emitting.
 - Messaging tool sends are tracked to suppress duplicate assistant confirmations.
 
-## Reply shaping + suppression
+## Reply shaping
 
-- Final payloads are assembled from:
-  - assistant text (and optional reasoning)
-  - inline tool summaries (when verbose + allowed)
-  - assistant error text when the model errors
-- The exact silent token `NO_REPLY` / `no_reply` is filtered from outgoing
-  payloads.
+Final payloads are assembled from assistant text (plus optional reasoning), inline tool summaries (when verbose and allowed), and assistant error text when the model errors.
+
+- The exact silent token `NO_REPLY` is filtered from outgoing payloads.
 - Messaging tool duplicates are removed from the final payload list.
-- If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted
-  (unless a messaging tool already sent a user-visible reply).
+- If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted unless a messaging tool already sent a user-visible reply.
 
-## Compaction + retries
+Prompt-segment diagnostics attribute attachment/context blocks and generated inbound metadata separately from user text. A prompt containing only those blocks does not need trailing user text for reply processing to complete.
 
-- Auto-compaction emits `compaction` stream events and can trigger a retry.
-- On retry, in-memory buffers and tool summaries are reset to avoid duplicate output.
-- See [Compaction](/concepts/compaction) for the compaction pipeline.
+## Compaction and retries
 
-## Event streams (today)
+Auto-compaction emits `compaction` stream events and can trigger a retry. On retry, in-memory buffers and tool summaries reset to avoid duplicate output. See [Compaction](/concepts/compaction).
 
-- `lifecycle`: emitted by `subscribeEmbeddedPiSession` (and as a fallback by `agentCommand`)
-- `assistant`: streamed deltas from pi-agent-core
-- `tool`: streamed tool events from pi-agent-core
+## Event streams
+
+- `lifecycle`: emitted by `subscribeEmbeddedAgentSession` (and as a fallback by `agentCommand`).
+- `assistant`: streamed deltas from the agent runtime.
+- `tool`: streamed tool events from the agent runtime.
+
+The Gateway projects lifecycle and tool start/terminal events into the bounded,
+metadata-only [audit ledger](/cli/audit). This projection records provenance and
+result codes without copying prompts, messages, tool arguments, tool results,
+or raw errors out of the transcript/runtime path.
 
 ## Chat channel handling
 
-- Assistant deltas are buffered into chat `delta` messages.
-- A chat `final` is emitted on **lifecycle end/error**.
+Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on **lifecycle end/error**.
+
+Run-duration metadata belongs to the current run, including when preparation fails before the model starts. In Control UI completed-work rollups, independent sends have separate elapsed-time boundaries: a failed turn and the idle time before the next send are not part of that next turn's work. Steering remains associated with its target run rather than being treated as an independent retry.
 
 ## Timeouts
 
-- `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
-- Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
-- LLM idle timeout: `agents.defaults.llm.idleTimeoutSeconds` aborts a model request when no response chunks arrive before the idle window. Set it explicitly for slow local models or reasoning/tool-call providers; set it to 0 to disable. If it is not set, OpenClaw uses `agents.defaults.timeoutSeconds` when configured, otherwise 120s. Cron-triggered runs with no explicit LLM or agent timeout disable the idle watchdog and rely on the cron outer timeout.
+| Timeout                                          | Default                                | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.wait`                                     | 30s                                    | Wait-only; `timeoutMs` param overrides. Does not stop the underlying run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Agent runtime (`agents.defaults.timeoutSeconds`) | 172800s (48h)                          | Enforced by `runEmbeddedAgent`'s abort timer. Set `0` for an unlimited run budget; model stream liveness watchdogs still apply.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| CLI backend no-output watchdog                   | computed per fresh/resumed CLI run     | Separate from the agent runtime and owned by the registered backend plugin. A CLI-internal background task shares the parent subprocess and does not outlive an overall agent timeout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Cron isolated agent turn                         | owned by cron                          | The scheduler starts its own timer when execution begins, aborts the run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Model idle timeout                               | Cloud 120s; self-hosted 300s           | OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers, but stays bounded by any lower finite `agents.defaults.timeoutSeconds` or run-specific timeout, since those govern the whole agent run. Unlimited run budgets still keep the provider-class idle watchdog. Cron-triggered cloud model runs with no explicit model/agent timeout use the same default; with an explicit cron run timeout, cloud model stream stalls cap at 60s so configured model fallbacks can still run before the outer cron deadline. Cron-triggered runs on genuinely local endpoints (loopback/private baseUrl) keep the local idle opt-out; self-hosted providers on network baseUrls get the 300s implicit watchdog. With an explicit cron run timeout, local/self-hosted stalls cap at that timeout. Set `models.providers.<id>.timeoutSeconds` for slow local providers. |
+| Provider HTTP request timeout                    | `models.providers.<id>.timeoutSeconds` | Covers connect, headers, body, SDK request timeout, guarded-fetch abort handling, and the model stream idle watchdog for that provider. Use for slow local/self-hosted providers (for example Ollama) before raising the whole agent runtime timeout; keep the agent/runtime timeout at least as high when the model request needs to run longer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+### Stuck session diagnostics
+
+With diagnostics enabled, a built-in two-minute threshold classifies long `processing` sessions with no observed reply, tool, status, block, or ACP progress:
+
+- Active embedded runs, model calls, and tool calls report as `session.long_running`. Owned silent model calls stay `session.long_running` until the abort threshold so slow or non-streaming providers are not flagged as stalled too early.
+- Active work with no recent progress reports as `session.stalled`. Owned model calls switch to `session.stalled` at or after the abort threshold; ownerless stale model/tool activity is not hidden as long-running.
+- `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
+
+The abort threshold is at least 5 minutes and 3x the warning threshold. Stale session bookkeeping releases the affected session lane immediately after recovery gates pass; stalled embedded runs are abort-drained only after the abort threshold, so queued work resumes without cutting off merely slow runs. Recovery emits structured requested/completed outcomes; diagnostic state is marked idle only if the same processing generation is still current, and repeated `session.stuck` diagnostics back off while the session stays unchanged.
 
 ## Where things can end early
 
 - Agent timeout (abort)
 - AbortSignal (cancel)
 - Gateway disconnect or RPC timeout
-- `agent.wait` timeout (wait-only, does not stop agent)
+- `agent.wait` timeout (wait-only, does not stop the agent)
 
 ## Related
 
-- [Tools](/tools) — available agent tools
-- [Hooks](/automation/hooks) — event-driven scripts triggered by agent lifecycle events
-- [Compaction](/concepts/compaction) — how long conversations are summarized
-- [Exec Approvals](/tools/exec-approvals) — approval gates for shell commands
-- [Thinking](/tools/thinking) — thinking/reasoning level configuration
+- [Tools](/tools) - available agent tools
+- [Hooks](/automation/hooks) - event-driven scripts triggered by agent lifecycle events
+- [Compaction](/concepts/compaction) - how long conversations are summarized
+- [Exec Approvals](/tools/exec-approvals) - approval gates for shell commands
+- [Thinking](/tools/thinking) - thinking/reasoning level configuration

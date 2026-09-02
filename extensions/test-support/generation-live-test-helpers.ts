@@ -1,1 +1,2 @@
-export { maybeLoadShellEnvForGenerationProviders } from "../../src/test-utils/generation-live-test-helpers.js";
+// Test Support helper module supports generation live test helpers behavior.
+export { maybeLoadShellEnvForGenerationProviders } from "openclaw/plugin-sdk/test-live-auth";

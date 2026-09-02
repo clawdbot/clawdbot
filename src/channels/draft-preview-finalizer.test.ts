@@ -1,3 +1,4 @@
+// Draft preview finalizer tests cover final draft rendering and cleanup after streamed replies.
 import { describe, expect, it, vi } from "vitest";
 import { deliverFinalizableDraftPreview } from "./draft-preview-finalizer.js";
 

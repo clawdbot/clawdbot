@@ -1,6 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Verifies group-policy normalization and runtime resolution.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
-import { resolveChannelGroupPolicy, resolveToolsBySender } from "./group-policy.js";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+  resolveToolsBySender,
+} from "./group-policy.js";
+
+function firstWarningCall(warningSpy: ReturnType<typeof vi.spyOn>): [unknown, { code?: unknown }?] {
+  const [call] = warningSpy.mock.calls;
+  if (!call) {
+    throw new Error("expected process.emitWarning call");
+  }
+  return call as [unknown, { code?: unknown }?];
+}
 
 describe("resolveChannelGroupPolicy", () => {
   it("fails closed when groupPolicy=allowlist and groups are missing", () => {
@@ -129,6 +142,96 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowlistEnabled).toBe(true);
     expect(policy.allowed).toBe(false);
   });
+
+  it("can default explicitly configured groups to no mention for channels that opt in", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "123@g.us": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "whatsapp",
+        groupId: "123@g.us",
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelGroupRequireMention({
+        cfg,
+        channel: "whatsapp",
+        groupId: "123@g.us",
+        configuredGroupDefaultsToNoMention: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("falls back to root channel groups when account.groups is an empty object (regression: #79427)", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100123": { requireMention: false },
+          },
+          accounts: {
+            default: { botToken: "123:default", groups: {} },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "telegram",
+      groupId: "-100123",
+      accountId: "default",
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
+  });
+
+  it("uses populated account.groups instead of root when both are configured", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-100root": { requireMention: false },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+              groups: { "-100account": { requireMention: false } },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelGroupPolicy({
+        cfg,
+        channel: "telegram",
+        groupId: "-100account",
+        accountId: "default",
+      }).allowed,
+    ).toBe(true);
+    expect(
+      resolveChannelGroupPolicy({
+        cfg,
+        channel: "telegram",
+        groupId: "-100root",
+        accountId: "default",
+      }).allowed,
+    ).toBe(false);
+  });
 });
 
 describe("resolveToolsBySender", () => {
@@ -146,6 +249,37 @@ describe("resolveToolsBySender", () => {
         senderId: "user:alice",
       }),
     ).toEqual({ allow: ["exec"] });
+  });
+
+  it("matches channel-scoped sender IDs through canonical channel aliases", () => {
+    expect(
+      resolveToolsBySender({
+        toolsBySender: {
+          "channel:msteams:user:alice": { allow: ["exec"] },
+          "id:user:alice": { deny: ["exec"] },
+          "*": { deny: ["write"] },
+        },
+        messageProvider: "teams",
+        senderId: "user:alice",
+      }),
+    ).toEqual({ allow: ["exec"] });
+  });
+
+  it("keeps legacy colon sender IDs as sender IDs, not channel keys", () => {
+    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    expect(
+      resolveToolsBySender({
+        toolsBySender: {
+          "discord:user:alice": { allow: ["exec"] },
+          "channel:discord:user:alice": { deny: ["exec"] },
+        },
+        messageProvider: "slack",
+        senderId: "discord:user:alice",
+      }),
+    ).toEqual({ allow: ["exec"] });
+
+    expect(warningSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does not allow senderName collisions to match id keys", () => {
@@ -242,6 +376,20 @@ describe("resolveToolsBySender", () => {
     ).toEqual({ deny: ["exec"] });
   });
 
+  it("prefers channel-specific sender policy before generic id policy", () => {
+    expect(
+      resolveToolsBySender({
+        toolsBySender: {
+          "channel:discord:alice": { allow: ["read"] },
+          "id:alice": { deny: ["read"] },
+          "*": { deny: ["exec"] },
+        },
+        messageProvider: "discord",
+        senderId: "alice",
+      }),
+    ).toEqual({ allow: ["read"] });
+  });
+
   it("emits one deprecation warning per legacy key", () => {
     const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
     const legacyKey = "legacy-warning-key";
@@ -260,9 +408,46 @@ describe("resolveToolsBySender", () => {
     });
 
     expect(warningSpy).toHaveBeenCalledTimes(1);
-    expect(String(warningSpy.mock.calls[0]?.[0])).toContain(`toolsBySender key "${legacyKey}"`);
-    expect(warningSpy.mock.calls[0]?.[1]).toMatchObject({
-      code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
+    const [warningMessage, warningMeta] = firstWarningCall(warningSpy);
+    expect(String(warningMessage)).toContain(`toolsBySender key "${legacyKey}"`);
+    expect(warningMeta?.code).toBe("OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY");
+  });
+
+  describe("legacy key warning dedupe cache", () => {
+    let resolveToolsBySenderFn: typeof resolveToolsBySender;
+
+    const resolveFreshConfig = (legacyKey: string) => {
+      resolveToolsBySenderFn({
+        toolsBySender: { [legacyKey]: { allow: ["read"] }, "*": { deny: ["exec"] } },
+        senderId: "some-id",
+      });
+    };
+
+    beforeEach(async () => {
+      vi.resetModules();
+      const mod = await import("./group-policy.js");
+      resolveToolsBySenderFn = mod.resolveToolsBySender;
+    });
+
+    it("refreshes recent keys across config snapshots and re-warns evicted keys", () => {
+      const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+      for (let i = 0; i < 4096; i++) {
+        resolveFreshConfig(`legacy-key-${i}`);
+      }
+      expect(warningSpy).toHaveBeenCalledTimes(4096);
+
+      resolveFreshConfig("legacy-key-0");
+      expect(warningSpy).toHaveBeenCalledTimes(4096);
+
+      resolveFreshConfig("overflow-key");
+      expect(warningSpy).toHaveBeenCalledTimes(4097);
+
+      resolveFreshConfig("legacy-key-0");
+      expect(warningSpy).toHaveBeenCalledTimes(4097);
+
+      resolveFreshConfig("legacy-key-1");
+      expect(warningSpy).toHaveBeenCalledTimes(4098);
     });
   });
 });

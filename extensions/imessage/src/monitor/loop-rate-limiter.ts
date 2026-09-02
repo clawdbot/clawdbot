@@ -11,7 +11,7 @@ type ConversationWindow = {
   timestamps: number[];
 };
 
-export type LoopRateLimiter = {
+type LoopRateLimiter = {
   /** Returns true if this conversation has exceeded the rate limit. */
   isRateLimited: (conversationKey: string) => boolean;
   /** Record an inbound message for a conversation. */

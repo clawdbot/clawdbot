@@ -1,3 +1,4 @@
+// Matrix tests cover reaction common plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildMatrixReactionContent,

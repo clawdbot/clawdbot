@@ -1,17 +1,24 @@
-export {
-  abortEmbeddedPiRun as abortEmbeddedAgentRun,
-  compactEmbeddedPiSession as compactEmbeddedAgentSession,
-  isEmbeddedPiRunActive as isEmbeddedAgentRunActive,
-  isEmbeddedPiRunStreaming as isEmbeddedAgentRunStreaming,
-  queueEmbeddedPiMessage as queueEmbeddedAgentMessage,
-  resolveActiveEmbeddedRunSessionId as resolveActiveEmbeddedAgentRunSessionId,
-  resolveEmbeddedSessionLane,
-  runEmbeddedPiAgent as runEmbeddedAgent,
-  waitForEmbeddedPiRunEnd as waitForEmbeddedAgentRunEnd,
-} from "./pi-embedded-runner.js";
+// Public embedded-agent barrel. Re-export the runner API used by gateway,
+// command, and plugin surfaces without exposing internal runner file layout.
 export type {
-  EmbeddedPiAgentMeta as EmbeddedAgentMeta,
-  EmbeddedPiCompactResult as EmbeddedAgentCompactResult,
-  EmbeddedPiRunMeta as EmbeddedAgentRunMeta,
-  EmbeddedPiRunResult as EmbeddedAgentRunResult,
-} from "./pi-embedded-runner.js";
+  EmbeddedAgentCompactResult,
+  EmbeddedAgentMeta,
+  EmbeddedAgentRunMeta,
+  EmbeddedAgentRunResult,
+} from "./embedded-agent-runner.js";
+export {
+  abortAndDrainEmbeddedAgentRun,
+  abortEmbeddedAgentRun,
+  preemptAndDrainEmbeddedHeartbeatRun,
+  compactEmbeddedAgentSession,
+  isEmbeddedAgentRunAbortableForCompaction,
+  isEmbeddedAgentRunActive,
+  isEmbeddedAgentRunHandleActive,
+  isEmbeddedAgentRunStreaming,
+  queueEmbeddedAgentMessageWithOutcome,
+  resolveActiveEmbeddedRunSessionId,
+  resolveActiveEmbeddedRunSessionIdBySessionFile,
+  resolveEmbeddedSessionLane,
+  runEmbeddedAgent,
+  waitForEmbeddedAgentRunEnd,
+} from "./embedded-agent-runner.js";

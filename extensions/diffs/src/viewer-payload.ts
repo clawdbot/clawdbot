@@ -1,9 +1,10 @@
+// Diffs plugin module implements viewer payload behavior.
 import { DIFF_INDICATORS, DIFF_LAYOUTS, DIFF_THEMES } from "./types.js";
 import type { DiffViewerPayload } from "./types.js";
 
 const OVERFLOW_VALUES = ["scroll", "wrap"] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isViewerRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -23,7 +24,7 @@ export function parseViewerPayloadJson(raw: string): DiffViewerPayload {
 }
 
 function isDiffViewerPayload(value: unknown): value is DiffViewerPayload {
-  if (!isRecord(value)) {
+  if (!isViewerRecord(value)) {
     return false;
   }
 
@@ -39,8 +40,8 @@ function isDiffViewerPayload(value: unknown): value is DiffViewerPayload {
     return false;
   }
 
-  const hasFileDiff = isRecord(value.fileDiff);
-  const hasBeforeAfterFiles = isRecord(value.oldFile) && isRecord(value.newFile);
+  const hasFileDiff = isViewerRecord(value.fileDiff);
+  const hasBeforeAfterFiles = isViewerRecord(value.oldFile) && isViewerRecord(value.newFile);
   if (!hasFileDiff && !hasBeforeAfterFiles) {
     return false;
   }
@@ -49,11 +50,11 @@ function isDiffViewerPayload(value: unknown): value is DiffViewerPayload {
 }
 
 function isViewerOptions(value: unknown): boolean {
-  if (!isRecord(value)) {
+  if (!isViewerRecord(value)) {
     return false;
   }
 
-  if (!isRecord(value.theme)) {
+  if (!isViewerRecord(value.theme)) {
     return false;
   }
   if (value.theme.light !== "pierre-light" || value.theme.dark !== "pierre-dark") {

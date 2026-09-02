@@ -1,7 +1,14 @@
-import { createRequire } from "node:module";
+// Undici runtime helpers lazily load dispatcher constructors and enforce
+// OpenClaw HTTP/1, timeout, proxy TLS, and IP-safe proxy policies.
+import {
+  buildHttp1AgentOptions,
+  buildHttp1EnvHttpProxyAgentOptions,
+  buildHttp1ProxyAgentOptions,
+  loadUndiciModule,
+} from "./undici-dispatcher-options.js";
+import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
 
-export const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-
+/** Runtime-loaded undici constructors/functions used where static imports would affect globals. */
 export type UndiciRuntimeDeps = {
   Agent: typeof import("undici").Agent;
   EnvHttpProxyAgent: typeof import("undici").EnvHttpProxyAgent;
@@ -10,79 +17,66 @@ export type UndiciRuntimeDeps = {
   fetch: typeof import("undici").fetch;
 };
 
+/** Minimal undici surface needed by global-dispatcher installation code. */
+export type UndiciGlobalDispatcherDeps = Pick<UndiciRuntimeDeps, "Agent" | "EnvHttpProxyAgent"> & {
+  getGlobalDispatcher: typeof import("undici").getGlobalDispatcher;
+  setGlobalDispatcher: typeof import("undici").setGlobalDispatcher;
+};
+
 type UndiciAgentOptions = ConstructorParameters<UndiciRuntimeDeps["Agent"]>[0];
 type UndiciEnvHttpProxyAgentOptions = ConstructorParameters<
   UndiciRuntimeDeps["EnvHttpProxyAgent"]
 >[0];
 type UndiciProxyAgentOptions = ConstructorParameters<UndiciRuntimeDeps["ProxyAgent"]>[0];
 
-// Guarded fetch dispatchers intentionally stay on HTTP/1.1. Undici 8 enables
-// HTTP/2 ALPN by default, but our guarded paths rely on dispatcher overrides
-// that have not been reliable on the HTTP/2 path yet.
-const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
-  allowH2: false as const,
-});
+/** Loads undici lazily, allowing tests to inject constructors without global side effects. */
+export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
+  return loadUndiciModule(["Agent", "EnvHttpProxyAgent", "ProxyAgent", "fetch"]);
+}
 
-function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as UndiciRuntimeDeps).Agent === "function" &&
-    typeof (value as UndiciRuntimeDeps).EnvHttpProxyAgent === "function" &&
-    typeof (value as UndiciRuntimeDeps).ProxyAgent === "function" &&
-    typeof (value as UndiciRuntimeDeps).fetch === "function"
+/** Loads only the undici global-dispatcher API used by startup proxy setup. */
+export function loadUndiciGlobalDispatcherDeps(): UndiciGlobalDispatcherDeps {
+  return loadUndiciModule([
+    "Agent",
+    "EnvHttpProxyAgent",
+    "getGlobalDispatcher",
+    "setGlobalDispatcher",
+  ]);
+}
+
+/** Creates a direct undici Agent with OpenClaw's HTTP/1-only dispatcher policy. */
+export function createHttp1Agent(
+  options?: UndiciAgentOptions,
+  timeoutMs?: number,
+): import("undici").Agent {
+  const { Agent } = loadUndiciRuntimeDeps();
+  return withUndiciErrorDiagnostics(new Agent(buildHttp1AgentOptions(options, timeoutMs)));
+}
+
+/**
+ * Creates an EnvHttpProxyAgent with OpenClaw proxy TLS, IP-safe proxy pools,
+ * timeout propagation, and HTTP/1-only dispatch.
+ */
+export function createHttp1EnvHttpProxyAgent(
+  options?: UndiciEnvHttpProxyAgentOptions,
+  timeoutMs?: number,
+): import("undici").EnvHttpProxyAgent {
+  const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
+  return withUndiciErrorDiagnostics(
+    new EnvHttpProxyAgent(buildHttp1EnvHttpProxyAgentOptions(options, timeoutMs)),
   );
 }
 
-export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
-  const override = (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY];
-  if (isUndiciRuntimeDeps(override)) {
-    return override;
-  }
-
-  const require = createRequire(import.meta.url);
-  const undici = require("undici") as typeof import("undici");
-  return {
-    Agent: undici.Agent,
-    EnvHttpProxyAgent: undici.EnvHttpProxyAgent,
-    FormData: undici.FormData,
-    ProxyAgent: undici.ProxyAgent,
-    fetch: undici.fetch,
-  };
-}
-
-function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
-  options?: T,
-): (T extends object ? T : Record<never, never>) & { allowH2: false } {
-  if (!options) {
-    return { ...HTTP1_ONLY_DISPATCHER_OPTIONS } as (T extends object ? T : Record<never, never>) & {
-      allowH2: false;
-    };
-  }
-  return {
-    ...options,
-    ...HTTP1_ONLY_DISPATCHER_OPTIONS,
-  } as (T extends object ? T : Record<never, never>) & { allowH2: false };
-}
-
-export function createHttp1Agent(options?: UndiciAgentOptions): import("undici").Agent {
-  const { Agent } = loadUndiciRuntimeDeps();
-  return new Agent(withHttp1OnlyDispatcherOptions(options));
-}
-
-export function createHttp1EnvHttpProxyAgent(
-  options?: UndiciEnvHttpProxyAgentOptions,
-): import("undici").EnvHttpProxyAgent {
-  const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
-  return new EnvHttpProxyAgent(withHttp1OnlyDispatcherOptions(options));
-}
-
+/**
+ * Creates a fixed ProxyAgent with the same HTTP/1, managed TLS, timeout, and
+ * IP-safe proxy connection policy used by env proxy dispatchers.
+ */
 export function createHttp1ProxyAgent(
   options: UndiciProxyAgentOptions,
+  timeoutMs?: number,
 ): import("undici").ProxyAgent {
   const { ProxyAgent } = loadUndiciRuntimeDeps();
-  if (typeof options === "string" || options instanceof URL) {
-    return new ProxyAgent(withHttp1OnlyDispatcherOptions({ uri: options.toString() }));
-  }
-  return new ProxyAgent(withHttp1OnlyDispatcherOptions(options));
+  return withUndiciErrorDiagnostics(
+    new ProxyAgent(buildHttp1ProxyAgentOptions(options, timeoutMs)),
+  );
 }

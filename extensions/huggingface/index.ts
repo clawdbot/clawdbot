@@ -1,5 +1,7 @@
+// Huggingface plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyHuggingfaceConfig, HUGGINGFACE_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildHuggingfaceProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "huggingface";
@@ -14,23 +16,15 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Hugging Face Provider",
   description: "Bundled Hugging Face provider plugin",
+  manifest,
   provider: {
     label: "Hugging Face",
     docsPath: "/providers/huggingface",
     envVars: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
-    auth: [
-      {
-        methodId: "api-key",
-        label: "Hugging Face API key",
-        hint: "Inference API (HF token)",
-        optionKey: "huggingfaceApiKey",
-        flagName: "--huggingface-api-key",
-        envVar: "HUGGINGFACE_HUB_TOKEN",
-        promptMessage: "Enter Hugging Face API key",
-        defaultModel: HUGGINGFACE_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyHuggingfaceConfig(cfg),
-      },
-    ],
+    manifestAuth: {
+      defaultModel: HUGGINGFACE_DEFAULT_MODEL_REF,
+      applyConfig: applyHuggingfaceConfig,
+    },
     catalog: {
       order: "simple",
       run: async (ctx) => {
@@ -39,8 +33,7 @@ export default defineSingleProviderPluginEntry({
           pluginEntry && typeof pluginEntry === "object" && pluginEntry.config
             ? (pluginEntry.config as HuggingFacePluginConfig)
             : undefined;
-        const discoveryEnabled =
-          pluginConfig?.discovery?.enabled ?? ctx.config?.models?.huggingfaceDiscovery?.enabled;
+        const discoveryEnabled = pluginConfig?.discovery?.enabled;
         if (discoveryEnabled === false) {
           return null;
         }

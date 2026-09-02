@@ -1,35 +1,40 @@
+// Runtime-state test helpers hold hoisted mutable mocks shared by gateway
+// Vitest suites and module mocks.
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { Mock, vi } from "vitest";
-import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RunCronAgentTurnResult } from "../cron/isolated-agent/run.types.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
+/**
+ * Hoisted mutable state shared by gateway Vitest module mocks.
+ */
 export type GetReplyFromConfigFn = (
   ctx: MsgContext,
-  opts?: GetReplyOptions,
+  opts?: InternalGetReplyOptions,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
-export type CronIsolatedRunFn = (
-  ...args: unknown[]
-) => Promise<{ status: string; summary: string }>;
-export type AgentCommandFn = (...args: unknown[]) => Promise<void>;
-export type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
+type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>;
+type AgentCommandFn = (...args: unknown[]) => Promise<void>;
+type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
-export type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
-export type CompactEmbeddedPiSessionFn = (...args: unknown[]) => Promise<unknown>;
+type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
+type CompactEmbeddedAgentSessionFn = (...args: unknown[]) => Promise<unknown>;
 
 const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
 
-export type GatewayTestHoistedState = {
+type GatewayTestHoistedState = {
   testTailnetIPv4: { value: string | undefined };
-  piSdkMock: {
+  agentDiscoveryMock: {
     enabled: boolean;
     discoverCalls: number;
     models: Array<{
@@ -37,7 +42,10 @@ export type GatewayTestHoistedState = {
       name?: string;
       provider: string;
       contextWindow?: number;
+      contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
+      contextWindowDefault?: string;
       reasoning?: boolean;
+      input?: string[];
     }>;
   };
   cronIsolatedRun: Mock<CronIsolatedRunFn>;
@@ -45,13 +53,15 @@ export type GatewayTestHoistedState = {
   runBtwSideQuestion: Mock<RunBtwSideQuestionFn>;
   dispatchInboundMessage: Mock<DispatchInboundMessageFn>;
   testIsNixMode: { value: boolean };
-  sessionStoreSaveDelayMs: { value: number };
   embeddedRunMock: {
     activeIds: Set<string>;
     abortCalls: string[];
     waitCalls: string[];
     waitResults: Map<string, boolean>;
-    compactEmbeddedPiSession: Mock<CompactEmbeddedPiSessionFn>;
+    endWaitCalls: string[];
+    endWaiters: Map<string, (ended: boolean) => void>;
+    resolveEndBeforeTimeoutIds: Set<string>;
+    compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
   };
   testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
   getReplyFromConfig: Mock<GetReplyFromConfigFn>;
@@ -66,11 +76,11 @@ export type GatewayTestHoistedState = {
     allowFrom: string[] | undefined;
     cronStorePath: string | undefined;
     cronEnabled: boolean | undefined;
+    cronTriggersEnabled: boolean | undefined;
     gatewayBind: "auto" | "lan" | "tailnet" | "loopback" | undefined;
     gatewayAuth: Record<string, unknown> | undefined;
     gatewayControlUi: Record<string, unknown> | undefined;
     hooksConfig: HooksConfig | undefined;
-    canvasHostPort: number | undefined;
     legacyIssues: Array<{ path: string; message: string }>;
     legacyParsed: Record<string, unknown>;
     migrationConfig: Record<string, unknown> | null;
@@ -81,12 +91,12 @@ export type GatewayTestHoistedState = {
 const gatewayTestHoisted = vi.hoisted(() => {
   const key = Symbol.for("openclaw.gatewayTestHelpers.hoisted");
   const store = globalThis as Record<PropertyKey, unknown>;
-  if (Object.prototype.hasOwnProperty.call(store, key)) {
+  if (Object.hasOwn(store, key)) {
     return store[key] as GatewayTestHoistedState;
   }
   const created: GatewayTestHoistedState = {
     testTailnetIPv4: { value: undefined },
-    piSdkMock: {
+    agentDiscoveryMock: {
       enabled: false,
       discoverCalls: 0,
       models: [],
@@ -96,13 +106,15 @@ const gatewayTestHoisted = vi.hoisted(() => {
     runBtwSideQuestion: vi.fn().mockResolvedValue(undefined),
     dispatchInboundMessage: vi.fn(),
     testIsNixMode: { value: false },
-    sessionStoreSaveDelayMs: { value: 0 },
     embeddedRunMock: {
       activeIds: new Set<string>(),
       abortCalls: [],
       waitCalls: [],
       waitResults: new Map<string, boolean>(),
-      compactEmbeddedPiSession: vi.fn().mockResolvedValue({
+      endWaitCalls: [],
+      endWaiters: new Map<string, (ended: boolean) => void>(),
+      resolveEndBeforeTimeoutIds: new Set<string>(),
+      compactEmbeddedAgentSession: vi.fn().mockResolvedValue({
         ok: true,
         compacted: true,
         result: {
@@ -126,11 +138,11 @@ const gatewayTestHoisted = vi.hoisted(() => {
       allowFrom: undefined,
       cronStorePath: undefined,
       cronEnabled: false,
+      cronTriggersEnabled: undefined,
       gatewayBind: undefined,
       gatewayAuth: undefined,
       gatewayControlUi: undefined,
       hooksConfig: undefined,
-      canvasHostPort: undefined,
       legacyIssues: [],
       legacyParsed: {},
       migrationConfig: null,
@@ -141,31 +153,31 @@ const gatewayTestHoisted = vi.hoisted(() => {
   return created;
 });
 
+/** Returns the singleton state object used by gateway test module mocks. */
 export function getGatewayTestHoistedState(): GatewayTestHoistedState {
   return gatewayTestHoisted;
 }
 
 export const testTailnetIPv4 = gatewayTestHoisted.testTailnetIPv4;
 export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
-export const piSdkMock = gatewayTestHoisted.piSdkMock;
+export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
-export const agentCommand = gatewayTestHoisted.agentCommand;
-export const runBtwSideQuestion = gatewayTestHoisted.runBtwSideQuestion;
+export const agentCommandMock = gatewayTestHoisted.agentCommand;
 export const dispatchInboundMessageMock = gatewayTestHoisted.dispatchInboundMessage;
-export const getReplyFromConfig = gatewayTestHoisted.getReplyFromConfig;
+export const gatewayReplyMock = gatewayTestHoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
-  getReplyFromConfig.mockImplementationOnce(impl);
+  gatewayReplyMock.mockImplementationOnce(impl);
 };
 export const sendWhatsAppMock = gatewayTestHoisted.sendWhatsAppMock;
 export const testState = gatewayTestHoisted.testState;
 export const testIsNixMode = gatewayTestHoisted.testIsNixMode;
-export const sessionStoreSaveDelayMs = gatewayTestHoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = gatewayTestHoisted.embeddedRunMock;
 
 export const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KEY, () => ({
   value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
 }));
 
+/** Updates the config root used by gateway config-module mocks. */
 export function setTestConfigRoot(root: string): void {
   testConfigRoot.value = root;
   process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");

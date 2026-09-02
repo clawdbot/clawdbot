@@ -1,38 +1,66 @@
+// Discord tests cover send.webhook activity plugin behavior.
+import { MessageFlags } from "discord-api-types/v10";
+import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeDiscordRest } from "./send.test-harness.js";
 
 const recordChannelActivityMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ channels: { discord: {} } })));
+let dateNowSpy: ReturnType<typeof vi.spyOn>;
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
   );
   return {
     ...actual,
-    loadConfig: () => loadConfigMock(),
+    requireRuntimeConfig: (cfg: unknown) => cfg ?? loadConfigMock(),
   };
 });
 
-vi.mock("../../../src/infra/channel-activity.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/infra/channel-activity.js")>(
-    "../../../src/infra/channel-activity.js",
-  );
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivityMock(...args),
   };
 });
 
-let sendWebhookMessageDiscord: typeof import("./send.outbound.js").sendWebhookMessageDiscord;
+let sendWebhookMessageDiscord: typeof import("./send.webhook.js").sendWebhookMessageDiscord;
+let sendPollDiscord: typeof import("./send.outbound.js").sendPollDiscord;
+let sendStickerDiscord: typeof import("./send.outbound.js").sendStickerDiscord;
 
-describe("sendWebhookMessageDiscord activity", () => {
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+async function sendStructuredMessage(
+  kind: "poll" | "sticker",
+  opts: Parameters<typeof sendStickerDiscord>[2],
+) {
+  return kind === "poll"
+    ? sendPollDiscord("channel:789", { question: "Lunch?", options: ["Pizza", "Sushi"] }, opts)
+    : sendStickerDiscord("channel:789", ["123"], opts);
+}
+
+describe("Discord outbound channel activity", () => {
   beforeAll(async () => {
-    ({ sendWebhookMessageDiscord } = await import("./send.outbound.js"));
+    ({ sendWebhookMessageDiscord } = await import("./send.webhook.js"));
+    ({ sendPollDiscord, sendStickerDiscord } = await import("./send.outbound.js"));
   });
 
   beforeEach(() => {
     recordChannelActivityMock.mockClear();
     loadConfigMock.mockClear();
+    dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -45,6 +73,7 @@ describe("sendWebhookMessageDiscord activity", () => {
   });
 
   afterEach(() => {
+    dateNowSpy.mockRestore();
     vi.unstubAllGlobals();
   });
 
@@ -67,12 +96,207 @@ describe("sendWebhookMessageDiscord activity", () => {
     expect(result).toEqual({
       messageId: "msg-1",
       channelId: "thread-1",
+      receipt: {
+        primaryPlatformMessageId: "msg-1",
+        platformMessageIds: ["msg-1"],
+        parts: [
+          {
+            platformMessageId: "msg-1",
+            kind: "text",
+            index: 0,
+            threadId: "thread-1",
+            raw: {
+              channel: "discord",
+              messageId: "msg-1",
+              channelId: "thread-1",
+            },
+          },
+        ],
+        threadId: "thread-1",
+        sentAt: 1_700_000_000_000,
+        raw: [
+          {
+            channel: "discord",
+            messageId: "msg-1",
+            channelId: "thread-1",
+          },
+        ],
+      },
     });
     expect(recordChannelActivityMock).toHaveBeenCalledWith({
       channel: "discord",
       accountId: "runtime",
       direction: "outbound",
     });
+    expect(
+      isRecentOutboundMessageIdentity({
+        channel: "discord",
+        accountId: "runtime",
+        conversationId: "thread-1",
+        messageId: "msg-1",
+      }),
+    ).toBe(true);
     expect(loadConfigMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { kind: "poll", accountId: undefined, defaultAccount: undefined, expectedAccountId: "default" },
+    { kind: "poll", accountId: " Work ", defaultAccount: undefined, expectedAccountId: "work" },
+    { kind: "poll", accountId: undefined, defaultAccount: "work", expectedAccountId: "work" },
+    {
+      kind: "sticker",
+      accountId: undefined,
+      defaultAccount: undefined,
+      expectedAccountId: "default",
+    },
+    { kind: "sticker", accountId: " Work ", defaultAccount: undefined, expectedAccountId: "work" },
+    { kind: "sticker", accountId: undefined, defaultAccount: "work", expectedAccountId: "work" },
+  ] as const)(
+    "records successful $kind sends for the resolved $expectedAccountId account",
+    async ({ kind, accountId, defaultAccount, expectedAccountId }) => {
+      const { rest, postMock } = makeDiscordRest();
+      postMock.mockResolvedValue({ id: "msg-1", channel_id: "789" });
+      const cfg = {
+        channels: {
+          discord: {
+            token: "resolved-token",
+            accounts: {
+              default: { token: "default-token" },
+              work: { token: "work-token" },
+            },
+            ...(defaultAccount ? { defaultAccount } : {}),
+          },
+        },
+      };
+
+      await sendStructuredMessage(kind, {
+        cfg,
+        rest,
+        token: "test-token",
+        ...(accountId ? { accountId } : {}),
+      });
+
+      expect(recordChannelActivityMock).toHaveBeenCalledExactlyOnceWith({
+        channel: "discord",
+        accountId: expectedAccountId,
+        direction: "outbound",
+      });
+    },
+  );
+
+  it.each(["poll", "sticker"] as const)(
+    "does not record outbound activity when a %s send fails",
+    async (kind) => {
+      const { rest, postMock } = makeDiscordRest();
+      postMock.mockRejectedValue(new Error("provider rejected"));
+
+      await expect(
+        sendStructuredMessage(kind, {
+          cfg: { channels: { discord: { token: "resolved-token" } } },
+          rest,
+          token: "test-token",
+        }),
+      ).rejects.toThrow("provider rejected");
+      expect(recordChannelActivityMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rewrites configured mention aliases for webhook sends", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "resolved-token",
+          mentionAliases: {
+            opslead: "123456789012345678",
+          },
+        },
+      },
+    };
+    await sendWebhookMessageDiscord("hello @OpsLead", {
+      cfg,
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+      accountId: "runtime",
+      threadId: "thread-1",
+    });
+
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstMockCall(fetchMock, "fetch")).toEqual([
+      "https://discord.com/api/v10/webhooks/wh-1/tok-1?wait=true&thread_id=thread-1",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          content: "hello <@123456789012345678>",
+          flags: MessageFlags.SuppressEmbeds,
+        }),
+        signal: expect.any(AbortSignal),
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "the default",
+      channelSuppressEmbeds: undefined,
+      accountSuppressEmbeds: undefined,
+      expectedFlags: MessageFlags.SuppressEmbeds,
+    },
+    {
+      name: "the channel opt-out",
+      channelSuppressEmbeds: false,
+      accountSuppressEmbeds: undefined,
+      expectedFlags: undefined,
+    },
+    {
+      name: "an account opt-out",
+      channelSuppressEmbeds: true,
+      accountSuppressEmbeds: false,
+      expectedFlags: undefined,
+    },
+    {
+      name: "an account opt-in",
+      channelSuppressEmbeds: false,
+      accountSuppressEmbeds: true,
+      expectedFlags: MessageFlags.SuppressEmbeds,
+    },
+  ])(
+    "applies $name for webhook link-preview suppression",
+    async ({ channelSuppressEmbeds, accountSuppressEmbeds, expectedFlags }) => {
+      const cfg = {
+        channels: {
+          discord: {
+            token: "resolved-token",
+            ...(channelSuppressEmbeds === undefined
+              ? {}
+              : { suppressEmbeds: channelSuppressEmbeds }),
+            accounts: {
+              runtime:
+                accountSuppressEmbeds === undefined
+                  ? {}
+                  : { suppressEmbeds: accountSuppressEmbeds },
+            },
+          },
+        },
+      };
+
+      await sendWebhookMessageDiscord("https://example.com", {
+        cfg,
+        webhookId: "wh-1",
+        webhookToken: "tok-1",
+        accountId: "runtime",
+        threadId: "thread-1",
+      });
+
+      const request = firstMockCall(vi.mocked(fetch), "fetch")[1] as RequestInit;
+      if (typeof request.body !== "string") {
+        throw new Error("expected webhook request body");
+      }
+      const body = JSON.parse(request.body) as { flags?: number };
+      expect(body.flags).toBe(expectedFlags);
+    },
+  );
 });

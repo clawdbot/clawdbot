@@ -1,22 +1,38 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import { canExecRequestNode } from "../../agents/exec-defaults.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import type { EmbeddedContextFile } from "../../agents/pi-embedded-helpers.js";
-import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { getSkillsSnapshotVersion } from "../../agents/skills/refresh-state.js";
-import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
-import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
+// Implements system prompt inspection commands for agent runtime sessions.
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import type { EmbeddedContextFile } from "../../agents/embedded-agent-helpers.js";
+import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
+import {
+  mapSandboxSkillEntriesForPrompt,
+  resolveSandboxSkillRuntimeInputs,
+} from "../../agents/embedded-agent-runner/sandbox-skills.js";
+import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
+import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
+import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
+import type { AgentTool } from "../../agents/runtime/index.js";
+import {
+  ensureSandboxWorkspaceForSession,
+  resolveSandboxRuntimeStatus,
+} from "../../agents/sandbox.js";
+import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { buildTtsSystemPromptHint } from "../../tts/tts.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+import type { SkillEligibilityContext } from "../../skills/types.js";
+import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
-export type CommandsSystemPromptBundle = {
+const log = createSubsystemLogger("auto-reply/commands-system-prompt");
+
+type CommandsSystemPromptBundle = {
   systemPrompt: string;
   tools: AgentTool[];
   skillsPrompt: string;
@@ -25,55 +41,182 @@ export type CommandsSystemPromptBundle = {
   sandboxRuntime: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 
+function resolveCommandSkillsEligibility(params: {
+  agentId: string;
+  config: HandleCommandsParams["cfg"];
+  sessionEntry: HandleCommandsParams["sessionEntry"] | undefined;
+  sessionKey: string | undefined;
+}): SkillEligibilityContext {
+  try {
+    const nodeSkills = resolveNodeExecEligibility({
+      cfg: params.config,
+      sessionEntry: params.sessionEntry,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+    });
+    return {
+      nodeSkills,
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: nodeSkills.canExec,
+      }),
+    };
+  } catch {
+    try {
+      return {
+        nodeSkills: { canExec: false },
+        remote: getRemoteSkillEligibility({
+          advertiseExecNode: false,
+        }),
+      };
+    } catch {
+      return { nodeSkills: { canExec: false } };
+    }
+  }
+}
+
+async function resolveCommandSkillsPrompt(params: {
+  agentId: string;
+  config: HandleCommandsParams["cfg"];
+  eligibility: SkillEligibilityContext;
+  sandboxAgentId: string;
+  sandboxed: boolean;
+  sessionKey: string | undefined;
+  workspaceDir: string;
+}): Promise<string> {
+  if (params.sandboxed) {
+    try {
+      // Sandboxed prompt inspection must not fall back to host skill snapshots:
+      // those paths can be unreadable inside the container.
+      const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
+        config: params.config,
+        agentId: params.sandboxAgentId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+      });
+      if (!sandboxWorkspace) {
+        return "";
+      }
+      if (sandboxWorkspace.containerWorkdir) {
+        const {
+          skillsEligibility,
+          skillsPromptWorkspaceDir,
+          skillsSnapshot: skillsSnapshotForRun,
+          skillsWorkspaceDir,
+          workspaceOnly,
+        } = resolveSandboxSkillRuntimeInputs({
+          sandbox: {
+            enabled: true,
+            containerWorkdir: sandboxWorkspace.containerWorkdir,
+            ...(sandboxWorkspace.skillsEligibility
+              ? { skillsEligibility: sandboxWorkspace.skillsEligibility }
+              : {}),
+            ...(sandboxWorkspace.skillsWorkspaceDir
+              ? { skillsWorkspaceDir: sandboxWorkspace.skillsWorkspaceDir }
+              : {}),
+            ...(sandboxWorkspace.workspaceAccess
+              ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
+              : {}),
+          },
+          skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
+        });
+        const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
+          resolveEmbeddedRunSkillEntries({
+            workspaceDir: skillsWorkspaceDir,
+            config: params.config,
+            agentId: params.agentId,
+            eligibility: skillsEligibility,
+            skillsSnapshot: skillsSnapshotForRun,
+            workspaceOnly,
+          });
+        const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
+          entries: shouldLoadSkillEntries ? skillEntries : undefined,
+          skillsWorkspaceDir,
+          skillsPromptWorkspaceDir,
+        });
+        return resolveSkillsPrompt({
+          skillsSnapshot: skillsSnapshotForRun,
+          entries: promptSkillEntries,
+          config: params.config,
+          workspaceDir: skillsPromptWorkspaceDir,
+          agentId: params.agentId,
+          eligibility: skillsEligibility,
+          preserveEntryOrder,
+        });
+      }
+      // Existing third-party backends may not expose the optional workdir
+      // resolver yet. Preserve their previous host-snapshot inspection path.
+    } catch {
+      return "";
+    }
+  }
+
+  try {
+    const skillsSnapshot = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: params.workspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      eligibility: params.eligibility,
+      watch: false,
+    });
+    return skillsSnapshot.snapshot.prompt ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-    agentId: params.agentId,
-  });
+  const sessionAgentId = params.agentId;
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    chatType: targetSessionEntry?.chatType,
+    agentId: sessionAgentId,
+    warn: makeBootstrapWarn({
+      sessionLabel: params.sessionKey,
+      workspaceDir,
+      warn: (message) => log.warn(message),
+    }),
+  });
+  const toolPolicySessionKey = resolveRuntimePolicySessionKey({
+    agentId: sessionAgentId,
+    cfg: params.cfg,
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: params.sessionKey ?? params.ctx.SessionKey,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: toolPolicySessionKey,
   });
-  const skillsSnapshot = (() => {
-    try {
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: params.cfg,
-        agentId: sessionAgentId,
-        eligibility: {
-          remote: getRemoteSkillEligibility({
-            advertiseExecNode: canExecRequestNode({
-              cfg: params.cfg,
-              sessionEntry: targetSessionEntry,
-              sessionKey: params.sessionKey,
-              agentId: sessionAgentId,
-            }),
-          }),
-        },
-        snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
-      });
-    } catch {
-      return { prompt: "", skills: [], resolvedSkills: [] };
-    }
-  })();
-  const skillsPrompt = skillsSnapshot.prompt ?? "";
+  const skillsEligibility = resolveCommandSkillsEligibility({
+    agentId: sessionAgentId,
+    config: params.cfg,
+    sessionEntry: targetSessionEntry,
+    sessionKey: params.sessionKey,
+  });
+  const skillsPrompt = await resolveCommandSkillsPrompt({
+    agentId: sessionAgentId,
+    config: params.cfg,
+    eligibility: skillsEligibility,
+    sandboxAgentId: sandboxRuntime.classificationAgentId,
+    sandboxed: sandboxRuntime.sandboxed,
+    sessionKey: toolPolicySessionKey,
+    workspaceDir,
+  });
   const tools = (() => {
     try {
       return createOpenClawCodingTools({
         config: params.cfg,
         agentId: sessionAgentId,
         workspaceDir,
-        sessionKey: params.sessionKey,
+        sessionKey: toolPolicySessionKey,
         allowGatewaySubagentBinding: true,
         messageProvider: params.command.channel,
         groupId: targetSessionEntry?.groupId ?? undefined,
@@ -84,7 +227,6 @@ export async function resolveCommandsSystemPromptBundle(
         senderName: params.ctx.SenderName,
         senderUsername: params.ctx.SenderUsername,
         senderE164: params.ctx.SenderE164,
-        senderIsOwner: params.command.senderIsOwner,
         modelProvider: params.provider,
         modelId: params.model,
       });
@@ -93,25 +235,41 @@ export async function resolveCommandsSystemPromptBundle(
     }
   })();
   const toolNames = tools.map((t) => t.name);
-  const defaultModelRef = resolveDefaultModelForAgent({
-    cfg: params.cfg,
-    agentId: sessionAgentId,
-  });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
+  const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
+  const accountId = params.command.accountId ?? params.ctx.AccountId;
+  // Thread adapters own provider-specific targets. Command-only route fallbacks cover
+  // synthetic command contexts that bypass the normal inbound attempt preparation.
+  const threadingContext = buildThreadingToolContext({
+    sessionCtx: params.ctx,
     config: params.cfg,
-    agentId: sessionAgentId,
-    workspaceDir,
-    cwd: process.cwd(),
-    runtime: {
-      host: "unknown",
-      os: "unknown",
-      arch: "unknown",
-      node: process.version,
-      model: `${params.provider}/${params.model}`,
-      defaultModel: defaultModelLabel,
-    },
+    hasRepliedRef: undefined,
   });
+  const fallbackChannelId =
+    params.ctx.NativeChannelId?.trim() ||
+    params.ctx.ChatId?.trim() ||
+    params.ctx.OriginatingTo?.trim() ||
+    params.command.to;
+  const fallbackThreadId = params.ctx.MessageThreadId ?? params.ctx.TransportThreadId;
+  const { runtimeInfo, userTimezone, userDate, reactionGuidance, messageToolHints } =
+    await resolveAgentRuntimePrompt({
+      config: params.cfg,
+      agentId: sessionAgentId,
+      workspaceDir,
+      cwd: process.cwd(),
+      sessionKey: params.sessionKey,
+      sessionId: targetSessionEntry?.sessionId,
+      model: `${params.provider}/${params.model}`,
+      channel: params.command.channel,
+      accountId,
+      chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
+      currentChannelId: threadingContext.currentChannelId ?? fallbackChannelId,
+      currentThreadTs:
+        threadingContext.currentThreadTs ??
+        (fallbackThreadId === undefined ? undefined : String(fallbackThreadId)),
+      currentMessageId: threadingContext.currentMessageId,
+      senderId: params.ctx.SenderId ?? params.command.senderId,
+      senderIsOwner: params.command.senderIsOwner,
+    });
   const fullAccessState = resolveEmbeddedFullAccessState({
     execElevated: {
       enabled: params.elevated.enabled,
@@ -134,9 +292,9 @@ export async function resolveCommandsSystemPromptBundle(
         },
       }
     : { enabled: false };
-  const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
-
-  const systemPrompt = buildAgentSystemPrompt({
+  const systemPrompt = buildConfiguredAgentSystemPrompt({
+    config: params.cfg,
+    agentId: sessionAgentId,
     workspaceDir,
     defaultThinkLevel: params.resolvedThinkLevel,
     reasoningLevel: params.resolvedReasoningLevel,
@@ -144,18 +302,22 @@ export async function resolveCommandsSystemPromptBundle(
     ownerNumbers: undefined,
     reasoningTagHint: false,
     toolNames,
-    modelAliasLines: [],
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
     contextFiles: injectedFiles,
     skillsPrompt,
-    heartbeatPrompt: undefined,
-    ttsHint,
-    acpEnabled: params.cfg?.acp?.enabled !== false,
+    acpEnabled: isAcpRuntimeSpawnAvailable({
+      config: params.cfg,
+      sandboxed: sandboxRuntime.sandboxed,
+    }),
+    promptSurface,
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: promptSurface,
+    }),
+    reactionGuidance,
+    messageToolHints,
     runtimeInfo,
     sandboxInfo,
-    memoryCitationsMode: params.cfg?.memory?.citations,
   });
 
   return { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime };

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Plugin Clawhub Release Plan script supports OpenClaw repository automation.
 
 import { pathToFileURL } from "node:url";
 import {
@@ -6,7 +7,7 @@ import {
   parsePluginReleaseArgs,
 } from "./lib/plugin-clawhub-release.ts";
 
-export async function collectPluginReleasePlanForClawHub(argv: string[]) {
+async function collectPluginReleasePlanForClawHub(argv: string[]) {
   const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
   return await collectPluginClawHubReleasePlan({
     selection,

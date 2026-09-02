@@ -1,3 +1,4 @@
+// Matrix plugin module implements env vars behavior.
 import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 
 const MATRIX_SCOPED_ENV_SUFFIXES = [
@@ -43,12 +44,13 @@ export function getMatrixScopedEnvVarNames(accountId: string): {
 
 function decodeMatrixEnvAccountToken(token: string): string | undefined {
   let decoded = "";
-  for (let index = 0; index < token.length; ) {
+  for (let index = 0; index < token.length;) {
     const hexEscape = /^_X([0-9A-F]+)_/.exec(token.slice(index));
     if (hexEscape) {
       const hex = hexEscape[1];
       const codePoint = hex ? Number.parseInt(hex, 16) : Number.NaN;
-      if (!Number.isFinite(codePoint)) {
+      // Reject invalid code points so one malformed env token cannot abort Matrix discovery.
+      if (!Number.isInteger(codePoint) || codePoint > 0x10ffff) {
         return undefined;
       }
       const char = String.fromCodePoint(codePoint);
@@ -83,7 +85,11 @@ export function listMatrixEnvAccountIds(env: NodeJS.ProcessEnv = process.env): s
     if (!match) {
       continue;
     }
-    const accountId = decodeMatrixEnvAccountToken(match[1]);
+    const encodedAccountId = match[1];
+    if (!encodedAccountId) {
+      continue;
+    }
+    const accountId = decodeMatrixEnvAccountToken(encodedAccountId);
     if (accountId) {
       ids.add(accountId);
     }

@@ -1,12 +1,16 @@
+// Resolves allowed Control UI origins for gateway access.
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
+/** Non-loopback gateway bind modes that require explicit Control UI allowed origins. */
 export type GatewayNonLoopbackBindMode = "lan" | "tailnet" | "custom" | "auto";
 
+/** Narrows arbitrary config/runtime bind values to non-loopback bind modes. */
 export function isGatewayNonLoopbackBindMode(bind: unknown): bind is GatewayNonLoopbackBindMode {
   return bind === "lan" || bind === "tailnet" || bind === "custom" || bind === "auto";
 }
 
+/** Returns whether Control UI origin config is already explicit enough for non-loopback binds. */
 export function hasConfiguredControlUiAllowedOrigins(params: {
   allowedOrigins: unknown;
   dangerouslyAllowHostHeaderOriginFallback: unknown;
@@ -20,6 +24,7 @@ export function hasConfiguredControlUiAllowedOrigins(params: {
   );
 }
 
+/** Resolves the gateway port used when constructing default Control UI origins. */
 export function resolveGatewayPortWithDefault(
   port: unknown,
   fallback = DEFAULT_GATEWAY_PORT,
@@ -27,6 +32,7 @@ export function resolveGatewayPortWithDefault(
   return typeof port === "number" && port > 0 ? port : fallback;
 }
 
+/** Builds loopback plus custom-bind Control UI origins for a resolved gateway port. */
 export function buildDefaultControlUiAllowedOrigins(params: {
   port: number;
   bind: unknown;
@@ -43,11 +49,18 @@ export function buildDefaultControlUiAllowedOrigins(params: {
   return [...origins];
 }
 
+/** Seeds safe default Control UI origins before non-loopback gateway startup validation. */
 export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   config: OpenClawConfig,
   opts?: {
     defaultPort?: number;
     requireControlUiEnabled?: boolean;
+    /** Resolved runtime bind override. Mirrors Gateway runtime precedence:
+     *  explicit CLI/runtime bind wins over gateway.bind. */
+    runtimeBind?: unknown;
+    /** Resolved runtime port override. Mirrors Gateway runtime precedence:
+     *  explicit CLI/runtime port wins over gateway.port. */
+    runtimePort?: unknown;
     /** Optional container-detection callback.  When provided and `gateway.bind`
      *  is unset, the function is called to determine whether the runtime will
      *  default to `"auto"` (container) so that origins can be seeded
@@ -60,7 +73,7 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
   seededOrigins: string[] | null;
   bind: GatewayNonLoopbackBindMode | null;
 } {
-  const bind = config.gateway?.bind;
+  const bind = opts?.runtimeBind ?? config.gateway?.bind;
   // When bind is unset (undefined) and we are inside a container, the runtime
   // will default to "auto" → 0.0.0.0 via defaultGatewayBindMode().  We must
   // seed origins *before* resolveGatewayRuntimeConfig runs, otherwise the
@@ -83,7 +96,10 @@ export function ensureControlUiAllowedOriginsForNonLoopbackBind(
     return { config, seededOrigins: null, bind: effectiveBind };
   }
 
-  const port = resolveGatewayPortWithDefault(config.gateway?.port, opts?.defaultPort);
+  const port = resolveGatewayPortWithDefault(
+    opts?.runtimePort ?? config.gateway?.port,
+    opts?.defaultPort,
+  );
   const seededOrigins = buildDefaultControlUiAllowedOrigins({
     port,
     bind: effectiveBind,

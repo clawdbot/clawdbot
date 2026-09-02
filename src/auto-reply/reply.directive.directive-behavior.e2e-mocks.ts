@@ -1,11 +1,12 @@
+/** Shared E2E mocks for directive behavior tests that exercise reply-agent dispatch. */
 import { vi, type Mock } from "vitest";
 
-export const runEmbeddedPiAgentMock: Mock = vi.fn();
-export const compactEmbeddedPiSessionMock: Mock = vi.fn();
+export const runEmbeddedAgentMock: Mock = vi.fn();
+export const compactEmbeddedAgentSessionMock: Mock = vi.fn();
 export const loadModelCatalogMock: Mock = vi.fn();
 export const resolveCommandSecretRefsViaGatewayMock: Mock = vi.fn();
 export const clearSessionAuthProfileOverrideMock: Mock = vi.fn();
-export const resolveSessionAuthProfileOverrideMock: Mock = vi.fn();
+export const resolveSessionAuthSelectionMock: Mock = vi.fn();
 
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
@@ -21,6 +22,7 @@ function normalizeReplyAgentPayload(payload: Record<string, unknown>, params: un
   const replyToCurrentPattern = /\[\[\s*reply_to_current\s*\]\]/gi;
   const hasReplyToCurrent = replyToCurrentPattern.test(text);
   const currentMessageId = objectRecord(objectRecord(params)?.sessionCtx)?.MessageSid;
+  // Directive tests encode reply targets in text markers so mocked agents can stay lightweight.
   const cleanedText = text
     .replace(replyToCurrentPattern, "")
     .replace(/\[\[\s*reply_to\s*:\s*([^\]]+?)\s*\]\]/gi, "")
@@ -38,7 +40,7 @@ function normalizeReplyAgentPayload(payload: Record<string, unknown>, params: un
 }
 
 async function runMockedReplyAgent(runParams: unknown, params: unknown) {
-  const result = await runEmbeddedPiAgentMock(runParams);
+  const result = await runEmbeddedAgentMock(runParams);
   const payloadsRaw = objectRecord(result)?.payloads;
   const payloads = Array.isArray(payloadsRaw)
     ? payloadsRaw.flatMap((payload) => {
@@ -53,6 +55,7 @@ async function runMockedReplyAgent(runParams: unknown, params: unknown) {
   return normalized.length === 1 ? normalized[0] : normalized;
 }
 
+/** Runs the mocked reply agent using the follow-up run payload from directive tests. */
 export async function runDirectiveBehaviorReplyAgent(params: unknown) {
   const runParams = objectRecord(objectRecord(params)?.followupRun)?.run ?? {};
   return await runMockedReplyAgent(runParams, params);
@@ -60,6 +63,7 @@ export async function runDirectiveBehaviorReplyAgent(params: unknown) {
 
 export const runReplyAgentMock: Mock = vi.fn(runDirectiveBehaviorReplyAgent);
 
+/** Runs the mocked prepared-reply path with the resolved model and elevation settings. */
 export async function runDirectiveBehaviorPreparedReply(params: unknown) {
   const input = objectRecord(params) ?? {};
   const runParams = {
@@ -80,31 +84,40 @@ export async function runDirectiveBehaviorPreparedReply(params: unknown) {
 
 export const runPreparedReplyMock: Mock = vi.fn(runDirectiveBehaviorPreparedReply);
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  compactEmbeddedPiSession: (...args: unknown[]) => compactEmbeddedPiSessionMock(...args),
-  runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
+  runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("../agents/pi-embedded.runtime.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  compactEmbeddedPiSession: (...args: unknown[]) => compactEmbeddedPiSessionMock(...args),
-  runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+vi.mock("../agents/embedded-agent.runtime.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
+  runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
+
+vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/thinking-runtime.js")>();
+  return {
+    ...actual,
+    // These tests cover directive acknowledgements and persistence, not harness selection.
+    // Keep each directive from loading unrelated provider-route metadata through auto selection.
+    resolveEffectiveAgentRuntime: () => "openclaw",
+  };
+});
 
 vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>
@@ -114,15 +127,18 @@ vi.mock("../cli/command-secret-gateway.js", () => ({
 vi.mock("../agents/auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: (...args: unknown[]) =>
     clearSessionAuthProfileOverrideMock(...args),
-  resolveSessionAuthProfileOverride: (...args: unknown[]) =>
-    resolveSessionAuthProfileOverrideMock(...args),
+  resolveSessionAuthSelection: (...args: unknown[]) => resolveSessionAuthSelectionMock(...args),
 }));
 
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => undefined,
-  initializeGlobalHookRunner: vi.fn(),
-  resetGlobalHookRunner: vi.fn(),
-}));
+vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: () => undefined,
+    initializeGlobalHookRunner: vi.fn(),
+    resetGlobalHookRunner: vi.fn(),
+  };
+});
 
 vi.mock("./reply/agent-runner.runtime.js", () => ({
   runReplyAgent: (...args: unknown[]) => runReplyAgentMock(...args),

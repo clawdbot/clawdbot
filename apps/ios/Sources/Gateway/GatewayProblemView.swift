@@ -2,6 +2,50 @@ import OpenClawKit
 import SwiftUI
 import UIKit
 
+extension GatewayConnectionProblem.PresentationText {
+    var localizedString: String {
+        switch self {
+        case let .localized(key):
+            String(localized: String.LocalizationValue(key))
+        case let .localizedFormat(format, arguments):
+            String(
+                format: String(localized: String.LocalizationValue(format)),
+                locale: .current,
+                arguments: arguments.map { $0 as CVarArg })
+        case let .verbatim(value):
+            value
+        }
+    }
+}
+
+extension GatewayConnectionProblem {
+    var localizedTitle: String {
+        self.titlePresentation.localizedString
+    }
+
+    var localizedMessage: String {
+        self.messagePresentation.localizedString
+    }
+
+    var localizedActionLabel: String? {
+        self.actionLabelPresentation?.localizedString
+    }
+
+    var localizedStatusText: String {
+        switch self.kind {
+        case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,
+             .pairingMetadataUpgradeRequired, .protocolMismatch:
+            guard let requestId else { return self.localizedTitle }
+            return String(
+                format: String(localized: "%@ (request ID: %@)"),
+                self.localizedTitle,
+                requestId)
+        default:
+            return self.localizedTitle
+        }
+    }
+}
+
 struct GatewayProblemBanner: View {
     let problem: GatewayConnectionProblem
     var primaryActionTitle: String?
@@ -9,108 +53,67 @@ struct GatewayProblemBanner: View {
     var onShowDetails: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: self.iconName)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(self.tint)
-                    .frame(width: 20)
-                    .padding(.top, 2)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(self.problem.title)
-                            .font(.subheadline.weight(.semibold))
-                            .multilineTextAlignment(.leading)
-                        Spacer(minLength: 0)
-                        Text(self.ownerLabel)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Text(self.problem.message)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if let requestId = self.problem.requestId {
-                        Text("Request ID: \(requestId)")
-                            .font(.system(.caption, design: .monospaced).weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-
-            HStack(spacing: 10) {
-                if let primaryActionTitle, let onPrimaryAction {
-                    Button(primaryActionTitle, action: onPrimaryAction)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                }
-                if let onShowDetails {
-                    Button("Details", action: onShowDetails)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            .thinMaterial,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
+        OpenClawNoticeBanner(
+            icon: self.iconName,
+            title: .verbatim(self.problem.localizedTitle),
+            message: .verbatim(self.problem.localizedMessage),
+            ownerLabel: .localized(self.ownerLabel),
+            tint: self.tint,
+            detail: self.problem.requestId.map(OpenClawNoticeDetail.requestID),
+            primaryActionTitle: self.primaryActionTitle.map(OpenClawTextValue.verbatim),
+            onPrimaryAction: self.onPrimaryAction,
+            secondaryActionTitle: "Details",
+            onSecondaryAction: self.onShowDetails)
     }
 
     private var iconName: String {
         switch self.problem.kind {
         case .pairingRequired,
-            .pairingRoleUpgradeRequired,
-            .pairingScopeUpgradeRequired,
-            .pairingMetadataUpgradeRequired:
-            return "person.crop.circle.badge.clock"
+             .pairingRoleUpgradeRequired,
+             .pairingScopeUpgradeRequired,
+             .pairingMetadataUpgradeRequired:
+            "person.crop.circle.badge.clock"
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-            return "wifi.exclamationmark"
+            "wifi.exclamationmark"
         case .deviceIdentityRequired,
-            .deviceSignatureExpired,
-            .deviceNonceRequired,
-            .deviceNonceMismatch,
-            .deviceSignatureInvalid,
-            .devicePublicKeyInvalid,
-            .deviceIdMismatch:
-            return "lock.shield"
+             .deviceSignatureExpired,
+             .deviceNonceRequired,
+             .deviceNonceMismatch,
+             .deviceSignatureInvalid,
+             .devicePublicKeyInvalid,
+             .deviceIdMismatch:
+            "lock.shield"
         default:
-            return "exclamationmark.triangle.fill"
+            "exclamationmark.triangle.fill"
         }
     }
 
     private var tint: Color {
         switch self.problem.kind {
         case .pairingRequired,
-            .pairingRoleUpgradeRequired,
-            .pairingScopeUpgradeRequired,
-            .pairingMetadataUpgradeRequired:
-            return .orange
+             .pairingRoleUpgradeRequired,
+             .pairingScopeUpgradeRequired,
+             .pairingMetadataUpgradeRequired:
+            OpenClawBrand.warn
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
-            return .yellow
+            OpenClawBrand.warn
         default:
-            return .red
+            OpenClawBrand.danger
         }
     }
 
     private var ownerLabel: String {
         switch self.problem.owner {
         case .gateway:
-            return "Fix on gateway"
+            "Fix on gateway"
         case .iphone:
-            return "Fix on iPhone"
+            "Fix on this device"
         case .both:
-            return "Check both"
+            "Check both"
         case .network:
-            return "Check network"
+            "Check network"
         case .unknown:
-            return "Needs attention"
+            "Needs attention"
         }
     }
 }
@@ -129,13 +132,13 @@ struct GatewayProblemDetailsSheet: View {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(self.problem.title)
-                            .font(.title3.weight(.semibold))
-                        Text(self.problem.message)
-                            .font(.body)
+                        Text(verbatim: self.problem.localizedTitle)
+                            .font(OpenClawType.title3)
+                        Text(verbatim: self.problem.localizedMessage)
+                            .font(OpenClawType.body)
                             .foregroundStyle(.secondary)
-                        Text(self.ownerSummary)
-                            .font(.footnote.weight(.semibold))
+                        Text(LocalizedStringKey(self.ownerSummary))
+                            .font(OpenClawType.footnoteSemiBold)
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -143,54 +146,76 @@ struct GatewayProblemDetailsSheet: View {
                 }
 
                 if let requestId = self.problem.requestId {
-                    Section("Request") {
+                    Section {
                         Text(verbatim: requestId)
-                            .font(.system(.body, design: .monospaced))
+                            .font(OpenClawType.mono)
                             .textSelection(.enabled)
-                        Button("Copy request ID") {
+                        Button {
                             UIPasteboard.general.string = requestId
                             self.copyFeedback = "Copied request ID"
+                        } label: {
+                            Text("Copy request ID")
+                                .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
+                    } header: {
+                        Text("Request")
+                            .font(OpenClawType.captionSemiBold)
                     }
                 }
 
                 if let actionCommand = self.problem.actionCommand {
-                    Section("Gateway command") {
+                    Section {
                         Text(verbatim: actionCommand)
-                            .font(.system(.body, design: .monospaced))
+                            .font(OpenClawType.mono)
                             .textSelection(.enabled)
-                        Button("Copy command") {
+                        Button {
                             UIPasteboard.general.string = actionCommand
                             self.copyFeedback = "Copied command"
+                        } label: {
+                            Text("Copy command")
+                                .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
+                    } header: {
+                        Text("Gateway command")
+                            .font(OpenClawType.captionSemiBold)
                     }
                 }
 
                 if let docsURL = self.problem.docsURL {
-                    Section("Help") {
+                    Section {
                         Link(destination: docsURL) {
                             Label("Open docs", systemImage: "book")
+                                .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
                         Text(verbatim: docsURL.absoluteString)
-                            .font(.footnote)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                    } header: {
+                        Text("Help")
+                            .font(OpenClawType.captionSemiBold)
                     }
                 }
 
                 if let technicalDetails = self.problem.technicalDetails {
-                    Section("Technical details") {
+                    Section {
                         Text(verbatim: technicalDetails)
-                            .font(.system(.footnote, design: .monospaced))
+                            .font(OpenClawType.monoFootnote)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                    } header: {
+                        Text("Technical details")
+                            .font(OpenClawType.captionSemiBold)
                     }
                 }
 
                 if let copyFeedback {
                     Section {
-                        Text(copyFeedback)
-                            .font(.footnote)
+                        Text(verbatim: copyFeedback)
+                            .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -198,18 +223,30 @@ struct GatewayProblemDetailsSheet: View {
             .navigationTitle("Connection problem")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Connection problem")
+                        .font(OpenClawType.headline)
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     if let primaryActionTitle, let onPrimaryAction {
-                        Button(primaryActionTitle) {
+                        Button {
                             self.dismiss()
                             onPrimaryAction()
+                        } label: {
+                            Text(verbatim: primaryActionTitle)
+                                .font(OpenClawType.subheadSemiBold)
                         }
+                        .font(OpenClawType.subheadSemiBold)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button {
                         self.dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(OpenClawType.subheadSemiBold)
                     }
+                    .font(OpenClawType.subheadSemiBold)
                 }
             }
         }
@@ -218,15 +255,15 @@ struct GatewayProblemDetailsSheet: View {
     private var ownerSummary: String {
         switch self.problem.owner {
         case .gateway:
-            return "Primary fix: gateway"
+            "Primary fix: gateway"
         case .iphone:
-            return "Primary fix: this iPhone"
+            "Primary fix: this device"
         case .both:
-            return "Primary fix: check both this iPhone and the gateway"
+            "Primary fix: check both this device and the gateway"
         case .network:
-            return "Primary fix: network or remote access"
+            "Primary fix: network or remote access"
         case .unknown:
-            return "Primary fix: review details and retry"
+            "Primary fix: review details and retry"
         }
     }
 }

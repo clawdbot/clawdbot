@@ -1,33 +1,32 @@
+// Shared filesystem, path, and process helpers for the CLI.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
 import {
   resolveEffectiveHomeDir,
-  resolveHomeRelativePath,
   resolveRequiredHomeDir,
+  resolveUserPath,
 } from "./infra/home-dir.js";
+import { shortenPathWithHome } from "./infra/home-display.js";
 import { isPlainObject } from "./infra/plain-object.js";
+import { escapeRegExp as escapeRegExpValue } from "./shared/regexp.js";
+export { escapeRegExp } from "./shared/regexp.js";
+export { sleep } from "./utils/sleep.js";
+export { isRecord } from "@openclaw/normalization-core/record-coerce";
+export { resolveUserPath };
 
+/** Creates a directory tree if it does not already exist. */
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
 }
 
-/**
- * Check if a file or directory exists at the given path.
- */
-export async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.promises.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+/** Clamps a number to an inclusive min/max range. */
 export function clampNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+/** Floors a number before clamping it to an inclusive min/max range. */
 export function clampInt(value: number, min: number, max: number): number {
   return clampNumber(Math.floor(value), min, max);
 }
@@ -36,17 +35,10 @@ export function clampInt(value: number, min: number, max: number): number {
 export const clamp = clampNumber;
 
 /**
- * Escapes special regex characters in a string so it can be used in a RegExp constructor.
- */
-export function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/**
  * Safely parse JSON, returning null on error instead of throwing.
  */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON parsing helper lets callers ascribe the expected payload type.
-export function safeParseJson<T>(raw: string): T | null {
+export function tryParseJson<T>(raw: string): T | null {
   try {
     return JSON.parse(raw) as T;
   } catch {
@@ -56,83 +48,19 @@ export function safeParseJson<T>(raw: string): T | null {
 
 export { isPlainObject };
 
-/**
- * Type guard for Record<string, unknown> (less strict than isPlainObject).
- * Accepts any non-null object that isn't an array.
- */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
+/** Normalizes phone-like input into the loose E.164 shape used by channel helpers. */
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^[a-z][a-z0-9-]*:/i, "").trim();
-  const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
-  }
-  return `+${digits}`;
+  const digits = withoutPrefix.replace(/\D/g, "");
+  return digits ? `+${digits}` : "";
 }
 
-export function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// Surrogate-safe slicing helpers live in a node-free leaf module so browser/UI
+// bundles can import them without pulling in filesystem code. Re-exported here
+// to preserve the historical `utils.ts` import surface.
+export { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
-function isHighSurrogate(codeUnit: number): boolean {
-  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
-}
-
-function isLowSurrogate(codeUnit: number): boolean {
-  return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
-}
-
-export function sliceUtf16Safe(input: string, start: number, end?: number): string {
-  const len = input.length;
-
-  let from = start < 0 ? Math.max(len + start, 0) : Math.min(start, len);
-  let to = end === undefined ? len : end < 0 ? Math.max(len + end, 0) : Math.min(end, len);
-
-  if (to < from) {
-    const tmp = from;
-    from = to;
-    to = tmp;
-  }
-
-  if (from > 0 && from < len) {
-    const codeUnit = input.charCodeAt(from);
-    if (isLowSurrogate(codeUnit) && isHighSurrogate(input.charCodeAt(from - 1))) {
-      from += 1;
-    }
-  }
-
-  if (to > 0 && to < len) {
-    const codeUnit = input.charCodeAt(to - 1);
-    if (isHighSurrogate(codeUnit) && isLowSurrogate(input.charCodeAt(to))) {
-      to -= 1;
-    }
-  }
-
-  return input.slice(from, to);
-}
-
-export function truncateUtf16Safe(input: string, maxLen: number): string {
-  const limit = Math.max(0, Math.floor(maxLen));
-  if (input.length <= limit) {
-    return input;
-  }
-  return sliceUtf16Safe(input, 0, limit);
-}
-
-export function resolveUserPath(
-  input: string,
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
-): string {
-  if (!input) {
-    return "";
-  }
-  return resolveHomeRelativePath(input, { env, homedir });
-}
-
+/** Resolves the OpenClaw config directory from state/config env overrides or home. */
 export function resolveConfigDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -157,6 +85,7 @@ export function resolveConfigDir(
   return newDir;
 }
 
+/** Resolves the effective OpenClaw home directory, if one can be determined. */
 export function resolveHomeDir(): string | undefined {
   return resolveEffectiveHomeDir(process.env, os.homedir);
 }
@@ -173,24 +102,16 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   return { home, prefix: "~" };
 }
 
+/** Replaces the leading home directory in a path with `~` or `$OPENCLAW_HOME`. */
 export function shortenHomePath(input: string): string {
-  if (!input) {
-    return input;
-  }
   const display = resolveHomeDisplayPrefix();
   if (!display) {
     return input;
   }
-  const { home, prefix } = display;
-  if (input === home) {
-    return prefix;
-  }
-  if (input.startsWith(`${home}/`) || input.startsWith(`${home}\\`)) {
-    return `${prefix}${input.slice(home.length)}`;
-  }
-  return input;
+  return shortenPathWithHome(input, display);
 }
 
+/** Replaces all effective-home occurrences inside a diagnostic string. */
 export function shortenHomeInString(input: string): string {
   if (!input) {
     return input;
@@ -199,16 +120,33 @@ export function shortenHomeInString(input: string): string {
   if (!display) {
     return input;
   }
+  if (process.platform === "win32") {
+    return input.replace(new RegExp(escapeRegExpValue(display.home), "giu"), display.prefix);
+  }
   return input.split(display.home).join(display.prefix);
 }
 
+/** Shortens a path for display without changing non-home paths. */
 export function displayPath(input: string): string {
   return shortenHomePath(input);
 }
 
+/** Shortens home paths embedded in arbitrary display text. */
 export function displayString(input: string): string {
   return shortenHomeInString(input);
 }
 
-// Configuration root; can be overridden via OPENCLAW_STATE_DIR.
-export const CONFIG_DIR = resolveConfigDir();
+// Gateway startup re-pins this live binding after config/state selection converges so modules
+// imported during early CLI bootstrap cannot keep using the superseded configuration root.
+export let CONFIG_DIR = resolveConfigDir();
+
+export function pinConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  CONFIG_DIR = resolveConfigDir(env);
+  return CONFIG_DIR;
+}
+/**
+ * Check if a file or directory exists at the given path.
+ */
+export async function pathExists(targetPath: string): Promise<boolean> {
+  return await fsSafePathExists(targetPath);
+}

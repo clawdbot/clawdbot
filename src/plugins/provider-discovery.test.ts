@@ -1,18 +1,18 @@
+/** Tests provider discovery normalization, grouping, and manifest contribution handling. */
 import { describe, expect, it } from "vitest";
-import type { ModelProviderConfig } from "../config/types.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
-import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
   id: string;
   label?: string;
-  order?: ProviderDiscoveryOrder;
-  mode?: "catalog" | "discovery";
+  order?: ProviderCatalogOrder;
   aliases?: string[];
   hookAliases?: string[];
 }): ProviderPlugin {
@@ -26,7 +26,7 @@ function makeProvider(params: {
     auth: [],
     ...(params.aliases ? { aliases: params.aliases } : {}),
     ...(params.hookAliases ? { hookAliases: params.hookAliases } : {}),
-    ...(params.mode === "discovery" ? { discovery: hook } : { catalog: hook }),
+    catalog: hook,
   };
 }
 
@@ -38,9 +38,26 @@ function makeModelProviderConfig(overrides?: Partial<ModelProviderConfig>): Mode
   };
 }
 
+function makeModel(id: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+  };
+}
+
 function expectGroupedProviderIds(
   providers: readonly ProviderPlugin[],
-  expected: Record<ProviderDiscoveryOrder | "late", readonly string[]>,
+  expected: Record<ProviderCatalogOrder | "late", readonly string[]>,
 ) {
   const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
   const actual = {
@@ -50,34 +67,6 @@ function expectGroupedProviderIds(
     late: grouped.late.map((provider) => provider.id),
   };
   expect(actual).toEqual(expected);
-}
-
-function createCatalogRuntimeContext() {
-  return {
-    config: {},
-    env: {},
-    resolveProviderApiKey: () => ({ apiKey: undefined }),
-    resolveProviderAuth: () => ({
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    }),
-  };
-}
-
-function createCatalogProvider(params: {
-  id?: string;
-  catalogRun?: () => Promise<ProviderCatalogResult>;
-  discoveryRun?: () => Promise<ProviderCatalogResult>;
-}) {
-  return {
-    id: params.id ?? "demo",
-    label: "Demo",
-    auth: [],
-    ...(params.catalogRun ? { catalog: { run: params.catalogRun } } : {}),
-    ...(params.discoveryRun ? { discovery: { run: params.discoveryRun } } : {}),
-  };
 }
 
 function expectNormalizedDiscoveryResult(params: {
@@ -100,18 +89,6 @@ type NormalizePluginDiscoveryResultCase = {
   expected: Record<string, unknown>;
 };
 
-async function expectProviderCatalogResult(params: {
-  provider: ProviderPlugin;
-  expected: Record<string, unknown>;
-}) {
-  await expect(
-    runProviderCatalog({
-      provider: params.provider,
-      ...createCatalogRuntimeContext(),
-    }),
-  ).resolves.toEqual(params.expected);
-}
-
 describe("groupPluginDiscoveryProvidersByOrder", () => {
   it.each([
     {
@@ -130,21 +107,125 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
         late: ["late-a", "late-b"],
       },
     },
-    {
-      name: "uses the legacy discovery hook when catalog is absent",
-      providers: [
-        makeProvider({ id: "legacy", label: "Legacy", order: "profile", mode: "discovery" }),
-      ],
-      expected: {
-        simple: [],
-        profile: ["legacy"],
-        paired: [],
-        late: [],
-      },
-    },
   ] as const)("$name", ({ providers, expected }) => {
     expectGroupedProviderIds(providers, expected);
   });
+});
+
+describe("runProviderCatalog", () => {
+  it("passes the selected provider identities into the catalog hook", async () => {
+    let providerIds: readonly string[] | undefined;
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          providerIds = ctx.providerIds;
+          return null;
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      providerIds: ["azure-openai"],
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    expect(providerIds).toEqual(["azure-openai"]);
+  });
+
+  it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
+    const outcomes: Array<{
+      provider: string;
+      profileId?: string;
+      rejectionScope?: "catalog";
+      status: "ready" | "auth-rejected" | "unavailable";
+    }> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async () => {
+          await Promise.resolve();
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:chatgpt",
+                rejectionScope: "catalog",
+                status: "auth-rejected",
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      {
+        provider: "openai",
+        profileId: "openai:chatgpt",
+        rejectionScope: "catalog",
+        status: "auth-rejected",
+      },
+    ]);
+  });
+
+  it.each([
+    { providerIds: ["OPENAI"], expected: ["openai"] },
+    { providerIds: ["azure-openai"], expected: ["azure-openai"] },
+    { providerIds: [], expected: [] },
+  ])(
+    "emits outcomes only for selected provider identities: $providerIds",
+    async ({ providerIds, expected }) => {
+      const outcomes: string[] = [];
+      const provider: ProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        catalog: {
+          run: async () => ({
+            providers: {},
+            outcomes: [
+              { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
+              { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
+              { provider: "unrelated", status: "unavailable" },
+            ],
+          }),
+        },
+      };
+
+      await runProviderCatalog({
+        provider,
+        providerIds,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        reportCatalogOutcome: (outcome) => outcomes.push(outcome.provider),
+      });
+
+      expect(outcomes).toEqual(expected);
+    },
+  );
 });
 
 describe("normalizePluginDiscoveryResult", () => {
@@ -246,6 +327,130 @@ describe("normalizePluginDiscoveryResult", () => {
         },
       },
     },
+    {
+      name: "skips unreadable multi-provider entries while preserving healthy siblings",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: Object.defineProperty(
+          {
+            healthy: makeModelProviderConfig({
+              baseUrl: "http://healthy.example/v1",
+            }),
+          },
+          "broken",
+          {
+            enumerable: true,
+            get() {
+              throw new Error("provider row read failed");
+            },
+          },
+        ) as Record<string, ModelProviderConfig>,
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [],
+        },
+      },
+    },
+    {
+      name: "skips providers with unreadable required fields",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          broken: Object.defineProperty(
+            makeModelProviderConfig({
+              baseUrl: "http://broken.example/v1",
+              models: [makeModel("broken-model")],
+            }),
+            "baseUrl",
+            {
+              enumerable: true,
+              get() {
+                throw new Error("provider baseUrl read failed");
+              },
+            },
+          ),
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [makeModel("healthy-model")],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [makeModel("healthy-model")],
+        },
+      },
+    },
+    {
+      name: "skips unreadable model rows while preserving healthy siblings",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: Object.defineProperty([makeModel("healthy-model")], "1", {
+              enumerable: true,
+              get() {
+                throw new Error("model row read failed");
+              },
+            }),
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [makeModel("healthy-model")],
+        },
+      },
+    },
+    {
+      name: "skips model rows with unreadable required fields",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [
+              Object.defineProperty(makeModel("broken-model"), "id", {
+                enumerable: true,
+                get() {
+                  throw new Error("model id read failed");
+                },
+              }),
+              makeModel("healthy-model"),
+            ],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [makeModel("healthy-model")],
+        },
+      },
+    },
+    {
+      name: "keeps minimal model rows with id-only labels",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [{ id: "local-tiny" } as ModelDefinitionConfig],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [{ id: "local-tiny", name: "local-tiny" }],
+        },
+      },
+    },
   ];
 
   it.each(cases)("$name", ({ provider, result, expected }) => {
@@ -270,64 +475,37 @@ describe("runProviderStaticCatalog", () => {
       },
     };
 
-    await expect(
-      runProviderStaticCatalog({
-        provider,
-        config: {
-          models: {
-            providers: {
-              demo: {
-                baseUrl: "https://configured.example/v1",
-                models: [],
-                apiKey: "secret-value",
-              },
-            },
-          },
-        },
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        env: {
-          SECRET_TOKEN: "secret-value",
-        },
-      }),
-    ).resolves.toEqual({
+    await expect(runProviderStaticCatalog({ provider })).resolves.toEqual({
       provider: {
         baseUrl: "https://static.example/v1",
         models: [],
       },
     });
 
-    expect(seenContexts).toEqual([
-      expect.objectContaining({
-        config: {},
-        env: {},
-      }),
-    ]);
+    expect(seenContexts).toHaveLength(1);
+    const sterileContext = seenContexts[0] as {
+      config: Record<string, never>;
+      env: Record<string, never>;
+      resolveProviderApiKey: () => { apiKey: string | undefined };
+      resolveProviderAuth: () => {
+        apiKey: string | undefined;
+        mode: "none";
+        source: "none";
+      };
+    };
+    expect(sterileContext).toEqual({
+      config: {},
+      env: {},
+      resolveProviderApiKey: sterileContext.resolveProviderApiKey,
+      resolveProviderAuth: sterileContext.resolveProviderAuth,
+    });
+    expect(sterileContext.resolveProviderApiKey()).toEqual({ apiKey: undefined });
+    expect(sterileContext.resolveProviderAuth()).toEqual({
+      apiKey: undefined,
+      mode: "none",
+      source: "none",
+    });
     expect(seenContexts[0]).not.toHaveProperty("agentDir");
     expect(seenContexts[0]).not.toHaveProperty("workspaceDir");
-  });
-});
-
-describe("runProviderCatalog", () => {
-  it("prefers catalog over discovery when both exist", async () => {
-    const catalogRun = async () => ({
-      provider: makeModelProviderConfig({ baseUrl: "http://catalog.example/v1" }),
-    });
-    const discoveryRun = async () => ({
-      provider: makeModelProviderConfig({ baseUrl: "http://discovery.example/v1" }),
-    });
-
-    await expectProviderCatalogResult({
-      provider: createCatalogProvider({
-        catalogRun,
-        discoveryRun,
-      }),
-      expected: {
-        provider: {
-          baseUrl: "http://catalog.example/v1",
-          models: [],
-        },
-      },
-    });
   });
 });

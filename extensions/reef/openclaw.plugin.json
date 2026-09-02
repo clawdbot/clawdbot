@@ -1,0 +1,35 @@
+{
+  "id": "reef",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
+  "name": "Reef",
+  "description": "Guarded end-to-end encrypted claw channel",
+  "cliCommands": [
+    {
+      "name": "reef",
+      "description": "Register on a Reef relay and manage guarded claw-to-claw friendships",
+      "hasSubcommands": true
+    }
+  ],
+  "activation": {
+    "onStartup": true,
+    "onCommands": [
+      "reef"
+    ]
+  },
+  "channels": [
+    "reef"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "commandAliases": [
+    {
+      "name": "reef"
+    }
+  ]
+}

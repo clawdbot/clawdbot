@@ -1,3 +1,4 @@
+/** Tests Nextcloud Talk secret file precedence in runtime resolution. */
 import { describe, expect, it } from "vitest";
 import "./runtime-nextcloud-talk.test-support.ts";
 import {

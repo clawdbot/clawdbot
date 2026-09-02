@@ -1,9 +1,13 @@
-import { mkdirSync, writeFileSync, type RmOptions } from "node:fs";
+/**
+ * Shared test harness for plugin SDK contract tests that need temp fixtures.
+ */
+import { mkdirSync, type RmOptions } from "node:fs";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll } from "vitest";
 
+/** Creates per-suite temp fixture helpers with automatic Vitest cleanup. */
 export function createPluginSdkTestHarness(options?: { cleanup?: RmOptions }) {
   let fixtureRoot = "";
   let caseId = 0;
@@ -43,33 +47,4 @@ export function createPluginSdkTestHarness(options?: { cleanup?: RmOptions }) {
     createTempDir,
     createTempDirSync,
   };
-}
-
-export function createBundledPluginPublicSurfaceFixture(params: {
-  createTempDirSync: (prefix: string) => string;
-  marker: string;
-  prefix: string;
-}) {
-  const rootDir = params.createTempDirSync(params.prefix);
-  mkdirSync(path.join(rootDir, "demo"), { recursive: true });
-  writeFileSync(
-    path.join(rootDir, "demo", "api.js"),
-    `export const marker = ${JSON.stringify(params.marker)};\n`,
-    "utf8",
-  );
-  return rootDir;
-}
-
-export function createThrowingBundledPluginPublicSurfaceFixture(params: {
-  createTempDirSync: (prefix: string) => string;
-  prefix: string;
-}) {
-  const rootDir = params.createTempDirSync(params.prefix);
-  mkdirSync(path.join(rootDir, "bad"), { recursive: true });
-  writeFileSync(
-    path.join(rootDir, "bad", "api.js"),
-    `throw new Error("plugin load failure");\n`,
-    "utf8",
-  );
-  return rootDir;
 }

@@ -1,3 +1,8 @@
+/** Formats inbound message envelopes with sender, timing, and channel metadata for agent prompts. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
@@ -8,10 +13,6 @@ import {
   formatZonedTimestamp,
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 
 export type AgentEnvelopeParams = {
   channel: string;
@@ -24,6 +25,7 @@ export type AgentEnvelopeParams = {
   envelope?: EnvelopeFormatOptions;
 };
 
+/** User/config-facing controls for timestamp rendering in prompt envelopes. */
 export type EnvelopeFormatOptions = {
   /**
    * "local" (default), "utc", "user", or an explicit IANA timezone string.
@@ -66,12 +68,14 @@ function sanitizeEnvelopeHeaderPart(value: string): string {
     .trim();
 }
 
+/** Resolves envelope formatting defaults from agent config. */
 export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
+  const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
   return {
-    timezone: defaults?.envelopeTimezone,
-    includeTimestamp: defaults?.envelopeTimestamp !== "off",
-    includeElapsed: defaults?.envelopeElapsed !== "off",
+    timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
+    includeTimestamp: true,
+    includeElapsed: true,
     userTimezone: defaults?.userTimezone,
   };
 }
@@ -106,11 +110,12 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
 
-export function formatEnvelopeTimestamp(
+/** Formats an envelope timestamp using local, UTC, user, or explicit IANA timezone rules. */
+export function formatAgentEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (!ts) {
+  if (ts === undefined) {
     return undefined;
   }
   const resolved = normalizeEnvelopeOptions(options);
@@ -122,37 +127,36 @@ export function formatEnvelopeTimestamp(
     return undefined;
   }
   const zone = resolveEnvelopeTimezone(resolved);
-  // Include a weekday prefix so models do not need to derive DOW from the date
-  // (small models are notoriously unreliable at that).
-  const weekday = (() => {
-    try {
-      if (zone.mode === "utc") {
-        return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(date);
-      }
-      if (zone.mode === "local") {
-        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
-      }
-      return new Intl.DateTimeFormat("en-US", { timeZone: zone.timeZone, weekday: "short" }).format(
-        date,
-      );
-    } catch {
-      return undefined;
-    }
-  })();
-
-  const formatted =
-    zone.mode === "utc"
-      ? formatUtcTimestamp(date)
-      : zone.mode === "local"
-        ? formatZonedTimestamp(date)
-        : formatZonedTimestamp(date, { timeZone: zone.timeZone });
-
-  if (!formatted) {
-    return undefined;
+  // Include the weekday so models do not need to derive it from the date.
+  if (zone.mode !== "utc") {
+    return formatZonedTimestamp(date, {
+      timeZone: zone.mode === "iana" ? zone.timeZone : undefined,
+      displaySeconds: true,
+      displayWeekday: true,
+    });
   }
-  return weekday ? `${weekday} ${formatted}` : formatted;
+  const formatted = formatUtcTimestamp(date, { displaySeconds: true });
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(
+      date,
+    );
+    return `${weekday} ${formatted}`;
+  } catch {
+    return formatted;
+  }
 }
 
+function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
+  const label = sanitizeEnvelopeHeaderPart(from || "");
+  const idMarkerIndex = label.search(/\s+id:/i);
+  if (idMarkerIndex > 0) {
+    const displayLabel = label.slice(0, idMarkerIndex).trim();
+    return displayLabel.includes(":") ? "(sender)" : displayLabel;
+  }
+  return label.includes(":") ? "(sender)" : label;
+}
+
+/** Formats the generic bracketed envelope prepended to agent-visible messages. */
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   const channel = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.channel) || "Channel");
   const parts: string[] = [channel];
@@ -186,7 +190,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (ip) {
     parts.push(sanitizeEnvelopeHeaderPart(ip));
   }
-  const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
+  const ts = formatAgentEnvelopeTimestamp(params.timestamp, resolved);
   if (ts) {
     parts.push(ts);
   }
@@ -194,6 +198,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   return `${header} ${params.body}`;
 }
 
+/** Formats an inbound message body with sender attribution appropriate for direct/group chats. */
 export function formatInboundEnvelope(params: {
   channel: string;
   from: string;
@@ -211,12 +216,15 @@ export function formatInboundEnvelope(params: {
   const resolvedSenderRaw =
     normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
+  const directSender = resolveDirectEnvelopeBodyLabel(normalizeOptionalString(params.from));
   const body =
     isDirect && params.fromMe
       ? `(self): ${params.body}`
-      : !isDirect && resolvedSender
-        ? `${resolvedSender}: ${params.body}`
-        : params.body;
+      : isDirect && directSender
+        ? `${directSender}: ${params.body}`
+        : !isDirect && resolvedSender
+          ? `${resolvedSender}: ${params.body}`
+          : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,
@@ -227,6 +235,7 @@ export function formatInboundEnvelope(params: {
   });
 }
 
+/** Builds the compact `from` label used in inbound envelope headers. */
 export function formatInboundFromLabel(params: {
   isGroup: boolean;
   groupLabel?: string;

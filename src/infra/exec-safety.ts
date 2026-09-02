@@ -1,3 +1,4 @@
+// Validates executable config values before they reach shell-adjacent paths.
 const SHELL_METACHARS = /[;&|`$<>]/;
 const CONTROL_CHARS = /[\r\n]/;
 const QUOTE_CHARS = /["']/;
@@ -13,6 +14,7 @@ function isLikelyPath(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value);
 }
 
+/** Validates that a configured executable value cannot smuggle shell syntax. */
 export function isSafeExecutableValue(value: string | null | undefined): boolean {
   if (!value) {
     return false;
@@ -34,6 +36,7 @@ export function isSafeExecutableValue(value: string | null | undefined): boolean
     return false;
   }
 
+  // Path-like executables may contain separators, but still reject shell syntax above.
   if (isLikelyPath(trimmed)) {
     return true;
   }

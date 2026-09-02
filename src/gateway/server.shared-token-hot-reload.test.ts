@@ -1,11 +1,15 @@
+/**
+ * Shared gateway-token hot-reload tests.
+ */
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { openAuthenticatedGatewayWs, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";
 import {
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   rpcReq,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
 } from "./test-helpers.js";
 
@@ -16,7 +20,7 @@ const SECRET_REF_TOKEN_ID = "OPENCLAW_SHARED_TOKEN_HOT_RELOAD_SECRET_REF";
 const OLD_TOKEN = "shared-token-hot-reload-old";
 const NEW_TOKEN = "shared-token-hot-reload-new";
 
-let server: Awaited<ReturnType<typeof startGatewayServer>>;
+let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let port = 0;
 
 function buildSharedTokenReloadConfig(): Record<string, unknown> {
@@ -38,23 +42,23 @@ beforeAll(async () => {
   if (!configPath) {
     throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
   }
-  port = await getFreePort();
+  port = await getGatewayTestPort();
   testState.gatewayAuth = undefined;
-  process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+  setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
   await fs.writeFile(
     configPath,
     `${JSON.stringify(buildSharedTokenReloadConfig(), null, 2)}\n`,
     "utf-8",
   );
-  server = await startGatewayServer(port, { controlUiEnabled: true });
+  server = await startTestGatewayServer(port, { controlUiEnabled: true });
 });
 
 beforeEach(() => {
-  process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+  setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
 });
 
 afterAll(async () => {
-  delete process.env[SECRET_REF_TOKEN_ID];
+  deleteTestEnvValue(SECRET_REF_TOKEN_ID);
   testState.gatewayAuth = ORIGINAL_GATEWAY_AUTH;
   await server.close();
 });
@@ -64,12 +68,12 @@ describe("gateway shared token hot reload rotation", () => {
     const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
     try {
       const closed = waitForGatewayWsClose(ws);
-      process.env[SECRET_REF_TOKEN_ID] = NEW_TOKEN;
+      setTestEnvValue(SECRET_REF_TOKEN_ID, NEW_TOKEN);
       const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {}).catch(
         (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
       );
 
-      await expect(closed).resolves.toMatchObject({
+      await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });

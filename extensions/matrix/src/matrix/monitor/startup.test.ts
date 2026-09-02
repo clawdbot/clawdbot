@@ -1,13 +1,14 @@
+// Matrix tests cover startup plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAccountPatch } from "../config-update.js";
 import type { MatrixManagedDeviceInfo } from "../device-health.js";
 import type { MatrixProfileSyncResult } from "../profile.js";
 import type { MatrixOwnDeviceVerificationStatus } from "../sdk.js";
-import type { MatrixLegacyCryptoRestoreResult } from "./legacy-crypto-restore.js";
 import type { MatrixStartupVerificationOutcome } from "./startup-verification.js";
-import type { MatrixStartupMaintenanceDeps } from "./startup.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
+
+type MatrixStartupMaintenanceDeps = NonNullable<Parameters<typeof runMatrixStartupMaintenance>[1]>;
 
 function createVerificationStatus(
   overrides: Partial<MatrixOwnDeviceVerificationStatus> = {},
@@ -34,6 +35,7 @@ function createVerificationStatus(
       keyLoadError: null,
     },
     ...overrides,
+    serverDeviceKnown: overrides.serverDeviceKnown ?? true,
   };
 }
 
@@ -62,20 +64,24 @@ function createStartupVerificationOutcome(
   } as MatrixStartupVerificationOutcome;
 }
 
-function createLegacyCryptoRestoreResult(
-  overrides: Partial<MatrixLegacyCryptoRestoreResult> = {},
-): MatrixLegacyCryptoRestoreResult {
-  return {
-    kind: "skipped",
-    ...overrides,
-  } as MatrixLegacyCryptoRestoreResult;
+async function expectMatrixStartupAbort(promise: Promise<unknown>): Promise<void> {
+  let rejection: unknown;
+  try {
+    await promise;
+  } catch (error) {
+    rejection = error;
+  }
+
+  expect(rejection).toBeInstanceOf(Error);
+  const error = rejection as Error;
+  expect(error.name).toBe("AbortError");
+  expect(error.message).toBe("Matrix startup aborted");
 }
 
 function createDeps(
   overrides: Partial<MatrixStartupMaintenanceDeps> = {},
 ): MatrixStartupMaintenanceDeps {
   return {
-    maybeRestoreLegacyMatrixBackup: vi.fn(async () => createLegacyCryptoRestoreResult()),
     summarizeMatrixDeviceHealth: vi.fn(() => ({
       currentDeviceId: null,
       staleOpenClawDevices: [] as MatrixManagedDeviceInfo[],
@@ -126,8 +132,8 @@ describe("runMatrixStartupMaintenance", () => {
         error: vi.fn(),
       },
       logVerboseMessage: vi.fn(),
-      loadConfig: vi.fn(() => ({ channels: { matrix: {} } })),
-      writeConfigFile: vi.fn(async () => {}),
+      getRuntimeConfig: vi.fn(() => ({ channels: { matrix: {} } })),
+      replaceConfigFile: vi.fn(async () => {}),
       loadWebMedia: vi.fn(async () => ({
         buffer: Buffer.from("avatar"),
         contentType: "image/png",
@@ -153,20 +159,41 @@ describe("runMatrixStartupMaintenance", () => {
 
     await runMatrixStartupMaintenance(params, deps);
 
-    expect(deps.syncMatrixOwnProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: "@bot:example.org",
-        displayName: "Ops Bot",
-        avatarUrl: "https://example.org/avatar.png",
-      }),
-    );
+    expect(deps.syncMatrixOwnProfile).toHaveBeenCalledTimes(1);
+    const [profileSyncParams] = vi.mocked(deps.syncMatrixOwnProfile).mock.calls.at(0) ?? [];
+    if (!profileSyncParams) {
+      throw new Error("profile sync params missing");
+    }
+    const loadAvatarFromUrl = profileSyncParams.loadAvatarFromUrl;
+    if (!loadAvatarFromUrl) {
+      throw new Error("profile sync params missing loadAvatarFromUrl");
+    }
+    expect(profileSyncParams).toStrictEqual({
+      client: params.client,
+      userId: "@bot:example.org",
+      displayName: "Ops Bot",
+      avatarUrl: "https://example.org/avatar.png",
+      loadAvatarFromUrl,
+    });
+    await expect(
+      loadAvatarFromUrl("https://example.org/new-avatar.png", 123),
+    ).resolves.toStrictEqual({
+      buffer: Buffer.from("avatar"),
+      contentType: "image/png",
+      fileName: "avatar.png",
+    });
+    expect(params.loadWebMedia).toHaveBeenCalledWith("https://example.org/new-avatar.png", 123);
     expect(deps.updateMatrixAccountConfig).toHaveBeenCalledWith(
       { channels: { matrix: {} } },
       "ops",
       { avatarUrl: "mxc://avatar" },
     );
-    expect(params.writeConfigFile).toHaveBeenCalledWith(updatedCfg as never);
-    expect(params.logVerboseMessage).toHaveBeenCalledWith(
+    expect(params.replaceConfigFile).toHaveBeenCalledWith(updatedCfg as never);
+    const logVerboseMessage = params.logVerboseMessage;
+    if (!logVerboseMessage) {
+      throw new Error("expected logVerboseMessage");
+    }
+    expect(logVerboseMessage).toHaveBeenCalledWith(
       "matrix: persisted converted avatar URL for account ops (mxc://avatar)",
     );
   });
@@ -184,15 +211,6 @@ describe("runMatrixStartupMaintenance", () => {
     vi.mocked(deps.ensureMatrixStartupVerification).mockResolvedValue(
       createStartupVerificationOutcome("pending"),
     );
-    vi.mocked(deps.maybeRestoreLegacyMatrixBackup).mockResolvedValue(
-      createLegacyCryptoRestoreResult({
-        kind: "restored",
-        imported: 2,
-        total: 3,
-        localOnlyKeys: 1,
-      }),
-    );
-
     await runMatrixStartupMaintenance(params, deps);
 
     expect(params.logger.warn).toHaveBeenCalledWith(
@@ -203,12 +221,6 @@ describe("runMatrixStartupMaintenance", () => {
     );
     expect(params.logger.info).toHaveBeenCalledWith(
       "matrix: startup verification request is already pending; finish it in another Matrix client",
-    );
-    expect(params.logger.info).toHaveBeenCalledWith(
-      "matrix: restored 2/3 room key(s) from legacy encrypted-state backup",
-    );
-    expect(params.logger.warn).toHaveBeenCalledWith(
-      "matrix: 1 legacy local-only room key(s) were never backed up and could not be restored automatically",
     );
   });
 
@@ -247,11 +259,7 @@ describe("runMatrixStartupMaintenance", () => {
       return createProfileSyncResult();
     });
 
-    await expect(runMatrixStartupMaintenance(params, deps)).rejects.toMatchObject({
-      message: "Matrix startup aborted",
-      name: "AbortError",
-    });
+    await expectMatrixStartupAbort(runMatrixStartupMaintenance(params, deps));
     expect(deps.ensureMatrixStartupVerification).not.toHaveBeenCalled();
-    expect(deps.maybeRestoreLegacyMatrixBackup).not.toHaveBeenCalled();
   });
 });

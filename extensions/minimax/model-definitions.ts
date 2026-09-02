@@ -1,3 +1,4 @@
+// Minimax plugin module implements model definitions behavior.
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { MINIMAX_DEFAULT_MODEL_ID, MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
 
@@ -6,28 +7,34 @@ export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
 export const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
 export const MINIMAX_HOSTED_MODEL_ID = MINIMAX_DEFAULT_MODEL_ID;
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
-export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 204800;
+const DEFAULT_MINIMAX_CONTEXT_WINDOW = 204800;
 export const DEFAULT_MINIMAX_MAX_TOKENS = 131072;
 
 export const MINIMAX_API_COST = {
+  input: 0.6,
+  output: 2.4,
+  cacheRead: 0.12,
+  cacheWrite: 0,
+};
+const MINIMAX_M27_API_COST = {
   input: 0.3,
   output: 1.2,
   cacheRead: 0.06,
   cacheWrite: 0.375,
 };
-export const MINIMAX_API_HIGHSPEED_COST = {
+const MINIMAX_API_HIGHSPEED_COST = {
   input: 0.6,
   output: 2.4,
   cacheRead: 0.06,
   cacheWrite: 0.375,
 };
-export const MINIMAX_M25_API_COST = {
+const MINIMAX_M25_API_COST = {
   input: 0.3,
   output: 1.2,
   cacheRead: 0.03,
   cacheWrite: 0.375,
 };
-export const MINIMAX_M25_API_HIGHSPEED_COST = {
+const MINIMAX_M25_API_HIGHSPEED_COST = {
   input: 0.6,
   output: 2.4,
   cacheRead: 0.03,
@@ -49,6 +56,9 @@ export const MINIMAX_LM_STUDIO_COST = {
 type MinimaxCatalogId = keyof typeof MINIMAX_TEXT_MODEL_CATALOG;
 
 export function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
+  if (modelId === "MiniMax-M2.7") {
+    return MINIMAX_M27_API_COST;
+  }
   if (modelId === "MiniMax-M2.5-highspeed") {
     return MINIMAX_M25_API_HIGHSPEED_COST;
   }
@@ -70,16 +80,16 @@ export function buildMinimaxModelDefinition(params: {
   maxTokens: number;
 }): ModelDefinitionConfig {
   const catalog = MINIMAX_TEXT_MODEL_CATALOG[params.id as MinimaxCatalogId];
-  // MiniMax-M2.7 supports image input
-  const isImageCapable = params.id === "MiniMax-M2.7" || params.id.startsWith("MiniMax-M2.7-");
+  const compat = catalog && "compat" in catalog ? catalog.compat : undefined;
   return {
     id: params.id,
     name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
     reasoning: params.reasoning ?? catalog?.reasoning ?? false,
-    input: isImageCapable ? ["text", "image"] : ["text"],
+    input: [...(catalog?.input ?? ["text"])],
     cost: params.cost,
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,
+    ...(compat ? { compat: { ...compat } } : {}),
   };
 }
 
@@ -87,7 +97,9 @@ export function buildMinimaxApiModelDefinition(modelId: string): ModelDefinition
   return buildMinimaxModelDefinition({
     id: modelId,
     cost: resolveMinimaxApiCost(modelId),
-    contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+    contextWindow:
+      MINIMAX_TEXT_MODEL_CATALOG[modelId as MinimaxCatalogId]?.contextWindow ??
+      DEFAULT_MINIMAX_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   });
 }

@@ -1,32 +1,37 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+/** Converts registry/catalog models into printable model-list rows. */
 import { modelKey } from "../../agents/model-ref-shared.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
-export type ModelAuthAvailabilityResolver = (params: {
+/** Minimal model shape needed to render a model-list row. */
+export type ListRowModel = {
+  id: string;
+  name: string;
   provider: string;
-  cfg: OpenClawConfig;
-  authStore: AuthProfileStore;
-}) => boolean;
+  api?: string | null;
+  input?: Array<"text" | "image" | "document">;
+  baseUrl?: string;
+  contextWindow?: number | null;
+  contextTokens?: number | null;
+};
 
-function authStoreHasProviderProfile(authStore: AuthProfileStore, provider: string): boolean {
-  return Object.values(authStore.profiles ?? {}).some(
-    (credential) => credential.provider === provider,
+export function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
+  const parsed = input?.filter(
+    (item): item is NonNullable<ListRowModel["input"]>[number] =>
+      item === "text" || item === "image" || item === "document",
   );
+  return parsed?.length ? parsed : ["text"];
 }
 
+/** Builds a display row, preserving configured tags and alias metadata. */
 export function toModelRow(params: {
-  model?: Model<Api>;
+  model?: ListRowModel;
   key: string;
   tags: string[];
   aliases?: string[];
   availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
-  authStore?: AuthProfileStore;
-  allowProviderAvailabilityFallback?: boolean;
-  hasAuthForProvider?: ModelAuthAvailabilityResolver;
+  authAvailability: boolean | undefined;
+  authAvailabilityAuthoritative?: boolean;
 }): ModelRow {
   const {
     model,
@@ -34,9 +39,8 @@ export function toModelRow(params: {
     tags,
     aliases = [],
     availableKeys,
-    cfg,
-    authStore,
-    allowProviderAvailabilityFallback = false,
+    authAvailability,
+    authAvailabilityAuthoritative = false,
   } = params;
   if (!model) {
     return {
@@ -51,26 +55,17 @@ export function toModelRow(params: {
     };
   }
 
-  const input = model.input.join("+") || "text";
-  const local = isLocalBaseUrl(model.baseUrl);
-  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
-  // Prefer model-level registry availability when present.
-  // Fall back to provider-level auth heuristics only if registry availability isn't available,
-  // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
-  const available =
-    availableKeys !== undefined && !allowProviderAvailabilityFallback
+  const input = model.input?.join("+") || "-";
+  const local = isLocalBaseUrl(model.baseUrl ?? "");
+  const modelIsAvailable =
+    local || (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
+  // Registry model availability remains authoritative unless the row is outside
+  // that inventory or provider-owned route facts select a physical auth route.
+  const available = authAvailabilityAuthoritative
+    ? (authAvailability ?? null)
+    : availableKeys !== undefined
       ? modelIsAvailable
-      : modelIsAvailable ||
-        (cfg && authStore
-          ? (
-              params.hasAuthForProvider ??
-              ((input) => authStoreHasProviderProfile(input.authStore, input.provider))
-            )({
-              provider: model.provider,
-              cfg,
-              authStore,
-            })
-          : false);
+      : (authAvailability ?? (modelIsAvailable ? true : null));
   const aliasTags = aliases.length > 0 ? [`alias:${aliases.join(",")}`] : [];
   const mergedTags = new Set(tags);
   if (aliasTags.length > 0) {
@@ -89,6 +84,7 @@ export function toModelRow(params: {
     name: model.name || model.id,
     input,
     contextWindow: model.contextWindow ?? null,
+    ...(typeof model.contextTokens === "number" ? { contextTokens: model.contextTokens } : {}),
     local,
     available,
     tags: Array.from(mergedTags),

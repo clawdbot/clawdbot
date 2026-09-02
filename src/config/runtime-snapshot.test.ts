@@ -1,15 +1,34 @@
+// Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cloneConfigWithResolutionFacts,
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "./resolution-facts.js";
+import {
   finalizeRuntimeSnapshotWrite,
+  getRuntimeConfigAppliedHash,
+  hashRuntimeConfigValue,
+  hasManagedRuntimeConfigWriteOwner,
+  getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
+  preflightManagedRuntimeConfigWrite,
   loadPinnedRuntimeConfig,
   notifyRuntimeConfigWriteListeners,
   registerRuntimeConfigWriteListener,
+  registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
+  resolveRuntimeConfigCacheKey,
+  selectApplicableRuntimeConfig,
   setRuntimeConfigSnapshot,
+  setRuntimeConfigAppliedHash,
+  setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
+import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import type { OpenClawConfig } from "./types.js";
 
 function resetRuntimeConfigState(): void {
@@ -43,38 +62,137 @@ describe("runtime snapshot state", () => {
   });
 
   it("returns the source snapshot when runtime snapshot is active", () => {
-    const sourceConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
-    };
-    const runtimeConfig: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "sk-runtime-resolved",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = createProviderConfigFixture();
+    const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
 
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     expect(getRuntimeConfigSourceSnapshot()).toEqual(sourceConfig);
   });
+
+  it("publishes and replaces same-byte resolution facts with the source snapshot", () => {
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
+    };
+    const unresolvedSource = structuredClone(runtimeConfig);
+    setConfigResolutionFacts(
+      unresolvedSource,
+      createConfigResolutionFacts(
+        [{ configPath: "gateway.auth.token", varName: "GATEWAY_TOKEN" }],
+        new Map([["gateway.auth.token", "GATEWAY_TOKEN"]]),
+      ),
+    );
+    setRuntimeConfigSnapshot(runtimeConfig, unresolvedSource);
+    expect([...(getConfigResolutionFacts(getRuntimeConfigSnapshot()) ?? [])]).toEqual([
+      "gateway.auth.token",
+    ]);
+    expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")?.id).toBe(
+      "GATEWAY_TOKEN",
+    );
+
+    const literalSource = structuredClone(runtimeConfig);
+    setConfigResolutionFacts(literalSource, createConfigResolutionFacts([]));
+    expect(
+      setRuntimeConfigSourceSnapshotIfCurrent({
+        expectedRevision: getRuntimeConfigSnapshotMetadata()?.revision ?? -1,
+        sourceConfig: literalSource,
+      }),
+    ).toBe(true);
+    expect(getConfigResolutionFacts(getRuntimeConfigSnapshot())?.size).toBe(0);
+    expect(getAuthoredConfigSecretRef(getRuntimeConfigSnapshot(), "gateway.auth.token")).toBeNull();
+  });
+
+  it("tracks snapshot metadata and cache keys across runtime refreshes", () => {
+    const firstConfig: OpenClawConfig = { gateway: { port: 18789 } };
+    const secondConfig: OpenClawConfig = { gateway: { port: 19001 } };
+
+    setRuntimeConfigSnapshot(firstConfig);
+    const firstMetadata = getRuntimeConfigSnapshotMetadata();
+    expect(firstMetadata?.revision).toBe(1);
+    expect(resolveRuntimeConfigCacheKey(firstConfig)).toBe(
+      `runtime:${firstMetadata?.revision}:${firstMetadata?.fingerprint}`,
+    );
+
+    setRuntimeConfigSnapshot(secondConfig);
+    const secondMetadata = getRuntimeConfigSnapshotMetadata();
+    expect(secondMetadata?.revision).toBe(2);
+    expect(secondMetadata?.fingerprint).not.toBe(firstMetadata?.fingerprint);
+    expect(resolveRuntimeConfigCacheKey(secondConfig)).toBe(
+      `runtime:${secondMetadata?.revision}:${secondMetadata?.fingerprint}`,
+    );
+  });
+
+  it("tracks the applied source revision independently from runtime fingerprints", () => {
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+
+    setRuntimeConfigAppliedHash("disk-hash-1");
+    setRuntimeConfigSnapshot({ gateway: { port: 18789 } });
+    expect(getRuntimeConfigAppliedHash()).toBe("disk-hash-1");
+
+    resetConfigRuntimeState();
+    expect(getRuntimeConfigAppliedHash()).toBeNull();
+  });
+
+  it("hashes resolved source content independently from root-file revision metadata", () => {
+    const first = hashRuntimeConfigValue({ logging: { level: "info" } });
+    const second = hashRuntimeConfigValue({ logging: { level: "debug" } });
+
+    expect(first).not.toBe(second);
+    expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
+  });
+
+  it.each([false, true])(
+    "selects only matching runtime sources (resolution facts: %s)",
+    (withFacts) => {
+      const sourceConfig = createProviderConfigFixture();
+      if (withFacts) {
+        setConfigResolutionFacts(sourceConfig, createConfigResolutionFacts([]));
+      }
+      const runtimeConfig = createProviderConfigFixture("sk-runtime-resolved");
+      const scopedResolvedConfig: OpenClawConfig = {
+        ...runtimeConfig,
+        tools: {
+          updatePlan: true,
+        },
+      };
+
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: cloneConfigWithResolutionFacts(sourceConfig),
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(runtimeConfig);
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: scopedResolvedConfig,
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(scopedResolvedConfig);
+      const foreignConfig = cloneConfigWithResolutionFacts(sourceConfig);
+      setConfigResolutionFacts(
+        foreignConfig,
+        createConfigResolutionFacts(
+          [],
+          new Map([["models.providers.openai.apiKey", "OTHER_PROVIDER_KEY"]]),
+        ),
+      );
+      expect(
+        selectApplicableRuntimeConfig({
+          inputConfig: foreignConfig,
+          runtimeConfig,
+          runtimeSourceConfig: sourceConfig,
+        }),
+      ).toBe(foreignConfig);
+    },
+  );
 
   it("clears runtime source snapshot when runtime snapshot is cleared", () => {
     setRuntimeConfigSnapshot({ gateway: { port: 18789 } }, { gateway: { port: 18789 } });
     resetRuntimeConfigState();
     expect(getRuntimeConfigSnapshot()).toBeNull();
     expect(getRuntimeConfigSourceSnapshot()).toBeNull();
+    expect(getRuntimeConfigSnapshotMetadata()).toBeNull();
   });
 
   it("refreshes both snapshots from disk after a write when source + runtime snapshots exist", async () => {
@@ -84,31 +202,10 @@ describe("runtime snapshot state", () => {
     }));
     const nextSourceConfig: OpenClawConfig = {
       gateway: { auth: { mode: "token" } },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-            models: [],
-          },
-        },
-      },
+      ...createProviderConfigFixture(),
     };
 
-    setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
-      },
-      nextSourceConfig,
-    );
+    setRuntimeConfigSnapshot(createProviderConfigFixture("sk-runtime-resolved"), nextSourceConfig);
 
     await finalizeRuntimeSnapshotWrite({
       nextSourceConfig,
@@ -153,34 +250,14 @@ describe("runtime snapshot state", () => {
     const loadFreshConfig = vi.fn<() => OpenClawConfig>(() => ({
       gateway: { auth: { mode: "token" } },
     }));
-    let releaseRefresh!: () => void;
+    let releaseRefresh: (() => void) | undefined;
     const refreshPending = new Promise<boolean>((resolve) => {
       releaseRefresh = () => resolve(true);
     });
 
     setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: "sk-runtime-resolved",
-              models: [],
-            },
-          },
-        },
-      },
-      {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
-      },
+      createProviderConfigFixture("sk-runtime-resolved"),
+      createProviderConfigFixture(),
     );
     setRuntimeConfigSnapshotRefreshHandler({
       refresh: async ({ sourceConfig }) => {
@@ -193,15 +270,7 @@ describe("runtime snapshot state", () => {
     const writePromise = finalizeRuntimeSnapshotWrite({
       nextSourceConfig: {
         gateway: { auth: { mode: "token" } },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              models: [],
-            },
-          },
-        },
+        ...createProviderConfigFixture(),
       },
       hadRuntimeSnapshot: true,
       hadBothSnapshots: true,
@@ -215,6 +284,9 @@ describe("runtime snapshot state", () => {
     expect(getRuntimeConfigSnapshot()?.gateway?.auth).toBeUndefined();
     expect(loadFreshConfig).not.toHaveBeenCalled();
 
+    if (!releaseRefresh) {
+      throw new Error("Expected runtime snapshot refresh release callback to be initialized");
+    }
     releaseRefresh();
     await writePromise;
 
@@ -236,6 +308,9 @@ describe("runtime snapshot state", () => {
         sourceConfig: { gateway: { port: 18789 } },
         runtimeConfig: { gateway: { port: 19003 } },
         persistedHash: "abc123",
+        revision: 1,
+        fingerprint: "runtime-fingerprint",
+        sourceFingerprint: "source-fingerprint",
         writtenAtMs: 1,
       });
     } finally {
@@ -248,5 +323,70 @@ describe("runtime snapshot state", () => {
         runtimeConfig: { gateway: { port: 19003 } },
       },
     ]);
+  });
+
+  it("scopes managed write ownership by path and reference count", () => {
+    const releaseA = registerManagedRuntimeConfigWriteOwner("/tmp/a.json");
+    const releaseA2 = registerManagedRuntimeConfigWriteOwner("/tmp/a.json");
+    const releaseB = registerManagedRuntimeConfigWriteOwner("/tmp/b.json");
+
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/a.json")).toBe(true);
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/b.json")).toBe(true);
+    releaseA();
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/a.json")).toBe(true);
+    releaseA2();
+    releaseA2();
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/a.json")).toBe(false);
+    expect(hasManagedRuntimeConfigWriteOwner("/tmp/b.json")).toBe(true);
+    releaseB();
+  });
+
+  it("keeps prepared candidates scoped to each managed owner", async () => {
+    const runtimeConfigA: OpenClawConfig = { gateway: { port: 19001 } };
+    const runtimeConfigB: OpenClawConfig = { gateway: { port: 19002 } };
+    const candidateA = { runtimeConfig: runtimeConfigA, compareConfig: {} };
+    const candidateB = { runtimeConfig: runtimeConfigB, compareConfig: {} };
+    const releaseA = registerManagedRuntimeConfigWriteOwner(
+      "/tmp/scoped.json",
+      async () => candidateA,
+    );
+    const releaseB = registerManagedRuntimeConfigWriteOwner(
+      "/tmp/scoped.json",
+      async () => candidateB,
+    );
+
+    try {
+      const prepared = await preflightManagedRuntimeConfigWrite("/tmp/scoped.json", {});
+      expect(prepared.get(releaseA.ownerId)).toBe(candidateA);
+      expect(prepared.get(releaseB.ownerId)).toBe(candidateB);
+    } finally {
+      releaseA();
+      releaseB();
+    }
+  });
+
+  it("defers raw runtime activation to a managed write owner", async () => {
+    const activeConfig: OpenClawConfig = { gateway: { port: 18789 } };
+    setRuntimeConfigSnapshot(activeConfig);
+    const notifyCommittedWrite = vi.fn();
+    const refresh = vi.fn(async () => true);
+    const loadFreshConfig = vi.fn(() => ({ gateway: { port: 19001 } }));
+    setRuntimeConfigSnapshotRefreshHandler({ refresh });
+
+    await finalizeRuntimeSnapshotWrite({
+      nextSourceConfig: { gateway: { port: 19001 } },
+      hadRuntimeSnapshot: true,
+      hadBothSnapshots: false,
+      loadFreshConfig,
+      notifyCommittedWrite,
+      deferRuntimeActivation: true,
+      formatRefreshError: (error) => String(error),
+      createRefreshError: (detail, cause) => new Error(detail, { cause }),
+    });
+
+    expect(getRuntimeConfigSnapshot()).toBe(activeConfig);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(loadFreshConfig).not.toHaveBeenCalled();
+    expect(notifyCommittedWrite).toHaveBeenCalledOnce();
   });
 });

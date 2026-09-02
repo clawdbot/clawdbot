@@ -1,4 +1,7 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+// Fetches Codex provider usage windows.
+import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -53,31 +56,38 @@ export async function fetchCodexUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
-  const headers: Record<string, string> = {
+  const version = process.env.OPENCLAW_VERSION?.trim();
+  const defaultHeaders: Record<string, string> = {
     Authorization: `Bearer ${token}`,
-    "User-Agent": "CodexBar",
     Accept: "application/json",
+    originator: "openclaw",
+    ...(version ? { version } : {}),
+    "User-Agent": `openclaw/${version || "dev"}`,
   };
   if (accountId) {
-    headers["ChatGPT-Account-Id"] = accountId;
+    defaultHeaders["ChatGPT-Account-Id"] = accountId;
   }
+  const headers =
+    resolveProviderRequestHeaders({
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/wham/usage",
+      capability: "other",
+      transport: "http",
+      defaultHeaders,
+    }) ?? defaultHeaders;
 
-  const res = await fetchJson(
-    "https://chatgpt.com/backend-api/wham/usage",
-    { method: "GET", headers },
+  const parsed = await fetchUsageJson({
+    provider: "openai",
+    url: "https://chatgpt.com/backend-api/wham/usage",
+    init: { method: "GET", headers },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    return buildUsageHttpErrorSnapshot({
-      provider: "openai-codex",
-      status: res.status,
-      tokenExpiredStatuses: [401, 403],
-    });
+    tokenExpiredStatuses: [401, 403],
+  });
+  if (!parsed.ok) {
+    return parsed.snapshot;
   }
-
-  const data = (await res.json()) as CodexUsageResponse;
+  const data = parsed.data as CodexUsageResponse;
   const windows: UsageWindow[] = [];
 
   if (data.rate_limit?.primary_window) {
@@ -105,19 +115,23 @@ export async function fetchCodexUsage(
     });
   }
 
-  let plan = data.plan_type;
+  const plan = data.plan_type;
+  let billing: ProviderUsageSnapshot["billing"];
   if (data.credits?.balance !== undefined && data.credits.balance !== null) {
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : parseFloat(data.credits.balance) || 0;
-    plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
+        : parseStrictFiniteNumber(data.credits.balance);
+    if (balance !== undefined && balance >= 0) {
+      billing = [{ type: "balance", amount: balance, unit: "credits" }];
+    }
   }
 
   return {
-    provider: "openai-codex",
-    displayName: PROVIDER_LABELS["openai-codex"],
+    provider: "openai",
+    displayName: PROVIDER_LABELS.openai,
     windows,
     plan,
+    ...(billing ? { billing } : {}),
   };
 }

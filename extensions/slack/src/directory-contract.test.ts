@@ -1,16 +1,46 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
-import { describe, expect, expectTypeOf, it } from "vitest";
-import { expectDirectoryIds } from "../../../test/helpers/channels/directory-ids.js";
+// Slack tests cover directory contract plugin behavior.
+import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
-import type { SlackProbe } from "./probe.js";
+import { getSlackDirectorySelfLive } from "./directory-live.js";
+const slackClientMocks = vi.hoisted(() => ({
+  authTest: vi.fn(),
+  usersInfo: vi.fn(),
+  createSlackLookupClient: vi.fn(() => ({
+    auth: { test: slackClientMocks.authTest },
+    users: { info: slackClientMocks.usersInfo },
+  })),
+}));
+
+vi.mock("./client.js", () => ({
+  createSlackLookupClient: slackClientMocks.createSlackLookupClient,
+}));
 
 describe("Slack directory contract", () => {
-  it("keeps public probe aligned with base contract", () => {
-    expectTypeOf<SlackProbe>().toMatchTypeOf<BaseProbeResult>();
+  beforeEach(() => {
+    slackClientMocks.authTest.mockReset();
+    slackClientMocks.usersInfo.mockReset();
+    slackClientMocks.createSlackLookupClient.mockClear();
+  });
+
+  it("uses the bounded lookup client for live directory requests", async () => {
+    const fixture = "lookup-fixture";
+    slackClientMocks.authTest.mockResolvedValue({ ok: true, user_id: "U123", user: "bot" });
+    slackClientMocks.usersInfo.mockResolvedValue({
+      ok: true,
+      user: { id: "U123", name: "bot", profile: { display_name: "Bot" } },
+    });
+
+    await getSlackDirectorySelfLive({
+      cfg: { channels: { slack: { botToken: fixture } } },
+    } as Parameters<typeof getSlackDirectorySelfLive>[0]);
+
+    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
+    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
   });
 
   it("lists peers/groups from config", async () => {
@@ -19,7 +49,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: "xoxb-test",
           appToken: "xapp-test",
-          dm: { allowFrom: ["U123", "user:U999"] },
+          allowFrom: ["U123", "user:U999"],
           dms: { U234: {} },
           channels: { C111: { users: ["U777"] } },
         },
@@ -46,7 +76,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: envSecret,
           appToken: envSecret,
-          dm: { allowFrom: ["U123"] },
+          allowFrom: ["U123"],
           channels: { C111: {} },
         },
       },
@@ -62,7 +92,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: "xoxb-test",
           appToken: "xapp-test",
-          dm: { allowFrom: ["U100", "U200"] },
+          allowFrom: ["U100", "U200"],
           dms: { U300: {} },
         },
       },
@@ -76,5 +106,68 @@ describe("Slack directory contract", () => {
     });
     expect(peers).toHaveLength(2);
     expect(peers.every((entry) => entry.id.startsWith("user:u"))).toBe(true);
+  });
+
+  it("resolves current Slack account identity from live auth", async () => {
+    slackClientMocks.authTest.mockResolvedValue({
+      ok: true,
+      user_id: "USELF",
+      user: "ada",
+      team_id: "T1",
+      team: "Test Team",
+    });
+    slackClientMocks.usersInfo.mockResolvedValue({
+      user: {
+        id: "USELF",
+        name: "ada",
+        profile: {
+          display_name: "Ada",
+          real_name: "Ada Lovelace",
+        },
+      },
+    });
+    const cfg = {
+      channels: {
+        slack: {
+          userToken: "xoxp-test",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const self = await getSlackDirectorySelfLive({ cfg, accountId: "default" });
+    if (!self) {
+      throw new Error("expected Slack self directory entry");
+    }
+    expect(self.kind).toBe("user");
+    expect(self.id).toBe("user:USELF");
+    expect(self.name).toBe("Ada");
+    expect(self.handle).toBe("@ada");
+    expect(slackClientMocks.authTest).toHaveBeenCalled();
+    expect(slackClientMocks.usersInfo).toHaveBeenCalledWith({ user: "USELF" });
+  });
+
+  it("falls back to auth identity when live user profile lookup fails", async () => {
+    slackClientMocks.authTest.mockResolvedValue({
+      ok: true,
+      user_id: "USELF",
+      user: "ada",
+    });
+    slackClientMocks.usersInfo.mockRejectedValue(new Error("missing_scope"));
+    const cfg = {
+      channels: {
+        slack: {
+          userToken: "xoxp-test",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const self = await getSlackDirectorySelfLive({ cfg, accountId: "default" });
+    if (!self) {
+      throw new Error("expected Slack self directory entry");
+    }
+    expect(self.kind).toBe("user");
+    expect(self.id).toBe("user:USELF");
+    expect(self.name).toBe("ada");
+    expect(self.handle).toBe("@ada");
   });
 });

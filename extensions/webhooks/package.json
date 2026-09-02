@@ -1,21 +1,18 @@
 {
   "name": "@openclaw/webhooks",
-  "version": "2026.4.20",
+  "version": "2026.8.1",
   "private": true,
   "description": "OpenClaw webhook bridge plugin",
   "type": "module",
-  "dependencies": {
-    "zod": "^4.3.6"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
-    "bundle": {
-      "stageRuntimeDependencies": true
-    },
     "extensions": [
       "./index.ts"
     ]
+  },
+  "dependencies": {
+    "zod": "4.4.3"
   }
 }

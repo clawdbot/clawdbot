@@ -1,3 +1,4 @@
+// Documents persisted/runtime model selection display normalization.
 import { describe, expect, it } from "vitest";
 import {
   resolveModelDisplayName,
@@ -32,6 +33,20 @@ describe("model-selection-display", () => {
         }),
       ).toBe("anthropic/claude-sonnet-4-6");
     });
+
+    it("ignores malformed persisted model values instead of throwing", () => {
+      // Session files can contain old or malformed values; display helpers
+      // should fall back to safe refs rather than breaking status output.
+      expect(
+        resolveModelDisplayRef({
+          runtimeProvider: { provider: "openai" },
+          runtimeModel: false,
+          overrideProvider: ["anthropic"],
+          overrideModel: 123,
+          fallbackModel: " openai/gpt-5.5 ",
+        }),
+      ).toBe("openai/gpt-5.5");
+    });
   });
 
   describe("resolveModelDisplayName", () => {
@@ -64,6 +79,8 @@ describe("model-selection-display", () => {
     });
 
     it("keeps override ids attached to the current provider when no override provider is stored", () => {
+      // Slash-bearing override models may be nested model ids, not providers;
+      // preserve the known current provider when no override provider exists.
       expect(
         resolveSessionInfoModelSelection({
           currentProvider: "anthropic",
@@ -98,6 +115,22 @@ describe("model-selection-display", () => {
       ).toEqual({
         modelProvider: "openai",
         model: "gpt-5.4",
+      });
+    });
+
+    it("ignores malformed persisted session model values", () => {
+      expect(
+        resolveSessionInfoModelSelection({
+          currentProvider: { provider: "openai" },
+          currentModel: false,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-sonnet-4-6",
+          entryProvider: ["openrouter"],
+          entryModel: 123,
+        }),
+      ).toEqual({
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
       });
     });
   });

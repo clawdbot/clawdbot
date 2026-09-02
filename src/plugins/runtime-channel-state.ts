@@ -1,36 +1,40 @@
+// Stores active plugin channel registry state for the current runtime.
 import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
-
-export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
 type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
     activeVersion?: number;
     activeRegistry?: ActivePluginChannelRegistry | null;
-    channel?: {
-      registry: ActivePluginChannelRegistry | null;
-      version?: number;
-    };
   };
 };
 
-function countChannels(registry: ActivePluginChannelRegistry | null | undefined): number {
-  return registry?.channels?.length ?? 0;
+type GlobalChannelRegistryRuntimeState = GlobalChannelRegistryState[typeof PLUGIN_REGISTRY_STATE];
+
+export type ActivePluginChannelRegistrySnapshot = {
+  registry: ActivePluginChannelRegistry | null;
+  version: number;
+};
+
+let activePluginChannelRegistrySnapshot: ActivePluginChannelRegistrySnapshot | undefined;
+
+/** Returns a snapshot of the process-root plugin registry. */
+export function getActivePluginChannelRegistrySnapshotFromState(): ActivePluginChannelRegistrySnapshot {
+  const state: GlobalChannelRegistryRuntimeState = (globalThis as GlobalChannelRegistryState)[
+    PLUGIN_REGISTRY_STATE
+  ];
+  const registry = state?.activeRegistry ?? null;
+  const version = state?.activeVersion ?? 0;
+  const cached = activePluginChannelRegistrySnapshot;
+  if (cached && cached.registry === registry && cached.version === version) {
+    return cached;
+  }
+  const snapshot = { registry, version };
+  activePluginChannelRegistrySnapshot = snapshot;
+  return snapshot;
 }
 
+/** Returns the active plugin channel registry from global runtime state. */
 export function getActivePluginChannelRegistryFromState(): ActivePluginChannelRegistry | null {
-  const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
-  const pinnedRegistry = state?.channel?.registry ?? null;
-  if (countChannels(pinnedRegistry) > 0) {
-    return pinnedRegistry;
-  }
-  const activeRegistry = state?.activeRegistry ?? null;
-  if (countChannels(activeRegistry) > 0) {
-    return activeRegistry;
-  }
-  return pinnedRegistry ?? activeRegistry;
-}
-
-export function getActivePluginChannelRegistryVersionFromState(): number {
-  const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
-  return state?.channel?.registry ? (state.channel.version ?? 0) : (state?.activeVersion ?? 0);
+  return getActivePluginChannelRegistrySnapshotFromState().registry;
 }

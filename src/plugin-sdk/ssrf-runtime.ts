@@ -4,15 +4,19 @@
 export {
   closeDispatcher,
   createPinnedDispatcher,
+  SsrFBlockedError,
   isBlockedHostnameOrIp,
+  isPrivateIpAddress,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 export { formatErrorMessage } from "../infra/errors.js";
-export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+export { fetchWithSsrFGuard, GuardedFetchRedirectError } from "../infra/net/fetch-guard.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
@@ -25,4 +29,4 @@ export {
   ssrfPolicyFromPrivateNetworkOptIn,
   ssrfPolicyFromAllowPrivateNetwork,
 } from "./ssrf-policy.js";
-export { isPrivateOrLoopbackHost } from "../gateway/net.js";
+export { isLoopbackHost, isPrivateOrLoopbackHost } from "../gateway/net.js";

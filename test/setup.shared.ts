@@ -1,9 +1,20 @@
+// Shared test setup installs common Vitest mocks and cleanup behavior.
 import { vi } from "vitest";
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";
+type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
+  [openAiCodexTokenRefreshTestHook]?: ((...args: unknown[]) => unknown) | undefined;
+};
+
+vi.mock("../src/llm/oauth.js", () => ({
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
+  refreshOpenAICodexToken: vi.fn((...args: unknown[]) =>
+    (globalThis as GlobalWithOpenAiCodexTokenRefreshTestHook)[openAiCodexTokenRefreshTestHook]?.(
+      ...args,
+    ),
+  ),
 }));
 
 vi.mock("@mariozechner/clipboard", () => ({
@@ -29,9 +40,9 @@ vi.mock("@mariozechner/clipboard", () => ({
 
 // Ensure Vitest environment is properly set.
 process.env.VITEST = "true";
-// Config validation walks plugin manifests; keep an aggressive cache in tests to avoid
-// repeated filesystem discovery across suites/workers.
-process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS ??= "60000";
+// Tests frequently point bundled plugin discovery at temp fixture roots. Production still rejects
+// arbitrary OPENCLAW_BUNDLED_PLUGINS_DIR overrides unless this Vitest-only opt-in is present.
+process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ??= "1";
 // Vitest fork workers can load transitive lockfile helpers many times per worker.
 // Raise listener budget to avoid noisy MaxListeners warnings and warning-stack overhead.
 const TEST_PROCESS_MAX_LISTENERS = 256;

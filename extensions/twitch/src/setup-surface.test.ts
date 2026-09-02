@@ -43,6 +43,29 @@ const mockAccount: TwitchAccountConfig = {
   clientId: "test-client-id",
   channel: "#testchannel",
 };
+const mockRefreshAccount: TwitchAccountConfig = {
+  ...mockAccount,
+  clientSecret: "existing-secret",
+  refreshToken: "existing-refresh",
+};
+
+function requireFirstTextPromptArgs(): {
+  message?: string;
+  initialValue?: string;
+  sensitive?: boolean;
+  validate?: (value: string) => string | undefined;
+} {
+  const [call] = mockPromptText.mock.calls;
+  if (!call || typeof call[0] !== "object" || call[0] === null || Array.isArray(call[0])) {
+    throw new Error("expected Twitch text prompt args");
+  }
+  return call[0] as {
+    message?: string;
+    initialValue?: string;
+    sensitive?: boolean;
+    validate?: (value: string) => string | undefined;
+  };
+}
 
 describe("setup surface helpers", () => {
   beforeEach(() => {
@@ -62,7 +85,7 @@ describe("setup surface helpers", () => {
     it("should return existing token when user confirms to keep it", async () => {
       mockPromptConfirm.mockResolvedValue(true);
 
-      const result = await promptToken(mockPrompter, mockAccount, undefined);
+      const result = await promptToken(mockPrompter, mockAccount);
 
       expect(result).toBe("oauth:test123");
       expect(mockPromptConfirm).toHaveBeenCalledWith({
@@ -72,8 +95,7 @@ describe("setup surface helpers", () => {
       expect(mockPromptText).not.toHaveBeenCalled();
     });
 
-    it("should validate token format", async () => {
-      // Set up mocks - user doesn't want to keep existing token
+    it("should use a sensitive prompt when replacing a configured token", async () => {
       mockPromptConfirm.mockResolvedValueOnce(false);
 
       // Track how many times promptText is called
@@ -90,11 +112,15 @@ describe("setup surface helpers", () => {
       });
 
       // Call promptToken
-      const result = await promptToken(mockPrompter, mockAccount, undefined);
+      const result = await promptToken(mockPrompter, mockAccount);
 
       // Verify promptText was called
       expect(promptTextCallCount).toBe(1);
       expect(result).toBe("oauth:test123");
+      expect(requireFirstTextPromptArgs()).toMatchObject({
+        sensitive: true,
+      });
+      expect(requireFirstTextPromptArgs()).not.toHaveProperty("initialValue");
 
       // Test the validate function
       if (!capturedValidate) {
@@ -113,11 +139,11 @@ describe("setup surface helpers", () => {
       const result = await promptUsername(mockPrompter, null);
 
       expect(result).toBe("mybot");
-      expect(mockPromptText).toHaveBeenCalledWith({
-        message: "Twitch bot username",
-        initialValue: "",
-        validate: expect.any(Function),
-      });
+      const promptArgs = requireFirstTextPromptArgs();
+      expect(promptArgs.message).toBe("Twitch bot username");
+      expect(promptArgs.initialValue).toBe("");
+      expect(promptArgs.validate?.("")).toBe("Required");
+      expect(promptArgs.validate?.("mybot")).toBeUndefined();
     });
   });
 
@@ -128,11 +154,11 @@ describe("setup surface helpers", () => {
       const result = await promptClientId(mockPrompter, null);
 
       expect(result).toBe("abc123xyz");
-      expect(mockPromptText).toHaveBeenCalledWith({
-        message: "Twitch Client ID",
-        initialValue: "",
-        validate: expect.any(Function),
-      });
+      const promptArgs = requireFirstTextPromptArgs();
+      expect(promptArgs.message).toBe("Twitch Client ID");
+      expect(promptArgs.initialValue).toBe("");
+      expect(promptArgs.validate?.("")).toBe("Required");
+      expect(promptArgs.validate?.("abc123xyz")).toBeUndefined();
     });
   });
 
@@ -142,7 +168,7 @@ describe("setup surface helpers", () => {
 
       await promptChannelName(mockPrompter, null);
 
-      const { validate } = mockPromptText.mock.calls[0]?.[0] ?? {};
+      const { validate } = requireFirstTextPromptArgs();
       expect(validate?.("")).toBe("Required");
       expect(validate?.("   ")).toBe("Required");
       expect(validate?.("#chan")).toBeUndefined();
@@ -155,7 +181,7 @@ describe("setup surface helpers", () => {
 
       const result = await promptRefreshTokenSetup(mockPrompter, mockAccount);
 
-      expect(result).toEqual({});
+      expect(result).toStrictEqual({});
       expect(mockPromptConfirm).toHaveBeenCalledWith({
         message: "Enable automatic token refresh (requires client secret and refresh token)?",
         initialValue: false,
@@ -164,18 +190,42 @@ describe("setup surface helpers", () => {
 
     it("should prompt for credentials when user accepts", async () => {
       mockPromptConfirm
-        .mockResolvedValueOnce(true) // First call: useRefresh
-        .mockResolvedValueOnce("secret123") // clientSecret
-        .mockResolvedValueOnce("refresh123"); // refreshToken
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(false);
 
       mockPromptText.mockResolvedValueOnce("secret123").mockResolvedValueOnce("refresh123");
 
-      const result = await promptRefreshTokenSetup(mockPrompter, null);
+      const result = await promptRefreshTokenSetup(mockPrompter, mockRefreshAccount);
 
       expect(result).toEqual({
         clientSecret: "secret123",
         refreshToken: "refresh123",
       });
+      expect(mockPromptText).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          sensitive: true,
+        }),
+      );
+      expect(mockPromptText.mock.calls[0]?.[0]).not.toHaveProperty("initialValue");
+      expect(mockPromptText).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          sensitive: true,
+        }),
+      );
+      expect(mockPromptText.mock.calls[1]?.[0]).not.toHaveProperty("initialValue");
+    });
+
+    it("should keep existing credentials without opening masked replacement prompts", async () => {
+      mockPromptConfirm.mockResolvedValue(true);
+
+      await expect(promptRefreshTokenSetup(mockPrompter, mockRefreshAccount)).resolves.toEqual({
+        clientSecret: "existing-secret",
+        refreshToken: "existing-refresh",
+      });
+      expect(mockPromptText).not.toHaveBeenCalled();
     });
   });
 
@@ -200,8 +250,10 @@ describe("setup surface helpers", () => {
       );
 
       // Should return config with username and clientId
-      expect(result).not.toBeNull();
-      const defaultAccount = result?.cfg.channels?.twitch?.accounts?.default as
+      if (!result) {
+        throw new Error("expected Twitch env-token setup result");
+      }
+      const defaultAccount = result.cfg.channels?.twitch?.accounts?.default as
         | { username?: string; clientId?: string }
         | undefined;
       expect(defaultAccount?.username).toBe("testbot");
@@ -237,7 +289,7 @@ describe("setup surface helpers", () => {
   });
 
   describe("defaultAccount setup resolution", () => {
-    it("reports status for the configured default account", async () => {
+    it("reports status for the configured default account", () => {
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
         cfg: {
           channels: {
@@ -259,7 +311,7 @@ describe("setup surface helpers", () => {
       expect(lines).toEqual(["Twitch (secondary): configured"]);
     });
 
-    it("reports status for the requested account override", async () => {
+    it("reports status for the requested account override", () => {
       const lines = twitchSetupWizard.status?.resolveStatusLines?.({
         cfg: {
           channels: {
@@ -315,6 +367,18 @@ describe("setup surface helpers", () => {
   describe("setup wizard account routing", () => {
     type FinalizeArgs = Parameters<NonNullable<typeof twitchSetupWizard.finalize>>[0];
 
+    async function finalizeDefaultTwitchSetup(cfg: FinalizeArgs["cfg"]) {
+      return await twitchSetupWizard.finalize?.({
+        cfg,
+        accountId: "default",
+        credentialValues: {},
+        runtime: {} as FinalizeArgs["runtime"],
+        prompter: mockPrompter,
+        options: {},
+        forceAllowFrom: false,
+      });
+    }
+
     async function finalizeTwitchSetupForAccount(cfg: FinalizeArgs["cfg"]) {
       return await twitchSetupWizard.finalize?.({
         cfg,
@@ -326,6 +390,31 @@ describe("setup surface helpers", () => {
         forceAllowFrom: false,
       });
     }
+
+    it("uses an environment-only token without sending it to wizard prompts", async () => {
+      const envToken = "oauth:environment-only";
+      process.env.OPENCLAW_TWITCH_ACCESS_TOKEN = envToken;
+      mockPromptConfirm.mockReset().mockResolvedValueOnce(true as never);
+      mockPromptText
+        .mockReset()
+        .mockResolvedValueOnce("env-bot" as never)
+        .mockResolvedValueOnce("env-client" as never);
+
+      const result = await finalizeDefaultTwitchSetup({});
+
+      expect(result?.cfg?.channels?.twitch?.accounts?.default).toMatchObject({
+        username: "env-bot",
+        accessToken: envToken,
+        clientId: "env-client",
+      });
+      expect(mockPromptConfirm).toHaveBeenCalledWith({
+        message: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
+        initialValue: true,
+      });
+      expect(mockPromptText).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(mockPromptConfirm.mock.calls)).not.toContain(envToken);
+      expect(JSON.stringify(mockPromptText.mock.calls)).not.toContain(envToken);
+    });
 
     it("rejects reserved account ids before using them as config keys", () => {
       expect(() =>

@@ -1,12 +1,18 @@
-import { describe, expect, it } from "vitest";
+// Zalo tests cover channelirectory plugin behavior.
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/plugins/directory.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {
+  it("distinguishes user ids from group ids", () => {
+    expect(zaloPlugin.messaging?.inferTargetChatType?.({ to: "user:123" })).toBe("direct");
+    expect(zaloPlugin.messaging?.inferTargetChatType?.({ to: "group:456" })).toBe("group");
+  });
+
   const runtimeEnv = createDirectoryTestRuntime() as RuntimeEnv;
   const directory = expectDirectorySurface(zaloPlugin.directory);
 
@@ -19,21 +25,18 @@ describe("zalo directory", () => {
       },
     } as unknown as OpenClawConfig;
 
-    await expect(
-      directory.listPeers({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "123" },
-        { kind: "user", id: "234" },
-        { kind: "user", id: "345" },
-      ]),
-    );
+    const peers = await directory.listPeers({
+      cfg,
+      accountId: undefined,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "123" },
+      { kind: "user", id: "234" },
+      { kind: "user", id: "345" },
+    ]);
 
     await expect(
       directory.listGroups({
@@ -43,7 +46,7 @@ describe("zalo directory", () => {
         limit: undefined,
         runtime: runtimeEnv,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   }
 
   it("lists peers from allowFrom", async () => {
@@ -55,5 +58,22 @@ describe("zalo directory", () => {
 
     expect(zaloPlugin.pairing?.normalizeAllowEntry?.("  zalo:123  ")).toBe("123");
     expect(zaloPlugin.messaging?.normalizeTarget?.("  zl:234  ")).toBe("234");
+  });
+
+  it("recognizes opaque Bot API chat ids as direct targets", () => {
+    const looksLikeId = zaloPlugin.messaging?.targetResolver?.looksLikeId;
+    if (!looksLikeId) {
+      throw new Error("expected Zalo target resolver");
+    }
+
+    expect(looksLikeId("123456", "123456")).toBe(true);
+    expect(looksLikeId("3becaa50ae12474c1e03", "3becaa50ae12474c1e03")).toBe(true);
+    expect(looksLikeId("abc.xyz", "abc.xyz")).toBe(true);
+    expect(looksLikeId("zalo:49270a5f8f1c66423f0d", "49270a5f8f1c66423f0d")).toBe(true);
+    expect(looksLikeId("zalo:abc.xyz", "abc.xyz")).toBe(true);
+    expect(looksLikeId("zl:3becaa50ae12474c1e03", "3becaa50ae12474c1e03")).toBe(true);
+    expect(looksLikeId("zl:abc.xyz", "abc.xyz")).toBe(true);
+    expect(looksLikeId("support", "support")).toBe(true);
+    expect(looksLikeId("zalo:  ", "")).toBe(false);
   });
 });

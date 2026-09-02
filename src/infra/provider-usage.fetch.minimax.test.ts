@@ -1,3 +1,4 @@
+// Tests MiniMax provider usage fetch normalization.
 import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchMinimaxUsage } from "./provider-usage.fetch.minimax.js";
@@ -17,11 +18,75 @@ async function expectMinimaxUsageResult(params: {
   });
 
   const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+  expect(result.error).toBeUndefined();
   expect(result.plan).toBe(params.expected.plan);
   expect(result.windows).toEqual(params.expected.windows);
 }
 
+function makeOversizedJsonResponse(): {
+  response: Response;
+  state: { canceled: boolean; enqueuedBytes: number };
+} {
+  const state = { canceled: false, enqueuedBytes: 0 };
+  const chunkSize = 1024 * 1024;
+  let emitted = 0;
+  const response = new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (emitted >= 64) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        state.enqueuedBytes += chunkSize;
+        controller.enqueue(new Uint8Array(chunkSize));
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+  return { response, state };
+}
+
 describe("fetchMinimaxUsage", () => {
+  it.each([
+    {
+      name: "uses the CN usage endpoint by default",
+      baseUrl: undefined,
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+    {
+      name: "derives the global usage endpoint from an Anthropic-compatible base URL",
+      baseUrl: "https://api.minimax.io/anthropic",
+      expectedUrl: "https://api.minimax.io/v1/token_plan/remains",
+    },
+    {
+      name: "derives the usage endpoint from a configured origin",
+      baseUrl: "https://api.minimaxi.com",
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+    {
+      name: "falls back to CN when the configured base URL is malformed",
+      baseUrl: "not a url",
+      expectedUrl: "https://api.minimaxi.com/v1/token_plan/remains",
+    },
+  ])("$name", async ({ baseUrl, expectedUrl }) => {
+    const mockFetch = createProviderUsageFetch(async (url) => {
+      expect(url).toBe(expectedUrl);
+      return makeResponse(200, {
+        data: {
+          current_interval_total_count: 100,
+          current_interval_usage_count: 98,
+        },
+      });
+    });
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch, { baseUrl });
+    expect(result.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
+  });
+
   it.each([
     {
       name: "returns HTTP errors for failed requests",
@@ -60,6 +125,18 @@ describe("fetchMinimaxUsage", () => {
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);
     expect(result.error).toBe(expectedError);
     expect(result.windows).toHaveLength(0);
+  });
+
+  it("bounds oversized successful JSON responses and cancels the stream", async () => {
+    const oversized = makeOversizedJsonResponse();
+    const mockFetch = createProviderUsageFetch(async () => oversized.response);
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+
+    expect(result.error).toBe("Invalid JSON");
+    expect(result.windows).toHaveLength(0);
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
   });
 
   it.each([
@@ -158,6 +235,51 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
+      name: "skips an invalid early reset alias in a nested usage record",
+      payload: {
+        data: {
+          nested: [
+            {
+              usage_ratio: 0.4,
+              reset_at: "not-a-date",
+              expires_at: "2026-09-01T00:00:00Z",
+            },
+          ],
+        },
+      },
+      expected: {
+        windows: [{ label: "5h", usedPercent: 40, resetAt: 1_788_220_800_000 }],
+      },
+    },
+    {
+      name: "preserves reset alias order across numeric and date values",
+      payload: {
+        data: {
+          reset_at: 1_800_000_000,
+          resetTime: "2030-01-01T00:00:00Z",
+          nested: [{ usage_ratio: 0.4 }],
+        },
+      },
+      expected: {
+        windows: [{ label: "5h", usedPercent: 40, resetAt: 1_800_000_000_000 }],
+      },
+    },
+    {
+      name: "drops Date-invalid reset timestamps",
+      payload: {
+        data: {
+          plan_name: "Overflow Plan",
+          reset_at: 8_640_000_000_000_001,
+          current_interval_total_count: 100,
+          current_interval_usage_count: 25,
+        },
+      },
+      expected: {
+        plan: "Overflow Plan",
+        windows: [{ label: "5h", usedPercent: 75, resetAt: undefined }],
+      },
+    },
+    {
       name: "prefers chat model entries from model_remains and derives window labels from timestamps",
       payload: {
         data: {
@@ -189,6 +311,152 @@ describe("fetchMinimaxUsage", () => {
       expected: {
         plan: "Coding Plan · MiniMax-M*",
         windows: [{ label: "4h", usedPercent: 0.8333333333333334, resetAt: 1_774_195_200_000 }],
+      },
+    },
+    {
+      name: "normalizes current MiniMax percentage-only general and weekly windows",
+      payload: {
+        model_remains: [
+          {
+            model_name: "general",
+            start_time: "1784386800000",
+            end_time: "1784404800000",
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 97,
+            current_interval_status: 1,
+            weekly_start_time: "1783900800000",
+            weekly_end_time: "1784505600000",
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 77,
+            current_weekly_status: 1,
+          },
+          {
+            model_name: "video",
+            start_time: 1_784_332_800_000,
+            end_time: 1_784_419_200_000,
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+            weekly_start_time: 1_783_900_800_000,
+            weekly_end_time: 1_784_505_600_000,
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 100,
+            current_weekly_status: 3,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [
+          { label: "5h", usedPercent: 3, resetAt: 1_784_404_800_000 },
+          { label: "Week", usedPercent: 23, resetAt: 1_784_505_600_000 },
+        ],
+      },
+    },
+    {
+      name: "prefers current MiniMax remaining percentages over legacy count math",
+      payload: {
+        model_remains: [
+          {
+            model_name: "general",
+            startTime: 1_784_386_800_000,
+            endTime: 1_784_404_800_000,
+            currentIntervalTotalCount: 100,
+            currentIntervalUsageCount: 90,
+            currentIntervalRemainingPercent: 1,
+            currentIntervalStatus: 1,
+            weeklyStartTime: 1_783_900_800_000,
+            weeklyEndTime: 1_784_505_600_000,
+            currentWeeklyTotalCount: 0,
+            currentWeeklyUsageCount: 0,
+            currentWeeklyRemainingPercent: 100,
+            currentWeeklyStatus: 3,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [{ label: "5h", usedPercent: 99, resetAt: 1_784_404_800_000 }],
+      },
+    },
+    {
+      name: "omits an unlimited current window while preserving a bounded weekly window",
+      payload: {
+        model_remains: [
+          {
+            model_name: "general",
+            start_time: 1_784_386_800_000,
+            end_time: 1_784_404_800_000,
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+            weekly_start_time: 1_783_900_800_000,
+            weekly_end_time: 1_784_505_600_000,
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 50,
+            current_weekly_status: 1,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [{ label: "Week", usedPercent: 50, resetAt: 1_784_505_600_000 }],
+      },
+    },
+    {
+      name: "returns a valid empty snapshot when all MiniMax windows are unlimited",
+      payload: {
+        model_remains: [
+          {
+            model_name: "general",
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 100,
+            current_weekly_status: 3,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [],
+      },
+    },
+    {
+      name: "prefers an exhausted bounded row over an earlier unlimited fallback row",
+      payload: {
+        model_remains: [
+          {
+            model_name: "video",
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+          },
+          {
+            model_name: "other-bounded-model",
+            start_time: 1_784_386_800_000,
+            end_time: 1_784_404_800_000,
+            current_interval_remaining_percent: 0,
+            current_interval_status: 2,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · other-bounded-model",
+        windows: [{ label: "5h", usedPercent: 100, resetAt: 1_784_404_800_000 }],
       },
     },
     {
@@ -241,13 +509,8 @@ describe("fetchMinimaxUsage", () => {
       first: sharedUsage,
       nested: [sharedUsage],
     };
-    const mockFetch = createProviderUsageFetch(
-      async () =>
-        ({
-          ok: true,
-          status: 200,
-          json: async () => ({ data: dataWithSharedReference }),
-        }) as Response,
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, { data: dataWithSharedReference }),
     );
 
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);

@@ -1,3 +1,8 @@
+/**
+ * Tests credential eligibility and expiry classification.
+ * Protects missing, expired, near-expiry, and SecretRef credential handling for
+ * auth profile selection.
+ */
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
@@ -18,6 +23,10 @@ describe("resolveTokenExpiryState", () => {
     expect(resolveTokenExpiryState(-1, now)).toBe("invalid_expires");
     expect(resolveTokenExpiryState(Number.NaN, now)).toBe("invalid_expires");
     expect(resolveTokenExpiryState(Number.POSITIVE_INFINITY, now)).toBe("invalid_expires");
+  });
+
+  it("treats Date-invalid future timestamps as invalid_expires", () => {
+    expect(resolveTokenExpiryState(8_700_000_000_000_000, now)).toBe("invalid_expires");
   });
 
   it("returns expired when expires is in the past", () => {
@@ -45,7 +54,7 @@ describe("hasUsableOAuthCredential", () => {
       hasUsableOAuthCredential(
         {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: now + DEFAULT_OAUTH_REFRESH_MARGIN_MS - 1,
@@ -75,6 +84,23 @@ describe("evaluateStoredCredentialEligibility", () => {
     expect(result).toEqual({ eligible: true, reasonCode: "ok" });
   });
 
+  it.each([
+    "openclaw onboard --auth-choice zai-coding-global",
+    "openclaw onboard --auth-choice=zai-coding-global",
+    "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
+    "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+  ])("marks pasted OpenClaw onboarding command %p as a malformed api key", (key) => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "api_key",
+        provider: "zai",
+        key,
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: false, reasonCode: "malformed_api_key" });
+  });
+
   it("marks tokenRef with missing expires as eligible", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {
@@ -102,5 +128,19 @@ describe("evaluateStoredCredentialEligibility", () => {
       now,
     });
     expect(result).toEqual({ eligible: false, reasonCode: "invalid_expires" });
+  });
+
+  it("marks oauth without inline credential material as ineligible", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "oauth",
+        provider: "openai",
+        access: "",
+        refresh: "",
+        expires: now + 60_000,
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: false, reasonCode: "missing_credential" });
   });
 });

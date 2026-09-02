@@ -1,3 +1,5 @@
+// Tool invoke cron regression tests cover HTTP tool invocation for cron/gateway
+// tools with lightweight mocks around auth, config, and before-tool hooks.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,16 +14,23 @@ const runBeforeToolCallHook = async (args: { params: unknown }) => ({
 let cfg: Record<string, unknown> = {};
 const alwaysAuthorized = async () => ({ ok: true as const });
 const disableDefaultMemorySlot = () => false;
-const noPluginToolMeta = () => undefined;
 const noWarnLog = () => {};
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => cfg,
+  getRuntimeConfig: () => cfg,
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  resolveMainSessionKey: () => "agent:main:main",
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => cfg,
 }));
+
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveMainSessionKey: () => "agent:main:main",
+  };
+});
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: alwaysAuthorized,
@@ -31,11 +40,11 @@ vi.mock("../logger.js", () => ({
   logWarn: noWarnLog,
 }));
 
-vi.mock("../agents/pi-tools.js", () => ({
+vi.mock("../agents/agent-tools.js", () => ({
   resolveToolLoopDetectionConfig,
 }));
 
-vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
+vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook,
 }));
 
@@ -47,16 +56,12 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: noPluginToolMeta,
-}));
-
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [
     {
-      name: "cron",
+      name: "automations",
       parameters: { type: "object", properties: { action: { type: "string" } } },
-      execute: async () => ({ ok: true, via: "cron" }),
+      execute: async () => ({ ok: true, via: "automations" }),
     },
     {
       name: "gateway",
@@ -85,7 +90,7 @@ beforeAll(async () => {
       }
       res.statusCode = 404;
       res.end("not found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       res.statusCode = 500;
       res.end(String(err));
     });
@@ -104,7 +109,9 @@ afterAll(async () => {
   if (!server) {
     return;
   }
-  await new Promise<void>((resolve) => server?.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server?.close(() => resolve());
+  });
   server = undefined;
 });
 
@@ -146,6 +153,24 @@ describe("tools invoke HTTP denylist", () => {
 
     expect(cronRes.status).toBe(200);
   });
+
+  it.each(["cron", " CRON ", "CrOn"])(
+    "keeps deny spelling %j authoritative over a canonical allow",
+    async (deniedTool) => {
+      cfg = {
+        gateway: {
+          tools: {
+            allow: ["automations"],
+            deny: [deniedTool],
+          },
+        },
+      };
+
+      const cronRes = await invoke("cron", "operator.admin");
+
+      expect(cronRes.status).toBe(404);
+    },
+  );
 
   it("keeps gateway denied under the coding profile while honoring explicit cron allow", async () => {
     cfg = {

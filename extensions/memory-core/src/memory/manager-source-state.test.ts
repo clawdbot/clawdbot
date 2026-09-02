@@ -1,8 +1,7 @@
+// Memory Core tests cover manager source state plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   loadMemorySourceFileState,
-  MEMORY_SOURCE_FILE_HASH_SQL,
-  MEMORY_SOURCE_FILE_STATE_SQL,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
 
@@ -15,8 +14,8 @@ describe("memory source state", () => {
           all: (...args) => {
             calls.push({ sql, args });
             return [
-              { path: "memory/one.md", hash: "hash-1" },
-              { path: "memory/two.md", hash: "hash-2" },
+              { path: "memory/one.md", hash: "hash-1", mtime: 100, size: 10 },
+              { path: "memory/two.md", hash: "hash-2", mtime: 200, size: 20 },
             ];
           },
           get: () => undefined,
@@ -25,10 +24,15 @@ describe("memory source state", () => {
       source: "memory",
     });
 
-    expect(calls).toEqual([{ sql: MEMORY_SOURCE_FILE_STATE_SQL, args: ["memory"] }]);
+    expect(calls).toEqual([
+      {
+        sql: "SELECT path, hash, mtime, size FROM memory_index_sources WHERE source = ?",
+        args: ["memory"],
+      },
+    ]);
     expect(state.rows).toEqual([
-      { path: "memory/one.md", hash: "hash-1" },
-      { path: "memory/two.md", hash: "hash-2" },
+      { path: "memory/one.md", hash: "hash-1", mtime: 100, size: 10 },
+      { path: "memory/two.md", hash: "hash-2", mtime: 200, size: 20 },
     ]);
     expect(state.hashes).toEqual(
       new Map([
@@ -56,7 +60,7 @@ describe("memory source state", () => {
     });
 
     expect(hash).toBe("hash-from-snapshot");
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
   });
 
   it("falls back to per-file lookups without a bulk snapshot", () => {
@@ -79,7 +83,7 @@ describe("memory source state", () => {
     expect(hash).toBe("hash-from-row");
     expect(calls).toEqual([
       {
-        sql: MEMORY_SOURCE_FILE_HASH_SQL,
+        sql: "SELECT hash FROM memory_index_sources WHERE path = ? AND source = ?",
         args: ["sessions/thread.jsonl", "sessions"],
       },
     ]);

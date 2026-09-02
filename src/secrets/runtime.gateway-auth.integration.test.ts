@@ -1,8 +1,9 @@
+/** Integration tests for Gateway auth secret surfaces in the secrets runtime. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/config.js";
+import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -37,7 +38,6 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
     await withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
         OPENCLAW_VERSION: undefined,
       },
       async () => {
@@ -66,7 +66,7 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
   });
 
   it(
-    "keeps last-known-good runtime snapshot active when reload introduces unresolved active gateway auth refs",
+    "rejects unresolved active gateway auth refs before persisting them",
     async () => {
       await withTempHome("openclaw-secrets-runtime-gateway-auth-reload-lkg-", async (home) => {
         const initialTokenRef = {
@@ -79,6 +79,23 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
           provider: "default",
           id: "MISSING_GATEWAY_AUTH_TOKEN",
         } as const;
+        await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+        await fs.writeFile(
+          path.join(home, ".openclaw", "openclaw.json"),
+          `${JSON.stringify(
+            {
+              gateway: {
+                auth: {
+                  mode: "token",
+                  token: initialTokenRef,
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
 
         const prepared = await prepareSecretsRuntimeSnapshot({
           config: asConfig({
@@ -98,11 +115,11 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
         });
 
         activateSecretsRuntimeSnapshot(prepared);
-        expect(loadConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
+        expect(getRuntimeConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
 
         await expect(
           writeConfigFile({
-            ...loadConfig(),
+            ...getRuntimeConfig(),
             gateway: {
               auth: {
                 mode: "token",
@@ -110,17 +127,19 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
               },
             },
           }),
-        ).rejects.toThrow(/runtime snapshot refresh failed: .*MISSING_GATEWAY_AUTH_TOKEN/i);
+        ).rejects.toThrow(/active SecretRef resolution failed: .*MISSING_GATEWAY_AUTH_TOKEN/i);
 
         const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
-        expect(activeAfterFailure).not.toBeNull();
-        expect(loadConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
-        expect(activeAfterFailure?.sourceConfig.gateway?.auth?.token).toEqual(initialTokenRef);
+        if (activeAfterFailure === null) {
+          throw new Error("Expected active secrets runtime snapshot");
+        }
+        expect(getRuntimeConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
+        expect(activeAfterFailure.sourceConfig.gateway?.auth?.token).toEqual(initialTokenRef);
 
         const persistedConfig = JSON.parse(
           await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
         ) as OpenClawConfig;
-        expect(persistedConfig.gateway?.auth?.token).toEqual(missingTokenRef);
+        expect(persistedConfig.gateway?.auth?.token).toEqual(initialTokenRef);
       });
     },
     SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS,

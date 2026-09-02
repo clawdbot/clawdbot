@@ -1,72 +1,71 @@
-import path from "node:path";
-import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Telegram plugin module implements sticker cache store behavior.
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getTelegramRuntime } from "./runtime.js";
+import {
+  normalizeCachedStickerForStore,
+  TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+  TELEGRAM_STICKER_CACHE_NAMESPACE,
+  type CachedSticker,
+} from "./sticker-cache-store.legacy-state.js";
 
-const CACHE_VERSION = 1;
+export type { CachedSticker };
 
-export interface CachedSticker {
-  fileId: string;
-  fileUniqueId: string;
-  emoji?: string;
-  setName?: string;
-  description: string;
-  cachedAt: string;
-  receivedFrom?: string;
+type TelegramStickerCacheStore = PluginStateSyncKeyedStore<CachedSticker>;
+
+function openStickerCacheStore(): TelegramStickerCacheStore {
+  return getTelegramRuntime().state.openSyncKeyedStore<CachedSticker>({
+    namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+    maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+  });
 }
 
-interface StickerCache {
-  version: number;
-  stickers: Record<string, CachedSticker>;
-}
-
-function getCacheFile(): string {
-  return path.join(resolveStateDir(), "telegram", "sticker-cache.json");
-}
-
-function loadCache(): StickerCache {
-  const data = loadJsonFile(getCacheFile());
-  if (!data || typeof data !== "object") {
-    return { version: CACHE_VERSION, stickers: {} };
+function readStickerCacheStore<T>(
+  operation: string,
+  read: (store: TelegramStickerCacheStore) => T,
+  fallback: T,
+): T {
+  try {
+    return read(openStickerCacheStore());
+  } catch (err) {
+    logVerbose(`telegram sticker cache ${operation} failed: ${String(err)}`);
+    return fallback;
   }
-  const cache = data as StickerCache;
-  if (cache.version !== CACHE_VERSION) {
-    // Future: handle migration if needed
-    return { version: CACHE_VERSION, stickers: {} };
-  }
-  return cache;
-}
-
-function saveCache(cache: StickerCache): void {
-  saveJsonFile(getCacheFile(), cache);
 }
 
 /**
  * Get a cached sticker by its unique ID.
  */
 export function getCachedSticker(fileUniqueId: string): CachedSticker | null {
-  const cache = loadCache();
-  return cache.stickers[fileUniqueId] ?? null;
+  return readStickerCacheStore("lookup", (store) => store.lookup(fileUniqueId) ?? null, null);
 }
 
 /**
  * Add or update a sticker in the cache.
  */
 export function cacheSticker(sticker: CachedSticker): void {
-  const cache = loadCache();
-  cache.stickers[sticker.fileUniqueId] = sticker;
-  saveCache(cache);
+  readStickerCacheStore(
+    "register",
+    (store) => {
+      store.register(sticker.fileUniqueId, normalizeCachedStickerForStore(sticker));
+    },
+    undefined,
+  );
 }
 
 /**
  * Search cached stickers by text query (fuzzy match on description + emoji + setName).
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
-  const cache = loadCache();
   const queryLower = normalizeLowercaseStringOrEmpty(query);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
-  for (const sticker of Object.values(cache.stickers)) {
+  for (const { value: sticker } of readStickerCacheStore(
+    "entries",
+    (store) => store.entries(),
+    [],
+  )) {
     let score = 0;
     const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
 
@@ -109,16 +108,18 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
  * Get all cached stickers (for debugging/listing).
  */
 export function getAllCachedStickers(): CachedSticker[] {
-  const cache = loadCache();
-  return Object.values(cache.stickers);
+  return readStickerCacheStore(
+    "entries",
+    (store) => store.entries().map((entry) => entry.value),
+    [],
+  );
 }
 
 /**
  * Get cache statistics.
  */
 export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: string } {
-  const cache = loadCache();
-  const stickers = Object.values(cache.stickers);
+  const stickers = getAllCachedStickers();
   if (stickers.length === 0) {
     return { count: 0 };
   }

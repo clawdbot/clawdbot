@@ -1,9 +1,10 @@
+// Discord plugin module implements dm command decision behavior.
+import type { ResolvedChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
-import type { DiscordDmCommandAccess } from "./dm-command-auth.js";
 
 export async function handleDiscordDmCommandDecision(params: {
-  dmAccess: DiscordDmCommandAccess;
+  senderAccess: Pick<ResolvedChannelMessageIngress["senderAccess"], "decision">;
   accountId: string;
   sender: {
     id: string;
@@ -14,14 +15,15 @@ export async function handleDiscordDmCommandDecision(params: {
   onUnauthorized: () => Promise<void>;
   upsertPairingRequest?: typeof upsertChannelPairingRequest;
 }): Promise<boolean> {
-  if (params.dmAccess.decision === "allow") {
+  if (params.senderAccess.decision === "allow") {
     return true;
   }
 
-  if (params.dmAccess.decision === "pairing") {
+  if (params.senderAccess.decision === "pairing") {
     const upsertPairingRequest = params.upsertPairingRequest ?? upsertChannelPairingRequest;
     const result = await createChannelPairingChallengeIssuer({
       channel: "discord",
+      accountId: params.accountId,
       upsertPairingRequest: async ({ id, meta }) =>
         await upsertPairingRequest({
           channel: "discord",

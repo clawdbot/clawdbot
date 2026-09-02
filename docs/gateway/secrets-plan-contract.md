@@ -1,17 +1,19 @@
 ---
-summary: "Contract for `secrets apply` plans: target validation, path matching, and `auth-profiles.json` target scope"
+summary: "Contract for `secrets apply` plans: target validation, path matching, and SQLite auth-profile target scope"
 read_when:
   - Generating or reviewing `openclaw secrets apply` plans
   - Debugging `Invalid plan target path` errors
   - Understanding target type and path validation behavior
-title: "Secrets Apply Plan Contract"
+title: "Secrets apply plan contract"
 ---
 
-# Secrets apply plan contract
+This page defines the strict contract enforced by `openclaw secrets apply`. If a target does not match these rules, apply fails before mutating any file.
 
-This page defines the strict contract enforced by `openclaw secrets apply`.
+## Plan file requirements
 
-If a target does not match these rules, apply fails before mutating configuration.
+`openclaw secrets apply --from <plan.json>` accepts regular files up to 16 MiB (16,777,216 bytes). The limit applies to the complete serialized file, including whitespace. Directories, FIFOs, device files, and files larger than the limit are rejected before JSON parsing or target validation.
+
+`openclaw secrets configure --plan-out <plan.json>` enforces the same limit on the UTF-8 serialized output before creating the file. Hand-written plans and external plan generators must also keep the serialized file within this boundary.
 
 ## Plan file shape
 
@@ -40,23 +42,58 @@ If a target does not match these rules, apply fails before mutating configuratio
 }
 ```
 
+`openclaw secrets configure` generates plans in this shape. You can also hand-write or edit one.
+
+## Provider upserts and deletes
+
+Plans may also include two optional top-level fields that mutate the `secrets.providers` map alongside the per-target writes:
+
+- `providerUpserts` -- an object keyed by provider alias. Each value is a provider definition (the same shape accepted under `secrets.providers.<alias>` in `openclaw.json`, e.g. an `exec` or `file` provider).
+- `providerDeletes` -- an array of provider aliases to remove.
+
+`providerUpserts` runs before `targets`, so a `target.ref.provider` may reference a provider alias that the same plan introduces in `providerUpserts`. Without this ordering, plans that reference an alias not yet configured in `openclaw.json` fail with `provider "<alias>" is not configured`.
+
+```json5
+{
+  version: 1,
+  protocolVersion: 1,
+  providerUpserts: {
+    onepassword_anthropic: {
+      source: "exec",
+      command: "/usr/bin/op",
+      args: ["read", "op://Vault/Anthropic/credential"],
+    },
+  },
+  providerDeletes: ["legacy_unused_alias"],
+  targets: [
+    {
+      type: "models.providers.apiKey",
+      path: "models.providers.anthropic.apiKey",
+      pathSegments: ["models", "providers", "anthropic", "apiKey"],
+      providerId: "anthropic",
+      ref: { source: "exec", provider: "onepassword_anthropic", id: "credential" },
+    },
+  ],
+}
+```
+
+Exec providers introduced via `providerUpserts` are still subject to the exec consent rules in [Exec provider consent behavior](#exec-provider-consent-behavior): plans containing exec providers require `--allow-exec` in write mode.
+
 ## Supported target scope
 
-Plan targets are accepted for supported credential paths in:
-
-- [SecretRef Credential Surface](/reference/secretref-credential-surface)
+Plan targets are accepted for supported credential paths in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 
 ## Target type behavior
 
-General rule:
+`target.type` must be a recognized target type, and the normalized `target.path` must match that type's registered path shape.
 
-- `target.type` must be recognized and must match the normalized `target.path` shape.
+Some target types accept a compatibility alias as `target.type` for existing plans, in addition to their canonical type name:
 
-Compatibility aliases remain accepted for existing plans:
-
-- `models.providers.apiKey`
-- `skills.entries.apiKey`
-- `channels.googlechat.serviceAccount`
+| Canonical type                       | Accepted alias                                  |
+| ------------------------------------ | ----------------------------------------------- |
+| `models.providers.apiKey`            | `models.providers.*.apiKey`                     |
+| `skills.entries.apiKey`              | `skills.entries.*.apiKey`                       |
+| `channels.googlechat.serviceAccount` | `channels.googlechat.accounts.*.serviceAccount` |
 
 ## Path validation rules
 
@@ -68,8 +105,8 @@ Each target is validated with all of the following:
 - Forbidden segments are rejected: `__proto__`, `prototype`, `constructor`.
 - The normalized path must match the registered path shape for the target type.
 - If `providerId` or `accountId` is set, it must match the id encoded in the path.
-- `auth-profiles.json` targets require `agentId`.
-- When creating a new `auth-profiles.json` mapping, include `authProfileProvider`.
+- SQLite auth-profile targets require `agentId`.
+- When creating a new auth-profile mapping, include `authProfileProvider`.
 
 ## Failure behavior
 
@@ -79,7 +116,7 @@ If a target fails validation, apply exits with an error like:
 Invalid plan target path for models.providers.apiKey: models.providers.openai.baseUrl
 ```
 
-No writes are committed for an invalid plan.
+No writes are committed for an invalid plan: target resolution and path validation run before any state is changed. For a valid plan, apply captures file snapshots and SQLite auth-store snapshots before writing. If a later write fails, it attempts to restore the files and conditionally roll back the auth-store writes without overwriting concurrent credential changes.
 
 ## Exec provider consent behavior
 
@@ -89,8 +126,9 @@ No writes are committed for an invalid plan.
 
 ## Runtime and audit scope notes
 
-- Ref-only `auth-profiles.json` entries (`keyRef`/`tokenRef`) are included in runtime resolution and audit coverage.
-- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json` targets, and optional scrub targets.
+- Ref-only SQLite auth-profile entries (`keyRef`/`tokenRef`) are included in runtime credential resolution and audit coverage.
+- `secrets apply` writes supported `openclaw.json` targets and SQLite auth-profile targets. Two optional scrub passes are on by default: `scrubEnv` removes migrated plaintext values from `.env` files in the effective state and active-config directories; `scrubAuthProfilesForProviderTargets` clears plaintext/unused-ref residue in auth stores for providers a plan just migrated. Set either option to `false` in the plan to skip that pass.
+- `scrubLegacyAuthJson` is a deprecated plan input and is always disabled. Doctor owns legacy `auth.json` migration; `secrets apply` does not read or rewrite it.
 
 ## Operator checks
 

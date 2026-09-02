@@ -1,58 +1,19 @@
+// Zalo plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasOwnProperty,
+  normalizeSecretStringValue,
   type ResolverContext,
   type SecretDefaults,
-  type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries = [
-  {
-    id: "channels.zalo.accounts.*.botToken",
-    targetType: "channels.zalo.accounts.*.botToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.zalo.accounts.*.botToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.zalo.accounts.*.webhookSecret",
-    targetType: "channels.zalo.accounts.*.webhookSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.zalo.accounts.*.webhookSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.zalo.botToken",
-    targetType: "channels.zalo.botToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.zalo.botToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.zalo.webhookSecret",
-    targetType: "channels.zalo.webhookSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.zalo.webhookSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-] satisfies SecretTargetRegistryEntry[];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "zalo",
+  account: ["botToken", "webhookSecret"],
+  channel: ["botToken", "webhookSecret"],
+});
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
@@ -73,7 +34,9 @@ export function collectRuntimeConfigAssignments(params: {
     context: params.context,
     topLevelActiveWithoutAccounts: true,
     topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled && !hasOwnProperty(account, "botToken"),
+      enabled &&
+      !hasOwnProperty(account, "botToken") &&
+      !normalizeSecretStringValue(account.tokenFile),
     accountActive: ({ enabled }) => enabled,
     topInactiveReason: "no enabled Zalo surface inherits this top-level botToken.",
     accountInactiveReason: "Zalo account is disabled.",

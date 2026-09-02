@@ -1,4 +1,6 @@
+// Tests browser lifecycle cleanup after CLI and runtime shutdown paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "./config/types.openclaw.js";
 
 const closeTrackedBrowserTabsForSessions = vi.hoisted(() => vi.fn(async () => 0));
 
@@ -6,14 +8,14 @@ vi.mock("./plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions,
 }));
 
+const { cleanupBrowserSessionsForLifecycleEnd } = await import("./browser-lifecycle-cleanup.js");
+
 describe("cleanupBrowserSessionsForLifecycleEnd", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("normalizes session keys before closing browser sessions", async () => {
-    const { cleanupBrowserSessionsForLifecycleEnd } =
-      await import("./browser-lifecycle-cleanup.js");
     const onWarn = vi.fn();
 
     await expect(
@@ -29,9 +31,29 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
     });
   });
 
+  it("skips cleanup when root browser support is disabled", async () => {
+    await expect(
+      cleanupBrowserSessionsForLifecycleEnd({
+        cfg: { browser: { enabled: false } } as OpenClawConfig,
+        sessionKeys: ["session-a"],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  });
+
+  it("skips cleanup when the browser plugin entry is disabled", async () => {
+    await expect(
+      cleanupBrowserSessionsForLifecycleEnd({
+        cfg: { plugins: { entries: { browser: { enabled: false } } } } as OpenClawConfig,
+        sessionKeys: ["session-a"],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  });
+
   it("swallows browser cleanup failures", async () => {
-    const { cleanupBrowserSessionsForLifecycleEnd } =
-      await import("./browser-lifecycle-cleanup.js");
     const onError = vi.fn();
     const error = new Error("cleanup failed");
     closeTrackedBrowserTabsForSessions.mockRejectedValueOnce(error);

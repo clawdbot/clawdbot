@@ -1,8 +1,11 @@
+/** Type contracts for text/native chat command definitions and command detection. */
 import type { OpenClawConfig } from "../config/types.js";
 import type { CommandArgValues } from "./commands-args.types.js";
+import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
-export type { CommandArgValue, CommandArgValues, CommandArgs } from "./commands-args.types.js";
+export type { CommandArgValues, CommandArgs } from "./commands-args.types.js";
 
+/** Where a command may be invoked. */
 export type CommandScope = "text" | "native" | "both";
 
 /**
@@ -13,6 +16,7 @@ export type CommandScope = "text" | "native" | "both";
  */
 export type CommandTier = "essential" | "standard" | "power";
 
+// v2026.8.1 SDK definitions may still use "docks"; it remains presentation-only.
 export type CommandCategory =
   | "session"
   | "options"
@@ -22,20 +26,25 @@ export type CommandCategory =
   | "tools"
   | "docks";
 
-export type CommandArgType = "string" | "number" | "boolean";
+/** Primitive command argument kinds supported by native command surfaces. */
+type CommandArgType = "string" | "number" | "boolean";
 
+/** Context passed to dynamic command argument choice providers. */
 export type CommandArgChoiceContext = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
+  catalog?: ThinkingCatalogEntry[];
   command: ChatCommandDefinition;
   arg: CommandArgDefinition;
 };
 
 export type CommandArgChoice = string | { value: string; label: string };
 
-export type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => CommandArgChoice[];
+type CommandArgChoicesProvider = (context: CommandArgChoiceContext) => CommandArgChoice[];
 
+/** One positional argument accepted by a chat command. */
 export type CommandArgDefinition = {
   name: string;
   description: string;
@@ -46,6 +55,7 @@ export type CommandArgDefinition = {
   captureRemaining?: boolean;
 };
 
+/** Menu metadata for commands that should prompt for a missing argument. */
 export type CommandArgMenuSpec = {
   arg: string;
   title?: string;
@@ -53,10 +63,15 @@ export type CommandArgMenuSpec = {
 
 export type CommandArgsParsing = "none" | "positional";
 
+/** Canonical registry entry for one chat command across text and native surfaces. */
 export type ChatCommandDefinition = {
   key: string;
   nativeName?: string;
+  nativeAliases?: string[];
+  nativeProviders?: string[];
   description: string;
+  /** Localized descriptions for native command surfaces that support them. */
+  descriptionLocalizations?: Record<string, string>;
   textAliases: string[];
   acceptsArgs?: boolean;
   args?: CommandArgDefinition[];
@@ -67,24 +82,34 @@ export type ChatCommandDefinition = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: CommandTier;
+  /** Handler is safe to resolve while another run owns the session execution slot. */
+  activeRunSafe?: true;
 };
 
+/** Provider-facing native command registration shape. */
 export type NativeCommandSpec = {
   name: string;
   description: string;
+  descriptionLocalizations?: Record<string, string>;
   acceptsArgs: boolean;
   args?: CommandArgDefinition[];
+  isAlias?: boolean;
 };
 
+/** Extra context used when normalizing slash command text. */
 export type CommandNormalizeOptions = {
   botUsername?: string;
+  /** Strip an explicit command target only while channel bot identity is unavailable. */
+  targetedCommandMode?: "pre-identity";
 };
 
+/** Cached exact/regex command detector built from current registry aliases. */
 export type CommandDetection = {
   exact: Set<string>;
   regex: RegExp;
 };
 
+/** Inputs for deciding whether text slash commands should run on a surface. */
 export type ShouldHandleTextCommandsParams = {
   cfg: OpenClawConfig;
   surface: string;

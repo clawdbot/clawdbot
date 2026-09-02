@@ -1,15 +1,14 @@
 ---
-title: "Together AI"
 summary: "Together AI setup (auth + model selection)"
+title: "Together AI"
 read_when:
   - You want to use Together AI with OpenClaw
   - You need the API key env var or CLI auth choice
 ---
 
-# Together AI
-
 [Together AI](https://together.ai) provides access to leading open-source
 models including Llama, DeepSeek, Kimi, and more through a unified API.
+OpenClaw bundles it as the `together` provider.
 
 | Property | Value                         |
 | -------- | ----------------------------- |
@@ -35,7 +34,9 @@ models including Llama, DeepSeek, Kimi, and more through a unified API.
     {
       agents: {
         defaults: {
-          model: { primary: "together/moonshotai/Kimi-K2.5" },
+          model: {
+            primary: "together/moonshotai/Kimi-K2.6",
+          },
         },
       },
     }
@@ -46,42 +47,40 @@ models including Llama, DeepSeek, Kimi, and more through a unified API.
 ### Non-interactive example
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice together-api-key \
   --together-api-key "$TOGETHER_API_KEY"
 ```
 
 <Note>
-The onboarding preset sets `together/moonshotai/Kimi-K2.5` as the default
-model.
+Onboarding sets Together's recommended chat model,
+`together/moonshotai/Kimi-K2.6`, as the default.
 </Note>
 
 ## Built-in catalog
 
-OpenClaw ships this bundled Together catalog:
+Cost is USD per million tokens.
 
-| Model ref                                                    | Name                                   | Input       | Context    | Notes                            |
-| ------------------------------------------------------------ | -------------------------------------- | ----------- | ---------- | -------------------------------- |
-| `together/moonshotai/Kimi-K2.5`                              | Kimi K2.5                              | text, image | 262,144    | Default model; reasoning enabled |
-| `together/zai-org/GLM-4.7`                                   | GLM 4.7 Fp8                            | text        | 202,752    | General-purpose text model       |
-| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`           | Llama 3.3 70B Instruct Turbo           | text        | 131,072    | Fast instruction model           |
-| `together/meta-llama/Llama-4-Scout-17B-16E-Instruct`         | Llama 4 Scout 17B 16E Instruct         | text, image | 10,000,000 | Multimodal                       |
-| `together/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` | Llama 4 Maverick 17B 128E Instruct FP8 | text, image | 20,000,000 | Multimodal                       |
-| `together/deepseek-ai/DeepSeek-V3.1`                         | DeepSeek V3.1                          | text        | 131,072    | General text model               |
-| `together/deepseek-ai/DeepSeek-R1`                           | DeepSeek R1                            | text        | 131,072    | Reasoning model                  |
-| `together/moonshotai/Kimi-K2-Instruct-0905`                  | Kimi K2-Instruct 0905                  | text        | 262,144    | Secondary Kimi text model        |
+| Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes           |
+| -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | --------------- |
+| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 1.04 / 1.04   | General model   |
+| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Default model   |
+| `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 384,000    | 1.74 / 3.48   | Reasoning model |
+| `together/zai-org/GLM-5.2`                         | GLM 5.2 FP4                  | text        | 262,144 | 131,072    | 1.40 / 4.40   | Reasoning model |
 
 ## Video generation
 
 The bundled `together` plugin also registers video generation through the
 shared `video_generate` tool.
 
-| Property             | Value                                 |
-| -------------------- | ------------------------------------- |
-| Default video model  | `together/Wan-AI/Wan2.2-T2V-A14B`     |
-| Modes                | text-to-video, single-image reference |
-| Supported parameters | `aspectRatio`, `resolution`           |
+| Property             | Value                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| Default video model  | `Wan-AI/Wan2.2-T2V-A14B`                                                                  |
+| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/hailuo-02`, `kwaivgI/kling-2.1-master`                 |
+| Modes                | text-to-video; image-to-video only with `Wan-AI/Wan2.2-I2V-A14B` (single reference image) |
+| Duration             | 1-10 seconds                                                                              |
+| Supported parameters | `size` (parsed as `<width>x<height>`); `aspectRatio`/`resolution` are not read            |
 
 To use Together as the default video provider:
 
@@ -89,8 +88,10 @@ To use Together as the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+      mediaModels: {
+        video: {
+          primary: "together/Wan-AI/Wan2.2-T2V-A14B",
+        },
       },
     },
   },
@@ -98,7 +99,7 @@ To use Together as the default video provider:
 ```
 
 <Tip>
-See [Video Generation](/tools/video-generation) for the shared tool parameters,
+See [Video generation](/tools/video-generation) for the shared tool parameters,
 provider selection, and failover behavior.
 </Tip>
 
@@ -121,6 +122,7 @@ provider selection, and failover behavior.
     - If models are not appearing, confirm the API key is set in the correct
       environment for your Gateway process.
     - Model refs use the form `together/<model-id>`.
+
   </Accordion>
 </AccordionGroup>
 

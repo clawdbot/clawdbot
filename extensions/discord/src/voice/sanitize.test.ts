@@ -1,3 +1,4 @@
+// Discord tests cover sanitize plugin behavior.
 import { describe, expect, it } from "vitest";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 

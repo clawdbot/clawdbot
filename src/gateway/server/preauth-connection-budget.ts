@@ -1,18 +1,25 @@
+// Pre-auth connection budget caps unauthenticated WebSocket handshakes per client IP before full gateway auth runs.
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
+import { isVitestRuntimeEnv } from "../../infra/env.js";
+
 const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 32;
 const UNKNOWN_CLIENT_IP_BUDGET_KEY = "__openclaw_unknown_client_ip__";
 
-export function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.env): number {
   const configured =
     env.OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP ||
-    (env.VITEST && env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP);
+    (isVitestRuntimeEnv(env) ? env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP : undefined);
   if (!configured) {
     return DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
   }
-  const parsed = Number(configured);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(configured);
+  if (parsed === undefined) {
     return DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
   }
-  return Math.max(1, Math.floor(parsed));
+  return parsed;
 }
 
 export type PreauthConnectionBudget = {
@@ -23,6 +30,9 @@ export type PreauthConnectionBudget = {
 export function createPreauthConnectionBudget(
   limit = getMaxPreauthConnectionsPerIpFromEnv(),
 ): PreauthConnectionBudget {
+  const maxConnectionsPerIp = resolveIntegerOption(limit, getMaxPreauthConnectionsPerIpFromEnv(), {
+    min: 1,
+  });
   const counts = new Map<string, number>();
   const normalizeBudgetKey = (clientIp: string | undefined) => {
     const ip = clientIp?.trim();
@@ -36,7 +46,7 @@ export function createPreauthConnectionBudget(
     acquire(clientIp) {
       const ip = normalizeBudgetKey(clientIp);
       const next = (counts.get(ip) ?? 0) + 1;
-      if (next > limit) {
+      if (next > maxConnectionsPerIp) {
         return false;
       }
       counts.set(ip, next);

@@ -1,13 +1,14 @@
+// Slack helper module supports blocks helpers behavior.
 import type { WebClient } from "@slack/web-api";
 import { vi } from "vitest";
 
-export type SlackEditTestClient = WebClient & {
+type SlackEditTestClient = WebClient & {
   chat: {
     update: ReturnType<typeof vi.fn>;
   };
 };
 
-export type SlackSendTestClient = WebClient & {
+type SlackSendTestClient = WebClient & {
   conversations: {
     open: ReturnType<typeof vi.fn>;
   };
@@ -26,16 +27,6 @@ const slackBlockTestState = vi.hoisted(() => ({
   config: {},
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
-  );
-  return {
-    ...actual,
-    loadConfig: () => slackBlockTestState.config,
-  };
-});
-
 vi.mock("./accounts.js", async () => {
   const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
   return {
@@ -43,11 +34,6 @@ vi.mock("./accounts.js", async () => {
     resolveSlackAccount: () => slackBlockTestState.account,
   };
 });
-
-// Kept for compatibility with existing tests; mocks install at module evaluation.
-export function installSlackBlockTestMocks() {
-  return;
-}
 
 export function createSlackEditTestClient(): SlackEditTestClient {
   return {

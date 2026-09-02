@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
-import android.content.Context
 import ai.openclaw.app.gateway.GatewaySession
+import android.content.Context
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -263,6 +263,18 @@ class NotificationsHandlerTest {
 
     assertEquals(512, sanitized?.length)
     assertTrue((sanitized ?: "").all { it == 'x' })
+  }
+
+  @Test
+  fun sanitizeNotificationTextPreservesUtf16BoundariesAtLimit() {
+    val splitPairPrefix = "a".repeat(511)
+    assertEquals(splitPairPrefix, sanitizeNotificationText("$splitPairPrefix🚀 trailing text"))
+
+    val completePairPrefix = "a".repeat(510)
+    assertEquals(
+      "$completePairPrefix🚀",
+      sanitizeNotificationText("$completePairPrefix🚀 trailing text"),
+    )
   }
 
   @Test

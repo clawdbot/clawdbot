@@ -1,11 +1,6 @@
-export { MemoryIndexManager } from "./manager.js";
-export type {
-  MemoryEmbeddingProbeResult,
-  MemorySearchManager,
-  MemorySearchResult,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+// Memory Core plugin entrypoint registers its OpenClaw integration.
 export {
   closeAllMemorySearchManagers,
+  closeMemorySearchManager,
   getMemorySearchManager,
-  type MemorySearchManagerResult,
 } from "./search-manager.js";

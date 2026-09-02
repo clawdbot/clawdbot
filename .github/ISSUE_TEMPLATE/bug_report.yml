@@ -11,6 +11,8 @@ body:
         Do not speculate or infer beyond the evidence. If a narrative section cannot be answered from the available evidence, respond with exactly `NOT_ENOUGH_INFO`.
 
         If this is a plugin beta-release blocker, rename the issue title to `Beta blocker: <plugin-name> - <summary>` and apply the `beta-blocker` label after filing.
+
+        Please only report one issue per submission. Break multiple issues up into separate submissions.
   - type: dropdown
     id: bug_type
     attributes:
@@ -120,9 +122,14 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Logs, screenshots, and evidence
-      description: Include the redacted logs, screenshots, recordings, docs, or version comparisons that support the grounded answers above.
+      label: Logs
+      description: Include the redacted logs or version comparisons that support the grounded answers above.
       render: shell
+  - type: textarea
+    id: screenshots_evidence
+    attributes:
+      label: Screenshots, recordings, and evidence
+      description: Include screenshots, recordings, docs, or other evidence that support the grounded answers above.
   - type: textarea
     id: impact
     attributes:

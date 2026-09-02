@@ -1,3 +1,4 @@
+// Telegram tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TelegramConfigSchema } from "../config-api.js";
 
@@ -30,6 +31,24 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    expectTelegramConfigIssue({ dmPolicy: "allowlist", botToken: "fake" }, "allowFrom");
+  });
+
+  it("accepts account allowlist policy inherited from the channel", () => {
+    expectTelegramConfigValid({
+      allowFrom: ["12345"],
+      accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } },
+    });
+  });
+
+  it("rejects account allowlist without account or channel allowFrom", () => {
+    expectTelegramConfigIssue(
+      { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } },
+      "accounts.bot1.allowFrom",
+    );
+  });
+
   it("defaults dm/group policy", () => {
     const res = TelegramConfigSchema.safeParse({});
 
@@ -53,22 +72,64 @@ describe("telegram custom commands schema", () => {
     }
   });
 
-  it("accepts pollingStallThresholdMs overrides per account", () => {
+  it("accepts group join introduction overrides per account", () => {
     const res = TelegramConfigSchema.safeParse({
-      pollingStallThresholdMs: 120_000,
-      accounts: { ops: { pollingStallThresholdMs: 180_000 } },
+      joinIntro: false,
+      accounts: { ops: { joinIntro: true } },
     });
 
     expect(res.success).toBe(true);
     if (res.success) {
-      expect(res.data.pollingStallThresholdMs).toBe(120_000);
-      expect(res.data.accounts?.ops?.pollingStallThresholdMs).toBe(180_000);
+      expect(res.data.joinIntro).toBe(false);
+      expect(res.data.accounts?.ops?.joinIntro).toBe(true);
     }
   });
 
-  it("rejects pollingStallThresholdMs outside the watchdog bounds", () => {
-    expectTelegramConfigIssue({ pollingStallThresholdMs: 29_999 }, "pollingStallThresholdMs");
-    expectTelegramConfigIssue({ pollingStallThresholdMs: 600_001 }, "pollingStallThresholdMs");
+  it("rejects retired group history context mode keys", () => {
+    const res = TelegramConfigSchema.safeParse({ includeGroupHistoryContext: "mention-only" });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]).toMatchObject({
+        code: "unrecognized_keys",
+        keys: ["includeGroupHistoryContext"],
+        path: [],
+      });
+    }
+  });
+
+  it("accepts Telegram progress commentary config", () => {
+    expectTelegramConfigValid({
+      streaming: {
+        mode: "progress",
+        progress: { commentary: true },
+      },
+      accounts: {
+        ops: {
+          streaming: {
+            progress: { commentary: true },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects removed DM thread reply policy keys", () => {
+    expectTelegramConfigIssue({ dm: { threadReplies: "off" } }, "");
+    expectTelegramConfigIssue(
+      { accounts: { ops: { dm: { threadReplies: "always" } } } },
+      ["accounts", "ops"].join("."),
+    );
+    expectTelegramConfigIssue(
+      {
+        direct: {
+          "123456789": {
+            threadReplies: "inbound",
+          },
+        },
+      },
+      "direct.123456789",
+    );
   });
 
   it("accepts textChunkLimit", () => {
@@ -80,6 +141,32 @@ describe("telegram custom commands schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.textChunkLimit).toBe(3333);
+    }
+  });
+
+  it("accepts rich message opt-in per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      richMessages: true,
+      accounts: { ops: { richMessages: false } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.richMessages).toBe(true);
+      expect(res.data.accounts?.ops?.richMessages).toBe(false);
+    }
+  });
+
+  it("preserves rich message inheritance for account overrides", () => {
+    const res = TelegramConfigSchema.safeParse({
+      richMessages: true,
+      accounts: { ops: {} },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.richMessages).toBe(true);
+      expect(res.data.accounts?.ops?.richMessages).toBeUndefined();
     }
   });
 
@@ -195,6 +282,38 @@ describe("telegram topic agentId schema", () => {
               agentId: "support",
               systemPrompt: "You are support",
             },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      console.error(res.error.format());
+      return;
+    }
+    expect(res.data.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe("support");
+  });
+
+  it("rejects removed per-DM threadReplies overrides", () => {
+    expectTelegramConfigIssue(
+      {
+        direct: {
+          "123456789": {
+            threadReplies: "inbound",
+          },
+        },
+      },
+      "direct.123456789",
+    );
+  });
+
+  it("accepts DM topic config without threadReplies overrides", () => {
+    const res = TelegramConfigSchema.safeParse({
+      direct: {
+        "123456789": {
+          topics: {
+            "99": { agentId: "support" },
           },
         },
       },

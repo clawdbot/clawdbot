@@ -1,5 +1,6 @@
+// Webhooks tests cover index plugin behavior.
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 
@@ -14,8 +15,10 @@ function createApi(params?: {
     source: "test",
     pluginConfig: params?.pluginConfig ?? {},
     runtime: {
-      taskFlow: {
-        bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
+      tasks: {
+        managedFlows: {
+          bindSession: vi.fn(({ sessionKey }: { sessionKey: string }) => ({ sessionKey })),
+        },
       },
     } as unknown as OpenClawPluginApi["runtime"],
     registerHttpRoute: params?.registerHttpRoute ?? vi.fn(),
@@ -28,6 +31,14 @@ function createApi(params?: {
         debug: vi.fn(),
       } as OpenClawPluginApi["logger"]),
   });
+}
+
+function requireFirstRouteRegistration(mock: ReturnType<typeof vi.fn>) {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected webhook route registration");
+  }
+  return call[0] as Parameters<OpenClawPluginApi["registerHttpRoute"]>[0];
 }
 
 describe("webhooks plugin registration", () => {
@@ -54,13 +65,11 @@ describe("webhooks plugin registration", () => {
 
     expect(result).toBeUndefined();
     expect(registerHttpRoute).toHaveBeenCalledTimes(1);
-    expect(registerHttpRoute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: "/plugins/webhooks/zapier",
-        auth: "plugin",
-        match: "exact",
-        replaceExisting: true,
-      }),
-    );
+    const route = requireFirstRouteRegistration(registerHttpRoute);
+    expect(route.path).toBe("/plugins/webhooks/zapier");
+    expect(route.auth).toBe("plugin");
+    expect(route.match).toBe("exact");
+    expect(route.replaceExisting).toBe(true);
+    expect(route.handler).toBeTypeOf("function");
   });
 });

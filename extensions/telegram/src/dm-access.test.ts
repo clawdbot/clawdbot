@@ -1,3 +1,4 @@
+// Telegram tests cover dm access plugin behavior.
 import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,7 +32,7 @@ vi.mock("./api-logging.js", () => ({
   withTelegramApiErrorLogging: withTelegramApiErrorLoggingMock,
 }));
 
-import type { Message } from "@grammyjs/types";
+import type { Message } from "grammy/types";
 import { normalizeAllowFrom } from "./bot-access.js";
 let enforceTelegramDmAccess: typeof import("./dm-access.js").enforceTelegramDmAccess;
 
@@ -80,8 +81,31 @@ describe("enforceTelegramDmAccess", () => {
     vi.clearAllMocks();
   });
 
-  it("allows DMs when policy is open", async () => {
-    const { allowed, bot } = await enforceDefaultDmAccess({ dmPolicy: "open" });
+  it("allows DMs when policy is open with wildcard allowFrom", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
+      dmPolicy: "open",
+      allow: ["*"],
+    });
+
+    expect(allowed).toBe(true);
+    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("blocks non-allowlisted DMs when open policy has no wildcard", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
+      dmPolicy: "open",
+      allow: ["99999"],
+    });
+
+    expect(allowed).toBe(false);
+    expect(bot.api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows allowlisted DMs when open policy was constrained by a restrictive allowFrom", async () => {
+    const { allowed, bot } = await enforceDefaultDmAccess({
+      dmPolicy: "open",
+      allow: ["12345"],
+    });
 
     expect(allowed).toBe(true);
     expect(bot.api.sendMessage).not.toHaveBeenCalled();
@@ -135,13 +159,15 @@ describe("enforceTelegramDmAccess", () => {
     expect(firstCall?.[0]).toBe(42);
     const sentText = typeof firstCall?.[1] === "string" ? firstCall[1] : "";
     expect(sentText).toContain("Pairing code:");
-    expect(firstCall?.[2]).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    expect(firstCall?.[2]).toEqual({ parse_mode: "HTML" });
     expect(logger.info).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         chatId: "42",
         senderUserId: "12345",
         username: "tester",
-      }),
+        firstName: "Test",
+        lastName: undefined,
+      },
       "telegram pairing request",
     );
   });

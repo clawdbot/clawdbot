@@ -1,21 +1,63 @@
+/**
+ * Exec script preflight tests.
+ * Covers Python/Node script file validation, shell-bleed detection, and
+ * symlink/path race handling before execution.
+ */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { __setFsSafeTestHooksForTest } from "../infra/fs-safe.js";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { detectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
+import { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { __testing, createExecTool } from "./bash-tools.exec.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
+import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { AgentToolResult } from "./runtime/index.js";
+
+const processGatewayAllowlistMock = vi.hoisted(() =>
+  vi.fn(
+    async (_params?: {
+      onApprovalReview?: (review: ExecToolApprovalReview) => void;
+    }): Promise<{
+      allowWithoutEnforcedCommand: boolean;
+      revalidateBeforeExecution?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
+    }> => ({ allowWithoutEnforcedCommand: true }),
+  ),
+);
+
+vi.mock("./bash-tools.exec-host-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bash-tools.exec-host-gateway.js")>()),
+  processGatewayAllowlist: processGatewayAllowlistMock,
+}));
+
+vi.mock("./bash-tools.exec-host-node.js", () => ({
+  executeNodeHostCommand: async () => {
+    throw new Error("node host execution is not used by script preflight tests");
+  },
+}));
+
+vi.mock("../utils/delivery-context.shared.js", () => ({
+  normalizeDeliveryContext: (value: unknown) => value,
+}));
 
 const isWin = process.platform === "win32";
 
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
-const validateExecScriptPreflight = __testing.validateScriptFileForShellBleed;
 const createPreflightTool = () =>
   createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
+const runExecPreflight = (params: { command: string; workdir: string }) =>
+  createPreflightTool().execute("call-script-preflight", params);
 
 afterEach(() => {
   __setFsSafeTestHooksForTest();
+});
+
+beforeEach(() => {
+  processGatewayAllowlistMock.mockReset();
+  processGatewayAllowlistMock.mockResolvedValue({ allowWithoutEnforcedCommand: true });
 });
 
 async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
@@ -43,30 +85,146 @@ async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
     });
 
     await expect(
-      validateExecScriptPreflight({
+      runExecPreflight({
         command: "node script.js",
         workdir,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
     expect(swapped).toBe(true);
   });
 }
 
+describe("exec interactive OpenClaw channel login guard", () => {
+  it("recognizes direct and package-runner channel login commands before execution", async () => {
+    await expect(
+      detectUnsafeExecControlShellCommand("openclaw channels login --channel whatsapp"),
+    ).resolves.toBe("channel-login");
+    expect(
+      await detectUnsafeExecControlShellCommand(
+        "pnpm exec openclaw channels login --channel whatsapp --verbose",
+      ),
+    ).toBe("channel-login");
+    await expect(
+      detectUnsafeExecControlShellCommand("openclaw channels status --deep"),
+    ).resolves.toBeNull();
+  });
+
+  it("blocks interactive channel login commands from exec", async () => {
+    const tool = createPreflightTool();
+
+    await expect(
+      tool.execute("call-openclaw-channel-login", {
+        command: "openclaw channels login --channel whatsapp --verbose",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-wrapped-openclaw-channel-login", {
+        command: "sudo -u openclaw bash -lc 'openclaw channels login --channel whatsapp'",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-clustered-sudo-channel-login", {
+        command: "sudo -EH bash -lc 'openclaw channels login --channel whatsapp'",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-deep-env-channel-login", {
+        command: "env env env env env env openclaw channels login --channel whatsapp",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+    await expect(
+      tool.execute("call-env-s-trailing-channel-login", {
+        command: "env -S 'openclaw channels' login --channel whatsapp",
+      }),
+    ).rejects.toThrow(/exec cannot run interactive OpenClaw channel login commands/);
+  });
+});
+
 describeNonWin("exec script preflight", () => {
-  it("blocks shell env var injection tokens in python scripts before execution", async () => {
+  it.each([
+    { name: "denies changed bytes", mutate: true },
+    { name: "executes unchanged bytes", mutate: false },
+  ])("revalidates gateway approval script operands before spawn: $name", async ({ mutate }) => {
+    await withTempDir("openclaw-exec-approval-binding-", async (tmp) => {
+      const script = path.join(tmp, "script.sh");
+      await fs.writeFile(script, "#!/bin/sh\necho approved\n");
+      const prepared = await prepareSystemRunMutableFileApproval({
+        command: "sh script.sh",
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error(prepared.message);
+      }
+      const approvalReview: ExecToolApprovalReview = {
+        id: "guardian:call-script-preflight",
+        label: "Guardian",
+        status: "approved",
+      };
+      processGatewayAllowlistMock.mockImplementationOnce(async (params) => {
+        params?.onApprovalReview?.(approvalReview);
+        return {
+          allowWithoutEnforcedCommand: true,
+          revalidateBeforeExecution: async () => {
+            const current = await prepared.revalidate();
+            if (current.ok) {
+              return undefined;
+            }
+            return {
+              content: [{ type: "text", text: current.message }],
+              details: {
+                status: "failed",
+                exitCode: null,
+                durationMs: 0,
+                aggregated: current.message,
+                timedOut: false,
+                cwd: tmp,
+              },
+            };
+          },
+        };
+      });
+      if (mutate) {
+        await fs.writeFile(script, "#!/bin/sh\necho mutated\n");
+      }
+
+      const result = await runExecPreflight({ command: "sh script.sh", workdir: tmp });
+
+      if (mutate) {
+        expect(result.details.status).toBe("failed");
+        expect(result.content[0]).toEqual(
+          expect.objectContaining({
+            text: expect.stringContaining("approval script operand changed before execution"),
+          }),
+        );
+      } else {
+        expect(result.details.status).toBe("completed");
+        if (result.details.status !== "completed") {
+          throw new Error("expected completed exec result");
+        }
+        expect(result.details.aggregated).toBe("approved");
+      }
+      expect(result.details).toMatchObject({
+        approvalReviewOutcome: "approved",
+        approvalReviews: [approvalReview],
+      });
+    });
+  });
+
+  it.each([
+    ["a bare one-character token", "$A", "payload = $A"],
+    ["a bare multi-character token", "$DM_JSON", "payload = $DM_JSON"],
+    ["a token after a string", "$B", 'text = "$A"\npayload = $B'],
+    ["a token in an f-string replacement", "$P", 'result = f"{ "$A" + $P }"'],
+    ["a token after a backslash in an f-string", "$A", 'result = f"\\{$A}"'],
+    ["a token after a lambda colon in an f-string", "$F", 'result = f"{lambda value: $F}"'],
+    ["a token after a CR-only string line", "$C", 'text = "ok"\rpayload = $C'],
+    ["a token after a CR-only unterminated string", "$E", 'text = "ok\rpayload = $E'],
+    ["a token after a CR-only comment", "$D", "# note\rpayload = $D"],
+  ])("blocks %s in python scripts before execution", async (_name, token, source) => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
-
-      await fs.writeFile(
-        pyPath,
-        [
-          "import json",
-          "# model accidentally wrote shell syntax:",
-          "payload = $DM_JSON",
-          "print(payload)",
-        ].join("\n"),
-        "utf-8",
-      );
+      await fs.writeFile(pyPath, source, "utf-8");
 
       const tool = createPreflightTool();
 
@@ -75,7 +233,54 @@ describeNonWin("exec script preflight", () => {
           command: "python bad.py",
           workdir: tmp,
         }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      ).rejects.toThrow(`exec preflight: detected likely shell variable injection (${token})`);
+    });
+  });
+
+  it("allows one-character dollar text in Python strings and comments", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "valid.py"),
+        [
+          'value = "$A"',
+          "other = '''$_'''",
+          'raw = r"$Q"',
+          'hash_text = "# $R"',
+          "nested = f\"{ '$S' }\"",
+          'braces = f"{{ $T }}"',
+          'continued = "text \\\r\n$U"',
+          "class Echo:",
+          "    def __format__(self, spec):",
+          "        return spec",
+          'format_text = f"{Echo():$W}"',
+          "élambda = Echo()",
+          'unicode_format = f"{élambda:$Y}"',
+          "# $P",
+          'print(f"{value}:{other}:{raw}:{hash_text}:{nested}:{braces}:{continued}:{format_text}:{unicode_format}")',
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const result = await runExecPreflight({ command: "python3 valid.py", workdir: tmp });
+
+      expect(result.details).toMatchObject({
+        status: "completed",
+        aggregated: "$A:$_:$Q:# $R:$S:{ $T }:text $U:$W:$Y",
+      });
+    });
+  });
+
+  it("allows valid one-character dollar-prefixed identifiers in node scripts", async () => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "valid.js"),
+        'const $A = "node"; const $_ = "ok"; process.stdout.write(`${$A}-${$_}`);',
+        "utf-8",
+      );
+
+      const result = await runExecPreflight({ command: "node valid.js", workdir: tmp });
+
+      expect(result.details).toMatchObject({ status: "completed", aggregated: "node-ok" });
     });
   });
 
@@ -102,33 +307,28 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
-  it("blocks shell env var injection when script path is quoted", async () => {
+  it.each([
+    {
+      name: "a quoted script path",
+      callId: "call-quoted",
+      fileName: "bad.js",
+      command: 'node "bad.js"',
+    },
+    {
+      name: "an in-workdir script whose name starts with '..'",
+      callId: "call-dotdot-prefix-script",
+      fileName: "..bad.js",
+      command: "node ..bad.js",
+    },
+  ])("blocks shell env var injection through $name", async ({ callId, fileName, command }) => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      const jsPath = path.join(tmp, "bad.js");
+      const jsPath = path.join(tmp, fileName);
       await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
 
       const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-quoted", {
-          command: 'node "bad.js"',
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("validates in-workdir scripts whose names start with '..'", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      const jsPath = path.join(tmp, "..bad.js");
-      await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-dotdot-prefix-script", {
-          command: "node ..bad.js",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      await expect(tool.execute(callId, { command, workdir: tmp })).rejects.toThrow(
+        /exec preflight: detected likely shell variable injection \(\$DM_JSON\)/,
+      );
     });
   });
 
@@ -165,108 +365,86 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
-  it("validates python scripts when interpreter is prefixed with env", async () => {
+  it.each([
+    {
+      name: "python behind env",
+      callId: "call-env-python",
+      fileName: "bad.py",
+      contents: "payload = $DM_JSON",
+      command: "env python bad.py",
+    },
+    {
+      name: "python behind path-qualified env",
+      callId: "call-abs-env-python",
+      fileName: "bad.py",
+      contents: "payload = $DM_JSON",
+      command: "/usr/bin/env python bad.py",
+    },
+    {
+      name: "node behind env",
+      callId: "call-env-node",
+      fileName: "bad.js",
+      contents: "const value = $DM_JSON;",
+      command: "env node bad.js",
+    },
+  ])("validates $name", async ({ callId, fileName, contents, command }) => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      const pyPath = path.join(tmp, "bad.py");
-      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+      await fs.writeFile(path.join(tmp, fileName), contents, "utf-8");
 
       const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-env-python", {
-          command: "env python bad.py",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      await expect(tool.execute(callId, { command, workdir: tmp })).rejects.toThrow(
+        /exec preflight: detected likely shell variable injection \(\$DM_JSON\)/,
+      );
     });
   });
 
-  it("validates python scripts when interpreter is prefixed with path-qualified env", async () => {
+  it.each([
+    {
+      name: "the first positional python script before extra args",
+      callId: "call-python-first-script",
+      command: "python bad.py ghost.py",
+      files: [
+        { fileName: "bad.py", contents: "payload = $DM_JSON" },
+        { fileName: "ghost.py", contents: "print('ok')" },
+      ],
+    },
+    {
+      name: "a python script before a trailing option value that looks like a script",
+      callId: "call-python-trailing-option-value",
+      command: "python script.py --output out.py",
+      files: [
+        { fileName: "script.py", contents: "payload = $DM_JSON" },
+        { fileName: "out.py", contents: "print('ok')" },
+      ],
+    },
+    {
+      name: "the first positional node script before extra args",
+      callId: "call-node-first-script",
+      command: "node app.js config.js",
+      files: [
+        { fileName: "app.js", contents: "const value = $DM_JSON;" },
+        { fileName: "config.js", contents: "console.log('ok')" },
+      ],
+    },
+    {
+      name: "the node script after --require consumes a preceding .js option value",
+      callId: "call-node-require-script",
+      command: "node --require bootstrap.js app.js",
+      files: [
+        { fileName: "bootstrap.js", contents: "console.log('bootstrap')" },
+        { fileName: "app.js", contents: "const value = $DM_JSON;" },
+      ],
+    },
+  ])("validates $name", async ({ callId, command, files }) => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      const pyPath = path.join(tmp, "bad.py");
-      await fs.writeFile(pyPath, "payload = $DM_JSON", "utf-8");
+      for (const { fileName, contents } of files) {
+        await fs.writeFile(path.join(tmp, fileName), contents, "utf-8");
+      }
 
       const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-abs-env-python", {
-          command: "/usr/bin/env python bad.py",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("validates node scripts when interpreter is prefixed with env", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      const jsPath = path.join(tmp, "bad.js");
-      await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-env-node", {
-          command: "env node bad.js",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("validates the first positional python script operand when extra args follow", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
-      await fs.writeFile(path.join(tmp, "ghost.py"), "print('ok')", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-python-first-script", {
-          command: "python bad.py ghost.py",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("validates python script operand even when trailing option values look like scripts", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      await fs.writeFile(path.join(tmp, "script.py"), "payload = $DM_JSON", "utf-8");
-      await fs.writeFile(path.join(tmp, "out.py"), "print('ok')", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-python-trailing-option-value", {
-          command: "python script.py --output out.py",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("validates the first positional node script operand when extra args follow", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      await fs.writeFile(path.join(tmp, "app.js"), "const value = $DM_JSON;", "utf-8");
-      await fs.writeFile(path.join(tmp, "config.js"), "console.log('ok')", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-node-first-script", {
-          command: "node app.js config.js",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("still resolves node script when --require consumes a preceding .js option value", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      await fs.writeFile(path.join(tmp, "bootstrap.js"), "console.log('bootstrap')", "utf-8");
-      await fs.writeFile(path.join(tmp, "app.js"), "const value = $DM_JSON;", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-node-require-script", {
-          command: "node --require bootstrap.js app.js",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      await expect(tool.execute(callId, { command, workdir: tmp })).rejects.toThrow(
+        /exec preflight: detected likely shell variable injection \(\$DM_JSON\)/,
+      );
     });
   });
 
@@ -285,59 +463,35 @@ describeNonWin("exec script preflight", () => {
     });
   });
 
-  it("validates node --require preload modules when no entry script is provided", async () => {
+  it.each([
+    {
+      name: "--require preload modules when no entry script is provided",
+      callId: "call-node-require-only",
+      command: "node --require bad.js",
+    },
+    {
+      name: "--import preload modules when no entry script is provided",
+      callId: "call-node-import-only",
+      command: "node --import bad.js",
+    },
+    {
+      name: "--require preload modules when -e is present",
+      callId: "call-node-require-with-eval",
+      command: 'node --require bad.js -e "console.log(123)"',
+    },
+    {
+      name: "--import preload modules when -e is present",
+      callId: "call-node-import-with-eval",
+      command: 'node --import bad.js -e "console.log(123)"',
+    },
+  ])("validates node $name", async ({ callId, command }) => {
     await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
       const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-node-require-only", {
-          command: "node --require bad.js",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("validates node --import preload modules when no entry script is provided", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-node-import-only", {
-          command: "node --import bad.js",
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("validates node --require preload modules even when -e is present", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-node-require-with-eval", {
-          command: 'node --require bad.js -e "console.log(123)"',
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
-    });
-  });
-
-  it("validates node --import preload modules even when -e is present", async () => {
-    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
-      await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
-
-      const tool = createPreflightTool();
-      await expect(
-        tool.execute("call-node-import-with-eval", {
-          command: 'node --import bad.js -e "console.log(123)"',
-          workdir: tmp,
-        }),
-      ).rejects.toThrow(/exec preflight: detected likely shell variable injection \(\$DM_JSON\)/);
+      await expect(tool.execute(callId, { command, workdir: tmp })).rejects.toThrow(
+        /exec preflight: detected likely shell variable injection \(\$DM_JSON\)/,
+      );
     });
   });
 
@@ -359,9 +513,7 @@ describeNonWin("exec script preflight", () => {
       const text = result.content.find((c) => c.type === "text")?.text ?? "";
 
       expect(text).not.toMatch(/exec preflight:/);
-      expect(result.details).toMatchObject({
-        status: expect.stringMatching(/completed|failed/),
-      });
+      expect((result.details as { status?: string }).status).toMatch(/completed|failed/);
     });
   });
 
@@ -377,7 +529,7 @@ describeNonWin("exec script preflight", () => {
     });
     const text = result.content.find((c) => c.type === "text")?.text?.trim();
 
-    expect(result.details).toMatchObject({ status: "completed" });
+    expect((result.details as { status?: string }).status).toBe("completed");
     expect(text).toBe("ok");
   });
 
@@ -389,11 +541,11 @@ describeNonWin("exec script preflight", () => {
       await fs.writeFile(outsidePath, "const value = $DM_JSON;", "utf-8");
 
       await expect(
-        validateExecScriptPreflight({
+        runExecPreflight({
           command: "node ../outside.js",
           workdir,
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toBeDefined();
     });
   });
 
@@ -425,13 +577,13 @@ describeNonWin("exec script preflight", () => {
       });
 
       await expect(
-        validateExecScriptPreflight({
+        runExecPreflight({
           command: "node script.js",
           workdir: tmp,
         }),
-      ).resolves.toBeUndefined();
-      expect(scriptOpenFlags.length).toBeGreaterThan(0);
-      expect(scriptOpenFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+      ).resolves.toBeDefined();
+      expect(scriptOpenFlags).not.toStrictEqual([]);
+      expect(scriptOpenFlags.every((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
     });
   });
 
@@ -456,7 +608,7 @@ describeNonWin("exec script preflight", () => {
 
   it.each(failClosedCases)("fails closed for %s", async (_name, command) => {
     await expect(
-      validateExecScriptPreflight({
+      runExecPreflight({
         command,
         workdir: process.cwd(),
       }),
@@ -488,11 +640,11 @@ describeNonWin("exec script preflight", () => {
 
   it.each(passCases)("does not fail closed for %s", async (_name, command) => {
     await expect(
-      validateExecScriptPreflight({
+      runExecPreflight({
         command,
         workdir: process.cwd(),
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeDefined();
   });
 });
 
@@ -559,13 +711,11 @@ describeWin("exec script preflight on windows path syntax", () => {
 
 describe("exec interpreter heuristics ReDoS guard", () => {
   it("does not hang on long commands with VAR=value assignments and whitespace-heavy text", async () => {
-    // Simulate a heredoc with HTML content after a VAR= assignment. Keep the
-    // command parser check direct so no shell process timing hides regex cost.
     const htmlBlock = '<section style="padding: 30px 20px; font-family: Arial;">'.repeat(50);
-    const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\ncat > /tmp/out.html << 'EOF'\n${htmlBlock}\nEOF`;
+    const command = `ACCESS_TOKEN=$(__openclaw_missing_redos_guard__)\nprintf '%s' '${htmlBlock}' >/dev/null`;
 
     const start = Date.now();
-    await validateExecScriptPreflight({ command, workdir: process.cwd() });
+    await validateScriptFileForShellBleed({ command, workdir: process.cwd() });
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(5000);
   });

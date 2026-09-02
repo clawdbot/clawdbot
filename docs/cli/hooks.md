@@ -1,338 +1,290 @@
 ---
-summary: "CLI reference for `openclaw hooks` (agent hooks)"
+summary: "CLI reference for internal hook discovery, eligibility, enablement, and hook packs"
 read_when:
-  - You want to manage agent hooks
-  - You want to inspect hook availability or enable workspace hooks
-title: "hooks"
+  - You want to inspect internal hooks on a local or remote Gateway
+  - You want to enable or disable a hook in local config
+  - You need hook command flags or JSON report fields
+title: "Hooks"
+doc-schema-version: 1
 ---
 
 # `openclaw hooks`
 
-Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
+Inspect and configure [internal hooks](/automation/hooks): handlers for command,
+message, session, and Gateway events. Bare `openclaw hooks` runs the same report
+as `openclaw hooks list`. These commands do not manage HTTP
+[Webhooks](/automation/cron-jobs#webhooks) or the typed `api.on(...)` hook catalog in
+[Plugin hooks](/plugins/hooks).
 
-Running `openclaw hooks` with no subcommand is equivalent to `openclaw hooks list`.
+## Target and scope
 
-Related:
+Read-only reports (`hooks`, `list`, `info`, `check`) first call `hooks.status` on
+the selected Gateway. Configured remote Gateways and explicit
+`OPENCLAW_GATEWAY_URL` targets are authoritative: missing remote URLs,
+connection/authentication failures, and unsupported methods fail instead of
+showing client-local hooks. An implicitly selected local Gateway can fall back
+to local discovery when unavailable or when its hook-report method/agent
+parameter is unsupported. Other errors are not silently replaced with local
+inventory.
 
-- Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugin hooks](/plugins/architecture#provider-runtime-hooks)
+**Enable, disable, install, and update mutate local files/config/state.** They do
+not change a remote Gateway over RPC. To change the server, run the command on
+that host using its profile/config, then restart that Gateway.
 
-## List All Hooks
+`--agent <id>` selects the agent workspace used for inspection. It is required
+when configured agents do not have an implicit owner; blank or unknown IDs
+fail. The option works before or after `list`, `info`, `check`, `enable`, and
+`disable`. It does not scope the persisted hook entry to that agent and is not
+supported on install/update. See
+[Local, remote, and agent scope](/automation/hooks#local-remote-and-agent-scope)
+for the distinction between workspace inventory and Gateway loading.
 
-```bash
-openclaw hooks list
-```
-
-List all discovered hooks from workspace, managed, extra, and bundled directories.
-Gateway startup does not load internal hook handlers until at least one internal hook is configured.
-
-**Options:**
-
-- `--eligible`: Show only eligible hooks (requirements met)
-- `--json`: Output as JSON
-- `-v, --verbose`: Show detailed information including missing requirements
-
-**Example output:**
-
-```
-Hooks (4/4 ready)
-
-Ready:
-  🚀 boot-md ✓ - Run BOOT.md on gateway startup
-  📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
-  📝 command-logger ✓ - Log all command events to a centralized audit file
-  💾 session-memory ✓ - Save session context to memory when /new or /reset command is issued
-```
-
-**Example (verbose):**
+## List hooks
 
 ```bash
-openclaw hooks list --verbose
+openclaw hooks [--agent <id>] [--json]
+openclaw hooks list [--agent <id>] [--eligible] [--json] [-v|--verbose]
 ```
 
-Shows missing requirements for ineligible hooks.
+Discovery includes bundled hooks, active plugin hooks, managed hooks, extra
+directories, and the selected workspace. Hook-name collisions follow the
+[source policy](/automation/hooks#hook-discovery).
 
-**Example (JSON):**
+| Option          | Meaning                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `--agent <id>`  | Select the workspace to inspect.                                                                                        |
+| `--eligible`    | Show only `loadable` hooks: enabled by per-hook/source policy, requirements satisfied, and at least one declared event. |
+| `--json`        | Write structured JSON directly to stdout. Also accepted on the parent `hooks` command.                                  |
+| `-v, --verbose` | Add the Missing column to the human-readable table.                                                                     |
+
+Human output is a table with Status, Hook, Description, and Source columns,
+preceded by `Hooks (<ready>/<total> ready)`. Plugin-managed sources appear as
+`plugin:<id>`.
+
+<Note>
+`ready`, `eligible`, and `loadable` are inventory results, not a live handler
+registration check. The report does not apply the Gateway's master switch or
+configured-name selection, import the handler to prove it works, or verify that
+the event has run. A bundled hook can appear ready while the internal hook
+system is off. Enable the intended hook, restart, and
+[verify its real side effect](/automation/hooks#quick-start).
+</Note>
+
+### List JSON
+
+The root object contains `workspaceDir`, `managedHooksDir`, and `hooks`.
+Each hook includes:
+
+- Identity/display: `name`, `description`, `source`, optional `pluginId`,
+  `emoji`, `homepage`, and `managedByPlugin`.
+- Status: `enabledByConfig`, `requirementsSatisfied`, `loadable`, optional
+  `blockedReason`, plus compatibility aliases `eligible` (`loadable`) and
+  `disabled` (`!enabledByConfig`).
+- Events/requirements: `events`, `unknownEvents`, and `missing`, whose arrays
+  are `bins`, `anyBins`, `env`, `config`, and `os`.
+
+`blockedReason` can be `disabled in config`, `workspace hook (disabled by default)`,
+`missing requirements`, or `no events defined`. Unknown events are
+advisory: they do not by themselves make a hook unloadable.
+
+## Get hook info
 
 ```bash
-openclaw hooks list --json
+openclaw hooks info <name> [--agent <id>] [--json]
 ```
 
-Returns structured JSON for programmatic use.
+Accepts a hook name or its metadata `hookKey`. Exact hook names take precedence
+over matching keys; a key must identify a single hook. Shows source, descriptor
+and handler paths, homepage, events, unknown-event warnings, blocked reason, and
+per-requirement status. A missing or ambiguous hook exits with code 1; an
+ambiguous selector lists candidates so you can choose a unique name or key.
 
-## Get Hook Information
+JSON includes the list fields plus `filePath`, `baseDir`, `handlerPath`,
+`hookKey`, `always`, `requirements`, `configChecks`, and normalized `install`
+options. Each config check has `path` and `satisfied`; each install option has
+`id`, `kind`, `label`, and `bins`. Install options are descriptive metadata, not
+a command to install dependencies automatically.
+
+## Check eligibility
 
 ```bash
-openclaw hooks info <name>
+openclaw hooks check [--agent <id>] [--json]
 ```
 
-Show detailed information about a specific hook.
+Prints totals for ready/not-ready hooks and lists blocking reasons. JSON has
+`total`, `eligible`, `notEligible`, and `hooks` containing an `eligible` name
+array and a `notEligible` array of `{ name, blockedReason?, missing }` objects.
 
-**Arguments:**
+A successful report exits with code 0 even when hooks are not ready. For an
+automated eligibility gate, inspect the JSON counts rather than treating the
+exit code as an all-hooks-ready result. This still does not test actual loading.
 
-- `<name>`: Hook name or hook key (e.g., `session-memory`)
-
-**Options:**
-
-- `--json`: Output as JSON
-
-**Example:**
+## Enable a hook
 
 ```bash
-openclaw hooks info session-memory
+openclaw hooks enable <name> [--agent <id>]
 ```
 
-**Output:**
+Discovers the hook locally, then writes
+`hooks.internal.entries.<hookKey>.enabled = true` and
+`hooks.internal.enabled = true` in local config. Other fields in that entry are
+preserved. Exact hook names take precedence over matching keys; ambiguous key
+matches fail without writing.
 
-```
-💾 session-memory ✓ Ready
+Enable fails for a missing hook, a plugin-managed hook, or unmet runtime
+requirements. It can enable a currently disabled workspace hook. This does not
+prove a valid module export or event subscription; inspect `info` and the
+Gateway logs too.
 
-Save session context to memory when /new or /reset command is issued
+The entry is **global**, even with `--agent`: it applies wherever that key is
+discovered. Adding named entries can narrow a previously open-ended directory
+selection. See [Configuration](/automation/hooks#configuration).
 
-Details:
-  Source: openclaw-bundled
-  Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
-  Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
-  Events: command:new, command:reset
-
-Requirements:
-  Config: ✓ workspace.dir
-```
-
-## Check Hooks Eligibility
+Restart after enabling:
 
 ```bash
-openclaw hooks check
+openclaw gateway restart
 ```
 
-Show summary of hook eligibility status (how many are ready vs. not ready).
+For a foreground Gateway, stop and start the process instead. Restart is not
+performed automatically by `hooks enable`.
 
-**Options:**
-
-- `--json`: Output as JSON
-
-**Example output:**
-
-```
-Hooks Status
-
-Total hooks: 4
-Ready: 4
-Not ready: 0
-```
-
-## Enable a Hook
+## Disable a hook
 
 ```bash
-openclaw hooks enable <name>
+openclaw hooks disable <name> [--agent <id>]
 ```
 
-Enable a specific hook by adding it to your config (`~/.openclaw/openclaw.json` by default).
+Writes `hooks.internal.entries.<hookKey>.enabled = false`. It does not remove the
+hook files or change the master switch. Missing/ambiguous and plugin-managed
+hooks are rejected; missing runtime requirements do not prevent disabling.
+Restart the Gateway afterward.
 
-**Note:** Workspace hooks are disabled by default until enabled here or in config. Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and can’t be enabled/disabled here. Enable/disable the plugin instead.
+Plugin-managed hooks cannot be toggled by these commands. Enable or disable the
+owning plugin through [`openclaw plugins`](/cli/plugins).
 
-**Arguments:**
+## Install and update hook packs
 
-- `<name>`: Hook name (e.g., `session-memory`)
-
-**Example:**
+Use the unified plugin installer for reviewed hook packs:
 
 ```bash
-openclaw hooks enable session-memory
+openclaw plugins install npm:<package>
+openclaw plugins install npm:<package>@<version> --pin
+openclaw plugins install ./my-hook-pack
+openclaw plugins install ./my-hook-pack.tgz
+
+openclaw plugins update <id> --dry-run
+openclaw plugins update <id>
 ```
 
-**Output:**
+A pack declares hook directories in `package.json` under `openclaw.hooks`.
+A local directory without `package.json` can contain a single `HOOK.md` and
+handler. Copied hook packs are installed into `<stateDir>/hooks/<id>`; their
+hooks are enabled in config and install provenance is recorded in shared SQLite
+state. Restart the Gateway to load them. Do not author
+`hooks.internal.installs` in `openclaw.json`.
 
-```
-✓ Enabled hook: 💾 session-memory
-```
+For the npm hook-pack path, specs are registry-only: package name with an
+optional exact version or dist-tag. Git/URL/file specs, npm aliases, and semver
+ranges are not npm registry specs. Bare specs and `@latest` stay on the stable
+track; a prerelease resolution requires an explicit prerelease version or a
+non-latest tag such as `@beta` or `@rc`. Use `npm:` to select npm explicitly; the
+unified installer supports other plugin sources described in
+[`openclaw plugins`](/cli/plugins).
 
-**What it does:**
+Supported local archives are `.zip`, `.tgz`, `.tar.gz`, and `.tar`. npm pack and
+project-local dependency installation use `--ignore-scripts`; this does not
+sandbox the installed handler.
 
-- Checks if hook exists and is eligible
-- Updates `hooks.internal.entries.<name>.enabled = true` in your config
-- Saves config to disk
+### Install options and trust
 
-If the hook came from `<workspace>/hooks/`, this opt-in step is required before
-the Gateway will load it.
+| Option                                 | Effect for hook packs                                                                                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-l, --link`                           | Add the exact local hook or pack root to `hooks.internal.load.extraDirs` instead of copying it. Single hooks and nested pack layouts work.  |
+| `--pin`                                | Record the resolved exact npm `name@version` in install state when available; does not apply to local paths.                                |
+| `--force`                              | Acknowledge a non-ClawHub source and allow replacement of an existing copied install. For links it acknowledges the source without copying. |
+| `--acknowledge-install-policy-warning` | Acknowledge an operator `security.installPolicy` warning without its prompt. Blocks and policy failures still stop the install.             |
 
-**After enabling:**
+Interactive non-ClawHub installs ask you to confirm trust. Noninteractive
+installs require `--force`; global `--yes` is not a substitute for that gate.
+`--force` is also not a substitute for acknowledging an install-policy warning.
+Review the source before supplying either acknowledgement.
 
-- Restart the gateway so hooks reload (menu bar app restart on macOS, or restart your gateway process in dev).
+<Warning>
+A linked hook runs directly from the supplied path; linking does not copy it
+or create a symlink. A single-hook root loads its own `HOOK.md` and handler.
+A pack loads only the hook directories listed in `openclaw.hooks`, including
+nested paths such as `./hooks/my-hook`. Declared paths must stay inside the
+pack and point directly to hooks; discovery does not recurse into nested packs
+or collections, or scan unlisted children, even when all declared paths are rejected.
 
-## Disable a Hook
+Only link trusted code. Extra directories still make directory-hook name
+selection open-ended across discovery sources, not just within the linked
+pack. Restart the Gateway after linking or editing hook code, check
+`hooks list`, and [verify the handler's actual side effect](/automation/hooks#quick-start).
+</Warning>
+
+### Update behavior
+
+Updates use tracked npm install records. A tracked hook-pack ID uses its stored
+spec; a matching npm package spec can select a new version/tag. Local path and
+archive records are not refreshed by the npm hook updater.
+
+`--dry-run` reports what would change without installing or rewriting config.
+`--all` selects **both plugins and hook packs** in the unified updater, including
+when reached through the deprecated alias; it is not a hooks-only bulk command.
+
+When an applicable stored integrity hash differs from the downloaded artifact,
+the updater warns and asks for confirmation. Global `--yes` can accept that
+yes/no prompt, so use it only when you intend to accept the drift. It does not
+bypass operator policy blocks or replace the dedicated policy-warning flag.
+
+### Deprecated aliases
+
+These commands print a deprecation warning and forward to the unified owners:
 
 ```bash
-openclaw hooks disable <name>
+openclaw hooks install <path-or-spec> [-l|--link] [--pin] [--force] [--acknowledge-install-policy-warning]
+openclaw hooks update [id] [--all] [--dry-run] [--acknowledge-install-policy-warning]
 ```
 
-Disable a specific hook by updating your config.
+For update, provide `id` or `--all`. The aliases do not accept `--agent` and are
+not the preferred interface for new automation.
 
-**Arguments:**
+## Bundled hooks
 
-- `<name>`: Hook name (e.g., `command-logger`)
+The maintained catalog, event subscriptions, options, and verification notes
+are in [Bundled hooks](/automation/hooks#bundled-hooks). This includes
+`boot-md`, `bootstrap-extra-files`, `command-logger`, `compaction-notifier`, and
+`session-memory` (manual **and automatic** reset capture).
 
-**Example:**
+### command-logger log file
+
+On the Gateway host, with the default state directory:
 
 ```bash
-openclaw hooks disable command-logger
+tail -n 20 ~/.openclaw/logs/commands.log
+jq . ~/.openclaw/logs/commands.log
+jq 'select(.action == "new")' ~/.openclaw/logs/commands.log
 ```
 
-**Output:**
-
-```
-⏸ Disabled hook: 📝 command-logger
-```
-
-**After disabling:**
-
-- Restart the gateway so hooks reload
+Use `<stateDir>/logs/commands.log` for a custom state directory. These records
+contain session and sender identifiers; protect access and arrange retention or
+rotation. The hook does not rotate them.
 
 ## Notes
 
-- `openclaw hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
-- Plugin-managed hooks cannot be enabled or disabled here; enable or disable the owning plugin instead.
+Report commands support `--json`; success JSON goes directly to stdout. Failures
+use the standard [CLI JSON failure envelope](/cli#json-failures), and missing
+hook info also includes the requested `hook` name. Reports do not execute a hook
+as a test.
 
-## Install Hook Packs
+The hidden `hooks relay` command is reserved for generated native harness
+integration. It is not an internal-hook testing or manual event-trigger command.
 
-```bash
-openclaw plugins install <package>        # ClawHub first, then npm
-openclaw plugins install <package> --pin  # pin version
-openclaw plugins install <path>           # local path
-```
+## Related
 
-Install hook packs through the unified plugins installer.
-
-`openclaw hooks install` still works as a compatibility alias, but it prints a
-deprecation warning and forwards to `openclaw plugins install`.
-
-Npm specs are **registry-only** (package name + optional **exact version** or
-**dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
-installs run with `--ignore-scripts` for safety.
-
-Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
-prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
-
-**What it does:**
-
-- Copies the hook pack into `~/.openclaw/hooks/<id>`
-- Enables the installed hooks in `hooks.internal.entries.*`
-- Records the install under `hooks.internal.installs`
-
-**Options:**
-
-- `-l, --link`: Link a local directory instead of copying (adds it to `hooks.internal.load.extraDirs`)
-- `--pin`: Record npm installs as exact resolved `name@version` in `hooks.internal.installs`
-
-**Supported archives:** `.zip`, `.tgz`, `.tar.gz`, `.tar`
-
-**Examples:**
-
-```bash
-# Local directory
-openclaw plugins install ./my-hook-pack
-
-# Local archive
-openclaw plugins install ./my-hook-pack.zip
-
-# NPM package
-openclaw plugins install @openclaw/my-hook-pack
-
-# Link a local directory without copying
-openclaw plugins install -l ./my-hook-pack
-```
-
-Linked hook packs are treated as managed hooks from an operator-configured
-directory, not as workspace hooks.
-
-## Update Hook Packs
-
-```bash
-openclaw plugins update <id>
-openclaw plugins update --all
-```
-
-Update tracked npm-based hook packs through the unified plugins updater.
-
-`openclaw hooks update` still works as a compatibility alias, but it prints a
-deprecation warning and forwards to `openclaw plugins update`.
-
-**Options:**
-
-- `--all`: Update all tracked hook packs
-- `--dry-run`: Show what would change without writing
-
-When a stored integrity hash exists and the fetched artifact hash changes,
-OpenClaw prints a warning and asks for confirmation before proceeding. Use
-global `--yes` to bypass prompts in CI/non-interactive runs.
-
-## Bundled Hooks
-
-### session-memory
-
-Saves session context to memory when you issue `/new` or `/reset`.
-
-**Enable:**
-
-```bash
-openclaw hooks enable session-memory
-```
-
-**Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
-
-**See:** [session-memory documentation](/automation/hooks#session-memory)
-
-### bootstrap-extra-files
-
-Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TOOLS.md`) during `agent:bootstrap`.
-
-**Enable:**
-
-```bash
-openclaw hooks enable bootstrap-extra-files
-```
-
-**See:** [bootstrap-extra-files documentation](/automation/hooks#bootstrap-extra-files)
-
-### command-logger
-
-Logs all command events to a centralized audit file.
-
-**Enable:**
-
-```bash
-openclaw hooks enable command-logger
-```
-
-**Output:** `~/.openclaw/logs/commands.log`
-
-**View logs:**
-
-```bash
-# Recent commands
-tail -n 20 ~/.openclaw/logs/commands.log
-
-# Pretty-print
-cat ~/.openclaw/logs/commands.log | jq .
-
-# Filter by action
-grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
-```
-
-**See:** [command-logger documentation](/automation/hooks#command-logger)
-
-### boot-md
-
-Runs `BOOT.md` when the gateway starts (after channels start).
-
-**Events**: `gateway:startup`
-
-**Enable**:
-
-```bash
-openclaw hooks enable boot-md
-```
-
-**See:** [boot-md documentation](/automation/hooks#boot-md)
+- [CLI reference](/cli)
+- [Automation hooks](/automation/hooks)
+- [Plugin hooks](/plugins/hooks)
+- [Plugins CLI](/cli/plugins)

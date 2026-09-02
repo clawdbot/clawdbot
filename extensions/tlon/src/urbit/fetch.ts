@@ -1,3 +1,4 @@
+// Tlon plugin module implements fetch behavior.
 import {
   fetchWithSsrFGuard,
   type LookupFn,
@@ -6,7 +7,7 @@ import {
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
-export type UrbitFetchOptions = {
+type UrbitFetchOptions = {
   baseUrl: string;
   path: string;
   init?: RequestInit;
@@ -27,7 +28,7 @@ export async function urbitFetch(params: UrbitFetchOptions) {
   }
 
   const url = new URL(params.path, validated.baseUrl).toString();
-  return await fetchWithSsrFGuard({
+  const guarded = await fetchWithSsrFGuard({
     url,
     fetchImpl: params.fetchImpl,
     init: params.init,
@@ -39,4 +40,16 @@ export async function urbitFetch(params: UrbitFetchOptions) {
     auditContext: params.auditContext,
     pinDns: params.pinDns,
   });
+
+  return {
+    ...guarded,
+    release: async () => {
+      // Guard cleanup only closes the dispatcher; captured response clones can
+      // keep cancellation pending, so start it without delaying the release.
+      if (!guarded.response.bodyUsed) {
+        void guarded.response.body?.cancel().catch(() => undefined);
+      }
+      await guarded.release();
+    },
+  };
 }

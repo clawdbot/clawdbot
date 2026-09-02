@@ -1,3 +1,4 @@
+/** Integration tests for auth-profile secret runtime preparation. */
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -56,12 +57,22 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
       }
     }
   },
-  resolveSecretRefValues: async () => new Map(),
-  applyResolvedAssignments: () => {},
   resolveRuntimeWebTools: async () => ({
-    search: { providerSource: "none", diagnostics: [] },
-    fetch: { providerSource: "none", diagnostics: [] },
-    diagnostics: [],
+    metadata: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+    degradedOwners: [],
+    secretOwners: [],
+  }),
+}));
+
+vi.mock("./runtime-owner-assignments.js", () => ({
+  listSecretAssignmentOwners: () => [],
+  resolveAndApplySecretAssignments: async () => ({
+    degradedOwners: [],
+    resolvedValues: new Map(),
   }),
 }));
 
@@ -163,14 +174,18 @@ describe("secrets runtime snapshot auth integration", () => {
       });
       activateSecretsRuntimeSnapshot(refreshed);
 
-      expect(
-        getActiveSecretsRuntimeSnapshot()?.authStores.find(
-          (entry) => entry.agentDir === opsAgentDir,
-        )?.store.profiles["anthropic:ops"],
-      ).toMatchObject({
-        type: "api_key",
-        key: "sk-ops-runtime",
-        keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
+      const profile = getActiveSecretsRuntimeSnapshot()?.authStores.find(
+        (entry) => entry.agentDir === opsAgentDir,
+      )?.store.profiles["anthropic:ops"];
+      expect(profile?.type).toBe("api_key");
+      if (profile?.type !== "api_key") {
+        throw new Error("Expected anthropic ops API key profile");
+      }
+      expect(profile.key).toBe("sk-ops-runtime");
+      expect(profile.keyRef).toEqual({
+        source: "env",
+        provider: "default",
+        id: "ANTHROPIC_API_KEY",
       });
     });
   });

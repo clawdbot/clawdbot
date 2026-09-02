@@ -1,5 +1,9 @@
+// Test path helpers resolve repository-relative fixture paths.
 import path from "node:path";
 
+// Cross-platform path containment helper for tests.
+
+/** Return true when target is equal to or inside base, with Windows case folding. */
 export function isPathWithinBase(base: string, target: string): boolean {
   if (process.platform === "win32") {
     const normalizedBase = path.win32.normalize(path.win32.resolve(base));

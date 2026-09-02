@@ -1,7 +1,61 @@
+// Verifies probe failure audit reporting.
 import { describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
+import { runSecurityAuditCore } from "./audit.js";
+
+function requireProbeFailure(findings: ReturnType<typeof collectDeepProbeFindings>) {
+  const finding = findings.find((entry) => entry.checkId === "gateway.probe_failed");
+  if (!finding) {
+    throw new Error("Expected gateway probe failure finding");
+  }
+  return finding;
+}
 
 describe("security audit deep probe failure", () => {
+  it("redacts gateway URL credentials from the deep audit report", async () => {
+    const user = "audit-user-sentinel";
+    const password = "audit-password-sentinel";
+    const querySecret = "audit-query-sentinel";
+    const url = `wss://${user}:${password}@gateway.example.test/socket?client_secret=${querySecret}`;
+
+    const report = await withEnvAsync({ OPENCLAW_GATEWAY_URL: undefined }, async () =>
+      runSecurityAuditCore({
+        config: { gateway: { mode: "remote", remote: { url } } },
+        sourceConfig: { gateway: { mode: "remote", remote: { url } } },
+        env: {},
+        deep: true,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+        loadPluginSecurityCollectors: false,
+        probeGatewayFn: async ({ url: probeUrl }) => ({
+          ok: false,
+          url: probeUrl,
+          connectLatencyMs: null,
+          error: `failed to connect to ${probeUrl}`,
+          close: { code: 1006, reason: `connection closed at ${probeUrl}` },
+          auth: { role: null, scopes: [], capability: "unknown" },
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        }),
+      }),
+    );
+
+    expect(report.deep?.gateway).toMatchObject({
+      url: "wss://***:***@gateway.example.test/socket?client_secret=***",
+      error: "failed to connect to wss://***:***@gateway.example.test/socket?client_secret=***",
+      close: {
+        reason: "connection closed at wss://***:***@gateway.example.test/socket?client_secret=***",
+      },
+    });
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain(user);
+    expect(serialized).not.toContain(password);
+    expect(serialized).not.toContain(querySecret);
+  });
+
   it("adds probe_failed warnings for deep probe failure modes", () => {
     const cases: Array<{
       name: string;
@@ -14,7 +68,7 @@ describe("security audit deep probe failure", () => {
           close?: { code: number; reason: string } | null;
         };
       };
-      expectedError?: string;
+      expectedError: string;
     }> = [
       {
         name: "probe returns failed result",
@@ -46,11 +100,8 @@ describe("security audit deep probe failure", () => {
 
     for (const testCase of cases) {
       const findings = collectDeepProbeFindings({ deep: testCase.deep });
-      expect(
-        findings.some((finding) => finding.checkId === "gateway.probe_failed"),
-        testCase.name,
-      ).toBe(true);
-      expect(findings[0]?.detail).toContain(testCase.expectedError!);
+      const probeFailure = requireProbeFailure(findings);
+      expect(probeFailure.detail, testCase.name).toContain(testCase.expectedError);
     }
   });
 });

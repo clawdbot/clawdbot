@@ -1,10 +1,10 @@
-export {
-  resolveSandboxBrowserConfig,
-  resolveSandboxConfigForAgent,
-  resolveSandboxDockerConfig,
-  resolveSandboxPruneConfig,
-  resolveSandboxScope,
-} from "./sandbox/config.js";
+/**
+ * Public sandbox barrel for agent runtime code.
+ *
+ * Keep sandbox implementation modules behind this export surface so callers use
+ * the same config, backend, Docker, SSH, filesystem, and policy contracts.
+ */
+export { resolveSandboxConfigForAgent, resolveSandboxScope } from "./sandbox/config.js";
 export {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
@@ -14,11 +14,12 @@ export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandb
 export {
   getSandboxBackendFactory,
   getSandboxBackendManager,
+  getSandboxBackendWorkdirResolver,
   registerSandboxBackend,
   requireSandboxBackendFactory,
 } from "./sandbox/backend.js";
 
-export { buildSandboxCreateArgs } from "./sandbox/docker.js";
+export { isDockerDaemonUnavailable } from "./sandbox/docker.js";
 export {
   listSandboxBrowsers,
   listSandboxContainers,
@@ -27,20 +28,20 @@ export {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "./sandbox/manage.js";
-export {
-  formatSandboxToolPolicyBlockedMessage,
-  resolveSandboxRuntimeStatus,
-} from "./sandbox/runtime-status.js";
+export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 
-export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export { isToolAllowed } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 export {
   buildExecRemoteCommand,
+  buildRemoteWorkdirValidationCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
+  prepareSshSandboxExec,
   runSshSandboxCommand,
   shellEscape,
   uploadDirectoryToSshTarget,
@@ -50,7 +51,6 @@ export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js"
 export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";
-
 export type {
   CreateSandboxBackendParams,
   SandboxBackendCommandParams,
@@ -60,8 +60,12 @@ export type {
   SandboxBackendHandle,
   SandboxBackendId,
   SandboxBackendManager,
+  SandboxBackendPreparedWorkdirDiscarder,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
+  SandboxBackendWorkdirValidation,
+  SandboxBackendWorkdirResolver,
+  SandboxBackendWorkdirValidator,
 } from "./sandbox/backend.js";
 export type { RemoteShellSandboxHandle } from "./sandbox/remote-fs-bridge.js";
 export type {
@@ -71,17 +75,8 @@ export type {
 } from "./sandbox/ssh.js";
 
 export type {
-  SandboxBrowserConfig,
-  SandboxBrowserContext,
-  SandboxConfig,
   SandboxContext,
-  SandboxDockerConfig,
-  SandboxPruneConfig,
-  SandboxScope,
   SandboxSshConfig,
   SandboxToolPolicy,
-  SandboxToolPolicyResolved,
-  SandboxToolPolicySource,
   SandboxWorkspaceAccess,
-  SandboxWorkspaceInfo,
 } from "./sandbox/types.js";

@@ -1,3 +1,4 @@
+// Log level option tests cover CLI log-level flag parsing and validation.
 import { describe, expect, it } from "vitest";
 import { parseCliLogLevelOption } from "./log-level-option.js";
 

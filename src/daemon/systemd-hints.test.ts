@@ -1,3 +1,4 @@
+// Systemd hint tests cover Linux daemon setup guidance.
 import { describe, expect, it } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isSystemdUnavailableDetail, renderSystemdUnavailableHints } from "./systemd-hints.js";
@@ -6,6 +7,12 @@ describe("isSystemdUnavailableDetail", () => {
   it("matches systemd unavailable error details", () => {
     expect(
       isSystemdUnavailableDetail("systemctl --user unavailable: Failed to connect to bus"),
+    ).toBe(true);
+    expect(isSystemdUnavailableDetail("systemctl --user unavailable: ENOMEDIUM")).toBe(true);
+    expect(
+      isSystemdUnavailableDetail(
+        "systemctl --user unavailable: Failed to connect to bus: Permission denied",
+      ),
     ).toBe(true);
     expect(
       isSystemdUnavailableDetail(
@@ -42,14 +49,15 @@ describe("renderSystemdUnavailableHints", () => {
   });
 
   it("skips headless recovery hints when container context is known", () => {
+    const env = { OPENCLAW_CONTAINER_HINT: "sandbox" };
     expect(
       renderSystemdUnavailableHints({
         kind: "user_bus_unavailable",
-        container: true,
+        env,
       }),
     ).toEqual([
       "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-      `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
+      `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway", env)}\`.`,
     ]);
   });
 });

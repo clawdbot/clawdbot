@@ -1,257 +1,411 @@
 ---
+summary: "Built-in memory search, admission exclusions, and dreaming configuration"
 title: "Memory configuration reference"
-summary: "All configuration knobs for memory search, embedding providers, QMD, hybrid search, and multimodal indexing"
+sidebarTitle: "Memory config"
+doc-schema-version: 1
 read_when:
   - You want to configure memory search providers or embedding models
-  - You want to set up the QMD backend
-  - You want to tune hybrid search, MMR, or temporal decay
+  - You want to understand hybrid search, MMR, or temporal-decay defaults
   - You want to enable multimodal memory indexing
+  - You need to exclude specific session sources from automatic dreaming ingestion
 ---
 
-# Memory configuration reference
+This page lists every configuration knob for OpenClaw memory search. For conceptual overviews, see:
 
-This page lists every configuration knob for OpenClaw memory search. For
-conceptual overviews, see:
+<CardGroup cols={2}>
+  <Card title="Memory overview" href="/concepts/memory">
+    How memory works.
+  </Card>
+  <Card title="Builtin engine" href="/concepts/memory-builtin">
+    Default SQLite backend.
+  </Card>
+  <Card title="Memory search" href="/concepts/memory-search">
+    Search pipeline and tuning.
+  </Card>
+  <Card title="Active memory" href="/concepts/active-memory">
+    Memory sub-agent for interactive sessions.
+  </Card>
+</CardGroup>
 
-- [Memory Overview](/concepts/memory) -- how memory works
-- [Builtin Engine](/concepts/memory-builtin) -- default SQLite backend
-- [QMD Engine](/concepts/memory-qmd) -- local-first sidecar
-- [Memory Search](/concepts/memory-search) -- search pipeline and tuning
-- [Active Memory](/concepts/active-memory) -- enabling the memory sub-agent for interactive sessions
+All shared memory settings live under top-level `memory` in `openclaw.json`. Search defaults use `memory.search`; per-agent search overrides use `agents.entries.*.memory.search`.
 
-All memory search settings live under `agents.defaults.memorySearch` in
-`openclaw.json` unless noted otherwise.
+<Note>
+For the recommended personal-agent workflow, use
+`memory.search.rememberAcrossConversations`. Advanced Active Memory targeting,
+model, prompt, and latency controls live under `plugins.entries.active-memory`.
 
-If you are looking for the **active memory** feature toggle and sub-agent config,
-that lives under `plugins.entries.active-memory` instead of `memorySearch`.
+See [Active Memory](/concepts/active-memory) for both activation paths,
+transcript persistence, and safe rollout guidance.
+</Note>
 
-Active memory uses a two-gate model:
+---
 
-1. the plugin must be enabled and target the current agent id
-2. the request must be an eligible interactive persistent chat session
+## Remember across conversations
 
-See [Active Memory](/concepts/active-memory) for the activation model,
-plugin-owned config, transcript persistence, and safe rollout pattern.
+| Key                           | Type      | Default                                                    | Description                                                                    |
+| ----------------------------- | --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `rememberAcrossConversations` | `boolean` | On for personal installs; off with configured DM isolation | Use relevant context from this agent's other recognized private conversations. |
+
+Configure it per agent when only a trusted personal agent should use
+cross-conversation transcript recall:
+
+```json5
+{
+  agents: {
+    entries: {
+      personal: {
+        memory: {
+          search: {
+            rememberAcrossConversations: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The value follows normal `memory.search` inheritance with a
+per-agent override. When unset, it defaults on only if global
+`session.dmScope` is unset or `"main"` and no binding has a `session.dmScope`
+override. Any configured DM isolation defaults it off. An explicit `true` or
+`false` always wins. Enabling it implies session transcript indexing and adds
+`sessions` to the agent's resolved memory sources.
+
+OpenClaw's built-in memory provider supports this protected path. Alternate memory providers can keep using their own
+recall hooks and advanced Active Memory tools, but this setting is skipped
+unless the current provider supports protected private transcript recall.
+`openclaw doctor` reports an unsupported provider or an explicit Active Memory
+`toolsAllow` list that omits `memory_search`.
+
+The retrieval boundary is narrower than general session search:
+
+- only the same agent's recognized private conversations are eligible
+- the conversation being answered is excluded
+- groups and channels are excluded as sources and destinations
+- unknown conversation kinds fail closed
+- sandboxed recall cannot use the special cross-conversation authorization
+
+The setting does not change `tools.sessions.visibility`, session keys,
+transcript storage, delivery routing, or the permissions of `sessions_list`,
+`sessions_history`, and `sessions_send`. Active Memory performs a bounded
+read-only retrieval pass; unavailable or timed-out retrieval does not block the
+reply.
 
 ---
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                   |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
-| `model`    | `string`  | provider default | Embedding model name                                                                                          |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                    |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                               |
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
+| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                             |
+| `provider` | `string`  | `"openai"`       | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `openai-compatible`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at a memory embedding adapter or OpenAI-compatible model API |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                                                                                        |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                                                                                  |
 
-### Auto-detection order
+When `provider` is not set, OpenClaw uses OpenAI embeddings. Set `provider`
+explicitly to use Bedrock, DeepInfra, Gemini, GitHub Copilot, Mistral, Ollama,
+Voyage, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
+Legacy configs that still say `provider: "auto"` resolve to `openai`.
 
-When `provider` is not set, OpenClaw selects the first available:
+<Warning>
+Changing the embedding provider, model, provider settings, sources, scope,
+chunking, or tokenizer can make the existing SQLite vector index incompatible.
+OpenClaw pauses vector search and reports an index identity warning instead of
+automatically re-embedding everything. Rebuild when you are ready with
+`openclaw memory status --index --agent <id>` or
+`openclaw memory index --force --agent <id>`.
+</Warning>
 
-1. `local` -- if `memorySearch.local.modelPath` is configured and the file exists.
-2. `github-copilot` -- if a GitHub Copilot token can be resolved (env var or auth profile).
-3. `openai` -- if an OpenAI key can be resolved.
-4. `gemini` -- if a Gemini key can be resolved.
-5. `voyage` -- if a Voyage key can be resolved.
-6. `mistral` -- if a Mistral key can be resolved.
-7. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
+When `provider` is unset, legacy `provider: "auto"` is present, or
+`provider: "none"` intentionally selects FTS-only mode, memory recall can still
+use lexical FTS ranking when embeddings are unavailable.
 
-`ollama` is supported but not auto-detected (set it explicitly).
+Explicit non-local providers fail closed. If you set `memory.search.provider` to
+a concrete remote-backed provider such as Bedrock, DeepInfra, Gemini, GitHub
+Copilot, LM Studio, Mistral, Ollama, OpenAI, Voyage, or an OpenAI-compatible
+custom provider, and that provider is unavailable at runtime, `memory_search`
+returns an unavailable result instead of silently using FTS-only recall. Fix the
+provider/auth configuration, switch to a reachable provider, or set
+`provider: "none"` if you want deliberate FTS-only recall.
+
+### Custom provider ids
+
+`memory.search.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+
+```json5
+{
+  models: {
+    providers: {
+      "ollama-5080": {
+        api: "ollama",
+        baseUrl: "http://gpu-box.local:11435",
+        apiKey: "ollama-local",
+        models: [{ id: "qwen3-embedding:0.6b", name: "Qwen3 Embedding 0.6B" }],
+      },
+    },
+  },
+  memory: {
+    search: {
+      provider: "ollama-5080",
+      model: "qwen3-embedding:0.6b",
+    },
+  },
+}
+```
 
 ### API key resolution
 
-Remote embeddings require an API key. Bedrock uses the AWS SDK default
-credential chain instead (instance roles, SSO, access keys).
+Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys, or a Bedrock API key).
 
-| Provider       | Env var                                            | Config key                        |
-| -------------- | -------------------------------------------------- | --------------------------------- |
-| Bedrock        | AWS credential chain                               | No API key needed                 |
-| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
-| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
-| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
-| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                |
-| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
-| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
+| Provider       | Env var                                             | Config key                          |
+| -------------- | --------------------------------------------------- | ----------------------------------- |
+| Bedrock        | AWS credential chain, or `AWS_BEARER_TOKEN_BEDROCK` | No API key needed                   |
+| DeepInfra      | `DEEPINFRA_API_KEY`                                 | `models.providers.deepinfra.apiKey` |
+| Gemini         | `GEMINI_API_KEY`                                    | `models.providers.google.apiKey`    |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`  | Auth profile via device login       |
+| Mistral        | `MISTRAL_API_KEY`                                   | `models.providers.mistral.apiKey`   |
+| Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
+| OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
+| Voyage         | `VOYAGE_API_KEY`                                    | `models.providers.voyage.apiKey`    |
 
-Codex OAuth covers chat/completions only and does not satisfy embedding
-requests.
+For custom OpenAI-compatible providers, `models.providers.<id>.apiKey` can name
+an API-key or bearer-token profile saved with [`openclaw models auth`](/cli/models#auth-profiles),
+such as `my-embeddings:default`. Literal keys keep their configured value even
+when other profiles are saved for the provider. Empty keys do not select a saved profile.
+
+<Note>
+Codex OAuth covers chat/completions only and does not satisfy embedding requests.
+</Note>
 
 ---
 
 ## Remote endpoint config
 
-For custom OpenAI-compatible endpoints or overriding provider defaults:
+Use `provider: "openai-compatible"` for a generic OpenAI-compatible
+`/v1/embeddings` server that should not inherit global OpenAI chat credentials.
 
-| Key              | Type     | Description                                        |
-| ---------------- | -------- | -------------------------------------------------- |
-| `remote.baseUrl` | `string` | Custom API base URL                                |
-| `remote.apiKey`  | `string` | Override API key                                   |
-| `remote.headers` | `object` | Extra HTTP headers (merged with provider defaults) |
+<ParamField path="remote.baseUrl" type="string">
+  Custom API base URL. Provider credentials and headers are inherited only when this resolves to the provider's configured destination.
+</ParamField>
+<ParamField path="remote.apiKey" type="string">
+  API key owned by the remote destination. Set this when `remote.baseUrl` points somewhere other than the provider's configured destination.
+</ParamField>
+<ParamField path="remote.headers" type="object">
+  Extra HTTP headers owned by the remote destination. Provider defaults are merged only for the provider's configured destination.
+</ParamField>
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "openai",
-        model: "text-embedding-3-small",
-        remote: {
-          baseUrl: "https://api.example.com/v1/",
-          apiKey: "YOUR_KEY",
+  memory: {
+    search: {
+      provider: "openai-compatible",
+      model: "text-embedding-3-small",
+      remote: {
+        baseUrl: "https://api.example.com/v1/",
+        apiKey: "YOUR_KEY",
+      },
+    },
+  },
+}
+```
+
+---
+
+## Provider-specific config
+
+<AccordionGroup>
+  <Accordion title="Gemini">
+    | Key                    | Type     | Default                | Description                                |
+    | ---------------------- | -------- | ---------------------- | ------------------------------------------- |
+    | `model`                | `string` | `gemini-embedding-001` | Also supports `gemini-embedding-2`         |
+    | `outputDimensionality` | `number` | `3072`                 | 128-3072; recommended: 768, 1536, or 3072  |
+
+    The legacy `gemini-embedding-2-preview` identifier remains accepted during
+    migration to the stable model.
+
+    <Warning>
+    Changing model or `outputDimensionality` changes the index identity. OpenClaw
+    pauses vector search until you explicitly rebuild the memory index.
+
+    Upgrading any existing configuration that already uses
+    `gemini-embedding-2` can trigger the same pause even when you do not edit the
+    configuration. Before this release, the stable model's dimension was
+    omitted from index identity whether `outputDimensionality` was absent or
+    explicitly set. After upgrade, an absent setting resolves to 3072, while an
+    explicit setting between 128 and 3072 becomes part of the identity. The
+    default `gemini-embedding-001` keeps its existing identity when this setting
+    is absent; an explicitly configured value that was previously ignored now
+    also changes the identity. For either path, check the affected agent with
+    `openclaw memory status --deep --agent <id>`, then rebuild when ready with
+    `openclaw memory index --force --agent <id>`.
+    </Warning>
+
+  </Accordion>
+  <Accordion title="OpenAI-compatible input types">
+    OpenAI-compatible embedding endpoints can opt into provider-specific `input_type` request fields. This is useful for asymmetric embedding models that require different labels for query and document embeddings.
+
+    | Key                 | Type     | Default | Description                                             |
+    | ------------------- | -------- | ------- | -------------------------------------------------------- |
+    | `inputType`         | `string` | unset   | Shared `input_type` for query and document embeddings   |
+    | `queryInputType`    | `string` | unset   | Query-time `input_type`; overrides `inputType`          |
+    | `documentInputType` | `string` | unset   | Index/document `input_type`; overrides `inputType`      |
+
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          remote: {
+            baseUrl: "https://embeddings.example/v1",
+            apiKey: "${EMBEDDINGS_API_KEY}",
+          },
+          model: "asymmetric-embedder",
+          queryInputType: "query",
+          documentInputType: "passage",
         },
       },
-    },
-  },
-}
-```
+    }
+    ```
 
----
+    Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
 
-## Gemini-specific config
+  </Accordion>
+  <Accordion title="Bedrock">
+    ### Bedrock embedding config
 
-| Key                    | Type     | Default                | Description                                |
-| ---------------------- | -------- | ---------------------- | ------------------------------------------ |
-| `model`                | `string` | `gemini-embedding-001` | Also supports `gemini-embedding-2-preview` |
-| `outputDimensionality` | `number` | `3072`                 | For Embedding 2: 768, 1536, or 3072        |
+    Bedrock uses the AWS SDK default credential chain plus an OpenClaw-checked bearer token, so no API keys are stored in config. If OpenClaw runs on EC2 with a Bedrock-enabled instance role, just set the provider and model:
 
-<Warning>
-Changing model or `outputDimensionality` triggers an automatic full reindex.
-</Warning>
-
----
-
-## Bedrock embedding config
-
-Bedrock uses the AWS SDK default credential chain -- no API keys needed.
-If OpenClaw runs on EC2 with a Bedrock-enabled instance role, just set the
-provider and model:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "bedrock",
-        model: "amazon.titan-embed-text-v2:0",
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "bedrock",
+          model: "amazon.titan-embed-text-v2:0",
+        },
       },
-    },
-  },
-}
-```
+    }
+    ```
 
-| Key                    | Type     | Default                        | Description                     |
-| ---------------------- | -------- | ------------------------------ | ------------------------------- |
-| `model`                | `string` | `amazon.titan-embed-text-v2:0` | Any Bedrock embedding model ID  |
-| `outputDimensionality` | `number` | model default                  | For Titan V2: 256, 512, or 1024 |
+    | Key                    | Type     | Default                        | Description                     |
+    | ---------------------- | -------- | ------------------------------- | -------------------------------- |
+    | `model`                | `string` | `amazon.titan-embed-text-v2:0` | Any Bedrock embedding model ID  |
+    | `outputDimensionality` | `number` | model default                  | For Titan V2: 256, 512, or 1024 |
 
-### Supported models
+    **Supported models** (with family detection and dimension defaults):
 
-The following models are supported (with family detection and dimension
-defaults):
+    | Model ID                                   | Provider   | Default Dims | Configurable Dims          |
+    | ------------------------------------------- | ---------- | ------------- | -------------------------- |
+    | `amazon.titan-embed-text-v2:0`             | Amazon     | 1024         | 256, 512, 1024             |
+    | `amazon.titan-embed-text-v1`               | Amazon     | 1536         | --                          |
+    | `amazon.titan-embed-g1-text-02`            | Amazon     | 1536         | --                          |
+    | `amazon.titan-embed-image-v1`              | Amazon     | 1024         | --                          |
+    | `amazon.nova-2-multimodal-embeddings-v1:0` | Amazon     | 1024         | 256, 384, 1024, 3072       |
+    | `cohere.embed-english-v3`                  | Cohere     | 1024         | --                          |
+    | `cohere.embed-multilingual-v3`             | Cohere     | 1024         | --                          |
+    | `cohere.embed-v4:0`                        | Cohere     | 1536         | 256, 384, 512, 768, 1024, 1536 |
+    | `twelvelabs.marengo-embed-3-0-v1:0`        | TwelveLabs | 512          | --                          |
+    | `twelvelabs.marengo-embed-2-7-v1:0`        | TwelveLabs | 1024         | --                          |
 
-| Model ID                                   | Provider   | Default Dims | Configurable Dims    |
-| ------------------------------------------ | ---------- | ------------ | -------------------- |
-| `amazon.titan-embed-text-v2:0`             | Amazon     | 1024         | 256, 512, 1024       |
-| `amazon.titan-embed-text-v1`               | Amazon     | 1536         | --                   |
-| `amazon.titan-embed-g1-text-02`            | Amazon     | 1536         | --                   |
-| `amazon.titan-embed-image-v1`              | Amazon     | 1024         | --                   |
-| `amazon.nova-2-multimodal-embeddings-v1:0` | Amazon     | 1024         | 256, 384, 1024, 3072 |
-| `cohere.embed-english-v3`                  | Cohere     | 1024         | --                   |
-| `cohere.embed-multilingual-v3`             | Cohere     | 1024         | --                   |
-| `cohere.embed-v4:0`                        | Cohere     | 1536         | 256-1536             |
-| `twelvelabs.marengo-embed-3-0-v1:0`        | TwelveLabs | 512          | --                   |
-| `twelvelabs.marengo-embed-2-7-v1:0`        | TwelveLabs | 1024         | --                   |
+    Throughput-suffixed variants (e.g., `amazon.titan-embed-text-v1:2:8k`) and region-prefixed inference profile IDs (e.g., `us.amazon.titan-embed-text-v2:0`) inherit the base model's configuration.
 
-Throughput-suffixed variants (e.g., `amazon.titan-embed-text-v1:2:8k`) inherit
-the base model's configuration.
+    **Region:** resolved in this order: the `memory.search.remote.baseUrl` override, the `models.providers.amazon-bedrock.baseUrl` config, `AWS_REGION`, `AWS_DEFAULT_REGION`, then a default of `us-east-1`.
 
-### Authentication
+    **Authentication:** OpenClaw checks for `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` or `AWS_BEARER_TOKEN_BEDROCK` first, then falls through to the standard AWS SDK default credential provider chain:
 
-Bedrock auth uses the standard AWS SDK credential resolution order:
+    1. Environment variables (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`), unless `AWS_PROFILE` is also set
+    2. SSO (only when SSO fields are configured)
+    3. Shared credentials and config files (`fromIni`, includes `AWS_PROFILE`)
+    4. Credential process (`credential_process` in the AWS config file)
+    5. Web identity token credentials
+    6. ECS or EC2 instance metadata credentials
 
-1. Environment variables (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`)
-2. SSO token cache
-3. Web identity token credentials
-4. Shared credentials and config files
-5. ECS or EC2 metadata credentials
+    **IAM permissions:** the IAM role or user needs:
 
-Region is resolved from `AWS_REGION`, `AWS_DEFAULT_REGION`, the
-`amazon-bedrock` provider `baseUrl`, or defaults to `us-east-1`.
+    ```json
+    {
+      "Effect": "Allow",
+      "Action": "bedrock:InvokeModel",
+      "Resource": "*"
+    }
+    ```
 
-### IAM permissions
+    For least-privilege, scope `InvokeModel` to the specific model:
 
-The IAM role or user needs:
+    ```text
+    arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
+    ```
 
-```json
-{
-  "Effect": "Allow",
-  "Action": "bedrock:InvokeModel",
-  "Resource": "*"
-}
-```
+  </Accordion>
+  <Accordion title="Local (managed llama.cpp server)">
+    | Key               | Type     | Default         | Description             |
+    | ----------------- | -------- | --------------- | ----------------------- |
+    | `local.modelPath` | `string` | auto-downloaded | Path to GGUF model file |
 
-For least-privilege, scope `InvokeModel` to the specific model:
+    Install the official llama.cpp provider, then choose llama.cpp once in
+    interactive setup. OpenClaw installs a pinned, verified `llama-server` and
+    writes its loopback `localService` configuration. Default model:
+    `embeddinggemma-300m-qat-Q8_0.gguf` (~0.3 GB, auto-downloaded).
 
-```
-arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
-```
+    Use the standalone CLI to verify the same provider path the Gateway uses:
 
----
+    ```bash
+    openclaw memory status --deep --agent main
+    openclaw memory index --force --agent main
+    ```
 
-## Local embedding config
+    Cache placement is provider-owned. `openclaw memory status --deep` reports
+    server build, model path, capability, and endpoint facts observed from the
+    managed server after it has handled an embedding request.
 
-| Key                   | Type     | Default                | Description                     |
-| --------------------- | -------- | ---------------------- | ------------------------------- |
-| `local.modelPath`     | `string` | auto-downloaded        | Path to GGUF model file         |
-| `local.modelCacheDir` | `string` | node-llama-cpp default | Cache dir for downloaded models |
+    Set `provider: "local"` explicitly for local GGUF embeddings. Full `hf:`
+    file references and integrity-bearing HTTPS GGUF URLs are supported for
+    explicit local configs, but they do not change the default provider.
 
-Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded).
-Requires native build: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
+  </Accordion>
+</AccordionGroup>
 
----
+## Indexing behavior
+
+Memory engines own synchronization, batching, watch, and post-compaction
+indexing heuristics. OpenClaw keeps these behaviors enabled with maintained
+defaults rather than exposing per-install timing switches.
 
 ## Hybrid search config
 
-All under `memorySearch.query.hybrid`:
+All under `memory.search.query`:
 
-| Key                   | Type      | Default | Description                        |
-| --------------------- | --------- | ------- | ---------------------------------- |
-| `enabled`             | `boolean` | `true`  | Enable hybrid BM25 + vector search |
-| `vectorWeight`        | `number`  | `0.7`   | Weight for vector scores (0-1)     |
-| `textWeight`          | `number`  | `0.3`   | Weight for BM25 scores (0-1)       |
-| `candidateMultiplier` | `number`  | `4`     | Candidate pool size multiplier     |
+| Key          | Type     | Default | Description                               |
+| ------------ | -------- | ------- | ----------------------------------------- |
+| `maxResults` | `number` | `6`     | Max memory hits returned before injection |
+| `minScore`   | `number` | `0.35`  | Minimum relevance score to include a hit  |
 
-### MMR (diversity)
+Without a per-call `maxResults`, primary-only `memory_search` calls use this
+configured limit, including `corpus=memory` and `corpus=sessions`. Wiki and
+combined searches (`corpus=wiki` or `corpus=all`) keep their separate default
+of 10 results. An explicit tool `maxResults` overrides the applicable default.
 
-| Key           | Type      | Default | Description                          |
-| ------------- | --------- | ------- | ------------------------------------ |
-| `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking                |
-| `mmr.lambda`  | `number`  | `0.7`   | 0 = max diversity, 1 = max relevance |
+Hybrid retrieval remains enabled. The builtin engine always applies a fixed
+30-day recency half-life to dated daily notes and a fixed importance
+multiplier after hybrid relevance, then applies MMR diversity ordering with a
+fixed lambda of `0.7`. `MEMORY.md`, `USER.md`, and other evergreen memory files
+do not decay. Nullable importance is neutral, so no migration or new tuning
+key is required for existing indexes.
 
-### Temporal decay (recency)
-
-| Key                          | Type      | Default | Description               |
-| ---------------------------- | --------- | ------- | ------------------------- |
-| `temporalDecay.enabled`      | `boolean` | `false` | Enable recency boost      |
-| `temporalDecay.halfLifeDays` | `number`  | `30`    | Score halves every N days |
-
-Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
+Strong trigger matches on promoted, trusted entries can inject up to three
+compact memories on eligible interactive turns. Today, root `MEMORY.md` and
+`USER.md` are the curated eligible tier. Daily notes and transcripts are never
+auto-injected.
 
 ### Full example
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        query: {
-          hybrid: {
-            vectorWeight: 0.7,
-            textWeight: 0.3,
-            mmr: { enabled: true, lambda: 0.7 },
-            temporalDecay: { enabled: true, halfLifeDays: 30 },
-          },
-        },
+  memory: {
+    search: {
+      query: {
+        maxResults: 6,
+        minScore: 0.35,
       },
     },
   },
@@ -262,35 +416,23 @@ Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 
 ## Additional memory paths
 
-| Key          | Type       | Description                              |
-| ------------ | ---------- | ---------------------------------------- |
-| `extraPaths` | `string[]` | Additional directories or files to index |
+| Key          | Type                                                  | Description                              |
+| ------------ | ----------------------------------------------------- | ---------------------------------------- |
+| `extraPaths` | `Array<string \| { path: string; pattern?: string }>` | Additional directories or files to index |
 
 ```json5
 {
-  agents: {
-    defaults: {
-      memorySearch: {
-        extraPaths: ["../team-docs", "/srv/shared-notes"],
-      },
+  memory: {
+    search: {
+      extraPaths: ["../team-docs", { path: "/srv/shared-notes", pattern: "runbooks/**/*.md" }],
     },
   },
 }
 ```
 
-Paths can be absolute or workspace-relative. Directories are scanned
-recursively for `.md` files. Symlink handling depends on the active backend:
-the builtin engine ignores symlinks, while QMD follows the underlying QMD
-scanner behavior.
-
-For agent-scoped cross-agent transcript search, use
-`agents.list[].memorySearch.qmd.extraCollections` instead of `memory.qmd.paths`.
-Those extra collections follow the same `{ path, name, pattern? }` shape, but
-they are merged per agent and can preserve explicit shared names when the path
-points outside the current workspace.
-If the same resolved path appears in both `memory.qmd.paths` and
-`memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the
-duplicate.
+Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
+files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
+file entries are indexed exactly. The builtin engine skips symlinks.
 
 ---
 
@@ -302,22 +444,21 @@ Index images and audio alongside Markdown using Gemini Embedding 2:
 | ------------------------- | ---------- | ---------- | -------------------------------------- |
 | `multimodal.enabled`      | `boolean`  | `false`    | Enable multimodal indexing             |
 | `multimodal.modalities`   | `string[]` | --         | `["image"]`, `["audio"]`, or `["all"]` |
-| `multimodal.maxFileBytes` | `number`   | `10000000` | Max file size for indexing             |
+| `multimodal.maxFileBytes` | `number`   | `10485760` | Max file size for indexing (10 MiB)    |
 
-Only applies to files in `extraPaths`. Default memory roots stay Markdown-only.
-Requires `gemini-embedding-2-preview`. `fallback` must be `"none"`.
+<Note>
+Only applies to files in `extraPaths`. Default memory roots stay Markdown-only. Requires `gemini-embedding-2` (the legacy preview identifier is also accepted). `fallback` must be `"none"`.
+</Note>
 
-Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif`
-(images); `.mp3`, `.wav`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.flac` (audio).
+Supported formats: `.jpg`, `.jpeg`, `.png` (images); `.mp3`, `.wav` (audio).
 
 ---
 
 ## Embedding cache
 
-| Key                | Type      | Default | Description                      |
-| ------------------ | --------- | ------- | -------------------------------- |
-| `cache.enabled`    | `boolean` | `false` | Cache chunk embeddings in SQLite |
-| `cache.maxEntries` | `number`  | `50000` | Max cached embeddings            |
+| Key             | Type      | Default | Description                      |
+| --------------- | --------- | ------- | -------------------------------- |
+| `cache.enabled` | `boolean` | `true`  | Cache chunk embeddings in SQLite |
 
 Prevents re-embedding unchanged text during reindex or transcript updates.
 
@@ -325,33 +466,88 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 ## Batch indexing
 
-| Key                           | Type      | Default | Description                |
-| ----------------------------- | --------- | ------- | -------------------------- |
-| `remote.batch.enabled`        | `boolean` | `false` | Enable batch embedding API |
-| `remote.batch.concurrency`    | `number`  | `2`     | Parallel batch jobs        |
-| `remote.batch.wait`           | `boolean` | `true`  | Wait for batch completion  |
-| `remote.batch.pollIntervalMs` | `number`  | --      | Poll interval              |
-| `remote.batch.timeoutMinutes` | `number`  | --      | Batch timeout              |
+| Key                    | Type      | Default | Description                |
+| ---------------------- | --------- | ------- | -------------------------- |
+| `remote.batch.enabled` | `boolean` | `false` | Enable batch embedding API |
 
-Available for `openai`, `gemini`, and `voyage`. OpenAI batch is typically
-fastest and cheapest for large backfills.
+Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
+
+Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 ---
 
-## Session memory search (experimental)
+## Session memory search
 
 Index session transcripts and surface them via `memory_search`:
 
-| Key                           | Type       | Default      | Description                             |
-| ----------------------------- | ---------- | ------------ | --------------------------------------- |
-| `experimental.sessionMemory`  | `boolean`  | `false`      | Enable session indexing                 |
-| `sources`                     | `string[]` | `["memory"]` | Add `"sessions"` to include transcripts |
-| `sync.sessions.deltaBytes`    | `number`   | `100000`     | Byte threshold for reindex              |
-| `sync.sessions.deltaMessages` | `number`   | `50`         | Message threshold for reindex           |
+| Key                           | Type       | Default                                                    | Description                              |
+| ----------------------------- | ---------- | ---------------------------------------------------------- | ---------------------------------------- |
+| `rememberAcrossConversations` | `boolean`  | On for personal installs; off with configured DM isolation | Permit private cross-conversation recall |
+| `sources`                     | `string[]` | `["memory"]`                                               | Add `"sessions"` to include transcripts  |
 
-Session indexing is opt-in and runs asynchronously. Results can be slightly
-stale. Session logs live on disk, so treat filesystem access as the trust
-boundary.
+<Warning>
+Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Active transcripts live in the agent's SQLite database, while retained transcript artifacts can live on disk. Treat access to both as part of the same trust boundary.
+</Warning>
+
+Internal dreaming-narrative, cron, and heartbeat session transcripts are not
+indexed, including retained compressed narrative archives whose live session
+metadata is gone. They may quote fragments from user conversations but are not
+searchable memory sources. Sessions purged with
+[`openclaw memory forget`](/cli/memory#memory-forget) are also durably excluded,
+even though their source transcripts remain in the session store. A forced
+reindex removes stale transcript records without readmitting either group.
+Ordinary user-session transcripts, including retained, reset, and
+deleted-session archives, remain eligible until explicitly targeted.
+
+<Note>
+The [session-memory hook](/automation/hooks#session-memory) saves conversation
+excerpts to `<workspace>/memory/`, which the `memory` source already indexes.
+If transcript indexing is also enabled, the same conversation can appear from
+both `memory` and `sessions`, resulting in overlapping search results and
+additional embedding work. For hook-only recall, set `sources: ["memory"]` and
+`rememberAcrossConversations: false`; `sources` alone is insufficient because
+cross-conversation recall automatically adds `sessions`. For full-transcript
+recall instead, run `openclaw hooks disable session-memory`. Enable both only
+when you intentionally want both representations.
+</Note>
+
+Ordinary model-invoked session transcript search obeys
+[`tools.sessions.visibility`](/gateway/config-tools#tools-sessions). The default
+`agent` visibility exposes same-agent sessions to unsandboxed callers, including
+non-main sessions and conversations with other users sharing the agent. Set
+`tree` explicitly for current plus spawned scope (main still sees all
+same-agent sessions), or `self` for strict current-session access. A per-peer
+DM scope alone does not restrict session-tool recall. Cross-agent recall
+requires `all` and agent-to-agent policy; sandbox clamps and incognito
+exclusions still apply.
+
+`rememberAcrossConversations` does not widen that setting. It supplies a
+separate runtime-only authorization limited to same-agent private
+transcripts during the bounded Active Memory pass.
+
+An explicit `memory_search` request for the `sessions` corpus requires session
+search to be enabled for that agent. If it is unavailable, OpenClaw explains
+how to enable session indexing instead of silently searching memory files.
+
+The examples below place these settings under top-level `memory.search`. You can also
+apply equivalent settings in a per-agent `memory.search` override when only one
+agent should index and search session transcripts.
+
+For same-agent gateway-to-DM recall:
+
+```json5
+{
+  memory: {
+    search: {
+      experimental: { sessionMemory: true },
+      sources: ["memory", "sessions"],
+    },
+  },
+  tools: {
+    sessions: { visibility: "agent" },
+  },
+}
+```
 
 ---
 
@@ -362,141 +558,67 @@ boundary.
 | `store.vector.enabled`       | `boolean` | `true`  | Use sqlite-vec for vector queries |
 | `store.vector.extensionPath` | `string`  | bundled | Override sqlite-vec path          |
 
-When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine
-similarity automatically.
+When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similarity automatically.
 
 ---
 
 ## Index storage
 
-| Key                   | Type     | Default                               | Description                                 |
-| --------------------- | -------- | ------------------------------------- | ------------------------------------------- |
-| `store.path`          | `string` | `~/.openclaw/memory/{agentId}.sqlite` | Index location (supports `{agentId}` token) |
-| `store.fts.tokenizer` | `string` | `unicode61`                           | FTS5 tokenizer (`unicode61` or `trigram`)   |
+Built-in memory indexes live in each agent's OpenClaw SQLite database at
+`agents/<agentId>/agent/openclaw-agent.sqlite`.
+
+| Key                   | Type     | Default     | Description                               |
+| --------------------- | -------- | ----------- | ----------------------------------------- |
+| `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
 
 ---
 
-## QMD backend config
+## Citations
 
-Set `memory.backend = "qmd"` to enable. All QMD settings live under
-`memory.qmd`:
+`memory.citations` controls citation visibility for built-in memory results:
 
-| Key                      | Type      | Default  | Description                                  |
-| ------------------------ | --------- | -------- | -------------------------------------------- |
-| `command`                | `string`  | `qmd`    | QMD executable path                          |
-| `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query` |
-| `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`    |
-| `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`      |
-| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                    |
-| `sessions.retentionDays` | `number`  | --       | Transcript retention                         |
-| `sessions.exportDir`     | `string`  | --       | Export directory                             |
-
-OpenClaw prefers the current QMD collection and MCP query shapes, but keeps
-older QMD releases working by falling back to legacy `--mask` collection flags
-and older MCP tool names when needed.
-
-QMD model overrides stay on the QMD side, not OpenClaw config. If you need to
-override QMD's models globally, set environment variables such as
-`QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway
-runtime environment.
-
-### Update schedule
-
-| Key                       | Type      | Default | Description                           |
-| ------------------------- | --------- | ------- | ------------------------------------- |
-| `update.interval`         | `string`  | `5m`    | Refresh interval                      |
-| `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-| `update.onBoot`           | `boolean` | `true`  | Refresh on startup                    |
-| `update.waitForBootSync`  | `boolean` | `false` | Block startup until refresh completes |
-| `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
-| `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
-| `update.updateTimeoutMs`  | `number`  | --      | Timeout for QMD update operations     |
-| `update.embedTimeoutMs`   | `number`  | --      | Timeout for QMD embed operations      |
-
-### Limits
-
-| Key                       | Type     | Default | Description                |
-| ------------------------- | -------- | ------- | -------------------------- |
-| `limits.maxResults`       | `number` | `6`     | Max search results         |
-| `limits.maxSnippetChars`  | `number` | --      | Clamp snippet length       |
-| `limits.maxInjectedChars` | `number` | --      | Clamp total injected chars |
-| `limits.timeoutMs`        | `number` | `4000`  | Search timeout             |
-
-### Scope
-
-Controls which sessions can receive QMD search results. Same schema as
-[`session.sendPolicy`](/gateway/configuration-reference#session):
-
-```json5
-{
-  memory: {
-    qmd: {
-      scope: {
-        default: "deny",
-        rules: [{ action: "allow", match: { chatType: "direct" } }],
-      },
-    },
-  },
-}
-```
-
-The shipped default allows direct and channel sessions, while still denying
-groups.
-
-Default is DM-only. `match.keyPrefix` matches the normalized session key;
-`match.rawKeyPrefix` matches the raw key including `agent:<id>:`.
-
-### Citations
-
-`memory.citations` applies to all backends:
-
-| Value            | Behavior                                            |
-| ---------------- | --------------------------------------------------- |
-| `auto` (default) | Include `Source: <path#line>` footer in snippets    |
-| `on`             | Always include footer                               |
-| `off`            | Omit footer (path still passed to agent internally) |
-
-### Full QMD example
-
-```json5
-{
-  memory: {
-    backend: "qmd",
-    citations: "auto",
-    qmd: {
-      includeDefaultMemory: true,
-      update: { interval: "5m", debounceMs: 15000 },
-      limits: { maxResults: 6, timeoutMs: 4000 },
-      scope: {
-        default: "deny",
-        rules: [{ action: "allow", match: { chatType: "direct" } }],
-      },
-      paths: [{ name: "docs", path: "~/notes", pattern: "**/*.md" }],
-    },
-  },
-}
-```
+| Value            | Behavior                                               |
+| ---------------- | ------------------------------------------------------ |
+| `auto` (default) | Include `Source: <path#line>` when useful              |
+| `on`             | Always include the source footer                       |
+| `off`            | Omit the footer; the path remains available internally |
 
 ---
 
-## Dreaming
+## Memory admission policy
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
-not under `agents.defaults.memorySearch`.
+Configure session exclusions for **dreaming ingestion and session backfill** under
+`plugins.entries.memory-core.config.memoryPolicy.excludeSessions`. These
+settings do not disable transcript search, restrict workspace writes, or
+erase existing memories. See
+[Memory provenance and deletion](/concepts/memory-provenance) for coverage and
+deletion workflows.
 
-Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as
-an implementation detail.
+| Key                          | Type       | Default | Matches                                                    |
+| ---------------------------- | ---------- | ------- | ---------------------------------------------------------- |
+| `hookExternalContentSources` | `string[]` | `[]`    | Recorded external-content hook sources, such as `"gmail"`. |
+| `channels`                   | `string[]` | `[]`    | Recorded channel/plugin identifiers, not room IDs.         |
+| `chatTypes`                  | `string[]` | `[]`    | Recorded chat type: `"direct"`, `"group"`, or `"channel"`. |
 
-For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
+Every setting is optional. Omitted or empty arrays add no exclusions;
+the normal provenance and session-kind gates still apply. Configured strings
+are trimmed, with empty values dropped, then matched exactly and case-sensitively.
+There are no glob patterns, substring matches, or message-content searches.
 
-### User settings
+Hook sources are exact identifiers: IMAP uses `email`, Gmail hooks use `gmail`,
+and generic webhooks use `webhook`. To exclude both IMAP and Gmail ingestion,
+set `hookExternalContentSources: ["email", "gmail"]`.
 
-| Key         | Type      | Default     | Description                                       |
-| ----------- | --------- | ----------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`     | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *` | Optional cron cadence for the full dreaming sweep |
-
-### Example
+Lists combine with **OR**. For example, configuring a hook source and
+`chatTypes: ["group"]` excludes that hook source **and every group session**,
+not just group sessions from that source. Matching uses retained live session
+metadata through the configured `session.store`, including custom and shared
+stores, scoped to the source agent. Missing metadata does not match a rule.
+Older retained records may contain only a coarse `webhook` classification;
+when the original exact source is gone, neither `email` nor `webhook` is
+inferred for matching. Explicitly forget those sessions by full ID when needed.
+Automatic dreaming separately skips retained archives; these lists do not
+establish whether another memory path can read an archived transcript.
 
 ```json5
 {
@@ -504,9 +626,10 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
     entries: {
       "memory-core": {
         config: {
-          dreaming: {
-            enabled: true,
-            frequency: "0 3 * * *",
+          memoryPolicy: {
+            excludeSessions: {
+              hookExternalContentSources: ["gmail"],
+            },
           },
         },
       },
@@ -515,8 +638,90 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 }
 ```
 
-Notes:
+Automatic ingestion checks these rules before reading the transcript. A
+matched session's ingestion checkpoint records `excludedReason` as
+`hookExternalContentSource:<source>`,
+`channel:<channel>`, or `chatType:<type>`, in that precedence order.
+Removing the rule makes the session eligible for a later sweep, subject to
+the other ingestion gates.
 
+Sessions selected by [`memory forget`](/cli/memory#memory-forget) are checked
+first and receive the reason `forgotten`. Their durable per-agent exclusion
+also applies to session backfill and transcript indexing, and removing a
+configured rule does not undo it. It excludes the selected IDs, not every
+future session from the same source.
+
+<Warning>
+Configured admission rules apply to automatic dreaming ingestion and manual
+`memory session-backfill` previews, REM output, and apply runs. Raw transcript
+indexing does not apply these lists. Direct agent writes and session-memory hooks are also
+outside this policy. Use tool permissions and hook configuration when a
+session must not write memory files at all.
+</Warning>
+
+Adding a rule does not remove an existing corpus, short-term candidate, or
+promoted memory. Preview existing attributable artifacts with
+`memory forget --dry-run`, then review its
+[deletion boundaries](/concepts/memory-provenance#what-deletion-does-not-cover)
+before applying it. Source session transcripts remain in the session store.
+
+---
+
+## Dreaming
+
+Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+
+Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
+
+For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
+
+### User settings
+
+| Key                                     | Type      | Default       | Description                                                                                                                      |
+| --------------------------------------- | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                               | `boolean` | `true`        | Enable or disable dreaming entirely                                                                                              |
+| `frequency`                             | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
+| `model`                                 | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
+| `phases.deep.maxPromotedSnippetTokens`  | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
+| `phases.deep.maxPriorEntryLossFraction` | `number`  | `0.25`        | Reject a consolidation rewrite that removes more than this fraction of prior entries                                             |
+
+### Example
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-core": {
+        subagent: {
+          allowModelOverride: true,
+          allowedModels: ["anthropic/claude-sonnet-4-6"],
+        },
+        config: {
+          dreaming: {
+            enabled: true,
+            frequency: "0 3 * * *",
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+<Note>
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- Deep consolidation stores the prior `MEMORY.md` in SQLite-backed plugin state and records rewrite counts and highlights in `DREAMS.md`.
+- Untrusted and system-derived candidates are structurally excluded before consolidation and durable promotion.
+- `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
+- Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
+
+</Note>
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)

@@ -1,10 +1,10 @@
+// Feishu plugin module implements perm behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
-  jsonToolResult,
+  feishuExternalToolResult as jsonResult,
   toolExecutionErrorResult,
   unknownToolActionResult,
 } from "./tool-result.js";
@@ -114,19 +114,11 @@ async function removeMember(
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_perm: No config available, skipping perm tools");
     return;
   }
 
-  const accounts = listEnabledFeishuAccounts(api.config);
-  if (accounts.length === 0) {
-    api.logger.debug?.("feishu_perm: No Feishu accounts configured, skipping perm tools");
-    return;
-  }
-
-  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(api.config);
   if (!toolsCfg.perm) {
-    api.logger.debug?.("feishu_perm: perm tool disabled in config (default: false)");
     return;
   }
 
@@ -137,6 +129,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
       const defaultAccountId = ctx.agentAccountId;
       return {
         name: "feishu_perm",
+        resultContentSource: "network",
         label: "Feishu Perm",
         description: "Feishu permission management. Actions: list, add, remove",
         parameters: FeishuPermSchema,
@@ -147,16 +140,17 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
               api,
               executeParams: p,
               defaultAccountId,
+              requiredTool: { family: "perm", label: "Perm" },
             });
             switch (p.action) {
               case "list":
-                return jsonToolResult(await listMembers(client, p.token, p.type));
+                return jsonResult(await listMembers(client, p.token, p.type));
               case "add":
-                return jsonToolResult(
+                return jsonResult(
                   await addMember(client, p.token, p.type, p.member_type, p.member_id, p.perm),
                 );
               case "remove":
-                return jsonToolResult(
+                return jsonResult(
                   await removeMember(client, p.token, p.type, p.member_type, p.member_id),
                 );
               default:
@@ -170,6 +164,4 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
     },
     { name: "feishu_perm" },
   );
-
-  api.logger.debug?.(`feishu_perm: Registered feishu_perm tool`);
 }

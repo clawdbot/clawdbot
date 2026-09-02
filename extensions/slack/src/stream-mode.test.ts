@@ -1,42 +1,30 @@
+// Slack tests cover stream mode plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  applyAppendOnlyStreamUpdate,
-  buildStatusFinalPreviewText,
-  resolveSlackStreamingConfig,
-  resolveSlackStreamMode,
-} from "./stream-mode.js";
-
-describe("resolveSlackStreamMode", () => {
-  it("defaults to replace", () => {
-    expect(resolveSlackStreamMode(undefined)).toBe("replace");
-    expect(resolveSlackStreamMode("")).toBe("replace");
-    expect(resolveSlackStreamMode("unknown")).toBe("replace");
-  });
-
-  it("accepts valid modes", () => {
-    expect(resolveSlackStreamMode("replace")).toBe("replace");
-    expect(resolveSlackStreamMode("status_final")).toBe("status_final");
-    expect(resolveSlackStreamMode("append")).toBe("append");
-  });
-});
+import { applyAppendOnlyStreamUpdate, resolveSlackStreamingConfig } from "./stream-mode.js";
 
 describe("resolveSlackStreamingConfig", () => {
-  it("defaults to partial mode with native streaming enabled", () => {
+  it("defaults to progress mode with native streaming enabled", () => {
     expect(resolveSlackStreamingConfig({})).toEqual({
+      mode: "progress",
+      nativeStreaming: true,
+    });
+  });
+
+  it("keeps explicit partial mode on the replace draft path", () => {
+    expect(resolveSlackStreamingConfig({ streaming: { mode: "partial" } })).toEqual({
       mode: "partial",
       nativeStreaming: true,
-      draftMode: "replace",
     });
   });
 
   it("maps legacy streamMode values to unified streaming modes", () => {
-    expect(resolveSlackStreamingConfig({ streamMode: "append" })).toMatchObject({
+    expect(resolveSlackStreamingConfig({ streamMode: "append" })).toEqual({
       mode: "block",
-      draftMode: "append",
+      nativeStreaming: true,
     });
-    expect(resolveSlackStreamingConfig({ streamMode: "status_final" })).toMatchObject({
+    expect(resolveSlackStreamingConfig({ streamMode: "status_final" })).toEqual({
       mode: "progress",
-      draftMode: "status_final",
+      nativeStreaming: true,
     });
   });
 
@@ -44,12 +32,10 @@ describe("resolveSlackStreamingConfig", () => {
     expect(resolveSlackStreamingConfig({ streaming: false })).toEqual({
       mode: "off",
       nativeStreaming: false,
-      draftMode: "replace",
     });
     expect(resolveSlackStreamingConfig({ streaming: true })).toEqual({
       mode: "partial",
       nativeStreaming: true,
-      draftMode: "replace",
     });
   });
 
@@ -57,12 +43,10 @@ describe("resolveSlackStreamingConfig", () => {
     expect(resolveSlackStreamingConfig({ streaming: "off" })).toEqual({
       mode: "off",
       nativeStreaming: true,
-      draftMode: "replace",
     });
     expect(resolveSlackStreamingConfig({ streaming: "progress" })).toEqual({
       mode: "progress",
       nativeStreaming: true,
-      draftMode: "status_final",
     });
   });
 });
@@ -103,6 +87,19 @@ describe("applyAppendOnlyStreamUpdate", () => {
     });
   });
 
+  it("extends rendered when source continues after an appended chunk", () => {
+    const next = applyAppendOnlyStreamUpdate({
+      incoming: "next chunk grows",
+      rendered: "hello world\nnext chunk",
+      source: "next chunk",
+    });
+    expect(next).toEqual({
+      rendered: "hello world\nnext chunk grows",
+      source: "next chunk grows",
+      changed: true,
+    });
+  });
+
   it("appends non-prefix incoming chunks", () => {
     const next = applyAppendOnlyStreamUpdate({
       incoming: "next chunk",
@@ -114,13 +111,5 @@ describe("applyAppendOnlyStreamUpdate", () => {
       source: "next chunk",
       changed: true,
     });
-  });
-});
-
-describe("buildStatusFinalPreviewText", () => {
-  it("cycles status dots", () => {
-    expect(buildStatusFinalPreviewText(1)).toBe("Status: thinking..");
-    expect(buildStatusFinalPreviewText(2)).toBe("Status: thinking...");
-    expect(buildStatusFinalPreviewText(3)).toBe("Status: thinking.");
   });
 });

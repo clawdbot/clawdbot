@@ -1,8 +1,16 @@
+/** Builds dry-run cron delivery labels for CLI/UI list surfaces. */
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronDeliveryPlan } from "./delivery-plan.js";
-import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
+import { hasExplicitCronDeliveryTarget, resolveCronDeliveryPlan } from "./delivery-plan.js";
+import {
+  resolveDeliveryTarget,
+  resolvedDeliveryTargetsExternalChannel,
+} from "./isolated-agent/delivery-target.js";
+import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
+
+type CronDeliveryPreviewJob = Pick<CronJob, "delivery" | "payload" | "sessionTarget"> &
+  Partial<Pick<CronJob, "agentId" | "sessionKey">>;
 
 function formatTarget(channel?: string, to?: string | null): string {
   if (!channel) {
@@ -33,16 +41,18 @@ function formatDeliveryDetail(params: {
   return params.resolved ? "explicit" : (params.error ?? "unresolved");
 }
 
+/** Builds the user-visible cron delivery preview for one job without sending anything. */
 export async function resolveCronDeliveryPreview(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
-  job: CronJob;
+  job: CronDeliveryPreviewJob;
 }): Promise<CronDeliveryPreview> {
   const plan = resolveCronDeliveryPlan(params.job);
-  if (!plan.requested && plan.mode === "none" && !params.job.delivery) {
+  if (plan.mode === "none" && !hasExplicitCronDeliveryTarget(plan)) {
     return { label: "not requested", detail: "not requested" };
   }
   if (plan.mode === "webhook") {
+    // Webhook previews do not resolve channel targets; runtime only needs the configured URL.
     const target = plan.to ? `webhook:${plan.to}` : "webhook";
     return { label: target, detail: plan.to ? "webhook" : "webhook target missing" };
   }
@@ -50,6 +60,7 @@ export async function resolveCronDeliveryPreview(params: {
   const requestedChannel = plan.channel ?? "last";
   const agentId =
     params.job.agentId?.trim() || params.defaultAgentId || resolveDefaultAgentId(params.cfg);
+  const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
   const resolved = await resolveDeliveryTarget(
     params.cfg,
     agentId,
@@ -58,19 +69,36 @@ export async function resolveCronDeliveryPreview(params: {
       to: plan.to,
       threadId: plan.threadId,
       accountId: plan.accountId,
-      sessionKey: params.job.sessionKey,
+      sessionKey: deliverySessionKey,
     },
     { dryRun: true },
   );
   if (!resolved.ok) {
+    if (
+      params.job.sessionTarget === "current" &&
+      plan.mode === "announce" &&
+      !resolvedDeliveryTargetsExternalChannel(resolved)
+    ) {
+      // Mirrors runtime: a current-target completion with no external channel
+      // route commits durably to its own conversation instead of failing.
+      return {
+        label: "announce -> current session",
+        detail: "commits to this conversation (no external channel route)",
+      };
+    }
+    // Preview mirrors runtime fail-closed behavior for "last" delivery so the
+    // UI can show unresolved routes before the cron job actually runs.
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
-      detail: formatDeliveryDetail({
-        requestedChannel,
-        resolved: false,
-        sessionKey: params.job.sessionKey,
-        error: resolved.error.message,
-      }),
+      detail:
+        plan.mode === "none"
+          ? `message tool target unresolved: ${resolved.error.message}`
+          : formatDeliveryDetail({
+              requestedChannel,
+              resolved: false,
+              sessionKey: deliverySessionKey,
+              error: resolved.error.message,
+            }),
     };
   }
   return {
@@ -78,11 +106,12 @@ export async function resolveCronDeliveryPreview(params: {
     detail: formatDeliveryDetail({
       requestedChannel,
       resolved: true,
-      sessionKey: params.job.sessionKey,
+      sessionKey: deliverySessionKey,
     }),
   };
 }
 
+/** Builds cron delivery previews keyed by job id. */
 export async function resolveCronDeliveryPreviews(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;

@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { concatOptionalTextSegments, joinPresentTextSegments } from "./join-segments.js";
 
-function expectTextSegmentsCase<T>(actual: T, expected: T) {
-  expect(actual).toBe(expected);
-}
-
-function expectJoinedTextSegmentsCase<T>(params: { run: () => T; expected: T }) {
-  expectTextSegmentsCase(params.run(), params.expected);
-}
-
 describe("concatOptionalTextSegments", () => {
   it.each([
     { params: { left: "A", right: "B" }, expected: "A\n\nB" },
@@ -19,10 +11,7 @@ describe("concatOptionalTextSegments", () => {
     { params: { left: "" }, expected: "" },
     { params: { left: "A", right: "B", separator: " | " }, expected: "A | B" },
   ] as const)("concatenates optional segments %#", ({ params, expected }) => {
-    expectJoinedTextSegmentsCase({
-      run: () => concatOptionalTextSegments(params),
-      expected,
-    });
+    expect(concatOptionalTextSegments(params)).toBe(expected);
   });
 });
 
@@ -43,9 +32,6 @@ describe("joinPresentTextSegments", () => {
     },
     { segments: ["A", "  B  "], options: { separator: "|" }, expected: "A|  B  " },
   ] as const)("joins present segments %#", ({ segments, options, expected }) => {
-    expectJoinedTextSegmentsCase({
-      run: () => joinPresentTextSegments(segments, options),
-      expected,
-    });
+    expect(joinPresentTextSegments(segments, options)).toBe(expected);
   });
 });

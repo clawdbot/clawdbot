@@ -1,16 +1,18 @@
+// Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { createConfigIO } from "../config/config.js";
+import { createConfigIO, replaceConfigFile } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExec } from "../process/exec.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { createIcaclsResetCommand, formatIcaclsResetCommand, type ExecFn } from "./windows-acl.js";
 
-export type SecurityFixChmodAction = {
+type SecurityFixChmodAction = {
   kind: "chmod";
   path: string;
   mode: number;
@@ -19,7 +21,7 @@ export type SecurityFixChmodAction = {
   error?: string;
 };
 
-export type SecurityFixIcaclsAction = {
+type SecurityFixIcaclsAction = {
   kind: "icacls";
   path: string;
   command: string;
@@ -28,9 +30,9 @@ export type SecurityFixIcaclsAction = {
   error?: string;
 };
 
-export type SecurityFixAction = SecurityFixChmodAction | SecurityFixIcaclsAction;
+type SecurityFixAction = SecurityFixChmodAction | SecurityFixIcaclsAction;
 
-export type SecurityFixResult = {
+type SecurityFixResult = {
   ok: boolean;
   stateDir: string;
   configPath: string;
@@ -40,7 +42,7 @@ export type SecurityFixResult = {
   errors: string[];
 };
 
-export type SecurityPermissionTarget = {
+type SecurityPermissionTarget = {
   path: string;
   mode: number;
   require: "dir" | "file";
@@ -238,11 +240,6 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
   const next = structuredClone(params.cfg ?? {});
   const changes: string[] = [];
 
-  if (next.logging?.redactSensitive === "off") {
-    next.logging = { ...next.logging, redactSensitive: "tools" };
-    changes.push('logging.redactSensitive=off -> "tools"');
-  }
-
   for (const channel of Object.keys(next.channels ?? {})) {
     setGroupPolicyAllowlist({ cfg: next, channel, changes });
   }
@@ -250,7 +247,7 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
   return { cfg: next, changes };
 }
 
-export async function applySecurityFixConfigMutations(params: {
+async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   channelPlugins?: ChannelPlugin[];
@@ -308,7 +305,7 @@ async function collectChannelSecurityConfigFixMutation(params: {
   return { cfg: nextCfg, changes };
 }
 
-export async function collectSecurityPermissionTargets(params: {
+async function collectSecurityPermissionTargets(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   configPath: string;
@@ -340,9 +337,12 @@ export async function collectSecurityPermissionTargets(params: {
   }
 
   const ids = new Set<string>();
-  ids.add(resolveDefaultAgentId(params.cfg));
-  const list = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
-  for (const agent of list ?? []) {
+  ids.add(LEGACY_IMPLICIT_AGENT_ID);
+  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
+  if (defaultAgentId) {
+    ids.add(defaultAgentId);
+  }
+  for (const agent of listAgentEntries(params.cfg)) {
     if (!agent || typeof agent !== "object") {
       continue;
     }
@@ -362,6 +362,9 @@ export async function collectSecurityPermissionTargets(params: {
     targets.push({ path: agentRoot, mode: 0o700, require: "dir" });
     targets.push({ path: agentDir, mode: 0o700, require: "dir" });
 
+    for (const databasePath of resolveAuthProfileDatabaseFilePaths(agentDir)) {
+      targets.push({ path: databasePath, mode: 0o600, require: "file" });
+    }
     const authPath = path.join(agentDir, "auth-profiles.json");
     targets.push({ path: authPath, mode: 0o600, require: "file" });
 
@@ -404,7 +407,7 @@ export async function fixSecurityFootguns(opts?: {
   const errors: string[] = [];
 
   const io = createConfigIO({ env, configPath });
-  const snap = await io.readConfigFileSnapshot();
+  const { snapshot: snap, writeOptions } = await io.readConfigFileSnapshotForWrite();
   if (!snap.valid) {
     errors.push(...snap.issues.map((i) => `${i.path}: ${i.message}`));
   }
@@ -421,10 +424,16 @@ export async function fixSecurityFootguns(opts?: {
 
     if (changes.length > 0) {
       try {
-        await io.writeConfigFile(fixed.cfg);
+        await replaceConfigFile({
+          nextConfig: fixed.cfg,
+          snapshot: snap,
+          writeOptions,
+          io,
+          afterWrite: { mode: "auto" },
+        });
         configWritten = true;
       } catch (err) {
-        errors.push(`writeConfigFile failed: ${String(err)}`);
+        errors.push(`replaceConfigFile failed: ${String(err)}`);
       }
     }
   }
@@ -438,6 +447,7 @@ export async function fixSecurityFootguns(opts?: {
     includePaths = await collectIncludePathsRecursive({
       configPath: snap.path,
       parsed: snap.parsed,
+      env,
     }).catch(() => []);
   }
 
@@ -447,7 +457,7 @@ export async function fixSecurityFootguns(opts?: {
     configPath,
     cfg: snap.config ?? {},
     includePaths,
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     errors.push(`collectSecurityPermissionTargets failed: ${String(err)}`);
     return [] as SecurityPermissionTarget[];
   });

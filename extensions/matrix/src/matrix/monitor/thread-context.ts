@@ -1,5 +1,8 @@
+// Matrix plugin module implements thread context behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixClient } from "../sdk.js";
-import { summarizeMatrixMessageContextEvent, trimMatrixMaybeString } from "./context-summary.js";
+import { summarizeMatrixMessageContextEvent } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const MAX_TRACKED_THREAD_STARTERS = 256;
@@ -16,20 +19,20 @@ function truncateThreadStarterBody(value: string): string {
   if (value.length <= MAX_THREAD_STARTER_BODY_LENGTH) {
     return value;
   }
-  return `${value.slice(0, MAX_THREAD_STARTER_BODY_LENGTH - 3)}...`;
+  return `${sliceUtf16Safe(value, 0, MAX_THREAD_STARTER_BODY_LENGTH - 3)}...`;
 }
 
-export function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {
+function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | undefined {
   const body = summarizeMatrixMessageContextEvent(event);
   if (body) {
     return truncateThreadStarterBody(body);
   }
   const content = event.content as { msgtype?: unknown };
-  const msgtype = trimMatrixMaybeString(content.msgtype);
+  const msgtype = normalizeOptionalString(content.msgtype);
   if (msgtype) {
     return `Matrix ${msgtype} message`;
   }
-  const eventType = trimMatrixMaybeString(event.type);
+  const eventType = normalizeOptionalString(event.type);
   return eventType ? `Matrix ${eventType} event` : undefined;
 }
 
@@ -74,7 +77,7 @@ export function createMatrixThreadContextResolver(params: {
 
     const rootEvent = await params.client
       .getEvent(input.roomId, input.threadRootId)
-      .catch((err) => {
+      .catch((err: unknown) => {
         params.logVerboseMessage(
           `matrix: failed resolving thread root room=${input.roomId} id=${input.threadRootId}: ${String(err)}`,
         );
@@ -87,7 +90,7 @@ export function createMatrixThreadContextResolver(params: {
     }
 
     const rawEvent = rootEvent as MatrixRawEvent;
-    const senderId = trimMatrixMaybeString(rawEvent.sender);
+    const senderId = normalizeOptionalString(rawEvent.sender);
     const senderName =
       senderId &&
       (await params.getMemberDisplayName(input.roomId, senderId).catch(() => undefined));

@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for image generation provider access.
+ */
 export {
   generateImage,
   listRuntimeImageGenerationProviders,

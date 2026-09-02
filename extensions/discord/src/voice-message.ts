@@ -13,43 +13,68 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { RateLimitError, type RequestClient } from "@buape/carbon";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   parseFfprobeCodecAndSampleRate,
   runFfmpeg,
   runFfprobe,
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  unlinkIfExists,
 } from "openclaw/plugin-sdk/media-runtime";
-import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
-import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
-import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
+import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
+import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
+import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
+import {
+  classifyDiscordDeliveryFailure,
+  recordDiscordMessageCreateAmbiguity,
+  type DiscordRetryRunner,
+} from "./retry.js";
+import { createDiscordMessageNonce } from "./send.message-request.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
+const DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+};
+
+async function runFfmpegToOutput(params: {
+  outputPath: string;
+  buildArgs: (tempPath: string) => string[];
+}): Promise<void> {
+  const rootDir = path.dirname(params.outputPath);
+  await fs.mkdir(rootDir, { recursive: true });
+  await writeExternalFileWithinRoot({
+    rootDir,
+    path: path.basename(params.outputPath),
+    write: async (tempPath) => {
+      await runFfmpeg(params.buildArgs(tempPath));
+    },
+  });
+}
 
 function createRateLimitError(
   response: Response,
   body: { message: string; retry_after: number; global: boolean },
-  request?: Request,
 ): RateLimitError {
-  const compatRequest =
-    request ??
-    new Request("https://discord.com/api/v10/channels/voice/messages", {
-      method: "POST",
-    });
-  const RateLimitErrorCtor = RateLimitError as unknown as new (
-    response: Response,
-    body: { message: string; retry_after: number; global: boolean },
-    request?: Request,
-  ) => RateLimitError;
-  return new RateLimitErrorCtor(response, body, compatRequest);
+  return new RateLimitError(response, body);
 }
 
-export type VoiceMessageMetadata = {
+type VoiceMessageMetadata = {
   durationSecs: number;
   waveform: string; // base64 encoded
 };
@@ -57,7 +82,7 @@ export type VoiceMessageMetadata = {
 /**
  * Get audio duration using ffprobe
  */
-export async function getAudioDuration(filePath: string): Promise<number> {
+async function getAudioDuration(filePath: string): Promise<number> {
   try {
     const stdout = await runFfprobe([
       "-v",
@@ -68,8 +93,8 @@ export async function getAudioDuration(filePath: string): Promise<number> {
       "csv=p=0",
       filePath,
     ]);
-    const duration = parseFloat(stdout.trim());
-    if (isNaN(duration)) {
+    const duration = parseStrictFiniteNumber(stdout);
+    if (duration === undefined) {
       throw new Error("Could not parse duration");
     }
     return Math.round(duration * 100) / 100; // Round to 2 decimal places
@@ -83,7 +108,7 @@ export async function getAudioDuration(filePath: string): Promise<number> {
  * Generate waveform data from audio file using ffmpeg
  * Returns base64 encoded byte array of amplitude samples (0-255)
  */
-export async function generateWaveform(filePath: string): Promise<string> {
+async function generateWaveform(filePath: string): Promise<string> {
   try {
     // Extract raw PCM and sample amplitude values
     return await generateWaveformFromPcm(filePath);
@@ -102,25 +127,28 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
 
   try {
     // Convert to raw 16-bit signed PCM, mono, 8kHz
-    await runFfmpeg([
-      "-y",
-      "-i",
-      filePath,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-      "-f",
-      "s16le",
-      "-acodec",
-      "pcm_s16le",
-      "-ac",
-      "1",
-      "-ar",
-      "8000",
-      tempPcm,
-    ]);
+    await runFfmpegToOutput({
+      outputPath: tempPcm,
+      buildArgs: (outputPath) => [
+        "-y",
+        "-i",
+        filePath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-t",
+        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+        "-f",
+        "s16le",
+        "-acodec",
+        "pcm_s16le",
+        "-ac",
+        "1",
+        "-ar",
+        "8000",
+        outputPath,
+      ],
+    });
 
     const pcmData = await fs.readFile(tempPcm);
     const samples = new Int16Array(pcmData.buffer, pcmData.byteOffset, pcmData.byteLength / 2);
@@ -134,7 +162,7 @@ async function generateWaveformFromPcm(filePath: string): Promise<string> {
       let sum = 0;
       let count = 0;
       for (let j = 0; j < step && i * step + j < samples.length; j++) {
-        sum += Math.abs(samples[i * step + j]);
+        sum += Math.abs(expectDefined(samples.at(i * step + j), "bounded PCM waveform sample"));
         count++;
       }
       const avg = count > 0 ? sum / count : 0;
@@ -212,23 +240,28 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
   const tempDir = resolvePreferredOpenClawTmpDir();
   const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
-  await runFfmpeg([
-    "-y",
-    "-i",
-    filePath,
-    "-vn",
-    "-sn",
-    "-dn",
-    "-t",
-    String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-    "-ar",
-    String(DISCORD_OPUS_SAMPLE_RATE_HZ),
-    "-c:a",
-    "libopus",
-    "-b:a",
-    "64k",
+  await runFfmpegToOutput({
     outputPath,
-  ]);
+    buildArgs: (tempPath) => [
+      "-y",
+      "-i",
+      filePath,
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+      "-ar",
+      String(DISCORD_OPUS_SAMPLE_RATE_HZ),
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+      "-f",
+      "ogg",
+      tempPath,
+    ],
+  });
 
   return { path: outputPath, cleanup: true };
 }
@@ -253,6 +286,108 @@ type UploadUrlResponse = {
   }>;
 };
 
+function coerceDiscordErrorBody(raw: string): unknown {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { message: truncateUtf16Safe(raw, 200) };
+  }
+}
+
+async function createVoiceRequestError(
+  response: Response,
+  fallbackMessage: string,
+): Promise<Error> {
+  const raw = await readResponseTextLimited(response, DISCORD_VOICE_ERROR_BODY_LIMIT_BYTES).catch(
+    () => "",
+  );
+  const parsed = coerceDiscordErrorBody(raw);
+  if (response.status === 429) {
+    throw createRateLimitError(response, {
+      message: readDiscordMessage(parsed, "You are being rate limited."),
+      retry_after: readRetryAfter(parsed, response, 1),
+      global:
+        parsed && typeof parsed === "object" && "global" in parsed
+          ? Boolean((parsed as { global?: unknown }).global)
+          : false,
+    });
+  }
+  return new DiscordError(
+    response,
+    parsed ?? {
+      message: fallbackMessage,
+    },
+  );
+}
+
+async function requestVoiceUploadUrl(params: {
+  rest: RequestClient;
+  channelId: string;
+  botToken: string;
+  filename: string;
+  fileSize: number;
+}): Promise<UploadUrlResponse> {
+  const url = `${params.rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${params.channelId}/attachments`;
+  const uploadUrlInit: RequestInit = {
+    method: "POST",
+    headers: {
+      Authorization: `Bot ${params.botToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      files: [{ filename: params.filename, file_size: params.fileSize, id: "0" }],
+    }),
+  };
+  const { response: res, release } = await fetchWithSsrFGuard({
+    url,
+    init: uploadUrlInit,
+    // Keep control-plane negotiation on the REST budget; the binary upload below
+    // needs the longer attachment-transfer budget.
+    timeoutMs: params.rest.options.timeout,
+    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+    auditContext: "discord.voice.upload-url",
+  });
+  try {
+    if (!res.ok) {
+      throw await createVoiceRequestError(res, "Upload URL request failed");
+    }
+    return await readProviderJsonResponse<UploadUrlResponse>(res, "discord.voice.upload-url");
+  } finally {
+    await release();
+  }
+}
+
+async function uploadVoiceAttachment(params: {
+  uploadUrl: string;
+  audioBuffer: Buffer;
+}): Promise<void> {
+  const { response: uploadResponse, release } = await fetchWithSsrFGuard({
+    url: params.uploadUrl,
+    init: {
+      method: "PUT",
+      headers: {
+        "Content-Type": "audio/ogg",
+      },
+      body: new Uint8Array(params.audioBuffer),
+    },
+    timeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
+    auditContext: "discord.voice.attachment-upload",
+  });
+
+  try {
+    if (!uploadResponse.ok) {
+      throw await createVoiceRequestError(uploadResponse, "Failed to upload voice message");
+    }
+    await uploadResponse.body?.cancel().catch(() => undefined);
+  } finally {
+    await release();
+  }
+}
+
 /**
  * Send a voice message to Discord
  *
@@ -267,80 +402,42 @@ export async function sendDiscordVoiceMessage(
   audioBuffer: Buffer,
   metadata: VoiceMessageMetadata,
   replyTo: string | undefined,
-  request: RetryRunner,
+  request: DiscordRetryRunner,
   silent?: boolean,
   token?: string,
+  onPlatformSendDispatch?: () => Promise<void>,
+  assertPlatformSendAuthorized?: () => void,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
 
   // Step 1: Request upload URL from Discord
-  // Must use fetch() directly instead of rest.post() because @buape/carbon's
-  // RequestClient auto-converts requests to multipart/form-data when the body
-  // contains a "files" key. Discord's /attachments endpoint expects JSON, so
-  // the auto-conversion causes HTTP 400 "Expected Content-Type application/json".
+  // RequestClient auto-converts "files" bodies to multipart/form-data, but Discord's
+  // /attachments endpoint expects JSON, so this path uses a guarded raw HTTP call.
   const botToken = token;
   if (!botToken) {
     throw new Error("Discord bot token is required for voice message upload");
   }
-  const uploadUrlResponse = await request(async () => {
-    const url = `${rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${channelId}/attachments`;
-    const uploadUrlRequest = new Request(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bot ${botToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        files: [{ filename, file_size: fileSize, id: "0" }],
-      }),
+  const { upload_filename } = await request(async () => {
+    const uploadUrlResponse = await requestVoiceUploadUrl({
+      rest,
+      channelId,
+      botToken,
+      filename,
+      fileSize,
     });
-    const res = await fetch(uploadUrlRequest);
-    if (!res.ok) {
-      if (res.status === 429) {
-        const retryData = (await res.json().catch(() => ({}))) as {
-          message?: string;
-          retry_after?: number;
-          global?: boolean;
-        };
-        throw createRateLimitError(res, {
-          message: retryData.message ?? "You are being rate limited.",
-          retry_after: retryData.retry_after ?? 1,
-          global: retryData.global ?? false,
-        });
-      }
-      const errorBody = (await res.json().catch(() => null)) as {
-        code?: number;
-        message?: string;
-      } | null;
-      const err = new Error(`Upload URL request failed: ${res.status} ${errorBody?.message ?? ""}`);
-      if (errorBody?.code !== undefined) {
-        (err as Error & { code: number }).code = errorBody.code;
-      }
-      throw err;
+
+    if (!uploadUrlResponse.attachments?.[0]) {
+      throw new Error("Failed to get upload URL for voice message");
     }
-    return (await res.json()) as UploadUrlResponse;
-  }, "voice-upload-url");
 
-  if (!uploadUrlResponse.attachments?.[0]) {
-    throw new Error("Failed to get upload URL for voice message");
-  }
-
-  const { upload_url, upload_filename } = uploadUrlResponse.attachments[0];
-
-  // Step 2: Upload the file to Discord's CDN
-  // Note: Not wrapped in retry runner - upload URLs are single-use and CDN behavior differs
-  const uploadResponse = await fetch(upload_url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "audio/ogg",
-    },
-    body: new Uint8Array(audioBuffer),
-  });
-
-  if (!uploadResponse.ok) {
-    throw new Error(`Failed to upload voice message: ${uploadResponse.status}`);
-  }
+    const attachment = uploadUrlResponse.attachments[0];
+    await uploadVoiceAttachment({
+      uploadUrl: attachment.upload_url,
+      audioBuffer,
+    });
+    return attachment;
+  }, "voice-upload");
 
   // Step 3: Send the message with voice message flag and metadata
   const flags = silent
@@ -348,6 +445,8 @@ export async function sendDiscordVoiceMessage(
     : DISCORD_VOICE_MESSAGE_FLAG;
   const messagePayload: {
     flags: number;
+    nonce: string;
+    enforce_nonce: true;
     attachments: Array<{
       id: string;
       filename: string;
@@ -358,6 +457,8 @@ export async function sendDiscordVoiceMessage(
     message_reference?: { message_id: string; fail_if_not_exists: boolean };
   } = {
     flags,
+    nonce: createDiscordMessageNonce(),
+    enforce_nonce: true,
     attachments: [
       {
         id: "0",
@@ -377,13 +478,29 @@ export async function sendDiscordVoiceMessage(
     };
   }
 
-  const res = (await request(
-    () =>
-      rest.post(`/channels/${channelId}/messages`, {
-        body: messagePayload,
-      }) as Promise<{ id: string; channel_id: string }>,
-    "voice-message",
-  )) as { id: string; channel_id: string };
-
-  return res;
+  let messageCreateMayHaveCommitted = false;
+  try {
+    return (await request(
+      async () => {
+        await onPlatformSendDispatch?.();
+        assertPlatformSendAuthorized?.();
+        try {
+          return (await rest.post(`/channels/${channelId}/messages`, {
+            body: messagePayload,
+          })) as { id: string; channel_id: string };
+        } catch (error) {
+          messageCreateMayHaveCommitted ||= classifyDiscordDeliveryFailure(error) === "ambiguous";
+          throw error;
+        }
+      },
+      "voice-message",
+      { safety: "nonce-protected-create" },
+    )) as { id: string; channel_id: string };
+  } catch (error) {
+    // Only this final request can commit a message; upload/preflight failures cannot.
+    if (messageCreateMayHaveCommitted) {
+      recordDiscordMessageCreateAmbiguity(error);
+    }
+    throw error;
+  }
 }

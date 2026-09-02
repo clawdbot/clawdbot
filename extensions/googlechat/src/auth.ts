@@ -1,7 +1,13 @@
-import { GoogleAuth, OAuth2Client } from "google-auth-library";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Googlechat plugin module implements auth behavior.
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import {
+  getGoogleAuthTransport,
+  loadGoogleAuthRuntime,
+  resolveValidatedGoogleChatCredentials,
+} from "./google-auth.runtime.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
 const CHAT_ISSUER = "chat@system.gserviceaccount.com";
@@ -9,13 +15,44 @@ const CHAT_ISSUER = "chat@system.gserviceaccount.com";
 const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceaccount\.com$/;
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
+// Cert fetch shares the same deadline as outbound API calls. Without a timeout,
+// a stalled googleapis.com endpoint blocks webhook auth indefinitely, including
+// cold-start and every 10-minute cache refresh.
+const GOOGLECHAT_CERT_FETCH_TIMEOUT_MS = 30_000;
+
+async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
+  return readProviderJsonResponse<Record<string, string>>(
+    response,
+    "Google Chat cert fetch failed",
+  );
+}
 
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
-const authCache = new Map<string, { key: string; auth: GoogleAuth }>();
-const verifyClient = new OAuth2Client();
+type GoogleAuthRuntime = Awaited<ReturnType<typeof loadGoogleAuthRuntime>>;
+type GoogleAuthInstance = InstanceType<GoogleAuthRuntime["GoogleAuth"]>;
+type OAuth2ClientInstance = InstanceType<GoogleAuthRuntime["OAuth2Client"]>;
+
+const authCache = new Map<string, { key: string; auth: GoogleAuthInstance }>();
 
 let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
+let verifyClientPromise: Promise<OAuth2ClientInstance> | null = null;
+
+async function getVerifyClient(): Promise<OAuth2ClientInstance> {
+  if (!verifyClientPromise) {
+    verifyClientPromise = (async () => {
+      try {
+        const { OAuth2Client } = await loadGoogleAuthRuntime();
+        const transporter = await getGoogleAuthTransport();
+        return new OAuth2Client({ transporter });
+      } catch (error) {
+        verifyClientPromise = null;
+        throw error;
+      }
+    })();
+  }
+  return await verifyClientPromise;
+}
 
 function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   if (account.credentialsFile) {
@@ -27,12 +64,17 @@ function buildAuthKey(account: ResolvedGoogleChatAccount): string {
   return "none";
 }
 
-function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
+async function getAuthInstance(account: ResolvedGoogleChatAccount): Promise<GoogleAuthInstance> {
   const key = buildAuthKey(account);
   const cached = authCache.get(account.accountId);
   if (cached && cached.key === key) {
     return cached.auth;
   }
+  const [{ GoogleAuth }, transporter, credentials] = await Promise.all([
+    loadGoogleAuthRuntime(),
+    getGoogleAuthTransport(),
+    resolveValidatedGoogleChatCredentials(account),
+  ]);
 
   const evictOldest = () => {
     if (authCache.size > MAX_AUTH_CACHE_SIZE) {
@@ -43,21 +85,11 @@ function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
     }
   };
 
-  if (account.credentialsFile) {
-    const auth = new GoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
-    authCache.set(account.accountId, { key, auth });
-    evictOldest();
-    return auth;
-  }
-
-  if (account.credentials) {
-    const auth = new GoogleAuth({ credentials: account.credentials, scopes: [CHAT_SCOPE] });
-    authCache.set(account.accountId, { key, auth });
-    evictOldest();
-    return auth;
-  }
-
-  const auth = new GoogleAuth({ scopes: [CHAT_SCOPE] });
+  const auth = new GoogleAuth({
+    ...(credentials ? { credentials } : {}),
+    clientOptions: { transporter },
+    scopes: [CHAT_SCOPE],
+  });
   authCache.set(account.accountId, { key, auth });
   evictOldest();
   return auth;
@@ -66,7 +98,7 @@ function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
 export async function getGoogleChatAccessToken(
   account: ResolvedGoogleChatAccount,
 ): Promise<string> {
-  const auth = getAuthInstance(account);
+  const auth = await getAuthInstance(account);
   const client = await auth.getClient();
   const access = await client.getAccessToken();
   const token = typeof access === "string" ? access : access?.token;
@@ -84,12 +116,13 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   const { response, release } = await fetchWithSsrFGuard({
     url: CHAT_CERTS_URL,
     auditContext: "googlechat.auth.certs",
+    timeoutMs: GOOGLECHAT_CERT_FETCH_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
       throw new Error(`Failed to fetch Chat certs (${response.status})`);
     }
-    const certs = (await response.json()) as Record<string, string>;
+    const certs = await readGoogleChatCertsResponse(response);
     cachedCerts = { fetchedAt: now, certs };
     return certs;
   } finally {
@@ -117,6 +150,7 @@ export async function verifyGoogleChatRequest(params: {
 
   if (audienceType === "app-url") {
     try {
+      const verifyClient = await getVerifyClient();
       const ticket = await verifyClient.verifyIdToken({
         idToken: bearer,
         audience,
@@ -153,6 +187,7 @@ export async function verifyGoogleChatRequest(params: {
 
   if (audienceType === "project-number") {
     try {
+      const verifyClient = await getVerifyClient();
       const certs = await fetchChatCerts();
       await verifyClient.verifySignedJwtWithCertsAsync(bearer, certs, audience, [CHAT_ISSUER]);
       return { ok: true };
@@ -163,5 +198,3 @@ export async function verifyGoogleChatRequest(params: {
 
   return { ok: false, reason: "unsupported audience type" };
 }
-
-export const GOOGLE_CHAT_SCOPE = CHAT_SCOPE;

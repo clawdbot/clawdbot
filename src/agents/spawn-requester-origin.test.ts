@@ -1,3 +1,5 @@
+// Spawn requester-origin tests prove child agents inherit the right channel,
+// account, and target peer from the parent request context.
 import { describe, expect, it } from "vitest";
 import type { AgentBindingMatch } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,6 +28,15 @@ describe("resolveRequesterOriginForChild", () => {
     })?.accountId;
   }
 
+  function expectOrigin(
+    origin: ReturnType<typeof resolveRequesterOriginForChild>,
+    expected: { channel: string; accountId: string; to: string },
+  ) {
+    expect(origin?.channel).toBe(expected.channel);
+    expect(origin?.accountId).toBe(expected.accountId);
+    expect(origin?.to).toBe(expected.to);
+  }
+
   it.each([
     ["channel:conversation-a", "channel:conversation-a", "channel"],
     ["dm:conversation-a", "dm:conversation-a", "direct"],
@@ -46,7 +57,7 @@ describe("resolveRequesterOriginForChild", () => {
         ],
       } as OpenClawConfig;
 
-      expect(
+      expectOrigin(
         resolveRequesterOriginForChild({
           cfg,
           targetAgentId: "bot-alpha",
@@ -55,11 +66,12 @@ describe("resolveRequesterOriginForChild", () => {
           requesterAccountId: "bot-beta",
           requesterTo: to,
         }),
-      ).toMatchObject({
-        channel: "qa-channel",
-        accountId: "bot-alpha-qa",
-        to,
-      });
+        {
+          channel: "qa-channel",
+          accountId: "bot-alpha-qa",
+          to,
+        },
+      );
     },
   );
 
@@ -183,6 +195,8 @@ describe("resolveRequesterOriginForChild", () => {
       bindings: [routeBinding({ channel: "matrix", accountId: "bot-alpha-default" })],
     },
   ] as const)("selects target account: $name", (scenario) => {
+    // Binding priority is user-visible routing policy: peer and role scoped
+    // matches must beat broad channel defaults without losing same-agent calls.
     expect(
       resolveAccount({
         cfg: { bindings: [...scenario.bindings] } as OpenClawConfig,
@@ -213,7 +227,7 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     } as OpenClawConfig;
 
-    expect(
+    expectOrigin(
       resolveRequesterOriginForChild({
         cfg,
         targetAgentId: "bot-alpha",
@@ -222,11 +236,12 @@ describe("resolveRequesterOriginForChild", () => {
         requesterAccountId: "bot-beta",
         requesterTo: to,
       }),
-    ).toMatchObject({
-      channel: "msteams",
-      accountId: "bot-alpha-teams",
-      to,
-    });
+      {
+        channel: "msteams",
+        accountId: "bot-alpha-teams",
+        to,
+      },
+    );
   });
 
   it("keeps explicit channel prefixes ahead of ids that start with direct marker characters", () => {
@@ -244,7 +259,7 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     } as OpenClawConfig;
 
-    expect(
+    expectOrigin(
       resolveRequesterOriginForChild({
         cfg,
         targetAgentId: "bot-alpha",
@@ -253,11 +268,12 @@ describe("resolveRequesterOriginForChild", () => {
         requesterAccountId: "bot-beta",
         requesterTo: to,
       }),
-    ).toMatchObject({
-      channel: "qa-channel",
-      accountId: "bot-alpha-qa",
-      to,
-    });
+      {
+        channel: "qa-channel",
+        accountId: "bot-alpha-qa",
+        to,
+      },
+    );
   });
 
   it("uses requester group space before selecting a scoped target-agent account", () => {
@@ -285,7 +301,7 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     } as OpenClawConfig;
 
-    expect(
+    expectOrigin(
       resolveRequesterOriginForChild({
         cfg,
         targetAgentId: "bot-alpha",
@@ -295,11 +311,12 @@ describe("resolveRequesterOriginForChild", () => {
         requesterTo: to,
         requesterGroupSpace: "guild-current",
       }),
-    ).toMatchObject({
-      channel: "discord",
-      accountId: "bot-alpha-current-guild",
-      to,
-    });
+      {
+        channel: "discord",
+        accountId: "bot-alpha-current-guild",
+        to,
+      },
+    );
   });
 
   it("still peels channel id plus kind wrappers before peer lookup", () => {
@@ -317,7 +334,9 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     } as OpenClawConfig;
 
-    expect(
+    // Some channel adapters prefix both channel id and peer kind; the resolver
+    // has to strip wrappers without treating canonical colon ids as wrappers.
+    expectOrigin(
       resolveRequesterOriginForChild({
         cfg,
         targetAgentId: "bot-alpha",
@@ -326,10 +345,11 @@ describe("resolveRequesterOriginForChild", () => {
         requesterAccountId: "bot-beta",
         requesterTo: to,
       }),
-    ).toMatchObject({
-      channel: "line",
-      accountId: "bot-alpha-line",
-      to,
-    });
+      {
+        channel: "line",
+        accountId: "bot-alpha-line",
+        to,
+      },
+    );
   });
 });

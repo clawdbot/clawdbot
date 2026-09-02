@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.screenshots element selector plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,7 +13,8 @@ import {
 
 installPwToolsCoreTestHooks();
 const sessionMocks = getPwToolsCoreSessionMocks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.interactions.js");
+const downloads = await import("./pw-tools-core.downloads.js");
 
 function createFileChooserPageMocks() {
   const fileChooser = { setFiles: vi.fn(async () => {}) };
@@ -45,12 +47,13 @@ describe("pw-tools-core", () => {
       targetId: "T1",
       element: "#main",
       type: "png",
+      timeoutMs: 1234,
     });
 
     expect(res.buffer.toString()).toBe("E");
     expect(sessionMocks.getPageForTargetId).toHaveBeenCalled();
     expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
-    expect(elementScreenshot).toHaveBeenCalledWith({ type: "png" });
+    expect(elementScreenshot).toHaveBeenCalledWith({ type: "png", timeout: 1234 });
   });
   it("screenshots a ref locator", async () => {
     const refScreenshot = vi.fn(async () => Buffer.from("R"));
@@ -66,11 +69,12 @@ describe("pw-tools-core", () => {
       targetId: "T1",
       ref: "76",
       type: "jpeg",
+      timeoutMs: 2345,
     });
 
     expect(res.buffer.toString()).toBe("R");
     expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
-    expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg" });
+    expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 2345 });
   });
   it("rejects fullPage for element or ref screenshots", async () => {
     setPwToolsCoreCurrentRefLocator({ screenshot: vi.fn(async () => Buffer.from("R")) });
@@ -105,14 +109,14 @@ describe("pw-tools-core", () => {
     await fs.writeFile(uploadPath, "fixture", "utf8");
     const canonicalUploadPath = await fs.realpath(uploadPath);
     const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const waitForEvent = vi.fn(async (_event: string, _opts: unknown) => fileChooser);
+    const waitForEvent = vi.fn(async (_eventValue: string, _opts: unknown) => fileChooser);
     setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },
     });
 
     try {
-      await mod.armFileUploadViaPlaywright({
+      await downloads.armFileUploadViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",
         targetId: "T1",
         paths: [uploadPath],
@@ -125,7 +129,9 @@ describe("pw-tools-core", () => {
         timeout: 120_000,
       });
       await vi.waitFor(() => {
-        expect(fileChooser.setFiles).toHaveBeenCalledWith([canonicalUploadPath]);
+        expect(fileChooser.setFiles).toHaveBeenCalledWith([canonicalUploadPath], {
+          timeout: 120_000,
+        });
       });
     } finally {
       await fs.rm(uploadPath, { force: true });
@@ -135,7 +141,7 @@ describe("pw-tools-core", () => {
     const missingPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-missing-${crypto.randomUUID()}.txt`);
     const { fileChooser, press } = createFileChooserPageMocks();
 
-    await mod.armFileUploadViaPlaywright({
+    await downloads.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
       paths: [missingPath],
@@ -150,7 +156,7 @@ describe("pw-tools-core", () => {
   it("arms the next file chooser and escapes if no paths provided", async () => {
     const { fileChooser, press } = createFileChooserPageMocks();
 
-    await mod.armFileUploadViaPlaywright({
+    await downloads.armFileUploadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       paths: [],
     });

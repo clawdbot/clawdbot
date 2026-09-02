@@ -1,14 +1,18 @@
+/**
+ * Builds runtime model catalog entries from stored Cloudflare AI Gateway auth
+ * profiles.
+ */
 import {
   coerceSecretRef,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./models.js";
 
-export type CloudflareAiGatewayCredential =
+type CloudflareAiGatewayCredential =
   | {
       type?: string;
       keyRef?: unknown;
@@ -20,9 +24,7 @@ export type CloudflareAiGatewayCredential =
     }
   | undefined;
 
-export function resolveCloudflareAiGatewayApiKey(
-  cred: CloudflareAiGatewayCredential,
-): string | undefined {
+function resolveCloudflareAiGatewayApiKey(cred: CloudflareAiGatewayCredential): string | undefined {
   if (!cred || cred.type !== "api_key") {
     return undefined;
   }
@@ -35,7 +37,7 @@ export function resolveCloudflareAiGatewayApiKey(
   return normalizeOptionalString(cred.key);
 }
 
-export function resolveCloudflareAiGatewayMetadata(cred: CloudflareAiGatewayCredential): {
+function resolveCloudflareAiGatewayMetadata(cred: CloudflareAiGatewayCredential): {
   accountId?: string;
   gatewayId?: string;
 } {
@@ -48,6 +50,10 @@ export function resolveCloudflareAiGatewayMetadata(cred: CloudflareAiGatewayCred
   };
 }
 
+/**
+ * Returns a provider catalog entry when credentials and Gateway metadata are
+ * complete enough to construct an Anthropic-compatible base URL.
+ */
 export function buildCloudflareAiGatewayCatalogProvider(params: {
   credential: CloudflareAiGatewayCredential;
   envApiKey?: string;

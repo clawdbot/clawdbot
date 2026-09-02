@@ -1,8 +1,8 @@
 import Foundation
 import OpenClawKit
 
-// NetService-based resolver for Bonjour services.
-// Used to resolve the service endpoint (SRV + A/AAAA) without trusting TXT for routing.
+/// NetService-based resolver for Bonjour services.
+/// Used to resolve the service endpoint (SRV + A/AAAA) without trusting TXT for routing.
 final class GatewayServiceResolver: NSObject, NetServiceDelegate {
     private let service: NetService
     private let completion: ((host: String, port: Int)?) -> Void
@@ -38,7 +38,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
         self.finish(result: nil)
     }
 
-    private func finish(result: ((host: String, port: Int))?) {
+    private func finish(result: (host: String, port: Int)?) {
         guard !self.didFinish else { return }
         self.didFinish = true
         self.service.stop()

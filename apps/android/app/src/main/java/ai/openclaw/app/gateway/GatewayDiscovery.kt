@@ -3,19 +3,15 @@ package ai.openclaw.app.gateway
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.DnsResolver
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.Build
 import android.os.CancellationSignal
 import android.util.Log
-import java.io.IOException
-import java.net.InetSocketAddress
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
-import java.time.Duration
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executor
-import java.util.concurrent.Executors
+import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,26 +28,70 @@ import org.xbill.DNS.ExtendedResolver
 import org.xbill.DNS.Message
 import org.xbill.DNS.Name
 import org.xbill.DNS.PTRRecord
-import org.xbill.DNS.Record
 import org.xbill.DNS.Rcode
+import org.xbill.DNS.Record
 import org.xbill.DNS.Resolver
 import org.xbill.DNS.SRVRecord
 import org.xbill.DNS.Section
 import org.xbill.DNS.SimpleResolver
-import org.xbill.DNS.TextParseException
 import org.xbill.DNS.TXTRecord
+import org.xbill.DNS.TextParseException
 import org.xbill.DNS.Type
+import java.io.IOException
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+private fun createDnsResolver(context: Context): DnsResolver =
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+    createContextDnsResolver(context)
+  } else {
+    createLegacyDnsResolver()
+  }
+
+@RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
+private fun createContextDnsResolver(context: Context): DnsResolver = DnsResolver(context, null)
+
 @Suppress("DEPRECATION")
+private fun createLegacyDnsResolver(): DnsResolver = DnsResolver.getInstance()
+
+internal fun gatewayDiscoveryStatusText(
+  localCount: Int,
+  wideAreaRcode: Int?,
+  wideAreaCount: Int,
+): String {
+  val wide =
+    when (wideAreaRcode) {
+      null -> "Wide: ?"
+      Rcode.NOERROR -> "Wide: $wideAreaCount"
+      Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
+      else -> "Wide: ${Rcode.string(wideAreaRcode)}"
+    }
+
+  return when {
+    localCount == 0 && wideAreaRcode == null -> "Searching for gateways…"
+    localCount == 0 -> wide
+    else -> "Local: $localCount • $wide"
+  }
+}
+
+/**
+ * Watches local DNS-SD and optional wide-area DNS-SD for reachable OpenClaw gateways.
+ */
 class GatewayDiscovery(
   context: Context,
   private val scope: CoroutineScope,
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
-  private val dns = DnsResolver.getInstance()
+  private val dns = createDnsResolver(context)
   private val serviceType = "_openclaw-gw._tcp."
   private val wideAreaDomain = System.getenv("OPENCLAW_WIDE_AREA_DOMAIN")
   private val logTag = "OpenClaw/GatewayDiscovery"
@@ -59,22 +99,52 @@ class GatewayDiscovery(
   private val localById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val unicastById = ConcurrentHashMap<String, GatewayEndpoint>()
   private val _gateways = MutableStateFlow<List<GatewayEndpoint>>(emptyList())
+
+  /** Current discovered gateway list, merged from local DNS-SD and optional wide-area DNS-SD. */
   val gateways: StateFlow<List<GatewayEndpoint>> = _gateways.asStateFlow()
 
   private val _statusText = MutableStateFlow("Searching…")
+
+  /** Short diagnostic text shown by connect UI while discovery is running. */
   val statusText: StateFlow<String> = _statusText.asStateFlow()
 
   private var unicastJob: Job? = null
   private val dnsExecutor: Executor = Executors.newCachedThreadPool()
+  private val availableNetworks = ConcurrentHashMap.newKeySet<Network>()
+  private val serviceInfoCallbacks = ConcurrentHashMap<String, Any>()
+
+  // Legacy NSD callbacks share one handler and one resolve slot, which only a terminal callback releases.
+  private val legacyResolutions = ArrayDeque<LegacyResolution>()
 
   @Volatile private var lastWideAreaRcode: Int? = null
+
   @Volatile private var lastWideAreaCount: Int = 0
+
+  private val networkCallback =
+    object : ConnectivityManager.NetworkCallback() {
+      override fun onAvailable(network: Network) {
+        availableNetworks.add(network)
+      }
+
+      override fun onLost(network: Network) {
+        availableNetworks.remove(network)
+      }
+    }
 
   private val discoveryListener =
     object : NsdManager.DiscoveryListener {
-      override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {}
-      override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {}
+      override fun onStartDiscoveryFailed(
+        serviceType: String,
+        errorCode: Int,
+      ) {}
+
+      override fun onStopDiscoveryFailed(
+        serviceType: String,
+        errorCode: Int,
+      ) {}
+
       override fun onDiscoveryStarted(serviceType: String) {}
+
       override fun onDiscoveryStopped(serviceType: String) {}
 
       override fun onServiceFound(serviceInfo: NsdServiceInfo) {
@@ -86,28 +156,34 @@ class GatewayDiscovery(
         val serviceName = BonjourEscapes.decode(serviceInfo.serviceName)
         val id = stableId(serviceName, "local.")
         localById.remove(id)
+        unregisterServiceInfoCallback(id)
         publish()
       }
     }
 
   init {
+    startNetworkTracking()
     startLocalDiscovery()
     if (!wideAreaDomain.isNullOrBlank()) {
       startUnicastDiscovery(wideAreaDomain)
     }
   }
 
-  private fun startLocalDiscovery() {
+  private fun startNetworkTracking() {
+    val cm = connectivity ?: return
+    cm.activeNetwork?.let(availableNetworks::add)
     try {
-      nsd.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
+      // Track all networks so wide-area DNS can prefer VPN/split-DNS answers
+      // even when Android's active network is not the VPN.
+      cm.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
     } catch (_: Throwable) {
       // ignore (best-effort)
     }
   }
 
-  private fun stopLocalDiscovery() {
+  private fun startLocalDiscovery() {
     try {
-      nsd.stopServiceDiscovery(discoveryListener)
+      nsd.discoverServices(serviceType, NsdManager.PROTOCOL_DNS_SD, discoveryListener)
     } catch (_: Throwable) {
       // ignore (best-effort)
     }
@@ -128,80 +204,171 @@ class GatewayDiscovery(
   }
 
   private fun resolve(serviceInfo: NsdServiceInfo) {
-    nsd.resolveService(
-      serviceInfo,
-      object : NsdManager.ResolveListener {
-        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
-
-        override fun onServiceResolved(resolved: NsdServiceInfo) {
-          val host = resolved.host?.hostAddress ?: return
-          val port = resolved.port
-          if (port <= 0) return
-
-          val rawServiceName = resolved.serviceName
-          val serviceName = BonjourEscapes.decode(rawServiceName)
-          val displayName = BonjourEscapes.decode(txt(resolved, "displayName") ?: serviceName)
-          val lanHost = txt(resolved, "lanHost")
-          val tailnetDns = txt(resolved, "tailnetDns")
-          val gatewayPort = txtInt(resolved, "gatewayPort")
-          val canvasPort = txtInt(resolved, "canvasPort")
-          val tlsEnabled = txtBool(resolved, "gatewayTls")
-          val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
-          val id = stableId(serviceName, "local.")
-          localById[id] =
-            GatewayEndpoint(
-              stableId = id,
-              name = displayName,
-              host = host,
-              port = port,
-              lanHost = lanHost,
-              tailnetDns = tailnetDns,
-              gatewayPort = gatewayPort,
-              canvasPort = canvasPort,
-              tlsEnabled = tlsEnabled,
-              tlsFingerprintSha256 = tlsFingerprint,
-            )
-          publish()
-        }
-      },
-    )
-  }
-
-  private fun publish() {
-    _gateways.value =
-      (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
-    _statusText.value = buildStatusText()
-  }
-
-  private fun buildStatusText(): String {
-    val localCount = localById.size
-    val wideRcode = lastWideAreaRcode
-    val wideCount = lastWideAreaCount
-
-    val wide =
-      when (wideRcode) {
-        null -> "Wide: ?"
-        Rcode.NOERROR -> "Wide: $wideCount"
-        Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
-        else -> "Wide: ${Rcode.string(wideRcode)}"
-      }
-
-    return when {
-      localCount == 0 && wideRcode == null -> "Searching for gateways…"
-      localCount == 0 -> "$wide"
-      else -> "Local: $localCount • $wide"
+    val id = stableId(BonjourEscapes.decode(serviceInfo.serviceName), "local.")
+    if (serviceInfoCallbacks.containsKey(id)) return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      // Android 14+ streams service updates; older releases require one-shot resolve calls.
+      resolveWithServiceInfoCallback(id, serviceInfo)
+    } else {
+      val resolution = LegacyResolution(id, serviceInfo)
+      serviceInfoCallbacks[id] = resolution
+      legacyResolutions.addLast(resolution)
+      if (legacyResolutions.size == 1) startNextLegacyResolution()
     }
   }
 
-  private fun stableId(serviceName: String, domain: String): String {
-    return "${serviceType}|${domain}|${normalizeName(serviceName)}"
+  @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+  private fun resolveWithServiceInfoCallback(
+    id: String,
+    serviceInfo: NsdServiceInfo,
+  ) {
+    val callback =
+      object : NsdManager.ServiceInfoCallback {
+        override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
+          serviceInfoCallbacks.remove(id, this)
+        }
+
+        override fun onServiceInfoCallbackUnregistered() {
+          serviceInfoCallbacks.remove(id, this)
+        }
+
+        override fun onServiceLost() {
+          localById.remove(id)
+          publish()
+        }
+
+        override fun onServiceUpdated(serviceInfo: NsdServiceInfo) {
+          upsertResolvedService(serviceInfo)
+        }
+      }
+
+    serviceInfoCallbacks[id] = callback
+    try {
+      nsd.registerServiceInfoCallback(serviceInfo, dnsExecutor, callback)
+    } catch (_: Throwable) {
+      serviceInfoCallbacks.remove(id, callback)
+    }
   }
 
-  private fun normalizeName(raw: String): String {
-    return raw.trim().split(Regex("\\s+")).joinToString(" ")
+  private fun unregisterServiceInfoCallback(id: String) {
+    val callback = serviceInfoCallbacks.remove(id) ?: return
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      // A lost active service still occupies the OS slot; queued services can be discarded immediately.
+      if (callback !== legacyResolutions.firstOrNull()) legacyResolutions.remove(callback as LegacyResolution)
+      return
+    }
+    try {
+      nsd.unregisterServiceInfoCallback(callback as NsdManager.ServiceInfoCallback)
+    } catch (_: Throwable) {
+      // ignore (best-effort)
+    }
   }
 
-  private fun txt(info: NsdServiceInfo, key: String): String? {
+  @Suppress("DEPRECATION")
+  private fun startNextLegacyResolution() {
+    while (legacyResolutions.isNotEmpty()) {
+      val next = legacyResolutions.first()
+      try {
+        nsd.resolveService(next.serviceInfo, next)
+        return
+      } catch (_: Exception) {
+        serviceInfoCallbacks.remove(next.id, next)
+        legacyResolutions.removeFirst()
+      }
+    }
+  }
+
+  private inner class LegacyResolution(
+    val id: String,
+    val serviceInfo: NsdServiceInfo,
+  ) : NsdManager.ResolveListener {
+    override fun onResolveFailed(
+      serviceInfo: NsdServiceInfo,
+      errorCode: Int,
+    ) {
+      finish(null)
+    }
+
+    override fun onServiceResolved(resolved: NsdServiceInfo) {
+      finish(resolved)
+    }
+
+    private fun finish(resolved: NsdServiceInfo?) {
+      // Loss/rediscovery may replace this identity while the old OS request is still completing.
+      if (serviceInfoCallbacks.remove(id, this) && resolved != null) upsertResolvedService(resolved)
+      legacyResolutions.removeFirst()
+      startNextLegacyResolution()
+    }
+  }
+
+  private fun upsertResolvedService(resolved: NsdServiceInfo) {
+    val host = resolvedHostAddress(resolved) ?: return
+    val port = resolved.port
+    if (port <= 0) return
+
+    val rawServiceName = resolved.serviceName
+    val serviceName = BonjourEscapes.decode(rawServiceName)
+    val displayName = BonjourEscapes.decode(txt(resolved, "displayName") ?: serviceName)
+    val lanHost = txt(resolved, "lanHost")
+    val tailnetDns = txt(resolved, "tailnetDns")
+    val gatewayPort = txtInt(resolved, "gatewayPort")
+    val tlsEnabled = txtBool(resolved, "gatewayTls")
+    val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
+    val id = stableId(serviceName, "local.")
+    // Local NSD gives the socket host/port; TXT ports are retained as gateway metadata only.
+    localById[id] =
+      GatewayEndpoint(
+        stableId = id,
+        name = displayName,
+        host = host,
+        port = port,
+        lanHost = lanHost,
+        tailnetDns = tailnetDns,
+        gatewayPort = gatewayPort,
+        tlsEnabled = tlsEnabled,
+        tlsFingerprintSha256 = tlsFingerprint,
+      )
+    publish()
+  }
+
+  private fun resolvedHostAddress(resolved: NsdServiceInfo): String? {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+      return resolved.hostAddresses.firstOrNull { it.hostAddress?.contains('%') == false }?.hostAddress
+    }
+    return legacyHostAddress(resolved)
+  }
+
+  private fun legacyHostAddress(resolved: NsdServiceInfo): String? =
+    try {
+      val host = NsdServiceInfo::class.java.getMethod("getHost").invoke(resolved) as? InetAddress
+      host?.hostAddress
+    } catch (_: Throwable) {
+      null
+    }
+
+  private fun publish() {
+    _gateways.value =
+      // Merge local and wide-area results deterministically for stable UI selection.
+      (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
+    _statusText.value =
+      gatewayDiscoveryStatusText(
+        localCount = localById.size,
+        wideAreaRcode = lastWideAreaRcode,
+        wideAreaCount = lastWideAreaCount,
+      )
+  }
+
+  private fun stableId(
+    serviceName: String,
+    domain: String,
+  ): String = "$serviceType|$domain|${normalizeName(serviceName)}"
+
+  private fun normalizeName(raw: String): String = raw.trim().split(Regex("\\s+")).joinToString(" ")
+
+  private fun txt(
+    info: NsdServiceInfo,
+    key: String,
+  ): String? {
     val bytes = info.attributes[key] ?: return null
     return try {
       String(bytes, Charsets.UTF_8).trim().ifEmpty { null }
@@ -210,17 +377,21 @@ class GatewayDiscovery(
     }
   }
 
-  private fun txtInt(info: NsdServiceInfo, key: String): Int? {
-    return txt(info, key)?.toIntOrNull()
-  }
+  private fun txtInt(
+    info: NsdServiceInfo,
+    key: String,
+  ): Int? = txt(info, key)?.toIntOrNull()
 
-  private fun txtBool(info: NsdServiceInfo, key: String): Boolean {
+  private fun txtBool(
+    info: NsdServiceInfo,
+    key: String,
+  ): Boolean {
     val raw = txt(info, key)?.trim()?.lowercase() ?: return false
     return raw == "1" || raw == "true" || raw == "yes"
   }
 
   private suspend fun refreshUnicast(domain: String) {
-    val ptrName = "${serviceType}${domain}"
+    val ptrName = "${serviceType}$domain"
     val ptrMsg = lookupUnicastMessage(ptrName, Type.PTR) ?: return
     val ptrRecords = records(ptrMsg, Section.ANSWER).mapNotNull { it as? PTRRecord }
 
@@ -244,6 +415,7 @@ class GatewayDiscovery(
           ?: resolveHostUnicast(targetFqdn)
           ?: continue
 
+      // Wide-area DNS-SD may put TXT in additional records; fall back to a direct TXT query.
       val txtFromPtr =
         recordsByName(ptrMsg, Section.ADDITIONAL)[keyName(instanceFqdn)]
           .orEmpty()
@@ -260,7 +432,6 @@ class GatewayDiscovery(
       val lanHost = txtValue(txt, "lanHost")
       val tailnetDns = txtValue(txt, "tailnetDns")
       val gatewayPort = txtIntValue(txt, "gatewayPort")
-      val canvasPort = txtIntValue(txt, "canvasPort")
       val tlsEnabled = txtBoolValue(txt, "gatewayTls")
       val tlsFingerprint = txtValue(txt, "gatewayTlsSha256")
       val id = stableId(instanceName, domain)
@@ -273,7 +444,6 @@ class GatewayDiscovery(
           lanHost = lanHost,
           tailnetDns = tailnetDns,
           gatewayPort = gatewayPort,
-          canvasPort = canvasPort,
           tlsEnabled = tlsEnabled,
           tlsFingerprintSha256 = tlsFingerprint,
         )
@@ -293,8 +463,11 @@ class GatewayDiscovery(
     }
   }
 
-  private fun decodeInstanceName(instanceFqdn: String, domain: String): String {
-    val suffix = "${serviceType}${domain}"
+  private fun decodeInstanceName(
+    instanceFqdn: String,
+    domain: String,
+  ): String {
+    val suffix = "${serviceType}$domain"
     val withoutSuffix =
       if (instanceFqdn.endsWith(suffix)) {
         instanceFqdn.removeSuffix(suffix)
@@ -304,11 +477,12 @@ class GatewayDiscovery(
     return normalizeName(stripTrailingDot(withoutSuffix))
   }
 
-  private fun stripTrailingDot(raw: String): String {
-    return raw.removeSuffix(".")
-  }
+  private fun stripTrailingDot(raw: String): String = raw.removeSuffix(".")
 
-  private suspend fun lookupUnicastMessage(name: String, type: Int): Message? {
+  private suspend fun lookupUnicastMessage(
+    name: String,
+    type: Int,
+  ): Message? {
     val query =
       try {
         Message.newQuery(
@@ -325,6 +499,7 @@ class GatewayDiscovery(
     val system = queryViaSystemDns(query)
     if (records(system, Section.ANSWER).any { it.type == type }) return system
 
+    // Android's DnsResolver can miss split-DNS answers; retry with dnsjava against network DNS servers.
     val direct = createDirectResolver() ?: return system
     return try {
       val msg = direct.send(query)
@@ -350,15 +525,17 @@ class GatewayDiscovery(
     }
   }
 
-  private fun records(msg: Message?, section: Int): List<Record> {
-    return msg?.getSection(section).orEmpty()
-  }
+  private fun records(
+    msg: Message?,
+    section: Int,
+  ): List<Record> = msg?.getSection(section).orEmpty()
 
-  private fun keyName(raw: String): String {
-    return raw.trim().lowercase()
-  }
+  private fun keyName(raw: String): String = raw.trim().lowercase()
 
-  private fun recordsByName(msg: Message, section: Int): Map<String, List<Record>> {
+  private fun recordsByName(
+    msg: Message,
+    section: Int,
+  ): Map<String, List<Record>> {
     val next = LinkedHashMap<String, MutableList<Record>>()
     for (r in records(msg, section)) {
       val name = r.name?.toString() ?: continue
@@ -367,7 +544,11 @@ class GatewayDiscovery(
     return next
   }
 
-  private fun recordByName(msg: Message, fqdn: String, type: Int): Record? {
+  private fun recordByName(
+    msg: Message,
+    fqdn: String,
+    type: Int,
+  ): Record? {
     val key = keyName(fqdn)
     val byNameAnswer = recordsByName(msg, Section.ANSWER)
     val fromAnswer = byNameAnswer[key].orEmpty().firstOrNull { it.type == type }
@@ -377,7 +558,10 @@ class GatewayDiscovery(
     return byNameAdditional[key].orEmpty().firstOrNull { it.type == type }
   }
 
-  private fun resolveHostFromMessage(msg: Message?, hostname: String): String? {
+  private fun resolveHostFromMessage(
+    msg: Message?,
+    hostname: String,
+  ): String? {
     val m = msg ?: return null
     val key = keyName(hostname)
     val additional = recordsByName(m, Section.ADDITIONAL)[key].orEmpty()
@@ -390,20 +574,28 @@ class GatewayDiscovery(
     val cm = connectivity ?: return null
 
     // Prefer VPN (Tailscale) when present; otherwise use the active network.
-    cm.allNetworks.firstOrNull { n ->
-      val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-      caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-    }?.let { return it }
+    trackedNetworks(cm)
+      .firstOrNull { n ->
+        val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+      }?.let { return it }
 
     return cm.activeNetwork
   }
+
+  private fun trackedNetworks(cm: ConnectivityManager): List<Network> =
+    buildList {
+      cm.activeNetwork?.let(::add)
+      addAll(availableNetworks)
+    }.distinct()
 
   private fun createDirectResolver(): Resolver? {
     val cm = connectivity ?: return null
 
     val candidateNetworks =
       buildList {
-        cm.allNetworks
+        // Put VPN DNS first so Tailscale split-horizon names win over public DNS.
+        trackedNetworks(cm)
           .firstOrNull { n ->
             val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
             caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
@@ -416,8 +608,7 @@ class GatewayDiscovery(
         .asSequence()
         .flatMap { n ->
           cm.getLinkProperties(n)?.dnsServers?.asSequence() ?: emptySequence()
-        }
-        .distinctBy { it.hostAddress ?: it.toString() }
+        }.distinctBy { it.hostAddress ?: it.toString() }
         .toList()
     if (servers.isEmpty()) return null
 
@@ -440,7 +631,10 @@ class GatewayDiscovery(
     }
   }
 
-  private suspend fun rawQuery(network: android.net.Network?, wireQuery: ByteArray): ByteArray =
+  private suspend fun rawQuery(
+    network: android.net.Network?,
+    wireQuery: ByteArray,
+  ): ByteArray =
     suspendCancellableCoroutine { cont ->
       val signal = CancellationSignal()
       cont.invokeOnCancellation { signal.cancel() }
@@ -452,7 +646,10 @@ class GatewayDiscovery(
         dnsExecutor,
         signal,
         object : DnsResolver.Callback<ByteArray> {
-          override fun onAnswer(answer: ByteArray, rcode: Int) {
+          override fun onAnswer(
+            answer: ByteArray,
+            rcode: Int,
+          ) {
             cont.resume(answer)
           }
 
@@ -463,12 +660,15 @@ class GatewayDiscovery(
       )
     }
 
-  private fun txtValue(records: List<TXTRecord>, key: String): String? {
+  private fun txtValue(
+    records: List<TXTRecord>,
+    key: String,
+  ): String? {
     val prefix = "$key="
     for (r in records) {
       val strings: List<String> =
         try {
-          r.strings.mapNotNull { it as? String }
+          r.strings
         } catch (_: Throwable) {
           emptyList()
         }
@@ -482,11 +682,15 @@ class GatewayDiscovery(
     return null
   }
 
-  private fun txtIntValue(records: List<TXTRecord>, key: String): Int? {
-    return txtValue(records, key)?.toIntOrNull()
-  }
+  private fun txtIntValue(
+    records: List<TXTRecord>,
+    key: String,
+  ): Int? = txtValue(records, key)?.toIntOrNull()
 
-  private fun txtBoolValue(records: List<TXTRecord>, key: String): Boolean {
+  private fun txtBoolValue(
+    records: List<TXTRecord>,
+    key: String,
+  ): Boolean {
     val raw = txtValue(records, key)?.trim()?.lowercase() ?: return false
     return raw == "1" || raw == "true" || raw == "yes"
   }

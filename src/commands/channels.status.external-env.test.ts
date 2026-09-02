@@ -1,3 +1,4 @@
+// Channels status external-env tests cover env-backed credentials and config-only status rendering.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -5,17 +6,18 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
 } from "../plugins/loader.test-fixtures.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { channelsStatusCommand } from "./channels/status.js";
+import { createCapturingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
-  requireValidConfigSnapshot: vi.fn(),
+  requireValidConfig: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
 }));
 
@@ -27,12 +29,15 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
 }));
 
+vi.mock("./config-validation.js", () => ({
+  requireValidConfig: (runtime: unknown) => mocks.requireValidConfig(runtime),
+}));
+
 vi.mock("../cli/command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: (opts: unknown) => mocks.resolveCommandConfigWithSecrets(opts),
 }));
 
 vi.mock("./channels/shared.js", () => ({
-  requireValidConfigSnapshot: (runtime: unknown) => mocks.requireValidConfigSnapshot(runtime),
   formatChannelAccountLabel: ({ channel, accountId }: { channel: string; accountId: string }) =>
     `${channel} ${accountId}`,
   appendBaseUrlBit: () => undefined,
@@ -48,7 +53,7 @@ vi.mock("../cli/progress.js", () => ({
 
 function writeExternalEnvChannelPlugin() {
   useNoBundledPlugins();
-  const pluginDir = makeTempDir();
+  const pluginDir = makePluginLoaderTempDir();
   const fullMarker = path.join(pluginDir, "full-loaded.txt");
   fs.writeFileSync(
     path.join(pluginDir, "package.json"),
@@ -58,6 +63,10 @@ function writeExternalEnvChannelPlugin() {
         version: "1.0.0",
         openclaw: {
           extensions: ["./index.cjs"],
+          channel: {
+            id: "external-env-channel",
+            configuredState: { env: { anyOf: ["EXTERNAL_ENV_CHANNEL_TOKEN"] } },
+          },
         },
       },
       null,
@@ -72,9 +81,6 @@ function writeExternalEnvChannelPlugin() {
         id: "external-env-channel-plugin",
         configSchema: EMPTY_PLUGIN_SCHEMA,
         channels: ["external-env-channel"],
-        channelEnvVars: {
-          "external-env-channel": ["EXTERNAL_ENV_CHANNEL_TOKEN"],
-        },
       },
       null,
       2,
@@ -89,23 +95,12 @@ function writeExternalEnvChannelPlugin() {
   return { pluginDir, fullMarker };
 }
 
-function createRuntimeCapture() {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  const runtime = {
-    log: (message: unknown) => logs.push(String(message)),
-    error: (message: unknown) => errors.push(String(message)),
-    exit: (_code?: number) => undefined,
-  };
-  return { runtime, logs, errors };
-}
-
 describe("channelsStatusCommand external env-only channel fallback", () => {
   beforeEach(() => {
     mocks.callGateway.mockReset();
     mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
     mocks.readConfigFileSnapshot.mockClear();
-    mocks.requireValidConfigSnapshot.mockReset();
+    mocks.requireValidConfig.mockReset();
     mocks.resolveCommandConfigWithSecrets.mockReset();
   });
 
@@ -121,13 +116,13 @@ describe("channelsStatusCommand external env-only channel fallback", () => {
         allow: ["external-env-channel-plugin"],
       },
     } as OpenClawConfig;
-    mocks.requireValidConfigSnapshot.mockResolvedValue(config);
+    mocks.requireValidConfig.mockResolvedValue(config);
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: config,
       effectiveConfig: config,
       diagnostics: [],
     });
-    const { runtime, logs } = createRuntimeCapture();
+    const { runtime, logs } = createCapturingTestRuntime();
 
     await withEnvAsync({ EXTERNAL_ENV_CHANNEL_TOKEN: "token" }, async () => {
       await channelsStatusCommand({ json: true, probe: false }, runtime as never);
@@ -135,13 +130,9 @@ describe("channelsStatusCommand external env-only channel fallback", () => {
 
     expect(fs.existsSync(fullMarker)).toBe(false);
     const payload = JSON.parse(logs.at(-1) ?? "{}");
-    expect(payload).toEqual(
-      expect.objectContaining({
-        gatewayReachable: false,
-        configOnly: true,
-        configuredChannels: ["external-env-channel"],
-      }),
-    );
+    expect(payload.gatewayReachable).toBe(false);
+    expect(payload.configOnly).toBe(true);
+    expect(payload.configuredChannels).toEqual(["external-env-channel"]);
   });
 });
 

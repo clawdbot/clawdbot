@@ -1,5 +1,6 @@
+// Tests user-facing pairing messages and setup command copy.
+import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { expectPairingReplyText } from "../../test/helpers/pairing-reply.js";
 import { captureEnv } from "../test-utils/env.js";
 import { buildPairingReply } from "./pairing-messages.js";
 
@@ -54,6 +55,9 @@ describe("buildPairingReply", () => {
       `(?:openclaw|openclaw) --profile isolated pairing approve ${testCase.channel} ${testCase.code}`,
     );
     expect(text).toMatch(commandRe);
+    expect(
+      text.match(new RegExp(`pairing approve ${testCase.channel} ${testCase.code}`, "g")),
+    ).toHaveLength(1);
   }
 
   function expectProfileAwarePairingReply(testCase: (typeof pairingReplyCases)[number]) {

@@ -1,3 +1,4 @@
+// Public provider usage facade for formatting, loading, and shared types.
 export {
   formatUsageReportLines,
   formatUsageSummaryLine,
@@ -6,6 +7,7 @@ export {
 export { loadProviderUsageSummary } from "./provider-usage.load.js";
 export { resolveUsageProviderId } from "./provider-usage.shared.js";
 export type {
+  ProviderUsageBilling,
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageSummary,

@@ -1,22 +1,11 @@
-import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { createExtensionVitestConfig } from "./vitest.extension-config.ts";
+// Vitest extension media config wires the extension media test shard.
+import { mediaExtensionTestRoots } from "./vitest.extension-media-paths.mjs";
 
-export default createScopedVitestConfig(
-  [
-    "alibaba/**/*.test.ts",
-    "deepgram/**/*.test.ts",
-    "elevenlabs/**/*.test.ts",
-    "fal/**/*.test.ts",
-    "image-generation-core/**/*.test.ts",
-    "runway/**/*.test.ts",
-    "talk-voice/**/*.test.ts",
-    "video-generation-core/**/*.test.ts",
-    "vydra/**/*.test.ts",
-    "xiaomi/**/*.test.ts",
-  ],
-  {
-    dir: "extensions",
-    name: "extension-media",
-    passWithNoTests: true,
-    setupFiles: ["test/setup.extensions.ts"],
-  },
-);
+export function createExtensionMediaVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return createExtensionVitestConfig("media", mediaExtensionTestRoots, env);
+}
+
+export default createExtensionMediaVitestConfig();

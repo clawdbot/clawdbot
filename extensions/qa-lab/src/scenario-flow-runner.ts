@@ -1,4 +1,5 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Qa Lab plugin module implements scenario flow runner behavior.
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -9,16 +10,18 @@ type QaSuiteStep = {
 
 type QaSuiteScenarioResult = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: Array<{
     name: string;
     status: "pass" | "fail" | "skip";
     details?: string;
   }>;
   details?: string;
+  modelSwitchEvidence?: Record<string, unknown>;
 };
 
 type QaFlowApi = Record<string, unknown> & {
+  signal?: AbortSignal;
   state: QaTransportState;
   scenario: QaSeedScenarioWithSource;
   config: Record<string, unknown>;
@@ -26,14 +29,61 @@ type QaFlowApi = Record<string, unknown> & {
 };
 
 type QaFlowVars = Record<string, unknown>;
+type QaFlowImportLoader = () => Promise<unknown>;
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
   ...args: string[]
 ) => (...fnArgs: unknown[]) => Promise<unknown>;
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
+  "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
+  "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
+  "./errors.js": () => import("./errors.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-allowbots.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-approval.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-config.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-config.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-dm.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-dm.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-recovery.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-edit.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-edit.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-media.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-media.js"),
+  "./voice-preflight.fixture.js": () => import("./voice-preflight.fixture.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-policy.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-policy.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-reaction.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-reaction.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-restart.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-restart.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-room.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-room.js"),
+  "./live-transports/discord/scenario-runtime.js": () =>
+    import("./live-transports/discord/scenario-runtime.js"),
+  "./live-transports/slack/scenario-runtime.js": () =>
+    import("./live-transports/slack/scenario-runtime.js"),
+  "./live-transports/whatsapp/scenario-runtime.js": () =>
+    import("./live-transports/whatsapp/scenario-runtime.js"),
+  "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
+};
 
 function formatFlowDetails(details: unknown) {
   if (details === undefined) {
@@ -68,7 +118,10 @@ function getPathWithParent(
 function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
   return {
     ...api,
-    qaImport: (specifier: string) => import(specifier),
+    qaImport: (specifier: string) => {
+      const loader = qaFlowImportLoaders[specifier];
+      return loader ? loader() : import(specifier);
+    },
     vars,
     ...vars,
   };
@@ -134,12 +187,45 @@ async function resolveValue(node: unknown, api: QaFlowApi, vars: QaFlowVars): Pr
 function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   const { parent, value } = getPathWithParent(createEvalContext(api, vars), path);
   if (typeof value !== "function") {
+    if (path.startsWith("transport.")) {
+      const method = path.slice("transport.".length);
+      throw new Error(
+        `QA scenario "${api.scenario.id}" cannot run "${method}": the active transport adapter does not implement this method.`,
+      );
+    }
     throw new Error(`qa flow callable not found: ${path}`);
   }
   return parent ? value.bind(parent) : value;
 }
 
-async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) {
+type QaFlowActionOptions = { allowAfterAbort?: boolean };
+
+function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
+  if (!options.allowAfterAbort) {
+    api.signal?.throwIfAborted();
+  }
+}
+
+async function runFlowAction(
+  action: unknown,
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions = {},
+) {
+  throwIfFlowAborted(api, options);
+  try {
+    await runFlowActionBody(action, api, vars, options);
+  } finally {
+    throwIfFlowAborted(api, options);
+  }
+}
+
+async function runFlowActionBody(
+  action: unknown,
+  api: QaFlowApi,
+  vars: QaFlowVars,
+  options: QaFlowActionOptions,
+) {
   if (!isPlainObject(action)) {
     throw new Error(`invalid qa flow action: ${JSON.stringify(action)}`);
   }
@@ -148,10 +234,36 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     const args = Array.isArray(action.args)
       ? await Promise.all(action.args.map((entry) => resolveValue(entry, api, vars)))
       : [];
+    // Value resolution may cross the deadline, so fence every callable at invocation time.
+    throwIfFlowAborted(api, options);
     const result = await callable(...args);
     if (typeof action.saveAs === "string" && action.saveAs.trim()) {
       vars[action.saveAs.trim()] = result;
     }
+    return;
+  }
+  for (const name of [
+    "sendInbound",
+    "sendNativeCommand",
+    "waitForOutbound",
+    "waitForOutboundSequence",
+    "waitForNoOutbound",
+  ] as const) {
+    if (name in action) {
+      const callable = resolveCallable(`transport.${name}`, api, vars);
+      const input = await resolveValue(action[name], api, vars);
+      throwIfFlowAborted(api, options);
+      const result = await callable(input);
+      if (typeof action.saveAs === "string" && action.saveAs.trim()) {
+        vars[action.saveAs.trim()] = result;
+      }
+      return;
+    }
+  }
+  if (action.resetTransport === true) {
+    const reset = resolveCallable("transport.reset", api, vars);
+    throwIfFlowAborted(api, options);
+    await reset();
     return;
   }
   if (typeof action.set === "string") {
@@ -208,7 +320,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     const passed = Boolean(await evalExpr(ifAction.expr, api, vars));
     const branch = passed ? ifAction.then : (ifAction.else ?? []);
     for (const nested of branch) {
-      await runFlowAction(nested, api, vars);
+      await runFlowAction(nested, api, vars, options);
     }
     return;
   }
@@ -229,7 +341,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
         vars[forEachAction.index] = index;
       }
       for (const nested of forEachAction.actions) {
-        await runFlowAction(nested, api, vars);
+        await runFlowAction(nested, api, vars, options);
       }
     }
     return;
@@ -243,7 +355,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     };
     try {
       for (const nested of tryAction.actions) {
-        await runFlowAction(nested, api, vars);
+        await runFlowAction(nested, api, vars, options);
       }
     } catch (error) {
       if (!tryAction.catch && !tryAction.finally) {
@@ -254,7 +366,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
       }
       if (tryAction.catch) {
         for (const nested of tryAction.catch) {
-          await runFlowAction(nested, api, vars);
+          await runFlowAction(nested, api, vars, options);
         }
       } else {
         throw error;
@@ -262,7 +374,7 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     } finally {
       if (tryAction.finally) {
         for (const nested of tryAction.finally) {
-          await runFlowAction(nested, api, vars);
+          await runFlowAction(nested, api, vars, { allowAfterAbort: true });
         }
       }
     }
@@ -275,8 +387,9 @@ export async function runScenarioFlow(params: {
   api: QaFlowApi;
   flow: QaScenarioFlow;
   scenarioTitle: string;
+  vars?: QaFlowVars;
 }) {
-  const vars: QaFlowVars = {};
+  const vars = params.vars ?? {};
   const steps: QaSuiteStep[] = params.flow.steps.map((step) => ({
     name: step.name,
     run: async () => {
@@ -286,13 +399,16 @@ export async function runScenarioFlow(params: {
       if (!step.detailsExpr) {
         return undefined;
       }
-      const details = await evalExpr(step.detailsExpr, params.api, vars);
-      return formatFlowDetails(details);
+      throwIfFlowAborted(params.api);
+      try {
+        return formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars));
+      } finally {
+        throwIfFlowAborted(params.api);
+      }
     },
   }));
-  return await params.api.runScenario(params.scenarioTitle, steps);
-}
-
-export function describeScenarioFlowError(error: unknown) {
-  return formatErrorMessage(error);
+  const result = await params.api.runScenario(params.scenarioTitle, steps);
+  return isPlainObject(vars.modelSwitchEvidence)
+    ? { ...result, modelSwitchEvidence: vars.modelSwitchEvidence }
+    : result;
 }

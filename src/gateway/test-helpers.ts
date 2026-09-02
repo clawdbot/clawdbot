@@ -1,5 +1,37 @@
-export * from "./test-helpers.runtime-state.js";
-export * from "./test-helpers.plugin-registry.js";
-export * from "./test-helpers.config-snapshots.js";
-export * from "./test-helpers.mocks.js";
-export * from "./test-helpers.server.js";
+/**
+ * Public barrel for gateway integration test helpers.
+ */
+export {
+  agentCommandMock,
+  cronIsolatedRun,
+  dispatchInboundMessageMock,
+  embeddedRunMock,
+  gatewayReplyMock,
+  mockGetReplyFromConfigOnce,
+  agentDiscoveryMock,
+  testState,
+  testTailscaleWhois,
+} from "./test-helpers.runtime-state.js";
+export { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
+export {
+  connectOk,
+  connectReq,
+  connectWebchatClient,
+  createGatewaySuiteHarness,
+  getGatewayTestPort,
+  getTrackedConnectChallengeNonce,
+  installGatewayTestHooks,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+  readConnectChallengeNonce,
+  rpcReq,
+  startConnectedServerWithClient,
+  startTestGatewayServer,
+  startGatewayServerWithRetries,
+  startServer,
+  startServerWithClient,
+  trackConnectChallengeNonce,
+  waitForSystemEvent,
+  withGatewayServer,
+  writeSessionStore,
+} from "./test-helpers.server.js";

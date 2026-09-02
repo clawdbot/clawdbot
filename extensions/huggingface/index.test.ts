@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
+// Huggingface tests cover index plugin behavior.
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const buildHuggingfaceProviderMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -40,10 +41,20 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
   );
 
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return registerProviderMock.mock.calls[0]?.[0];
+  const firstCall = registerProviderMock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("expected huggingface provider registration");
+  }
+  return firstCall[0];
 }
 
 describe("huggingface plugin", () => {
+  afterAll(() => {
+    vi.doUnmock("./provider-catalog.js");
+    vi.doUnmock("./onboard.js");
+    vi.resetModules();
+  });
+
   it("skips catalog discovery when plugin discovery is disabled", async () => {
     const provider = registerProvider();
 

@@ -1,3 +1,4 @@
+// Checks thread-binding config keys stay aligned with schema metadata.
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
@@ -15,15 +16,13 @@ describe("thread binding config keys", () => {
     if (result.ok) {
       return;
     }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "session.threadBindings",
-        message: expect.stringContaining("ttlHours"),
-      }),
+    const threadBindingIssue = result.issues.find(
+      (issue) => issue.path === "session.threadBindings",
     );
+    expect(threadBindingIssue?.message).toContain("ttlHours");
   });
 
-  it("rejects legacy channels.<id>.threadBindings.ttlHours", () => {
+  it("accepts channel-level thread binding ttlHours compatibility", () => {
     const result = validateConfigObjectRaw({
       channels: {
         demo: {
@@ -34,19 +33,10 @@ describe("thread binding config keys", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "channels",
-        message: expect.stringContaining("ttlHours"),
-      }),
-    );
+    expect(result.ok).toBe(true);
   });
 
-  it("rejects legacy channels.<id>.accounts.<id>.threadBindings.ttlHours", () => {
+  it("accepts account-level thread binding ttlHours compatibility", () => {
     const result = validateConfigObjectRaw({
       channels: {
         demo: {
@@ -61,15 +51,6 @@ describe("thread binding config keys", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.issues).toContainEqual(
-      expect.objectContaining({
-        path: "channels",
-        message: expect.stringContaining("ttlHours"),
-      }),
-    );
+    expect(result.ok).toBe(true);
   });
 });

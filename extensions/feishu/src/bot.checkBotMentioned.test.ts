@@ -1,3 +1,4 @@
+// Feishu tests cover bot.checkBotMentioned plugin behavior.
 import { describe, it, expect } from "vitest";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 
@@ -92,6 +93,45 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
+  it("returns mentionedBot=false for broadcast-only @_all text", () => {
+    const event = makeEvent("group", [], "@_all please review");
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false for broadcast-only @all mention metadata", () => {
+    const event = makeEvent("group", [{ key: "@_all", name: "all", id: { open_id: "all" } }]);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false for @all even when botOpenId is the broadcast id", () => {
+    const event = makeEvent("group", [{ key: "@_all", name: "all", id: { open_id: "all" } }]);
+    const ctx = parseFeishuMessageEvent(event, "all");
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=true when bot is mentioned alongside @all", () => {
+    const event = makeEvent("group", [
+      { key: "@_all", name: "all", id: { open_id: "all" } },
+      { key: "@_bot_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+    expect(ctx.mentionTargets).toBeUndefined();
+  });
+
+  it("does not include @all in mention-forward targets", () => {
+    const event = makeEvent("group", [
+      { key: "@_all", name: "all", id: { open_id: "all" } },
+      { key: "@_bot_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
+      { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
+    ]);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
+    expect(ctx.mentionTargets).toEqual([{ openId: "ou_alice", name: "Alice", key: "@_user_1" }]);
+  });
+
   it("returns mentionedBot=false when botOpenId is undefined (unknown bot)", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
@@ -99,6 +139,17 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const ctx = parseFeishuMessageEvent(event, undefined);
     expect(ctx.mentionedBot).toBe(false);
   });
+
+  it.each([undefined, "", "  "])(
+    "does not create mention-forward targets when botOpenId is %j",
+    (botOpenId) => {
+      const event = makeEvent("p2p", [
+        { key: "@_user_1", name: "Alice", id: { open_id: "ou_alice" } },
+      ]);
+      const ctx = parseFeishuMessageEvent(event, botOpenId);
+      expect(ctx.mentionTargets).toBeUndefined();
+    },
+  );
 
   it("returns mentionedBot=false when botOpenId is empty string (probe failed)", () => {
     const event = makeEvent("group", [
@@ -129,14 +180,14 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
   });
 
   it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
-    const BOT_OPEN_ID = "ou_bot_123";
+    const BOT_OPEN_IDLocal = "ou_bot_123";
     const event = makePostEvent({
       content: [
-        [{ tag: "at", user_id: BOT_OPEN_ID, user_name: "claw" }],
+        [{ tag: "at", user_id: BOT_OPEN_IDLocal, user_name: "claw" }],
         [{ tag: "text", text: "What does this document say" }],
       ],
     });
-    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_IDLocal);
     expect(ctx.mentionedBot).toBe(true);
   });
 
@@ -157,6 +208,39 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     });
     const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false for post message with broadcast-only @all", () => {
+    const event = makePostEvent({
+      content: [
+        [{ tag: "at", user_id: "all", user_name: "all" }],
+        [{ tag: "text", text: "hello" }],
+      ],
+    });
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=false for post @all even when botOpenId is the broadcast id", () => {
+    const event = makePostEvent({
+      content: [[{ tag: "at", user_id: "all", user_name: "all" }]],
+    });
+    const ctx = parseFeishuMessageEvent(event, "all");
+    expect(ctx.mentionedBot).toBe(false);
+  });
+
+  it("returns mentionedBot=true for post message with bot mention and broadcast @all", () => {
+    const event = makePostEvent({
+      content: [
+        [
+          { tag: "at", user_id: "all", user_name: "all" },
+          { tag: "text", text: " " },
+          { tag: "at", user_id: BOT_OPEN_ID, user_name: "claw" },
+        ],
+      ],
+    });
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionedBot).toBe(true);
   });
 
   it("preserves post code and code_block content", () => {

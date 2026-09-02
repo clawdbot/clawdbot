@@ -1,45 +1,20 @@
-import { killProcessTree } from "../../kill-tree.js";
+// PTY adapter wraps pseudo-terminal processes for the process supervisor.
+import type { IDisposable } from "@lydell/node-pty";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { signalPtySessionTree } from "../../kill-tree.js";
+import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
+import {
+  readPtyTerminalName,
+  resolvePtyTerminalName,
+  setPtyTerminalName,
+} from "../../pty-terminal-name.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
-type PtyExitEvent = { exitCode: number; signal?: number };
-type PtyDisposable = { dispose: () => void };
-type PtySpawnHandle = {
-  pid: number;
-  write: (data: string | Buffer) => void;
-  onData: (listener: (value: string) => void) => PtyDisposable | void;
-  onExit: (listener: (event: PtyExitEvent) => void) => PtyDisposable | void;
-  kill: (signal?: string) => void;
-};
-type PtySpawn = (
-  file: string,
-  args: string[] | string,
-  options: {
-    name?: string;
-    cols?: number;
-    rows?: number;
-    cwd?: string;
-    env?: Record<string, string>;
-  },
-) => PtySpawnHandle;
-
-type PtyModule = {
-  spawn?: PtySpawn;
-  default?: {
-    spawn?: PtySpawn;
-  };
-};
-
-export type PtyAdapter = SpawnProcessAdapter;
-
-let ptyModulePromise: Promise<PtyModule> | null = null;
-
-async function loadPtyModule(): Promise<PtyModule> {
-  ptyModulePromise ??= import("@lydell/node-pty") as Promise<unknown> as Promise<PtyModule>;
-  return ptyModulePromise;
-}
+type PtyAdapter = SpawnProcessAdapter;
 
 export async function createPtyAdapter(params: {
   shell: string;
@@ -50,28 +25,46 @@ export async function createPtyAdapter(params: {
   rows?: number;
   name?: string;
 }): Promise<PtyAdapter> {
-  const module = await loadPtyModule();
-  const spawn = module.spawn ?? module.default?.spawn;
-  if (!spawn) {
-    throw new Error("PTY support is unavailable (node-pty spawn not found).");
+  // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
+  // instead of binding the Gateway host's native PTY binary into the bundle.
+  if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+    throw new Error("PTY is unavailable in the portable worker runtime");
   }
-  const pty = spawn(params.shell, params.args, {
+  const { spawn } = await import("@lydell/node-pty");
+  const baseEnv = params.env ? toStringEnv(params.env) : undefined;
+  const preparedSpawn = prepareOomScoreAdjustedSpawn(params.shell, params.args, { env: baseEnv });
+  const terminalName = resolvePtyTerminalName(
+    params.name ??
+      readPtyTerminalName(preparedSpawn.env, process.platform) ??
+      readPtyTerminalName(process.env, process.platform),
+  );
+  const spawnEnv = preparedSpawn.env
+    ? toStringEnv(preparedSpawn.env)
+    : process.platform === "win32"
+      ? toStringEnv(process.env)
+      : undefined;
+  // Unix node-pty rewrites child TERM from name; Windows forwards env unchanged.
+  if (spawnEnv) {
+    setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
+  }
+  const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
     cwd: params.cwd,
-    env: params.env ? toStringEnv(params.env) : undefined,
-    name: params.name ?? process.env.TERM ?? "xterm-256color",
+    env: spawnEnv,
+    name: terminalName,
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
   });
 
-  let dataListener: PtyDisposable | null = null;
-  let exitListener: PtyDisposable | null = null;
-  let waitResult: { code: number | null; signal: NodeJS.Signals | number | null } | null = null;
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | number | null }) => void)
-    | null = null;
-  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | number | null }> | null =
-    null;
+  let dataListener: IDisposable | null = null;
+  let exitListener: IDisposable | null = null;
+  const completion = createDeferredCore<{
+    code: number | null;
+    signal: NodeJS.Signals | number | null;
+  }>();
+  let waitSettled = false;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
+  let stdinDestroyed = false;
+  let stdinEnded = false;
 
   const clearForceKillWaitFallback = () => {
     if (!forceKillWaitFallbackTimer) {
@@ -82,16 +75,14 @@ export async function createPtyAdapter(params: {
   };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | number | null }) => {
-    if (waitResult) {
+    if (waitSettled) {
       return;
     }
+    waitSettled = true;
     clearForceKillWaitFallback();
-    waitResult = value;
-    if (resolveWait) {
-      const resolve = resolveWait;
-      resolveWait = null;
-      resolve(value);
-    }
+    stdinDestroyed = true;
+    stdinEnded = true;
+    completion.resolve(value);
   };
 
   const scheduleForceKillWaitFallback = (signal: NodeJS.Signals) => {
@@ -104,14 +95,24 @@ export async function createPtyAdapter(params: {
     forceKillWaitFallbackTimer.unref();
   };
 
-  exitListener =
-    pty.onExit((event) => {
-      const signal = event.signal && event.signal !== 0 ? event.signal : null;
-      settleWait({ code: event.exitCode ?? null, signal });
-    }) ?? null;
+  exitListener = pty.onExit((event) => {
+    const signal = event.signal && event.signal !== 0 ? event.signal : null;
+    settleWait({ code: event.exitCode ?? null, signal });
+  });
 
   const stdin: ManagedRunStdin = {
-    destroyed: false,
+    get destroyed() {
+      return stdinDestroyed;
+    },
+    get writable() {
+      return !stdinDestroyed && !stdinEnded;
+    },
+    get writableEnded() {
+      return stdinEnded;
+    },
+    get writableFinished() {
+      return stdinEnded;
+    },
     write: (data, cb) => {
       try {
         pty.write(data);
@@ -122,48 +123,39 @@ export async function createPtyAdapter(params: {
     },
     end: () => {
       try {
+        stdinEnded = true;
         const eof = process.platform === "win32" ? "\x1a" : "\x04";
         pty.write(eof);
       } catch {
         // ignore EOF errors
       }
     },
+    destroy: () => {
+      stdinDestroyed = true;
+      stdinEnded = true;
+    },
   };
 
   const onStdout = (listener: (chunk: string) => void) => {
-    dataListener =
-      pty.onData((chunk) => {
-        listener(chunk);
-      }) ?? null;
+    dataListener = pty.onData((chunk) => {
+      listener(chunk);
+    });
   };
 
   const onStderr = (_listener: (chunk: string) => void) => {
     // PTY gives a unified output stream.
   };
 
-  const wait = async () => {
-    if (waitResult) {
-      return waitResult;
-    }
-    if (!waitPromise) {
-      waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | number | null }>(
-        (resolve) => {
-          resolveWait = resolve;
-          if (waitResult) {
-            const settled = waitResult;
-            resolveWait = null;
-            resolve(settled);
-          }
-        },
-      );
-    }
-    return waitPromise;
-  };
+  const wait = async () => await completion.promise;
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {
-      if (signal === "SIGKILL" && typeof pty.pid === "number" && pty.pid > 0) {
-        killProcessTree(pty.pid);
+      if (
+        (signal === "SIGKILL" || signal === "SIGTERM") &&
+        typeof pty.pid === "number" &&
+        pty.pid > 0
+      ) {
+        signalPtySessionTree(pty.pid, signal);
       } else if (process.platform === "win32") {
         pty.kill();
       } else {
@@ -179,6 +171,8 @@ export async function createPtyAdapter(params: {
   };
 
   const dispose = () => {
+    stdinDestroyed = true;
+    stdinEnded = true;
     try {
       dataListener?.dispose();
     } catch {
@@ -198,6 +192,7 @@ export async function createPtyAdapter(params: {
   return {
     pid: pty.pid || undefined,
     stdin,
+    oomScoreWrapperSelected: preparedSpawn.wrapped,
     onStdout,
     onStderr,
     wait,

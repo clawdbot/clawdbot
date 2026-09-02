@@ -1,76 +1,54 @@
+/**
+ * Model selection resolution facade.
+ *
+ * This module resolves configured fallbacks and explicit model selections.
+ */
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelRef } from "./model-selection-normalize.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import {
-  buildAllowedModelSetWithFallbacks,
   buildModelAliasIndex,
-  getModelRefStatusWithFallbackModels,
+  getModelRefStatus,
   resolveAllowedModelRefFromAliasIndex,
-  type ModelRefStatus,
 } from "./model-selection-shared.js";
 
 export {
-  buildConfiguredAllowlistKeys,
-  buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  inferUniqueProviderFromConfiguredModels,
+  getModelRefStatus,
   normalizeModelSelection,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
-export type { ModelAliasIndex, ModelRefStatus } from "./model-selection-shared.js";
 
-function resolveDefaultFallbackModels(cfg: OpenClawConfig): string[] {
-  return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+/** Resolve agent-owned fallback overrides without loading the full selection facade. */
+export function resolveConfiguredModelFallbacks(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): string[] {
+  if (params.agentId) {
+    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
+    if (override !== undefined) {
+      return override;
+    }
+  }
+  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
 }
 
-export function buildAllowedModelSet(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-}): {
-  allowAny: boolean;
-  allowedCatalog: ModelCatalogEntry[];
-  allowedKeys: Set<string>;
-} {
-  const { cfg, catalog, defaultProvider, defaultModel } = params;
-  return buildAllowedModelSetWithFallbacks({
-    cfg,
-    catalog,
-    defaultProvider,
-    defaultModel,
-    fallbackModels: resolveDefaultFallbackModels(cfg),
-  });
-}
-
-export function getModelRefStatus(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  ref: ModelRef;
-  defaultProvider: string;
-  defaultModel?: string;
-}): ModelRefStatus {
-  const { cfg, catalog, ref, defaultProvider, defaultModel } = params;
-  return getModelRefStatusWithFallbackModels({
-    cfg,
-    catalog,
-    ref,
-    defaultProvider,
-    defaultModel,
-    fallbackModels: resolveDefaultFallbackModels(cfg),
-  });
-}
-
-export function resolveAllowedModelRef(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  raw: string;
-  defaultProvider: string;
-  defaultModel?: string;
-}):
+/** Resolves a raw model string into an allowed model ref or an explanatory error. */
+export function resolveAllowedModelRefCore(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    raw: string;
+    defaultProvider: string;
+    defaultModel?: string;
+    agentId?: string;
+  } & ModelManifestNormalizationContext,
+):
   | { ref: ModelRef; key: string }
   | {
       error: string;
@@ -78,12 +56,16 @@ export function resolveAllowedModelRef(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
   });
   return resolveAllowedModelRefFromAliasIndex({
     cfg: params.cfg,
     raw: params.raw,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
     aliasIndex,
+    manifestPlugins: params.manifestPlugins,
     getStatus: (ref) =>
       getModelRefStatus({
         cfg: params.cfg,
@@ -91,6 +73,8 @@ export function resolveAllowedModelRef(params: {
         ref,
         defaultProvider: params.defaultProvider,
         defaultModel: params.defaultModel,
+        agentId: params.agentId,
+        manifestPlugins: params.manifestPlugins,
       }),
   });
 }

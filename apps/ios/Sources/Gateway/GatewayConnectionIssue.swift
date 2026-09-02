@@ -4,6 +4,7 @@ import OpenClawKit
 enum GatewayConnectionIssue: Equatable {
     case none
     case tokenMissing
+    case passwordMissing
     case unauthorized
     case pairingRequired(requestId: String?)
     case network
@@ -16,12 +17,12 @@ enum GatewayConnectionIssue: Equatable {
         return nil
     }
 
-    var needsAuthToken: Bool {
+    var needsAuthCredentials: Bool {
         switch self {
-        case .tokenMissing, .unauthorized:
-            return true
+        case .tokenMissing, .passwordMissing, .unauthorized:
+            true
         default:
-            return false
+            false
         }
     }
 
@@ -35,22 +36,28 @@ enum GatewayConnectionIssue: Equatable {
         if problem.needsPairingApproval {
             return .pairingRequired(requestId: problem.requestId)
         }
+        if problem.kind == .gatewayAuthTokenMissing {
+            return .tokenMissing
+        }
+        if problem.kind == .gatewayAuthPasswordMissing {
+            return .passwordMissing
+        }
         if problem.needsCredentialUpdate {
-            return problem.kind == .gatewayAuthTokenMissing ? .tokenMissing : .unauthorized
+            return .unauthorized
         }
         switch problem.kind {
         case .deviceIdentityRequired,
-            .deviceSignatureExpired,
-            .deviceNonceRequired,
-            .deviceNonceMismatch,
-            .deviceSignatureInvalid,
-            .devicePublicKeyInvalid,
-            .deviceIdMismatch,
-            .tailscaleIdentityMissing,
-            .tailscaleProxyMissing,
-            .tailscaleWhoisFailed,
-            .tailscaleIdentityMismatch,
-            .authRateLimited:
+             .deviceSignatureExpired,
+             .deviceNonceRequired,
+             .deviceNonceMismatch,
+             .deviceSignatureInvalid,
+             .devicePublicKeyInvalid,
+             .deviceIdMismatch,
+             .tailscaleIdentityMissing,
+             .tailscaleProxyMissing,
+             .tailscaleWhoisFailed,
+             .tailscaleIdentityMismatch,
+             .authRateLimited:
             return .unauthorized
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
             return .network
@@ -71,6 +78,9 @@ enum GatewayConnectionIssue: Equatable {
         }
         if lower.contains("gateway token missing") {
             return .tokenMissing
+        }
+        if lower.contains("gateway password missing") {
+            return .passwordMissing
         }
         if lower.contains("unauthorized") {
             return .unauthorized

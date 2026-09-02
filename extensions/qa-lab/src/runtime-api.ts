@@ -1,7 +1,8 @@
+// Qa Lab API module exposes the plugin public contract.
 export type { Command } from "commander";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-export { callGatewayFromCli } from "openclaw/plugin-sdk/browser-node-runtime";
+export { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 export {
@@ -36,7 +37,9 @@ export type {
   QaBusReactToMessageInput,
   QaBusReadMessageInput,
   QaBusSearchMessagesInput,
+  QaBusSnapshotConversation,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
   QaBusWaitForInput,
-} from "openclaw/plugin-sdk/qa-channel";
+} from "./protocol.js";

@@ -1,3 +1,4 @@
+// Covers safe-bin allowlist behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,20 +6,17 @@ import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
   makePathEnv,
-  makeTempDir,
+  makeExecApprovalsTempDir,
 } from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
-  evaluateShellAllowlist,
+  evaluateShellAllowlistWithAuthorization,
   isSafeBinUsage,
   normalizeSafeBins,
   resolveSafeBins,
 } from "./exec-approvals.js";
-import {
-  SAFE_BIN_PROFILE_FIXTURES,
-  SAFE_BIN_PROFILES,
-  resolveSafeBinProfiles,
-} from "./exec-safe-bin-policy.js";
+import { resolveSafeBinProfiles } from "./exec-safe-bin-policy.js";
+import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
   type SafeBinCase = {
@@ -32,6 +30,7 @@ describe("exec approvals safe bins", () => {
     rawExecutable?: string;
     cwd?: string;
     setup?: (cwd: string) => void;
+    trusted?: boolean;
   };
 
   function buildDeniedFlagVariantCases(params: {
@@ -175,10 +174,10 @@ describe("exec approvals safe bins", () => {
 
   const cases: SafeBinCase[] = [
     {
-      name: "allows safe bins with non-path args",
+      name: "blocks jq safe bins even with non-path args",
       argv: ["jq", ".foo"],
       resolvedPath: "/usr/bin/jq",
-      expected: true,
+      expected: false,
     },
     {
       name: "blocks jq env builtin even when jq is explicitly opted in",
@@ -195,6 +194,30 @@ describe("exec approvals safe bins", () => {
     {
       name: "blocks jq $ENV property access even when jq is explicitly opted in",
       argv: ["jq", "($ENV).OPENAI_API_KEY"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq include directives even when jq is explicitly opted in",
+      argv: ["jq", 'include "envdump"; envdump'],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq import directives even when jq is explicitly opted in",
+      argv: ["jq", 'import "envdump" as envdump; envdump::read'],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq field names that match directive keywords",
+      argv: ["jq", ".include + .import"],
+      resolvedPath: "/usr/bin/jq",
+      expected: false,
+    },
+    {
+      name: "blocks jq object keys that match directive keywords",
+      argv: ["jq", "{include: .foo, import : .bar}"],
       resolvedPath: "/usr/bin/jq",
       expected: false,
     },
@@ -224,11 +247,36 @@ describe("exec approvals safe bins", () => {
       setup: (cwd) => fs.writeFileSync(path.join(cwd, "secret.json"), "{}"),
     },
     {
+      name: "blocks POSIX parameter expansion in safe-bin value tokens",
+      argv: ["head", "-c${IFS}16${IFS}${OPENCLAW_CONFIG_PATH}"],
+      resolvedPath: "/usr/bin/head",
+      expected: false,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin long option values",
+      argv: ["head", "--bytes=${IFS}16"],
+      resolvedPath: "/usr/bin/head",
+      expected: false,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "blocks POSIX parameter expansion in safe-bin positional tokens",
+      argv: ["tr", "${IFS}", "_"],
+      resolvedPath: "/usr/bin/tr",
+      expected: false,
+      safeBins: ["tr"],
+      executableName: "tr",
+    },
+    {
       name: "blocks safe bins resolved from untrusted directories",
       argv: ["jq", ".foo"],
       resolvedPath: "/tmp/evil-bin/jq",
       expected: false,
       cwd: "/tmp",
+      trusted: false,
     },
     ...deniedFlagCases,
     {
@@ -271,22 +319,89 @@ describe("exec approvals safe bins", () => {
       safeBins: ["tr"],
       executableName: "tr",
     },
+    {
+      name: "keeps tail -fn 1 follow mode approval-gated",
+      argv: ["tail", "-fn", "1"],
+      resolvedPath: "/usr/bin/tail",
+      expected: false,
+      safeBins: ["tail"],
+      executableName: "tail",
+    },
+    {
+      name: "auto-allows cut only-delimited mode with a field selector",
+      argv: ["cut", "-s", "-f", "1"],
+      resolvedPath: "/usr/bin/cut",
+      expected: true,
+      safeBins: ["cut"],
+      executableName: "cut",
+    },
+    {
+      name: "auto-allows head quiet mode",
+      argv: ["head", "-q"],
+      resolvedPath: "/usr/bin/head",
+      expected: true,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "auto-allows tail quiet mode",
+      argv: ["tail", "-q"],
+      resolvedPath: "/usr/bin/tail",
+      expected: true,
+      safeBins: ["tail"],
+      executableName: "tail",
+    },
+    {
+      name: "auto-allows wc line count via boolean flag",
+      argv: ["wc", "-l"],
+      resolvedPath: "/usr/bin/wc",
+      expected: true,
+      safeBins: ["wc"],
+      executableName: "wc",
+    },
+    {
+      name: "auto-allows wc word count via boolean long flag",
+      argv: ["wc", "--words"],
+      resolvedPath: "/usr/bin/wc",
+      expected: true,
+      safeBins: ["wc"],
+      executableName: "wc",
+    },
+    {
+      name: "auto-allows uniq count via boolean flag",
+      argv: ["uniq", "-c"],
+      resolvedPath: "/usr/bin/uniq",
+      expected: true,
+      safeBins: ["uniq"],
+      executableName: "uniq",
+    },
+    {
+      name: "auto-allows tr delete via boolean flag",
+      argv: ["tr", "-d", "abc"],
+      resolvedPath: "/usr/bin/tr",
+      expected: true,
+      safeBins: ["tr"],
+      executableName: "tr",
+    },
   ];
 
   it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
-    const cwd = testCase.cwd ?? makeTempDir();
+    const cwd = testCase.cwd ?? makeExecApprovalsTempDir();
     testCase.setup?.(cwd);
     const executableName = testCase.executableName ?? "jq";
     const rawExecutable = testCase.rawExecutable ?? executableName;
     const ok = isSafeBinUsage({
       argv: testCase.argv,
       resolution: {
+        kind: "executable",
         rawExecutable,
         resolvedPath: testCase.resolvedPath,
         executableName,
       },
       safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
       safeBinProfiles: testCase.safeBinProfiles,
+      // This table isolates argv policy. Dedicated cases below exercise real path trust.
+      isTrustedSafeBinPathFn: () => testCase.trusted ?? true,
     });
     expect(ok).toBe(testCase.expected);
   });
@@ -296,27 +411,69 @@ describe("exec approvals safe bins", () => {
       return;
     }
     const ok = isSafeBinUsage({
-      argv: ["jq", ".foo"],
+      argv: ["head", "-n", "1"],
       resolution: {
-        rawExecutable: "jq",
-        resolvedPath: "/custom/bin/jq",
-        executableName: "jq",
+        kind: "executable",
+        rawExecutable: "head",
+        resolvedPath: "/custom/bin/head",
+        executableName: "head",
       },
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       trustedSafeBinDirs: new Set(["/custom/bin"]),
     });
     expect(ok).toBe(true);
   });
 
+  it("checks safe-bin trusted dirs against the real executable identity", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const resolution = {
+      kind: "executable" as const,
+      rawExecutable: "head",
+      resolvedPath: "/opt/homebrew/bin/head",
+      resolvedRealPath: "/opt/homebrew/Cellar/coreutils/9.5/bin/head",
+      executableName: "head",
+    };
+    expect(
+      isSafeBinUsage({
+        argv: ["head", "-n", "1"],
+        resolution,
+        safeBins: normalizeSafeBins(["head"]),
+        trustedSafeBinDirs: new Set(["/opt/homebrew/bin"]),
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBinUsage({
+        argv: ["head", "-n", "1"],
+        resolution,
+        safeBins: normalizeSafeBins(["head"]),
+        trustedSafeBinDirs: getTrustedSafeBinDirs({
+          extraDirs: ["/opt/homebrew/Cellar/coreutils/9.5/bin"],
+          refresh: true,
+        }),
+      }),
+    ).toBe(true);
+    expect(
+      isSafeBinUsage({
+        argv: ["head", "-n", "1"],
+        resolution,
+        safeBins: normalizeSafeBins(["head"]),
+        trustedSafeBinDirs: new Set(["/tmp/other-bin"]),
+      }),
+    ).toBe(false);
+  });
+
   it("supports injected platform for deterministic safe-bin checks", () => {
     const ok = isSafeBinUsage({
-      argv: ["jq", ".foo"],
+      argv: ["head", "-n", "1"],
       resolution: {
-        rawExecutable: "jq",
-        resolvedPath: "/usr/bin/jq",
-        executableName: "jq",
+        kind: "executable",
+        rawExecutable: "head",
+        resolvedPath: "/usr/bin/head",
+        executableName: "head",
       },
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       platform: "win32",
     });
     expect(ok).toBe(false);
@@ -327,13 +484,14 @@ describe("exec approvals safe bins", () => {
       return;
     }
     const baseParams = {
-      argv: ["jq", ".foo"],
+      argv: ["head", "-n", "1"],
       resolution: {
-        rawExecutable: "jq",
-        resolvedPath: "/tmp/custom/jq",
-        executableName: "jq",
+        kind: "executable" as const,
+        rawExecutable: "head",
+        resolvedPath: "/tmp/custom/head",
+        executableName: "head",
       },
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
     };
     expect(
       isSafeBinUsage({
@@ -349,21 +507,6 @@ describe("exec approvals safe bins", () => {
     ).toBe(false);
   });
 
-  it("keeps safe-bin profile fixtures aligned with compiled profiles", () => {
-    for (const [name, fixture] of Object.entries(SAFE_BIN_PROFILE_FIXTURES)) {
-      const profile = SAFE_BIN_PROFILES[name];
-      expect(profile).toBeDefined();
-      const fixtureDeniedFlags = fixture.deniedFlags ?? [];
-      const compiledDeniedFlags = profile?.deniedFlags ?? new Set<string>();
-      for (const deniedFlag of fixtureDeniedFlags) {
-        expect(compiledDeniedFlags.has(deniedFlag)).toBe(true);
-      }
-      expect(Array.from(compiledDeniedFlags).toSorted()).toEqual(
-        [...fixtureDeniedFlags].toSorted(),
-      );
-    }
-  });
-
   it("does not include sort/grep in default safeBins", () => {
     const defaults = resolveSafeBins(undefined);
     expect(defaults.has("jq")).toBe(false);
@@ -371,11 +514,11 @@ describe("exec approvals safe bins", () => {
     expect(defaults.has("grep")).toBe(false);
   });
 
-  it("does not auto-allow unprofiled safe-bin entries", () => {
+  it("does not auto-allow unprofiled safe-bin entries", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const result = evaluateShellAllowlist({
+    const result = await evaluateShellAllowlistWithAuthorization({
       command: "python3 -c \"print('owned')\"",
       allowlist: [],
       safeBins: normalizeSafeBins(["python3"]),
@@ -397,22 +540,26 @@ describe("exec approvals safe bins", () => {
     const allow = isSafeBinUsage({
       argv: ["echo", "hello"],
       resolution: {
+        kind: "executable",
         rawExecutable: "echo",
-        resolvedPath: "/bin/echo",
+        resolvedPath: "/opt/openclaw-test/bin/echo",
         executableName: "echo",
       },
       safeBins: normalizeSafeBins(["echo"]),
       safeBinProfiles,
+      trustedSafeBinDirs: new Set(["/opt/openclaw-test/bin"]),
     });
     const deny = isSafeBinUsage({
       argv: ["echo", "hello", "world"],
       resolution: {
+        kind: "executable",
         rawExecutable: "echo",
-        resolvedPath: "/bin/echo",
+        resolvedPath: "/opt/openclaw-test/bin/echo",
         executableName: "echo",
       },
       safeBins: normalizeSafeBins(["echo"]),
       safeBinProfiles,
+      trustedSafeBinDirs: new Set(["/opt/openclaw-test/bin"]),
     });
     expect(allow).toBe(true);
     expect(deny).toBe(false);
@@ -422,9 +569,10 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const cwd = makeTempDir();
+    const cwd = makeExecApprovalsTempDir();
     fs.writeFileSync(path.join(cwd, "existing.txt"), "x");
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "sort",
       resolvedPath: "/usr/bin/sort",
       executableName: "sort",
@@ -458,13 +606,13 @@ describe("exec approvals safe bins", () => {
       ok: true as const,
       segments: [
         {
-          raw: "jq .foo",
-          argv: ["jq", ".foo"],
+          raw: "head -n 1",
+          argv: ["head", "-n", "1"],
           resolution: makeMockCommandResolution({
             execution: makeMockExecutableResolution({
-              rawExecutable: "jq",
-              resolvedPath: "/custom/bin/jq",
-              executableName: "jq",
+              rawExecutable: "head",
+              resolvedPath: "/custom/bin/head",
+              executableName: "head",
             }),
           }),
         },
@@ -473,7 +621,7 @@ describe("exec approvals safe bins", () => {
     const denied = evaluateExecAllowlist({
       analysis,
       allowlist: [],
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       trustedSafeBinDirs: new Set(["/usr/bin"]),
       cwd: "/tmp",
     });
@@ -482,25 +630,25 @@ describe("exec approvals safe bins", () => {
     const allowed = evaluateExecAllowlist({
       analysis,
       allowlist: [],
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
       trustedSafeBinDirs: new Set(["/custom/bin"]),
       cwd: "/tmp",
     });
     expect(allowed.allowlistSatisfied).toBe(true);
   });
 
-  it("does not auto-trust PATH-shadowed safe bins without explicit trusted dirs", () => {
+  it("does not auto-trust PATH-shadowed safe bins without explicit trusted dirs", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmp = makeTempDir();
+    const tmp = makeExecApprovalsTempDir();
     const fakeDir = path.join(tmp, "fake-bin");
     fs.mkdirSync(fakeDir, { recursive: true });
     const fakeHead = path.join(fakeDir, "head");
     fs.writeFileSync(fakeHead, "#!/bin/sh\nexit 0\n");
     fs.chmodSync(fakeHead, 0o755);
 
-    const result = evaluateShellAllowlist({
+    const result = await evaluateShellAllowlistWithAuthorization({
       command: "head -n 1",
       allowlist: [],
       safeBins: normalizeSafeBins(["head"]),
@@ -513,11 +661,11 @@ describe("exec approvals safe bins", () => {
     expect(result.segments[0]?.resolution?.execution.resolvedPath).toBe(fakeHead);
   });
 
-  it("fails closed for semantic env wrappers in allowlist mode", () => {
+  it("fails closed for semantic env wrappers in allowlist mode", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const result = evaluateShellAllowlist({
+    const result = await evaluateShellAllowlistWithAuthorization({
       command: "env -S 'sh -c \"echo pwned\"' tr",
       allowlist: [{ pattern: "/usr/bin/tr" }],
       safeBins: normalizeSafeBins(["tr"]),

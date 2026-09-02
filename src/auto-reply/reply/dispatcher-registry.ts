@@ -2,6 +2,7 @@
  * Global registry for tracking active reply dispatchers.
  * Used to ensure gateway restart waits for all replies to complete.
  */
+import { resolveGlobalSet } from "../../shared/global-singleton.js";
 
 type TrackedDispatcher = {
   readonly id: string;
@@ -9,7 +10,10 @@ type TrackedDispatcher = {
   readonly waitForIdle: () => Promise<void>;
 };
 
-const activeDispatchers = new Set<TrackedDispatcher>();
+const activeDispatchers = resolveGlobalSet<TrackedDispatcher>(
+  Symbol.for("openclaw.activeReplyDispatchers"),
+  "close-only",
+);
 let nextId = 0;
 
 /**
@@ -44,15 +48,4 @@ export function getTotalPendingReplies(): number {
     total += dispatcher.pending();
   }
   return total;
-}
-
-/**
- * Clear all registered dispatchers (for testing).
- * WARNING: Only use this in test cleanup!
- */
-export function clearAllDispatchers(): void {
-  if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
-    throw new Error("clearAllDispatchers() is only available in test environments");
-  }
-  activeDispatchers.clear();
 }

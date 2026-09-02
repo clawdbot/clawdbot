@@ -4,6 +4,8 @@ export {
   collectConditionalChannelFieldAssignments,
   collectNestedChannelFieldAssignments,
   collectSimpleChannelFieldAssignments,
+  createChannelSecretTargetRegistryEntries,
+  createSimpleChannelSecretContract,
   getChannelRecord,
   getChannelSurface,
   hasConfiguredSecretInputValue,
@@ -15,6 +17,7 @@ export type {
   ChannelAccountEntry,
   ChannelAccountPredicate,
   ChannelAccountSurface,
+  ChannelSecretTargetPathSpec,
 } from "../secrets/channel-secret-basic-runtime.js";
 export {
   collectSecretInputAssignment,

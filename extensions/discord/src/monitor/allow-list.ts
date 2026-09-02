@@ -1,16 +1,20 @@
-import type { Guild, User } from "@buape/carbon";
-import type { AllowlistMatch } from "openclaw/plugin-sdk/allow-from";
+// Discord plugin module implements allow list behavior.
+import {
+  type AllowlistMatch,
+  resolveAllowlistMatchByCandidates,
+} from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
   resolveChannelMatchConfig,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import { evaluateGroupRouteAccessForPolicy } from "openclaw/plugin-sdk/group-access";
+import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { Guild, User } from "../internal/discord.js";
 import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordAllowList = {
@@ -19,7 +23,7 @@ export type DiscordAllowList = {
   names: Set<string>;
 };
 
-export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
+type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | "tag">;
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
@@ -37,7 +41,7 @@ type DiscordChannelOverrideConfig = {
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
 };
 
-export type DiscordGuildEntryResolved = {
+export type DiscordGuildEntryResolved = Pick<DiscordGuildEntry, "presenceEvents"> & {
   id?: string;
   slug?: string;
   requireMention?: boolean;
@@ -72,7 +76,7 @@ export function normalizeDiscordAllowList(raw: string[] | undefined, prefixes: s
       ids.add(maybeId);
       continue;
     }
-    const prefix = prefixes.find((entry) => text.startsWith(entry));
+    const prefix = prefixes.find((entryLocal) => text.startsWith(entryLocal));
     if (prefix) {
       const candidate = text.slice(prefix.length);
       if (candidate) {
@@ -91,6 +95,16 @@ export function normalizeDiscordSlug(value: string) {
   return normalizeLowercaseStringOrEmpty(value)
     .replace(/^#/, "")
     .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export function normalizeDiscordDisplaySlug(value: string) {
+  return normalizeLowercaseStringOrEmpty(value)
+    .normalize("NFC")
+    .replace(/^#/, "")
+    .replace(/[\s_]+/g, "-")
+    .replace(/[^\p{L}\p{M}\p{N}-]+/gu, "-")
+    .replace(/-{2,}/g, "-")
     .replace(/^-+|-+$/g, "");
 }
 
@@ -149,7 +163,7 @@ export function resolveDiscordAllowListMatch(params: {
   return { allowed: false };
 }
 
-export function resolveDiscordUserAllowed(params: {
+function resolveDiscordUserAllowed(params: {
   allowList?: string[];
   userId: string;
   userName?: string;
@@ -171,10 +185,7 @@ export function resolveDiscordUserAllowed(params: {
   );
 }
 
-export function resolveDiscordRoleAllowed(params: {
-  allowList?: string[];
-  memberRoleIds: string[];
-}) {
+function resolveDiscordRoleAllowed(params: { allowList?: string[]; memberRoleIds: string[] }) {
   // Role allowlists accept role IDs only. Names are ignored.
   const allowList = normalizeDiscordAllowList(params.allowList, ["role:"]);
   if (!allowList) {
@@ -279,8 +290,11 @@ export function resolveDiscordOwnerAccess(params: {
   ownerAllowList: DiscordAllowList | null;
   ownerAllowed: boolean;
 } {
+  const ownerAllowFrom = params.allowFrom?.filter(
+    (entry) => (normalizeOptionalString(entry) ?? "") !== "*",
+  );
   const ownerAllowList = normalizeDiscordAllowList(
-    params.allowFrom,
+    ownerAllowFrom && ownerAllowFrom.length > 0 ? ownerAllowFrom : undefined,
     DISCORD_OWNER_ALLOWLIST_PREFIXES,
   );
   const ownerAllowed = ownerAllowList
@@ -295,6 +309,36 @@ export function resolveDiscordOwnerAccess(params: {
       )
     : false;
   return { ownerAllowList, ownerAllowed };
+}
+
+export function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
+  const raw = cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const entries: string[] = [];
+  for (const entry of raw) {
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex > 0) {
+      const prefix = trimmed.slice(0, separatorIndex).toLowerCase();
+      if (prefix === "discord") {
+        const remainder = normalizeOptionalString(trimmed.slice(separatorIndex + 1)) ?? "";
+        if (remainder) {
+          entries.push(remainder);
+        }
+        continue;
+      }
+      if (prefix !== "user" && prefix !== "pk") {
+        continue;
+      }
+    }
+    entries.push(trimmed);
+  }
+  return entries.length > 0 ? entries : undefined;
 }
 
 export function resolveDiscordCommandAuthorized(params: {
@@ -497,7 +541,7 @@ export function resolveDiscordShouldRequireMention(params: {
   return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
 }
 
-export function isDiscordAutoThreadOwnedByBot(params: {
+function isDiscordAutoThreadOwnedByBot(params: {
   isThread: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   botId?: string | null;
@@ -523,15 +567,14 @@ export function isDiscordGroupAllowedByPolicy(params: {
   if (params.groupPolicy === "allowlist" && !params.guildAllowlisted) {
     return false;
   }
-
-  return evaluateGroupRouteAccessForPolicy({
-    groupPolicy:
-      params.groupPolicy === "allowlist" && !params.channelAllowlistConfigured
-        ? "open"
-        : params.groupPolicy,
-    routeAllowlistConfigured: params.channelAllowlistConfigured,
-    routeMatched: params.channelAllowed,
-  }).allowed;
+  if (params.groupPolicy === "disabled") {
+    return false;
+  }
+  return (
+    params.groupPolicy !== "allowlist" ||
+    !params.channelAllowlistConfigured ||
+    params.channelAllowed
+  );
 }
 
 export function resolveDiscordChannelPolicyCommandAuthorizer(params: {
@@ -564,13 +607,14 @@ export function resolveGroupDmAllow(params: {
   if (!channels || channels.length === 0) {
     return true;
   }
-  const allowList = new Set(channels.map((entry) => normalizeDiscordSlug(entry)));
-  const candidates = [
-    normalizeDiscordSlug(channelId),
-    channelSlug,
-    channelName ? normalizeDiscordSlug(channelName) : "",
-  ].filter(Boolean);
-  return allowList.has("*") || candidates.some((candidate) => allowList.has(candidate));
+  return resolveAllowlistMatchByCandidates({
+    allowList: channels.map((entry) => normalizeDiscordSlug(entry)),
+    candidates: [
+      { value: normalizeDiscordSlug(channelId), source: "id" },
+      { value: channelSlug, source: "slug" },
+      { value: channelName ? normalizeDiscordSlug(channelName) : undefined, source: "name" },
+    ],
+  }).allowed;
 }
 
 export function shouldEmitDiscordReactionNotification(params: {

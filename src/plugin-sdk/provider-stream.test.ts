@@ -1,14 +1,21 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Model } from "openclaw/plugin-sdk/llm";
+// Provider stream tests cover shared stream-wrapper families and payload compatibility.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { VERSION } from "../version.js";
 import {
   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
   createMoonshotThinkingWrapper as createMoonshotThinkingWrapperShared,
+  createPlainTextToolCallCompatWrapper as createPlainTextToolCallCompatWrapperShared,
   createToolStreamWrapper as createToolStreamWrapperShared,
 } from "./provider-stream-shared.js";
 import {
   buildProviderStreamFamilyHooks,
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
+  createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
   GOOGLE_THINKING_STREAM_HOOKS,
   KILOCODE_THINKING_STREAM_HOOKS,
@@ -37,6 +44,207 @@ function requireStreamFn(streamFn: StreamFn | null | undefined) {
   return streamFn;
 }
 
+const requireRecord = createRequireRecord("record", "expected-label-object");
+
+const streamTestModel = {
+  id: "test-model",
+  name: "Test Model",
+  api: "openai-completions",
+  provider: "test",
+  baseUrl: "https://example.test/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8_192,
+  maxTokens: 1_024,
+} satisfies Model<"openai-completions">;
+
+function streamTestMessage(text: string) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: streamTestModel.api,
+    provider: streamTestModel.provider,
+    model: streamTestModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: 1,
+  };
+}
+
+function requirePayload(payload: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!payload) {
+    throw new Error("expected captured payload");
+  }
+  return payload;
+}
+
+type OpenAIResponsesTestModel = {
+  api: "openai-responses" | "openai-chatgpt-responses";
+  provider: "openai";
+  baseUrl: string;
+  id: string;
+};
+
+const openAIResponsesServiceTierEndpoints = [
+  {
+    name: "public OpenAI Responses",
+    model: {
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      id: "gpt-5.6-luna",
+    },
+    fastParams: { fastMode: true },
+    payloadServiceTier: "default",
+    configuredServiceTier: "flex",
+  },
+  {
+    name: "ChatGPT Responses",
+    model: {
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      id: "gpt-5.6-sol",
+    },
+    fastParams: { fast_mode: true },
+    payloadServiceTier: "flex",
+    configuredServiceTier: "default",
+  },
+] as const;
+
+async function captureOpenAIResponsesFamilyPayload(params: {
+  model: OpenAIResponsesTestModel;
+  extraParams: Record<string, unknown>;
+  initialServiceTier?: string;
+}): Promise<Record<string, unknown>> {
+  let capturedPayload: Record<string, unknown> | undefined;
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    const payload: Record<string, unknown> = { model: model.id };
+    if (params.initialServiceTier !== undefined) {
+      payload.service_tier = params.initialServiceTier;
+    }
+    options?.onPayload?.(payload as never, model as never);
+    capturedPayload = payload;
+    return {} as never;
+  };
+  const wrapStreamFn = requireWrapStreamFn(
+    buildProviderStreamFamilyHooks("openai-responses-defaults").wrapStreamFn,
+  );
+  const streamFn = requireStreamFn(
+    wrapStreamFn({ streamFn: baseStreamFn, extraParams: params.extraParams } as never),
+  );
+
+  await streamFn(params.model as never, {} as never, {});
+  return requirePayload(capturedPayload);
+}
+
+function expectDefaultThinkingBudget(payload: Record<string, unknown>) {
+  const config = requireRecord(payload.config, "payload.config");
+  const thinkingConfig = requireRecord(config.thinkingConfig, "payload.config.thinkingConfig");
+  expect(thinkingConfig.thinkingBudget).toBe(-1);
+}
+
+describe("createMoonshotThinkingWrapper", () => {
+  it.each(["kimi-k2.7-code", "kimi-k2.7-code-highspeed"])(
+    "sanitizes %s after an async caller replaces the payload",
+    async (modelId) => {
+      let finalPayload: Record<string, unknown> | undefined;
+      const baseStreamFn: StreamFn = async (model, _context, options) => {
+        const payload = { model: model.id };
+        const replacement = await options?.onPayload?.(payload, model);
+        finalPayload = requireRecord(replacement ?? payload, "final payload");
+        return {} as never;
+      };
+      const wrapped = createMoonshotThinkingWrapper(baseStreamFn, "disabled", "all");
+
+      await wrapped({ api: "openai-completions", id: modelId } as never, {} as never, {
+        onPayload: async () => ({
+          model: modelId,
+          thinking: { type: "disabled" },
+          reasoning_effort: "low",
+          temperature: 0,
+          top_p: 0.5,
+          tool_choice: "required",
+        }),
+      });
+
+      const payload = requirePayload(finalPayload);
+      expect(payload).not.toHaveProperty("thinking");
+      expect(payload).not.toHaveProperty("reasoning_effort");
+      expect(payload).not.toHaveProperty("temperature");
+      expect(payload).not.toHaveProperty("top_p");
+      expect(payload.tool_choice).toBe("auto");
+    },
+  );
+
+  it("forces the direct Moonshot K3 payload contract after async caller replacement", async () => {
+    let finalPayload: Record<string, unknown> | undefined;
+    const pinnedToolChoice = { type: "function", function: { name: "read" } };
+    const baseStreamFn: StreamFn = async (model, _context, options) => {
+      const payload = { model: model.id };
+      const replacement = await options?.onPayload?.(payload, model);
+      finalPayload = requireRecord(replacement ?? payload, "final payload");
+      return {} as never;
+    };
+    const wrapped = createMoonshotThinkingWrapper(baseStreamFn, "disabled", "all");
+
+    await wrapped(
+      { api: "openai-completions", provider: "moonshot", id: "kimi-k3" } as never,
+      {} as never,
+      {
+        onPayload: async () => ({
+          model: "kimi-k3",
+          thinking: { type: "disabled" },
+          reasoningEffort: "low",
+          reasoning_effort: "low",
+          temperature: 0,
+          top_p: 0.5,
+          tool_choice: pinnedToolChoice,
+        }),
+      },
+    );
+
+    const payload = requirePayload(finalPayload);
+    expect(payload).not.toHaveProperty("thinking");
+    expect(payload).not.toHaveProperty("reasoningEffort");
+    expect(payload.reasoning_effort).toBe("max");
+    expect(payload).not.toHaveProperty("temperature");
+    expect(payload).not.toHaveProperty("top_p");
+    expect(payload.tool_choice).toEqual(pinnedToolChoice);
+  });
+
+  it("does not apply the direct K3 contract to an Ollama-owned model", async () => {
+    let finalPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = async (model, _context, options) => {
+      const payload = { model: model.id, reasoning_effort: "low", temperature: 0 };
+      const replacement = await options?.onPayload?.(payload, model);
+      finalPayload = requireRecord(replacement ?? payload, "final payload");
+      return {} as never;
+    };
+    const wrapped = createMoonshotThinkingWrapper(baseStreamFn, "enabled");
+
+    await wrapped(
+      { api: "openai-completions", provider: "ollama", id: "kimi-k3" } as never,
+      {} as never,
+      {},
+    );
+
+    expect(requirePayload(finalPayload)).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "low",
+      temperature: 0,
+    });
+  });
+});
+
 describe("composeProviderStreamWrappers", () => {
   it("re-exports the shared wrapper composer", () => {
     expect(composeProviderStreamWrappers).toBe(composeProviderStreamWrappersShared);
@@ -44,10 +252,11 @@ describe("composeProviderStreamWrappers", () => {
 
   it("re-exports shared helper wrappers", () => {
     expect(createMoonshotThinkingWrapper).toBe(createMoonshotThinkingWrapperShared);
+    expect(createPlainTextToolCallCompatWrapper).toBe(createPlainTextToolCallCompatWrapperShared);
     expect(createToolStreamWrapper).toBe(createToolStreamWrapperShared);
   });
 
-  it("applies wrappers left to right", async () => {
+  it("applies wrappers left to right", () => {
     const order: string[] = [];
     const baseStreamFn: StreamFn = (_model, _context, _options) => {
       order.push("base");
@@ -64,10 +273,11 @@ describe("composeProviderStreamWrappers", () => {
         return result;
       };
 
-    const composed = composeProviderStreamWrappers(baseStreamFn, wrap("a"), undefined, wrap("b"));
+    const composed = requireStreamFn(
+      composeProviderStreamWrappers(baseStreamFn, wrap("a"), undefined, wrap("b")),
+    );
 
-    expect(typeof composed).toBe("function");
-    void composed?.({} as never, {} as never, {});
+    void composed({} as never, {} as never, {});
 
     expect(order).toEqual(["b:before", "a:before", "base", "a:after", "b:after"]);
   });
@@ -79,14 +289,61 @@ describe("composeProviderStreamWrappers", () => {
 });
 
 describe("buildProviderStreamFamilyHooks", () => {
+  it.each(
+    openAIResponsesServiceTierEndpoints.flatMap(
+      ({ name, model, fastParams, payloadServiceTier, configuredServiceTier }) => [
+        {
+          name: `${name}: configured flex beats fast mode`,
+          model,
+          extraParams: { ...fastParams, serviceTier: "flex" },
+          initialServiceTier: undefined,
+          expectedServiceTier: "flex",
+        },
+        {
+          name: `${name}: configured default beats fast mode`,
+          model,
+          extraParams: { ...fastParams, service_tier: "default" },
+          initialServiceTier: undefined,
+          expectedServiceTier: "default",
+        },
+        {
+          name: `${name}: payload ${payloadServiceTier} beats configured ${configuredServiceTier} and fast mode`,
+          model,
+          extraParams: { ...fastParams, serviceTier: configuredServiceTier },
+          initialServiceTier: payloadServiceTier,
+          expectedServiceTier: payloadServiceTier,
+        },
+        {
+          name: `${name}: fast mode defaults to priority`,
+          model,
+          extraParams: fastParams,
+          initialServiceTier: undefined,
+          expectedServiceTier: "priority",
+        },
+      ],
+    ),
+  )("$name", async ({ model, extraParams, initialServiceTier, expectedServiceTier }) => {
+    const payload = await captureOpenAIResponsesFamilyPayload({
+      model,
+      extraParams,
+      initialServiceTier,
+    });
+
+    expect(payload.service_tier).toBe(expectedServiceTier);
+  });
+
   it("covers the stream family matrix", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     let capturedModelId: string | undefined;
+    let capturedModelReasoning: boolean | undefined;
     let capturedHeaders: Record<string, string> | undefined;
+    let capturedReasoning: string | undefined;
     let payloadSeed: Record<string, unknown> | undefined;
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       capturedModelId = model.id;
+      capturedModelReasoning = model.reasoning;
+      capturedReasoning = options?.reasoning;
       const payload = {
         model: model.id,
         config: { thinkingConfig: { thinkingBudget: -1 } },
@@ -111,12 +368,13 @@ describe("buildProviderStreamFamilyHooks", () => {
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingLevel: "HIGH" } },
-    });
-    const googleThinkingConfig = (
-      (capturedPayload as Record<string, unknown>).config as Record<string, unknown>
-    ).thinkingConfig as Record<string, unknown>;
+    const googlePayload = requirePayload(capturedPayload);
+    const googleConfig = requireRecord(googlePayload.config, "google payload config");
+    const googleThinkingConfig = requireRecord(
+      googleConfig.thinkingConfig,
+      "google thinking config",
+    );
+    expect(googleThinkingConfig.thinkingLevel).toBe("HIGH");
     expect(googleThinkingConfig).not.toHaveProperty("thinkingBudget");
 
     const minimaxHooks = MINIMAX_FAST_MODE_STREAM_HOOKS;
@@ -145,22 +403,22 @@ describe("buildProviderStreamFamilyHooks", () => {
         modelId: "openai/gpt-5.4",
       } as never),
     )({ provider: "kilocode", id: "openai/gpt-5.4" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      reasoning: { effort: "high" },
-    });
+    const kilocodeOpenAiPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(kilocodeOpenAiPayload);
+    expect(requireRecord(kilocodeOpenAiPayload.reasoning, "kilocode reasoning").effort).toBe(
+      "high",
+    );
 
     void requireStreamFn(
       requireWrapStreamFn(kilocodeHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         thinkingLevel: "high",
-        modelId: "kilo/auto",
+        modelId: "kilo-auto/balanced",
       } as never),
-    )({ provider: "kilocode", id: "kilo/auto" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-    });
-    expect(capturedPayload).not.toHaveProperty("reasoning");
+    )({ provider: "kilocode", id: "kilo-auto/balanced" } as never, {} as never, {});
+    const kilocodeAutoPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(kilocodeAutoPayload);
+    expect(kilocodeAutoPayload).not.toHaveProperty("reasoning");
 
     const moonshotHooks = MOONSHOT_THINKING_STREAM_HOOKS;
     const moonshotStream = requireStreamFn(
@@ -170,10 +428,11 @@ describe("buildProviderStreamFamilyHooks", () => {
       } as never),
     );
     await moonshotStream({ api: "openai-completions", id: "kimi-k2.5" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      thinking: { type: "disabled" },
-    });
+    const moonshotDisabledPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotDisabledPayload);
+    expect(requireRecord(moonshotDisabledPayload.thinking, "moonshot thinking").type).toBe(
+      "disabled",
+    );
 
     const moonshotKeepStream = requireStreamFn(
       requireWrapStreamFn(moonshotHooks.wrapStreamFn)({
@@ -187,21 +446,28 @@ describe("buildProviderStreamFamilyHooks", () => {
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      thinking: { type: "enabled", keep: "all" },
-    });
+    const moonshotKeepPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotKeepPayload);
+    const moonshotKeepThinking = requireRecord(
+      moonshotKeepPayload.thinking,
+      "moonshot keep thinking",
+    );
+    expect(moonshotKeepThinking.type).toBe("enabled");
+    expect(moonshotKeepThinking.keep).toBe("all");
 
     await moonshotKeepStream(
       { api: "openai-completions", id: "kimi-k2.5" } as never,
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      thinking: { type: "enabled" },
-    });
-    expect((capturedPayload?.thinking as Record<string, unknown>) ?? {}).not.toHaveProperty("keep");
+    const moonshotStrippedPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotStrippedPayload);
+    const moonshotStrippedThinking = requireRecord(
+      moonshotStrippedPayload.thinking,
+      "moonshot stripped thinking",
+    );
+    expect(moonshotStrippedThinking.type).toBe("enabled");
+    expect(moonshotStrippedThinking).not.toHaveProperty("keep");
 
     payloadSeed = { tool_choice: { type: "tool", name: "read" } };
     await moonshotKeepStream(
@@ -209,17 +475,77 @@ describe("buildProviderStreamFamilyHooks", () => {
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      tool_choice: { type: "tool", name: "read" },
-      thinking: { type: "disabled" },
+    const moonshotToolChoicePayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotToolChoicePayload);
+    expect(requireRecord(moonshotToolChoicePayload.tool_choice, "tool choice")).toEqual({
+      type: "tool",
+      name: "read",
     });
-    expect((capturedPayload?.thinking as Record<string, unknown>) ?? {}).not.toHaveProperty("keep");
+    const moonshotToolChoiceThinking = requireRecord(
+      moonshotToolChoicePayload.thinking,
+      "moonshot tool-choice thinking",
+    );
+    expect(moonshotToolChoiceThinking.type).toBe("disabled");
+    expect(moonshotToolChoiceThinking).not.toHaveProperty("keep");
+
+    payloadSeed = {
+      tool_choice: { type: "tool", name: "read" },
+      temperature: 0,
+      top_p: 0.5,
+      n: 2,
+      presence_penalty: 1,
+      frequency_penalty: 1,
+      reasoning_effort: "low",
+    };
+    await moonshotKeepStream(
+      { api: "openai-completions", id: "kimi-k2.7-code", reasoning: false } as never,
+      {} as never,
+      {},
+    );
+    const moonshotK27Payload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotK27Payload);
+    expect(moonshotK27Payload).not.toHaveProperty("thinking");
+    expect(moonshotK27Payload).not.toHaveProperty("reasoning_effort");
+    expect(moonshotK27Payload.tool_choice).toBe("auto");
+    expect(moonshotK27Payload).not.toHaveProperty("temperature");
+    expect(moonshotK27Payload).not.toHaveProperty("top_p");
+    expect(moonshotK27Payload).not.toHaveProperty("n");
+    expect(moonshotK27Payload).not.toHaveProperty("presence_penalty");
+    expect(moonshotK27Payload).not.toHaveProperty("frequency_penalty");
+    expect(capturedReasoning).toBe("low");
+    expect(capturedModelReasoning).toBe(true);
+
+    payloadSeed = {
+      thinking: { type: "disabled" },
+      tool_choice: { type: "tool", name: "read" },
+      temperature: 0,
+      reasoning_effort: "low",
+    };
+    await moonshotKeepStream(
+      {
+        api: "openai-completions",
+        provider: "moonshot",
+        id: "kimi-k3",
+        reasoning: false,
+      } as never,
+      {} as never,
+      {},
+    );
+    const moonshotK3Payload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(moonshotK3Payload);
+    expect(moonshotK3Payload).not.toHaveProperty("thinking");
+    expect(moonshotK3Payload.reasoning_effort).toBe("max");
+    expect(moonshotK3Payload.tool_choice).toEqual({ type: "tool", name: "read" });
+    expect(moonshotK3Payload).not.toHaveProperty("temperature");
+    expect(capturedReasoning).toBe("max");
+    expect(capturedModelReasoning).toBe(true);
 
     const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
+    payloadSeed = { reasoning: { effort: "medium", summary: "auto" } };
     void requireStreamFn(
       requireWrapStreamFn(openAiHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
+        thinkingLevel: "max",
         extraParams: { serviceTier: "flex" },
         config: {},
         agentDir: "/tmp/provider-stream-test",
@@ -229,16 +555,21 @@ describe("buildProviderStreamFamilyHooks", () => {
         api: "openai-responses",
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
-        id: "gpt-5.4",
+        id: "gpt-5.6-sol",
+        thinkingLevelMap: { max: "max" },
       } as never,
       {} as never,
       {},
     );
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      service_tier: "flex",
+    const openAiPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openAiPayload);
+    expect(openAiPayload.reasoning).toEqual({ effort: "max", summary: "auto" });
+    expect(openAiPayload.service_tier).toBe("flex");
+    expect(capturedHeaders).toEqual({
+      "User-Agent": `openclaw/${VERSION}`,
+      originator: "openclaw",
+      version: VERSION,
     });
-    expect(capturedHeaders).toBeDefined();
 
     const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
     void requireStreamFn(
@@ -248,10 +579,11 @@ describe("buildProviderStreamFamilyHooks", () => {
         modelId: "openai/gpt-5.4",
       } as never),
     )({ provider: "openrouter", id: "openai/gpt-5.4" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      reasoning: { effort: "high" },
-    });
+    const openRouterOpenAiPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openRouterOpenAiPayload);
+    expect(requireRecord(openRouterOpenAiPayload.reasoning, "openrouter reasoning").effort).toBe(
+      "high",
+    );
 
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
@@ -260,10 +592,9 @@ describe("buildProviderStreamFamilyHooks", () => {
         modelId: "x-ai/grok-3",
       } as never),
     )({ provider: "openrouter", id: "x-ai/grok-3" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-    });
-    expect(capturedPayload).not.toHaveProperty("reasoning");
+    const openRouterGrokPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(openRouterGrokPayload);
+    expect(openRouterGrokPayload).not.toHaveProperty("reasoning");
 
     const toolStreamHooks = TOOL_STREAM_DEFAULT_ON_HOOKS;
     const toolStreamDefault = requireStreamFn(
@@ -273,10 +604,9 @@ describe("buildProviderStreamFamilyHooks", () => {
       } as never),
     );
     await toolStreamDefault({ id: "glm-4.7" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      tool_stream: true,
-    });
+    const toolStreamDefaultPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(toolStreamDefaultPayload);
+    expect(toolStreamDefaultPayload.tool_stream).toBe(true);
 
     const toolStreamDisabled = requireStreamFn(
       requireWrapStreamFn(toolStreamHooks.wrapStreamFn)({
@@ -285,10 +615,9 @@ describe("buildProviderStreamFamilyHooks", () => {
       } as never),
     );
     await toolStreamDisabled({ id: "glm-4.7" } as never, {} as never, {});
-    expect(capturedPayload).toMatchObject({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-    });
-    expect(capturedPayload).not.toHaveProperty("tool_stream");
+    const toolStreamDisabledPayload = requirePayload(capturedPayload);
+    expectDefaultThinkingBudget(toolStreamDisabledPayload);
+    expect(toolStreamDisabledPayload).not.toHaveProperty("tool_stream");
   });
 
   it("exposes canonical stream hook constants for reused families", () => {
@@ -299,5 +628,50 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(TOOL_STREAM_DEFAULT_ON_HOOKS.wrapStreamFn).toBeTypeOf("function");
+  });
+});
+
+describe("createPlainTextToolCallCompatWrapper", () => {
+  it("streams normal prose that starts with a Harmony channel word", async () => {
+    let pushSourceEvent: ((event: never) => void) | undefined;
+    const baseStreamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      pushSourceEvent = (event) => stream.push(event);
+      return stream;
+    };
+    const wrapped = requireStreamFn(createPlainTextToolCallCompatWrapper(baseStreamFn));
+    const output = wrapped(
+      streamTestModel,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>;
+    const iterator = output[Symbol.asyncIterator]();
+    const first = iterator.next();
+
+    pushSourceEvent?.({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "final answer starts here",
+    } as never);
+
+    const firstResult = await Promise.race([
+      first,
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 20);
+      }),
+    ]);
+    expect(firstResult).not.toBe("timeout");
+    expect(firstResult).toMatchObject({
+      done: false,
+      value: { type: "text_delta", delta: "final answer starts here" },
+    });
+    expect(firstResult).not.toHaveProperty("value.partial");
+
+    pushSourceEvent?.({
+      type: "done",
+      reason: "stop",
+      message: streamTestMessage("final answer starts here"),
+    } as never);
+    await iterator.next();
   });
 });

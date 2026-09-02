@@ -1,3 +1,9 @@
+// Doctor warnings for multi-account channels missing explicit default account routing.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
 import { listRouteBindings } from "../../../config/bindings.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -11,11 +17,6 @@ import {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "../../../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
-import { asObjectRecord } from "./object.js";
 
 type ChannelMissingDefaultAccountContext = {
   channelKey: string;
@@ -34,18 +35,18 @@ function normalizeBindingChannelKey(raw?: string | null): string {
 function collectChannelsMissingDefaultAccount(
   cfg: OpenClawConfig,
 ): ChannelMissingDefaultAccountContext[] {
-  const channels = asObjectRecord(cfg.channels);
+  const channels = asNullableRecord(cfg.channels);
   if (!channels) {
     return [];
   }
 
   const contexts: ChannelMissingDefaultAccountContext[] = [];
   for (const [channelKey, rawChannel] of Object.entries(channels)) {
-    const channel = asObjectRecord(rawChannel);
+    const channel = asNullableRecord(rawChannel);
     if (!channel) {
       continue;
     }
-    const accounts = asObjectRecord(channel.accounts);
+    const accounts = asNullableRecord(channel.accounts);
     if (!accounts) {
       continue;
     }
@@ -65,6 +66,7 @@ function collectChannelsMissingDefaultAccount(
   return contexts;
 }
 
+/** Warn when account-scoped route bindings do not cover channels without accounts.default. */
 export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
   const bindings = listRouteBindings(cfg);
   const warnings: string[] = [];
@@ -76,11 +78,11 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
     let hasWildcardBinding = false;
     const coveredAccountIds = new Set<string>();
     for (const binding of bindings) {
-      const bindingRecord = asObjectRecord(binding);
+      const bindingRecord = asNullableRecord(binding);
       if (!bindingRecord) {
         continue;
       }
-      const match = asObjectRecord(bindingRecord.match);
+      const match = asNullableRecord(bindingRecord.match);
       if (!match) {
         continue;
       }
@@ -130,6 +132,7 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
   return warnings;
 }
 
+/** Warn when multi-account channels omit or misconfigure an explicit default account. */
 export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   for (const { channelKey, channel, normalizedAccountIds } of collectChannelsMissingDefaultAccount(

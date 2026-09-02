@@ -1,43 +1,35 @@
+// Tests agent runner helper decisions for payload and runtime preparation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 const hoisted = vi.hoisted(() => {
-  const loadSessionStoreMock = vi.fn();
-  const scheduleFollowupDrainMock = vi.fn();
-  return { loadSessionStoreMock, scheduleFollowupDrainMock };
+  const loadSessionEntryMock = vi.fn();
+  return { loadSessionEntryMock };
 });
 
-vi.mock("../../config/sessions.js", async () => {
-  const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
-    "../../config/sessions.js",
+vi.mock("../../config/sessions/session-accessor.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
+    "../../config/sessions/session-accessor.js",
   );
   return {
     ...actual,
-    loadSessionStore: (...args: unknown[]) => hoisted.loadSessionStoreMock(...args),
-  };
-});
-
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-  return {
-    ...actual,
-    scheduleFollowupDrain: (...args: unknown[]) => hoisted.scheduleFollowupDrainMock(...args),
+    loadSessionEntry: (...args: unknown[]) => hoisted.loadSessionEntryMock(...args),
+    loadSessionEntryReadOnly: (...args: unknown[]) => hoisted.loadSessionEntryMock(...args),
   };
 });
 
 const {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
-  finalizeWithFollowup,
   isAudioPayload,
   signalTypingIfNeeded,
 } = await import("./agent-runner-helpers.js");
 
 describe("agent runner helpers", () => {
   beforeEach(() => {
-    hoisted.loadSessionStoreMock.mockClear();
-    hoisted.scheduleFollowupDrainMock.mockClear();
+    vi.useRealTimers();
+    hoisted.loadSessionEntryMock.mockReset();
   });
 
   it("detects audio payloads from mediaUrl/mediaUrls", () => {
@@ -54,9 +46,7 @@ describe("agent runner helpers", () => {
   });
 
   it("uses session verbose level when present", () => {
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { verboseLevel: "full" },
-    });
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "full" });
     const shouldEmitResult = createShouldEmitToolResult({
       sessionKey: "agent:main:main",
       storePath: "/tmp/store.json",
@@ -69,10 +59,35 @@ describe("agent runner helpers", () => {
     });
     expect(shouldEmitResult()).toBe(true);
     expect(shouldEmitOutput()).toBe(true);
+    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/store.json",
+      clone: false,
+    });
+  });
+
+  it("caches session verbose reads briefly while still refreshing live changes", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "full" });
+    const shouldEmitOutput = createShouldEmitToolOutput({
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/store.json",
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(shouldEmitOutput()).toBe(true);
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "off" });
+    expect(shouldEmitOutput()).toBe(true);
+    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(1_251);
+    expect(shouldEmitOutput()).toBe(false);
+    expect(hoisted.loadSessionEntryMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back when store read fails or session value is invalid", () => {
-    hoisted.loadSessionStoreMock.mockImplementation(() => {
+    hoisted.loadSessionEntryMock.mockImplementation(() => {
       throw new Error("boom");
     });
     const fallbackOn = createShouldEmitToolResult({
@@ -82,23 +97,14 @@ describe("agent runner helpers", () => {
     });
     expect(fallbackOn()).toBe(true);
 
-    hoisted.loadSessionStoreMock.mockClear();
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      "agent:main:main": { verboseLevel: "weird" },
-    });
+    hoisted.loadSessionEntryMock.mockClear();
+    hoisted.loadSessionEntryMock.mockReturnValue({ verboseLevel: "weird" });
     const fallbackFull = createShouldEmitToolOutput({
       sessionKey: "agent:main:main",
       storePath: "/tmp/store.json",
       resolvedVerboseLevel: "full",
     });
     expect(fallbackFull()).toBe(true);
-  });
-
-  it("schedules followup drain and returns the original value", () => {
-    const runFollowupTurn = vi.fn();
-    const value = { ok: true };
-    expect(finalizeWithFollowup(value, "queue-key", runFollowupTurn)).toBe(value);
-    expect(hoisted.scheduleFollowupDrainMock).toHaveBeenCalledWith("queue-key", runFollowupTurn);
   });
 
   it("signals typing only when any payload has text or media", async () => {

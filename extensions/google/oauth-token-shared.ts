@@ -1,4 +1,5 @@
-import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
+// Google plugin module implements oauth token shared behavior.
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type GoogleOauthApiKeyCredential = {
   type?: string;
@@ -29,14 +30,4 @@ export function formatGoogleOauthApiKey(cred: GoogleOauthApiKeyCredential): stri
     token: cred.access,
     projectId: cred.projectId,
   });
-}
-
-export function parseGoogleUsageToken(apiKey: string): string {
-  const parsed = parseGoogleOauthApiKey(apiKey);
-  if (parsed?.token) {
-    return parsed.token;
-  }
-
-  // Keep the raw token when the stored credential is not a project-aware JSON payload.
-  return apiKey;
 }

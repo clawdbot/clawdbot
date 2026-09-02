@@ -20,8 +20,8 @@ public enum TalkConfigParsing {
     public static func selectProviderConfig(
         _ talk: [String: AnyCodable]?,
         defaultProvider: String,
-        allowLegacyFallback: Bool = true,
-    ) -> TalkProviderConfigSelection? {
+        allowLegacyFallback: Bool = true) -> TalkProviderConfigSelection?
+    {
         guard let talk else { return nil }
         if let resolvedSelection = self.resolvedProviderConfig(talk) {
             return resolvedSelection
@@ -35,6 +35,44 @@ public enum TalkConfigParsing {
             provider: defaultProvider,
             config: talk,
             normalizedPayload: false)
+    }
+
+    public static func firstNonEmptyString(
+        _ config: [String: AnyCodable]?,
+        keys: [String]) -> String?
+    {
+        guard let config else { return nil }
+        for key in keys {
+            let value = config[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value?.isEmpty == false { return value }
+        }
+        return nil
+    }
+
+    public static func singleRealtimeProviderID(_ providers: [String: AnyCodable]?) -> String? {
+        guard let providers, providers.count == 1 else { return nil }
+        let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return provider?.isEmpty == false ? provider : nil
+    }
+
+    public static func realtimeProviderConfig(
+        providers: [String: AnyCodable]?,
+        provider: String?) -> [String: AnyCodable]?
+    {
+        guard let providers else { return nil }
+        if let provider {
+            if let exact = providers[provider]?.dictionaryValue {
+                return exact
+            }
+            return providers.first { key, _ in
+                key.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(provider) == .orderedSame
+            }?.value.dictionaryValue
+        }
+        if providers.count == 1 {
+            return providers.values.first?.dictionaryValue
+        }
+        return nil
     }
 
     public static func resolvedPositiveInt(_ value: AnyCodable?, fallback: Int) -> Int {
@@ -56,14 +94,54 @@ public enum TalkConfigParsing {
         self.resolvedPositiveInt(talk?["silenceTimeoutMs"], fallback: fallback)
     }
 
+    public static func normalizedSpeechLocaleID(_ value: String?) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed.replacingOccurrences(of: "_", with: "-")
+    }
+
+    public static func resolvedSpeechLocaleID(
+        _ talk: [String: AnyCodable]?,
+        fallback: String? = nil) -> String?
+    {
+        self.normalizedSpeechLocaleID(talk?["speechLocale"]?.stringValue)
+            ?? self.normalizedSpeechLocaleID(fallback)
+    }
+
+    public static func normalizedExplicitSpeechLocaleID(
+        _ value: String?,
+        automaticID: String = "auto") -> String?
+    {
+        let normalized = self.normalizedSpeechLocaleID(value)
+        return normalized == automaticID ? nil : normalized
+    }
+
+    public static func resolvedSpeechRecognitionLocaleID(
+        preferredLocaleIDs: [String?],
+        fallbackLocaleID: String = "en-US",
+        supportedLocaleIDs: Set<String>) -> String?
+    {
+        let supported = Set(supportedLocaleIDs.compactMap(self.normalizedSpeechLocaleID))
+        var seen = Set<String>()
+        let candidates = (preferredLocaleIDs + [fallbackLocaleID])
+            .compactMap(self.normalizedSpeechLocaleID)
+
+        for candidate in candidates {
+            guard seen.insert(candidate).inserted else { continue }
+            if supported.isEmpty || supported.contains(candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
     private static func normalizedTalkProviderID(_ raw: String?) -> String? {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func resolvedProviderConfig(
-        _ talk: [String: AnyCodable]
-    ) -> TalkProviderConfigSelection? {
+        _ talk: [String: AnyCodable]) -> TalkProviderConfigSelection?
+    {
         guard
             let resolved = talk["resolved"]?.dictionaryValue,
             let providerID = self.normalizedTalkProviderID(resolved["provider"]?.stringValue)

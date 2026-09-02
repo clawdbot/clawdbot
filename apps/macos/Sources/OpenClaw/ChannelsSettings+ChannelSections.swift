@@ -95,9 +95,7 @@ extension ChannelsSettings {
 
     @ViewBuilder
     private func configEditorSection(channelId: String) -> some View {
-        self.formSection("Configuration") {
-            ChannelConfigForm(store: self.store, channelId: channelId)
-        }
+        ChannelConfigForm(store: self.store, channelId: channelId)
 
         self.configStatusMessage
 

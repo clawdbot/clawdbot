@@ -1,6 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord helper module supports message handler helpers behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { vi } from "vitest";
-import type { createDiscordMessageHandler } from "./message-handler.js";
+import type { createDiscordMessageDispatcher } from "./message-dispatcher.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export const DEFAULT_DISCORD_BOT_USER_ID = "bot-123";
@@ -9,8 +10,7 @@ export function createDiscordHandlerParams(overrides?: {
   botUserId?: string;
   setStatus?: (patch: Record<string, unknown>) => void;
   abortSignal?: AbortSignal;
-  workerRunTimeoutMs?: number;
-}): Parameters<typeof createDiscordMessageHandler>[0] {
+}): Parameters<typeof createDiscordMessageDispatcher>[0] {
   const cfg: OpenClawConfig = {
     channels: {
       discord: {
@@ -44,11 +44,11 @@ export function createDiscordHandlerParams(overrides?: {
     textLimit: 2_000,
     replyToMode: "off" as const,
     dmEnabled: true,
+    dmPolicy: "pairing",
     groupDmEnabled: false,
     threadBindings: createNoopThreadBindingManager("default"),
     setStatus: overrides?.setStatus,
     abortSignal: overrides?.abortSignal,
-    workerRunTimeoutMs: overrides?.workerRunTimeoutMs,
   };
 }
 
@@ -72,5 +72,11 @@ export function createDiscordPreflightContext(channelId = "ch-1") {
     },
     baseSessionKey: `agent:main:discord:channel:${channelId}`,
     messageChannelId: channelId,
+    messageText: "hello",
+    isDirectMessage: true,
+    isGroupDm: false,
+    isGuildMessage: false,
+    inboundEventKind: "message",
+    effectiveWasMentioned: false,
   };
 }

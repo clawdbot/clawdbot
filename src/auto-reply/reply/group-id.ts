@@ -1,14 +1,51 @@
-import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
-import { normalizeAnyChannelId } from "../../channels/registry.js";
+/** Extracts group/channel ids from explicit message targets. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
+import {
+  stripOutboundTargetKindPrefix,
+  stripTargetProviderPrefix,
+  stripTargetTopicSuffix,
+} from "../../infra/outbound/channel-target-prefix.js";
 import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
 
-export { extractSimpleExplicitGroupId };
+function extractInferredGroupTargetId(params: {
+  raw: string;
+  channelId: string;
+  messaging?: ChannelMessagingAdapter;
+}): string | undefined {
+  const normalized = params.messaging?.normalizeTarget?.(params.raw);
+  const candidates = uniqueStrings(
+    [normalized, params.raw].filter((candidate): candidate is string => Boolean(candidate)),
+  );
+  for (const candidate of candidates) {
+    const chatType = params.messaging?.inferTargetChatType?.({ to: candidate });
+    if (chatType === "direct" || chatType == null) {
+      continue;
+    }
+    const target = stripTargetTopicSuffix(
+      stripOutboundTargetKindPrefix(stripTargetProviderPrefix(candidate, params.channelId), [
+        "group",
+        "channel",
+        "conversation",
+        "room",
+        "thread",
+      ]),
+      { allowNumericShorthand: params.messaging?.numericTopicShorthand === true },
+    );
+    if (target) {
+      return target;
+    }
+  }
+  return undefined;
+}
 
+/** Extracts a group/channel target id from explicit channel target syntax. */
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
@@ -21,12 +58,13 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
   const firstPart = trimmed.split(":").find(Boolean);
   const channelId =
     normalizeAnyChannelId(firstPart ?? "") ?? normalizeOptionalLowercaseString(firstPart);
-  const messaging = channelId
-    ? (getLoadedChannelPluginById(channelId) as ChannelPlugin | undefined)?.messaging
-    : undefined;
-  const parsed = messaging?.parseExplicitTarget?.({ raw: trimmed }) ?? null;
-  if (parsed && parsed.chatType && parsed.chatType !== "direct") {
-    return parsed.to.replace(/:topic:.*$/, "") || undefined;
+  const messaging = channelId ? getLoadedChannelPluginForRead(channelId)?.messaging : undefined;
+  if (!channelId) {
+    return undefined;
   }
-  return undefined;
+  return extractInferredGroupTargetId({
+    raw: trimmed,
+    channelId,
+    messaging,
+  });
 }

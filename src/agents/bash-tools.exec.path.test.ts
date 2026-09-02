@@ -1,18 +1,56 @@
+/**
+ * Exec PATH handling tests.
+ * Covers shell snapshot PATH merging, pathPrepend behavior, and host env
+ * sanitization for gateway/sandbox execution.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const FOREGROUND_TEST_YIELD_MS = 120_000;
+const ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL", "SSLKEYLOGFILE"] as const;
 type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
 const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
+
+const parseShellSingleQuoted = (input: string) => {
+  if (!input.startsWith("'")) {
+    return null;
+  }
+  let output = "";
+  for (let index = 1; index < input.length; index += 1) {
+    const char = input[index];
+    if (char !== "'") {
+      output += char;
+      continue;
+    }
+    if (input.startsWith("'\\''", index)) {
+      output += "'";
+      index += 3;
+      continue;
+    }
+    return input.slice(index + 1).trim().length === 0 ? output : null;
+  }
+  return null;
+};
+
+const unwrapSnapshotEvalCommand = (command: string) => {
+  const evalIndex = command.lastIndexOf("\neval ");
+  const evalCommand =
+    evalIndex === -1
+      ? command.trimStart().startsWith("eval ")
+        ? command.trimStart().slice("eval ".length)
+        : null
+      : command.slice(evalIndex + "\neval ".length);
+  return evalCommand ? (parseShellSingleQuoted(evalCommand.trim()) ?? command) : command;
+};
 
 vi.mock("../infra/shell-env.js", async () => {
   const mod =
@@ -28,7 +66,11 @@ vi.mock("../infra/exec-approvals.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
     "../infra/exec-approvals.js",
   );
-  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+  return {
+    ...mod,
+    resolveExecApprovals: () => createExecApprovals(),
+    resolveExecApprovalsLocked: async () => createExecApprovals(),
+  };
 });
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -38,7 +80,7 @@ vi.mock("../process/supervisor/index.js", () => ({
       env?: NodeJS.ProcessEnv;
       onStdout?: (chunk: string) => void;
     }) => {
-      const command = input.argv?.at(-1) ?? "";
+      const command = unwrapSnapshotEvalCommand(input.argv?.at(-1) ?? "");
       const env = input.env ?? {};
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
@@ -46,7 +88,7 @@ vi.mock("../process/supervisor/index.js", () => ({
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
       } else if (command.includes("$PATH")) {
         input.onStdout?.(env.PATH ?? "");
-      } else if (command === "echo ok") {
+      } else if (command.includes("echo ok")) {
         input.onStdout?.("ok\n");
       }
       return {
@@ -68,12 +110,11 @@ vi.mock("../process/supervisor/index.js", () => ({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
 }));
 
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 
 function createExecApprovals(): ExecApprovalsResolved {
   return {
@@ -118,21 +159,34 @@ const normalizeText = (value?: string) =>
     .replace(/\r/g, "\n")
     .trim();
 
-const normalizePathEntries = (value?: string) =>
-  normalizeText(value)
-    .split(/[:\s]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+function normalizePathEntries(value?: string): string[] {
+  const entries: string[] = [];
+  for (const entry of normalizeText(value).split(/[:\s]+/)) {
+    const normalized = entry.trim();
+    if (normalized.length > 0) {
+      entries.push(normalized);
+    }
+  }
+  return entries;
+}
 
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ createExecTool } = await import("./bash-tools.exec-run.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("../infra/shell-env.js");
+    vi.doUnmock("../infra/exec-approvals.js");
+    vi.doUnmock("../process/supervisor/index.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
+    envSnapshot = captureEnv([...ENV_KEYS]);
+    process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
@@ -141,6 +195,58 @@ describe("exec PATH login shell merge", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+  });
+
+  it("strips malformed XML arg-value suffixes from exec command and routing options", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-xml-"));
+    try {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const malformedArgs = {
+        command: "echo ok</arg_value>>",
+        workdir: `${tempDir}</arg_value>>`,
+        host: "gateway</arg_value>>",
+        ask: "off</arg_value>>",
+        node: "ignored-node</arg_value>>",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      } as unknown as Parameters<typeof tool.execute>[1];
+      const prepared = await tool.prepareBeforeToolCallParams?.(malformedArgs, {});
+      expect(prepared).toMatchObject({
+        command: "echo ok",
+        workdir: tempDir,
+        host: "gateway",
+        ask: "off",
+        node: "ignored-node",
+      });
+      const result = await tool.execute("call-xml-suffix", malformedArgs);
+      const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+      expect(value).toBe("ok");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails without running when an explicit workdir is unavailable", async () => {
+    const missingWorkdir = path.join(
+      os.tmpdir(),
+      `openclaw-missing-workdir-${process.pid}-${Date.now()}`,
+    );
+    fs.rmSync(missingWorkdir, { recursive: true, force: true });
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-missing-workdir", {
+      command: "echo ok",
+      workdir: missingWorkdir,
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(result.details?.status).toBe("failed");
+    expect(value).toContain(`workdir "${missingWorkdir}" is unavailable or not a directory`);
+    expect(value).toContain("command was not executed");
+    expect(value).toContain("workdir is treated as a literal path");
+    expect(value).toContain('shell expansions such as "~" are not applied');
+    expect(value).not.toMatch(/^ok/);
   });
 
   it("merges login-shell PATH for host=gateway", async () => {
@@ -245,12 +351,9 @@ describe("exec PATH login shell merge", () => {
 
       expect(entries).toEqual(["/usr/bin"]);
       expect(shellPathMock).toHaveBeenCalledTimes(1);
-      expect(shellPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          timeoutMs: 1234,
-        }),
-      );
+      const shellPathCall = shellPathMock.mock.calls.at(0)?.[0];
+      expect(shellPathCall?.env).toBe(process.env);
+      expect(shellPathCall?.timeoutMs).toBe(1234);
     } finally {
       fs.rmSync(shellDir, { recursive: true, force: true });
     }
@@ -258,6 +361,17 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([...ENV_KEYS]);
+    process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 
@@ -337,11 +451,25 @@ describe("exec host env validation", () => {
     "env --ignore-environment /approve abc123 allow-once",
     "env -i FOO=1 /approve abc123 allow-once",
     "env -S '/approve abc123 deny'",
+    "env -P /usr/bin /approve abc123 deny",
+    "env -iS'/approve abc123 deny'",
+    "env -S '/approve abc123' deny",
+    "env -iS'/approve abc123' deny",
     "command /approve abc123 deny",
     "command -p /approve abc123 deny",
     "exec -a openclaw /approve abc123 deny",
     "sudo /approve abc123 allow-once",
     "sudo -E /approve abc123 allow-once",
+    "sudo -EH /approve abc123 allow-once",
+    "sudo -k /approve abc123 allow-once",
+    "sudo --reset-timestamp /approve abc123 allow-once",
+    "sudo --command-timeout=1 /approve abc123 allow-once",
+    "sudo OPENCLAW_APPROVE=1 /approve abc123 allow-once",
+    "sudo -uroot bash -lc '/approve abc123 allow-once'",
+    "sudo -u root OPENCLAW_APPROVE=1 bash -lc '/approve abc123 allow-once'",
+    "sudo -EH bash -lc '/approve abc123 allow-once'",
+    "doas -uroot bash -lc '/approve abc123 deny'",
+    "env env env env env env /approve abc123 allow-once",
     "bash -lc '/approve abc123 deny'",
     "bash -c 'sudo /approve abc123 allow-once'",
     "sh -c '/approve abc123 allow-once'",

@@ -1,0 +1,38 @@
+// Deepinfra provider module implements model/runtime integration.
+import {
+  createRemoteEmbeddingProvider,
+  resolveRemoteEmbeddingClient,
+  type MemoryEmbeddingProviderCreateOptions,
+  type MemoryEmbeddingProviderCreateResult,
+  type RemoteEmbeddingClient,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  DEEPINFRA_BASE_URL,
+  DEEPINFRA_EMBED_FALLBACK_MODELS,
+  normalizeDeepInfraModelRef,
+} from "./media-models.js";
+
+export const DEFAULT_DEEPINFRA_EMBEDDING_MODEL = DEEPINFRA_EMBED_FALLBACK_MODELS[0];
+
+export async function createDeepInfraEmbeddingProvider(
+  options: MemoryEmbeddingProviderCreateOptions & { defaultModel?: string },
+): Promise<MemoryEmbeddingProviderCreateResult & { client: RemoteEmbeddingClient }> {
+  const defaultModel = options.defaultModel ?? DEFAULT_DEEPINFRA_EMBEDDING_MODEL;
+  const client = await resolveRemoteEmbeddingClient({
+    provider: "deepinfra",
+    options: {
+      ...options,
+      model: normalizeDeepInfraModelRef(options.model, defaultModel),
+    },
+    defaultBaseUrl: DEEPINFRA_BASE_URL,
+    normalizeModel: (model) => normalizeDeepInfraModelRef(model, defaultModel),
+  });
+  const provider = createRemoteEmbeddingProvider({
+    id: "deepinfra",
+    client,
+    errorPrefix: "DeepInfra embeddings API error",
+    // DeepInfra query and document payloads are identical, so arrays stay one provider batch.
+    batchQueryInputs: true,
+  });
+  return { provider, client };
+}

@@ -1,38 +1,68 @@
+// Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
-import { defineConfig } from "vitest/config";
-import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
+import { defineConfig, type ViteUserConfig } from "vitest/config";
+import {
+  intersectIncludePatterns,
+  loadPatternListFromEnv,
+  narrowIncludePatternsForCli,
+  relativizeScopedPatterns,
+} from "./vitest.pattern-file.ts";
 import {
   nonIsolatedRunnerPath,
   repoRoot,
   resolveRepoRootPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
-import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { getUnitFastTestFilesForIncludePatterns } from "./vitest.unit-fast-paths.mjs";
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
 }
 
-function relativizeScopedPattern(value: string, dir: string): string {
-  const normalizedValue = normalizePathPattern(value);
-  const normalizedDir = normalizePathPattern(dir).replace(/\/+$/u, "");
-  if (!normalizedDir) {
-    return normalizedValue;
+function globRoot(pattern: string): string | null {
+  const globStart = pattern.search(/[*{[]/u);
+  if (globStart < 0) {
+    return null;
   }
-  if (normalizedValue === normalizedDir) {
-    return ".";
+  const slashBeforeGlob = pattern.lastIndexOf("/", globStart);
+  if (slashBeforeGlob < 0) {
+    return "";
   }
-  const prefix = `${normalizedDir}/`;
-  return normalizedValue.startsWith(prefix)
-    ? normalizedValue.slice(prefix.length)
-    : normalizedValue;
+  return pattern.slice(0, slashBeforeGlob);
 }
 
-function relativizeScopedPatterns(values: string[], dir?: string): string[] {
-  if (!dir) {
-    return values.map(normalizePathPattern);
+function directoryPatternCoversInclude(excludePattern: string, includePattern: string): boolean {
+  if (!excludePattern.endsWith("/**")) {
+    return false;
   }
-  return values.map((value) => relativizeScopedPattern(value, dir));
+  const excludeRoot = excludePattern.slice(0, -"/**".length);
+  const includeRoot = globRoot(includePattern);
+  const candidate = includeRoot ?? includePattern;
+  return candidate === excludeRoot || candidate.startsWith(`${excludeRoot}/`);
+}
+
+function includePatternIsFullyExcluded(includePattern: string, excludePattern: string): boolean {
+  const include = normalizePathPattern(includePattern);
+  const exclude = normalizePathPattern(excludePattern);
+  return (
+    include === exclude ||
+    path.matchesGlob(include, exclude) ||
+    directoryPatternCoversInclude(exclude, include)
+  );
+}
+
+export function shouldPassWithNoTestsForCliIncludes(
+  cliIncludePatterns: string[] | null,
+  excludePatterns: string[],
+): boolean {
+  if (cliIncludePatterns === null) {
+    return false;
+  }
+  return cliIncludePatterns.every((includePattern) =>
+    excludePatterns.some((excludePattern) =>
+      includePatternIsFullyExcluded(includePattern, excludePattern),
+    ),
+  );
 }
 
 export function resolveVitestIsolation(
@@ -45,6 +75,13 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
   [
     "acp",
     "agents",
+    "agents-core",
+    "agents-embedded-agent",
+    "agents-embedded-agent-incomplete-turn",
+    "agents-embedded-agent-overflow-compaction",
+    "agents-embedded-agent-run",
+    "agents-support",
+    "agents-tools",
     "auto-reply",
     "auto-reply-core",
     "auto-reply-reply",
@@ -52,14 +89,16 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "boundary",
     "bundled",
     "channels",
+    "cli-process",
     "cli",
     "commands",
     "commands-light",
     "cron",
     "daemon",
+    "extension-active-memory",
     "extension-acpx",
-    "extension-bluebubbles",
     "extension-channels",
+    "extension-codex",
     "extension-diffs",
     "extension-discord",
     "extension-feishu",
@@ -68,6 +107,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-line",
     "extension-mattermost",
     "extension-matrix",
+    "extension-media",
     "extension-memory",
     "extension-messaging",
     "extension-msteams",
@@ -81,6 +121,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-zalo",
     "extensions",
     "gateway",
+    "gateway-methods-isolated",
     "hooks",
     "infra",
     "logging",
@@ -94,14 +135,16 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "secrets",
     "shared-core",
     "tasks",
+    "tooling-docker",
+    "tooling-isolated",
     "tooling",
     "tui",
     "ui",
+    "ui-e2e",
     "unit-fast",
     "unit-security",
     "unit-src",
     "unit-support",
-    "unit-ui",
     "utils",
     "wizard",
   ].map((name, index) => [name, index + 10]),
@@ -148,26 +191,44 @@ export function createScopedVitestConfig(
     isolate?: boolean;
     name?: string;
     fileParallelism?: boolean;
+    hookTimeout?: number;
+    intersectIncludeFile?: boolean;
     pool?: "forks" | "threads";
     passWithNoTests?: boolean;
     excludeUnitFastTests?: boolean;
     setupFiles?: string[];
     useNonIsolatedRunner?: boolean;
   },
-) {
+  // Explicit nameable return type: inference otherwise reaches vite-internal
+  // names (TS4058/TS4082) in every downstream scoped-config creator.
+): ViteUserConfig {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
+  const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;
   const scopedDir = options?.dir;
   const resolvedScopedDir = scopedDir ? path.join(repoRoot, scopedDir) : undefined;
   const env = options?.env;
-  const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-  const cliInclude = narrowIncludePatternsForCli(include, options?.argv);
+  const externalIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
+  const includeFromEnv = options?.intersectIncludeFile
+    ? intersectIncludePatterns(include, externalIncludePatterns)
+    : externalIncludePatterns;
+  const cliInclude = narrowIncludePatternsForCli(include, options?.argv, {
+    scopedDir,
+  });
+  const effectiveInclude = includeFromEnv ?? cliInclude ?? include;
+  const scopedInclude = relativizeScopedPatterns(effectiveInclude, scopedDir);
   const unitFastExcludePatterns =
-    options?.excludeUnitFastTests === false ? [] : getUnitFastTestFiles();
+    options?.excludeUnitFastTests === false
+      ? []
+      : getUnitFastTestFilesForIncludePatterns(effectiveInclude, { dir: scopedDir });
   const exclude = relativizeScopedPatterns(
     [...(baseTest.exclude ?? []), ...unitFastExcludePatterns, ...(options?.exclude ?? [])],
     scopedDir,
   );
+  const scopedEnvInclude = includeFromEnv
+    ? relativizeScopedPatterns(includeFromEnv, scopedDir)
+    : includeFromEnv;
+  const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
   const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
   const setupFiles = [
     ...new Set([
@@ -191,23 +252,29 @@ export function createScopedVitestConfig(
       ...(runner ? { runner } : { runner: undefined }),
       setupFiles,
       ...(resolvedScopedDir ? { dir: resolvedScopedDir } : {}),
-      include: relativizeScopedPatterns(includeFromEnv ?? cliInclude ?? include, scopedDir),
+      include: scopedInclude,
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
       ...(options?.fileParallelism === undefined
         ? {}
         : { fileParallelism: options.fileParallelism }),
+      ...(options?.hookTimeout === undefined ? {} : { hookTimeout: options.hookTimeout }),
       ...(scopedGroupOrder === undefined
         ? {}
         : {
             sequence: {
-              ...baseTest.sequence,
+              ...baseSequence,
               groupOrder: scopedGroupOrder,
             },
           }),
-      ...(options?.passWithNoTests !== undefined || cliInclude !== null
-        ? { passWithNoTests: options?.passWithNoTests ?? true }
-        : {}),
+      ...(options?.passWithNoTests !== undefined
+        ? { passWithNoTests: options.passWithNoTests }
+        : externalIncludePatterns !== null &&
+            shouldPassWithNoTestsForCliIncludes(scopedEnvInclude, exclude)
+          ? { passWithNoTests: true }
+          : shouldPassWithNoTestsForCliIncludes(scopedCliInclude, exclude)
+            ? { passWithNoTests: true }
+            : {}),
     },
   });
 }

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements lab server ui behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
@@ -7,7 +8,7 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeError } from "./bus-server.js";
 
 export function detectContentType(filePath: string): string {
@@ -50,12 +51,13 @@ export function missingUiHtml() {
 </html>`;
 }
 
-export function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd()) {
+function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd()) {
   if (overrideDir?.trim()) {
     return overrideDir;
   }
+  const sourceDistDir = path.resolve(repoRoot, "extensions/qa-lab/web/dist");
   const candidates = [
-    path.resolve(repoRoot, "extensions/qa-lab/web/dist"),
+    sourceDistDir,
     path.resolve(repoRoot, "dist/extensions/qa-lab/web/dist"),
     fileURLToPath(new URL("../web/dist", import.meta.url)),
   ];
@@ -66,7 +68,7 @@ export function resolveUiDistDir(overrideDir?: string | null, repoRoot = process
       }
       const indexPath = path.join(candidate, "index.html");
       return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
-    }) ?? candidates[0]
+    }) ?? sourceDistDir
   );
 }
 
@@ -89,9 +91,12 @@ function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
   return files;
 }
 
-export function resolveUiAssetVersion(overrideDir?: string | null): string | null {
+export function resolveUiAssetVersion(
+  overrideDir?: string | null,
+  repoRoot = process.cwd(),
+): string | null {
   try {
-    const distDir = resolveUiDistDir(overrideDir);
+    const distDir = resolveUiDistDir(overrideDir, repoRoot);
     const indexPath = path.join(distDir, "index.html");
     if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
       return null;
@@ -156,6 +161,7 @@ export async function proxyHttpRequest(params: {
   target: URL;
   pathname: string;
   search: string;
+  authorizationToken?: string | null;
 }) {
   const client = params.target.protocol === "https:" ? httpsRequest : httpRequest;
   const upstreamReq = client(
@@ -168,6 +174,9 @@ export async function proxyHttpRequest(params: {
       headers: {
         ...params.req.headers,
         host: params.target.host,
+        ...(params.authorizationToken
+          ? { authorization: `Bearer ${params.authorizationToken}` }
+          : {}),
       },
     },
     (upstreamRes) => {
@@ -194,40 +203,86 @@ export async function proxyHttpRequest(params: {
   params.req.pipe(upstreamReq);
 }
 
+// Bound only the opening transport stage. Established WebSocket streams remain
+// unbounded after TCP connect for HTTP or the completed handshake for HTTPS.
+const PROXY_UPSTREAM_CONNECT_TIMEOUT_MS = 10_000;
+
 export function proxyUpgradeRequest(params: {
   req: IncomingMessage;
   socket: Duplex;
   head: Buffer;
   target: URL;
+  authorizationToken?: string | null;
 }) {
   const requestUrl = new URL(params.req.url ?? "/", "http://127.0.0.1");
   const port = Number(params.target.port || (params.target.protocol === "https:" ? 443 : 80));
+  const usesTls = params.target.protocol === "https:";
   const upstream =
     params.target.protocol === "https:"
       ? tls.connect({
           host: params.target.hostname,
           port,
           servername: params.target.hostname,
+          timeout: PROXY_UPSTREAM_CONNECT_TIMEOUT_MS,
         })
       : net.connect({
           host: params.target.hostname,
           port,
+          timeout: PROXY_UPSTREAM_CONNECT_TIMEOUT_MS,
         });
 
   const headerLines: string[] = [];
   for (let index = 0; index < params.req.rawHeaders.length; index += 2) {
     const name = params.req.rawHeaders[index];
     const value = params.req.rawHeaders[index + 1] ?? "";
-    if (normalizeLowercaseStringOrEmpty(name) === "host") {
+    const normalizedName = normalizeLowercaseStringOrEmpty(name);
+    if (
+      normalizedName === "host" ||
+      (params.authorizationToken && normalizedName === "authorization")
+    ) {
       continue;
     }
     headerLines.push(`${name}: ${value}`);
   }
 
-  upstream.once("connect", () => {
+  let responseStarted = false;
+  let upstreamClosed = false;
+  const closeUpstream = () => {
+    if (!upstreamClosed) {
+      upstreamClosed = true;
+      upstream.destroy();
+    }
+  };
+  const closeBoth = () => {
+    closeUpstream();
+    params.socket.destroy();
+  };
+  const failOpening = (status: "502 Bad Gateway" | "504 Gateway Timeout") => {
+    if (responseStarted || upstreamClosed) {
+      return;
+    }
+    closeUpstream();
+    if (!params.socket.destroyed) {
+      params.socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`, () =>
+        params.socket.destroy(),
+      );
+    }
+  };
+  const onOpeningTimeout = () => {
+    failOpening("504 Gateway Timeout");
+  };
+
+  upstream.once("timeout", onOpeningTimeout);
+  upstream.once(usesTls ? "secureConnect" : "connect", () => {
+    if (upstreamClosed) {
+      return;
+    }
+    upstream.setTimeout(0);
+    upstream.removeListener("timeout", onOpeningTimeout);
     const requestText = [
       `${params.req.method ?? "GET"} ${rewriteControlUiProxyPath(requestUrl.pathname, requestUrl.search)} HTTP/${params.req.httpVersion}`,
       `Host: ${params.target.host}`,
+      ...(params.authorizationToken ? [`Authorization: Bearer ${params.authorizationToken}`] : []),
       ...headerLines,
       "",
       "",
@@ -240,21 +295,17 @@ export function proxyUpgradeRequest(params: {
     params.socket.pipe(upstream);
   });
 
-  const closeBoth = () => {
-    if (!params.socket.destroyed) {
-      params.socket.destroy();
-    }
-    if (!upstream.destroyed) {
-      upstream.destroy();
-    }
-  };
-
+  upstream.once("data", () => {
+    responseStarted = true;
+  });
   upstream.on("error", () => {
-    if (!params.socket.destroyed) {
-      params.socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+    if (!responseStarted) {
+      failOpening("502 Bad Gateway");
+      return;
     }
     closeBoth();
   });
+  params.socket.on("end", closeBoth);
   params.socket.on("error", closeBoth);
   params.socket.on("close", closeBoth);
 }

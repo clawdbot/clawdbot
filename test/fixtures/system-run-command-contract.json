@@ -27,6 +27,15 @@
       }
     },
     {
+      "name": "non-sh login shell wrapper requires full argv display binding",
+      "command": ["/bin/bash", "-lc", "/usr/bin/printf ok"],
+      "rawCommand": "/usr/bin/printf ok",
+      "expected": {
+        "valid": false,
+        "errorContains": "rawCommand does not match command"
+      }
+    },
+    {
       "name": "shell wrapper positional argv carrier requires full argv display binding",
       "command": ["/bin/sh", "-lc", "$0 \"$1\"", "/usr/bin/touch", "/tmp/marker"],
       "rawCommand": "$0 \"$1\"",
@@ -46,11 +55,11 @@
     },
     {
       "name": "env wrapper shell payload accepted at ingress when prelude has no env modifiers",
-      "command": ["/usr/bin/env", "bash", "-lc", "echo hi"],
+      "command": ["/usr/bin/env", "sh", "-lc", "echo hi"],
       "rawCommand": "echo hi",
       "expected": {
         "valid": true,
-        "displayCommand": "/usr/bin/env bash -lc \"echo hi\""
+        "displayCommand": "/usr/bin/env sh -lc \"echo hi\""
       }
     },
     {
@@ -78,6 +87,42 @@
       "expected": {
         "valid": true,
         "displayCommand": "/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc \"echo hi\""
+      }
+    },
+    {
+      "name": "login shell wrapper requires full argv display binding",
+      "command": ["/bin/bash", "--login", "-c", "/usr/bin/printf ok"],
+      "rawCommand": "/usr/bin/printf ok",
+      "expected": {
+        "valid": false,
+        "errorContains": "rawCommand does not match command"
+      }
+    },
+    {
+      "name": "login shell wrapper accepts canonical full argv raw command",
+      "command": ["/bin/bash", "--login", "-c", "/usr/bin/printf ok"],
+      "rawCommand": "/bin/bash --login -c \"/usr/bin/printf ok\"",
+      "expected": {
+        "valid": true,
+        "displayCommand": "/bin/bash --login -c \"/usr/bin/printf ok\""
+      }
+    },
+    {
+      "name": "interactive shell wrapper requires full argv display binding",
+      "command": ["/bin/bash", "-i", "-c", "/usr/bin/printf ok"],
+      "rawCommand": "/usr/bin/printf ok",
+      "expected": {
+        "valid": false,
+        "errorContains": "rawCommand does not match command"
+      }
+    },
+    {
+      "name": "fish init-command wrapper requires full argv display binding",
+      "command": ["/usr/bin/fish", "--init-command=/tmp/payload.fish", "-c", "/usr/bin/printf ok"],
+      "rawCommand": "/usr/bin/printf ok",
+      "expected": {
+        "valid": false,
+        "errorContains": "rawCommand does not match command"
       }
     }
   ]

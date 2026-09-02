@@ -1,9 +1,17 @@
-import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
+// Normalizes raw agent output into sendable reply text and metadata.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
+import {
   HEARTBEAT_TOKEN,
+  isInternalFormattingArtifact,
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -12,29 +20,56 @@ import {
   stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
 
-export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
+export type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 
-export type NormalizeReplyOptions = {
+export type NormalizeReplyOutcome<T = ReplyPayload> =
+  | { kind: "deliver"; payload: T }
+  | { kind: "suppress"; reason: NormalizeReplySkipReason };
+
+const channelReplyTransformOwners = new WeakMap<
+  (payload: ReplyPayload) => ReplyPayload | null,
+  object
+>();
+
+export function bindNormalizeReplyTransformOwner<
+  T extends (payload: ReplyPayload) => ReplyPayload | null,
+>(transform: T, owner: object): T {
+  channelReplyTransformOwners.set(transform, owner);
+  return transform;
+}
+
+function resolveNormalizeReplyTransformOwner(
+  transform: ((payload: ReplyPayload) => ReplyPayload | null) | undefined,
+): object | undefined {
+  return transform ? (channelReplyTransformOwners.get(transform) ?? transform) : undefined;
+}
+
+type NormalizeReplyOptions = {
   responsePrefix?: string;
   applyChannelTransforms?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
-  stripHeartbeat?: boolean;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+  conversationContext?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
 
-export function normalizeReplyPayload(
+export function normalizeReplyPayloadOutcome(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
-): ReplyPayload | null {
+): NormalizeReplyOutcome {
+  const suppress = (reason: NormalizeReplySkipReason): NormalizeReplyOutcome => {
+    opts.onSkip?.(reason);
+    return { kind: "suppress", reason };
+  };
   const applyChannelTransforms = opts.applyChannelTransforms ?? true;
   const hasContent = (text: string | undefined) =>
     hasReplyPayloadContent(
@@ -48,16 +83,14 @@ export function normalizeReplyPayload(
     );
   const trimmed = normalizeOptionalString(payload.text) ?? "";
   if (!hasContent(trimmed)) {
-    opts.onSkip?.("empty");
-    return null;
+    return suppress("empty");
   }
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
   if (text && isSilentReplyPayloadText(text, silentToken)) {
     if (!hasContent("")) {
-      opts.onSkip?.("silent");
-      return null;
+      return suppress("silent");
     }
     text = "";
   }
@@ -72,8 +105,7 @@ export function normalizeReplyPayload(
     if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
       text = stripSilentToken(text, silentToken);
       if (!hasContent(text)) {
-        opts.onSkip?.("silent");
-        return null;
+        return suppress("silent");
       }
     }
   }
@@ -82,30 +114,50 @@ export function normalizeReplyPayload(
     text = "";
   }
 
-  const shouldStripHeartbeat = opts.stripHeartbeat ?? true;
-  if (shouldStripHeartbeat && text?.includes(HEARTBEAT_TOKEN)) {
+  if (text?.includes(HEARTBEAT_TOKEN)) {
     const stripped = stripHeartbeatToken(text, { mode: "message" });
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();
     }
     if (stripped.shouldSkip && !hasContent(stripped.text)) {
-      opts.onSkip?.("heartbeat");
-      return null;
+      return suppress("heartbeat");
     }
     text = stripped.text;
   }
 
-  if (text) {
-    text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
-  }
-  if (!hasContent(text)) {
-    opts.onSkip?.("empty");
-    return null;
+  if (text && isInternalFormattingArtifact(text) && !hasContent("")) {
+    return suppress("silent");
   }
 
-  let enrichedPayload: ReplyPayload = { ...payload, text };
-  if (applyChannelTransforms && opts.transformReplyPayload) {
-    enrichedPayload = opts.transformReplyPayload(enrichedPayload) ?? enrichedPayload;
+  if (text) {
+    text = payload.isError
+      ? renderUserFacingText(text, {
+          errorContext: true,
+          conversationContext: opts.conversationContext,
+        })
+      : sanitizeUserFacingText(text, { conversationContext: opts.conversationContext });
+  }
+  if (!hasContent(text)) {
+    return suppress("empty");
+  }
+
+  let enrichedPayload: ReplyPayload = copyReplyPayloadMetadata(payload, { ...payload, text });
+  const channelTransformOwner = resolveNormalizeReplyTransformOwner(opts.transformReplyPayload);
+  const transformAlreadyApplied =
+    channelTransformOwner != null &&
+    getReplyPayloadMetadata(enrichedPayload)?.channelReplyTransformOwner === channelTransformOwner;
+  if (applyChannelTransforms && opts.transformReplyPayload && !transformAlreadyApplied) {
+    const transformedPayload = opts.transformReplyPayload(enrichedPayload);
+    if (transformedPayload === null) {
+      return suppress("channel_transform");
+    }
+    const copiedPayload = transformedPayload
+      ? copyReplyPayloadMetadata(enrichedPayload, transformedPayload)
+      : enrichedPayload;
+    const appliedOwner = resolveNormalizeReplyTransformOwner(opts.transformReplyPayload);
+    enrichedPayload = appliedOwner
+      ? setReplyPayloadMetadata(copiedPayload, { channelReplyTransformOwner: appliedOwner })
+      : copiedPayload;
     text = enrichedPayload.text;
   }
 
@@ -123,6 +175,14 @@ export function normalizeReplyPayload(
     text = `${effectivePrefix} ${text}`;
   }
 
-  enrichedPayload = { ...enrichedPayload, text };
-  return enrichedPayload;
+  enrichedPayload = copyReplyPayloadMetadata(enrichedPayload, { ...enrichedPayload, text });
+  return { kind: "deliver", payload: enrichedPayload };
+}
+
+export function normalizeReplyPayload(
+  payload: ReplyPayload,
+  opts: NormalizeReplyOptions = {},
+): ReplyPayload | null {
+  const outcome = normalizeReplyPayloadOutcome(payload, opts);
+  return outcome.kind === "deliver" ? outcome.payload : null;
 }

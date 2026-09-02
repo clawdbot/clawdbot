@@ -1,3 +1,4 @@
+// Feishu plugin module implements event types behavior.
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -10,11 +11,14 @@ export type FeishuMessageEvent = {
   };
   message: {
     message_id: string;
+    reply_target_message_id?: string;
+    typing_target_message_id?: string;
+    suppress_reply_target?: boolean;
     root_id?: string;
     parent_id?: string;
     thread_id?: string;
     chat_id: string;
-    chat_type: "p2p" | "group" | "private";
+    chat_type: "p2p" | "group" | "topic_group" | "private";
     message_type: string;
     content: string;
     create_time?: string;

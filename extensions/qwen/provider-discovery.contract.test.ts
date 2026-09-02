@@ -1,3 +1,4 @@
-import { describeModelStudioProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
+// Qwen tests cover provider discovery.contract plugin behavior.
+import { describeModelStudioProviderDiscoveryContract } from "openclaw/plugin-sdk/provider-test-contracts";
 
 describeModelStudioProviderDiscoveryContract(() => import("./index.js"));

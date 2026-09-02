@@ -1,18 +1,20 @@
-import { resolveInspectedChannelAccount } from "../channels/account-inspection.js";
-import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
+// Formats channel account summaries for CLI status surfaces.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
-  buildChannelAccountSnapshot,
-  formatChannelAllowFrom,
-} from "../channels/account-summary.js";
+  resolveInspectedChannelAccount,
+  type ChannelAccountInspectionResult,
+} from "../channels/account-inspection.js";
+import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
+import { formatChannelAllowFrom } from "../channels/account-summary.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import { theme } from "../terminal/theme.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
 
-export type ChannelSummaryOptions = {
+type ChannelSummaryOptions = {
   colorize?: boolean;
   includeAllowFrom?: boolean;
   plugins?: readonly ChannelPlugin[];
@@ -24,12 +26,8 @@ const DEFAULT_OPTIONS: Omit<Required<ChannelSummaryOptions>, "plugins" | "source
   includeAllowFrom: false,
 };
 
-type ChannelAccountEntry = {
+type ChannelAccountEntry = ChannelAccountInspectionResult & {
   accountId: string;
-  account: unknown;
-  enabled: boolean;
-  configured: boolean;
-  snapshot: ChannelAccountSnapshot;
 };
 
 const formatAccountLabel = (params: { accountId: string; name?: string }) => {
@@ -44,8 +42,8 @@ const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
 async function loadChannelSummaryConfig(): Promise<OpenClawConfig> {
-  const { loadConfig } = await import("../config/config.js");
-  return loadConfig();
+  const { getRuntimeConfig } = await import("../config/config.js");
+  return getRuntimeConfig();
 }
 
 async function listChannelSummaryPlugins(params: {
@@ -55,6 +53,7 @@ async function listChannelSummaryPlugins(params: {
   const { listReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
   return listReadOnlyChannelPluginsForConfig(params.cfg, {
     activationSourceConfig: params.sourceConfig,
+    includeSetupFallbackPlugins: false,
   });
 }
 
@@ -87,7 +86,10 @@ const buildAccountDetails = (params: {
   ) {
     details.push(`signing:${snapshot.signingSecretSource}`);
   }
-  if (hasConfiguredUnavailableCredentialStatus(params.entry.account)) {
+  if (
+    params.entry.kind === "unavailable" ||
+    hasConfiguredUnavailableCredentialStatus(params.entry.account)
+  ) {
     details.push("secret unavailable in this command path");
   }
   if (snapshot.baseUrl) {
@@ -138,38 +140,33 @@ export async function buildChannelSummary(
     const entries: ChannelAccountEntry[] = [];
 
     for (const accountId of resolvedAccountIds) {
-      const { account, enabled, configured } = await resolveInspectedChannelAccount({
+      const inspected = await resolveInspectedChannelAccount({
         plugin,
         cfg: effective,
         sourceConfig,
         accountId,
       });
-      const snapshot = buildChannelAccountSnapshot({
-        plugin,
-        account,
-        cfg: effective,
-        accountId,
-        enabled,
-        configured,
-      });
-      entries.push({ accountId, account, enabled, configured, snapshot });
+      entries.push({ accountId, ...inspected });
     }
 
     const configuredEntries = entries.filter((entry) => entry.configured);
     const anyEnabled = entries.some((entry) => entry.enabled);
+    const configurationUnknown = entries.some(
+      (entry) => entry.enabled && entry.configured === undefined,
+    );
     const fallbackEntry =
       entries.find((entry) => entry.accountId === defaultAccountId) ?? entries[0];
-    const summary = plugin.status?.buildChannelSummary
-      ? await plugin.status.buildChannelSummary({
-          account: fallbackEntry?.account ?? {},
-          cfg: effective,
-          defaultAccountId,
-          snapshot:
-            fallbackEntry?.snapshot ?? ({ accountId: defaultAccountId } as ChannelAccountSnapshot),
-        })
-      : undefined;
+    const summary =
+      fallbackEntry?.kind === "resolved" && plugin.status?.buildChannelSummary
+        ? await plugin.status.buildChannelSummary({
+            account: fallbackEntry.account,
+            cfg: effective,
+            defaultAccountId,
+            snapshot: fallbackEntry.snapshot,
+          })
+        : fallbackEntry?.snapshot;
 
-    const summaryRecord = summary;
+    const summaryRecord = asNullableRecord(summary);
     const statusState =
       summaryRecord && typeof summaryRecord.statusState === "string"
         ? summaryRecord.statusState
@@ -183,15 +180,17 @@ export async function buildChannelSummary(
 
     const status = !anyEnabled
       ? "disabled"
-      : statusState
-        ? formatChannelStatusState(statusState)
-        : linked !== null
-          ? linked
-            ? "linked"
-            : "not linked"
-          : configured
-            ? "configured"
-            : "not configured";
+      : configurationUnknown
+        ? "configuration status unavailable"
+        : statusState
+          ? formatChannelStatusState(statusState)
+          : linked !== null
+            ? linked
+              ? "linked"
+              : "not linked"
+            : configured
+              ? "configured"
+              : "not configured";
 
     const statusColor =
       status === "linked" || status === "configured"
@@ -199,7 +198,7 @@ export async function buildChannelSummary(
         : status === "not linked" || status === "auth stabilizing"
           ? theme.error
           : theme.muted;
-    const baseLabel = plugin.meta.label ?? plugin.id;
+    const baseLabel = sanitizeForLog(plugin.meta.label ?? plugin.id).trim() || plugin.id;
     let line = `${baseLabel}: ${status}`;
 
     const authAgeMs =

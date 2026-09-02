@@ -1,4 +1,7 @@
+// System prompt report tests cover prompt accounting, bootstrap injection
+// matching, and hash output used to compare prompt/tool parity.
 import { describe, expect, it } from "vitest";
+import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -26,8 +29,10 @@ describe("buildSystemPromptReport", () => {
       bootstrapMaxChars: params.bootstrapMaxChars ?? 20_000,
       bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
       systemPrompt: "system",
-      bootstrapFiles: [params.file],
-      injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [params.file],
+        injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
+      }),
       skillsPrompt: "",
       tools: [],
     });
@@ -112,15 +117,120 @@ describe("buildSystemPromptReport", () => {
       generatedAt: 0,
       bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      bootstrapFiles: [file],
-      injectedFiles: [
-        { path: 123 as unknown as string, content: "bad" },
-        { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
-      ],
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [
+          { path: 123 as unknown as string, content: "bad" },
+          { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
+        ],
+      }),
       skillsPrompt: "",
       tools: [],
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
+
+  it("does not count injected files as project context when the rendered prompt omits them", () => {
+    const file = makeBootstrapFile({
+      path: "/tmp/workspace/AGENTS.md",
+      content: "raw bootstrap context",
+    });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "custom override",
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
+      }),
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.systemPrompt.chars).toBe("custom override".length);
+    expect(report.systemPrompt.projectContextChars).toBe(0);
+    expect(report.systemPrompt.nonProjectContextChars).toBe("custom override".length);
+  });
+
+  it("emits content hashes for prompt and tool parity checks", () => {
+    // Hashes catch same-length prompt/tool drift that plain character counts
+    // would miss when comparing runtime payloads.
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
+      skillsPrompt: "<skill><name>docs</name></skill>",
+      tools: [
+        {
+          name: "read",
+          description: "Read files",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+          },
+        },
+      ] as never,
+    });
+    const sameLengthChangedPrompt = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "systen",
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
+      skillsPrompt: "<skill><name>docs</name></skill>",
+      tools: [],
+    });
+
+    expect(report.systemPrompt.hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(report.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(report.tools.entries[0]?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(sameLengthChangedPrompt.systemPrompt.hash).not.toBe(report.systemPrompt.hash);
+  });
+
+  it("keeps reporting when a tool schema cannot be stringified", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const circularSchema: Record<string, unknown> = {
+      type: "object",
+      properties: { count: { type: "integer" } },
+    };
+    circularSchema.self = circularSchema;
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      injectedWorkspaceFiles: buildBootstrapInjectionStats({
+        bootstrapFiles: [file],
+        injectedFiles: [],
+      }),
+      skillsPrompt: "",
+      tools: [
+        {
+          name: "broken",
+          description: "Broken schema",
+          parameters: circularSchema,
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "broken",
+      schemaChars: 0,
+      propertiesCount: 1,
+    });
+    expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 });

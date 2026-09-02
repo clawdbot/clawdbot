@@ -1,18 +1,23 @@
 {
   "name": "@openclaw/zalouser",
-  "version": "2026.4.20",
-  "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
+  "version": "2026.8.1",
+  "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.49",
-    "zca-js": "2.1.2"
+    "typebox": "1.3.17",
+    "zca-js": "2.1.2",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.20"
+    "openclaw": ">=2026.8.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -26,6 +31,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "zalouser",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "ZALOUSER_PROFILE",
+            "ZCA_PROFILE"
+          ]
+        }
+      },
       "label": "Zalo Personal",
       "selectionLabel": "Zalo (Personal Account)",
       "docsPath": "/channels/zalouser",
@@ -35,7 +48,16 @@
         "zlu"
       ],
       "order": 85,
-      "quickstartAllowFrom": false
+      "quickstartAllowFrom": false,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "topOnly",
+        "groupModel": "hybrid",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": false
+      },
+      "setup": {
+        "fields": []
+      }
     },
     "install": {
       "npmSpec": "@openclaw/zalouser",
@@ -43,10 +65,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.4.20"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.4.20"
+      "openclawVersion": "2026.8.1"
     },
     "release": {
       "publishToClawHub": true,

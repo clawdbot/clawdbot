@@ -2,7 +2,7 @@
 
 Canonical scenario source now lives in:
 
-- `qa/scenarios/index.md`
-- `qa/scenarios/<theme>/*.md`
+- `qa/scenarios/index.yaml`
+- `qa/scenarios/<theme>/*.yaml`
 
-Each QA scenario has its own markdown file.
+Each QA scenario has its own YAML file.

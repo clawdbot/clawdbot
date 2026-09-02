@@ -1,12 +1,26 @@
+/**
+ * Channel status snapshot builders.
+ *
+ * Combines plugin status hooks, account inspection, and safe account field projection.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { projectSafeChannelAccountSnapshotFields } from "../account-snapshot-fields.js";
-import { inspectReadOnlyChannelAccount } from "../read-only-account-inspect.js";
+import { inspectChannelAccount } from "../account-inspection.js";
+import {
+  projectSafeChannelAccountSnapshotFields,
+  redactChannelAccountSnapshotBaseUrl,
+} from "../account-snapshot-fields.js";
+import { buildChannelAccountSnapshotFromInspection } from "../account-summary.js";
+import {
+  applyChannelAccountState,
+  resolveChannelAccountLinked,
+  resolveChannelAccountState,
+  resolveUnavailableChannelAccountSnapshot,
+} from "../status/account-state.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelAccountSnapshot } from "./types.public.js";
 
-// Channel docking: status snapshots flow through plugin.status hooks here.
-async function buildSnapshotFromAccount<ResolvedAccount>(params: {
+export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(params: {
   plugin: ChannelPlugin<ResolvedAccount>;
   cfg: OpenClawConfig;
   accountId: string;
@@ -14,52 +28,56 @@ async function buildSnapshotFromAccount<ResolvedAccount>(params: {
   runtime?: ChannelAccountSnapshot;
   probe?: unknown;
   audit?: unknown;
+  enabledFallback?: boolean;
+  configuredFallback?: boolean;
 }): Promise<ChannelAccountSnapshot> {
+  let snapshot: ChannelAccountSnapshot;
   if (params.plugin.status?.buildAccountSnapshot) {
-    const snapshot = await params.plugin.status.buildAccountSnapshot({
+    snapshot = await params.plugin.status.buildAccountSnapshot({
       account: params.account,
       cfg: params.cfg,
       runtime: params.runtime,
       probe: params.probe,
       audit: params.audit,
     });
-    return normalizeOptionalString(snapshot.accountId)
-      ? snapshot
-      : {
-          ...snapshot,
-          accountId: params.accountId,
-        };
+  } else {
+    snapshot = {
+      accountId: params.accountId,
+      ...projectSafeChannelAccountSnapshotFields(params.account),
+      ...projectSafeChannelAccountSnapshotFields(params.runtime),
+    };
   }
+
+  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
   const enabled = params.plugin.config.isEnabled
     ? params.plugin.config.isEnabled(params.account, params.cfg)
-    : params.account && typeof params.account === "object"
-      ? (params.account as { enabled?: boolean }).enabled
-      : undefined;
+    : (described?.enabled ?? snapshot.enabled ?? params.enabledFallback ?? true);
   const configured =
-    params.account && typeof params.account === "object" && "configured" in params.account
-      ? (params.account as { configured?: boolean }).configured
-      : params.plugin.config.isConfigured
-        ? await params.plugin.config.isConfigured(params.account, params.cfg)
-        : undefined;
-  return {
-    accountId: params.accountId,
+    described?.configured ??
+    (params.plugin.config.isConfigured
+      ? await params.plugin.config.isConfigured(params.account, params.cfg)
+      : (snapshot.configured ?? params.configuredFallback ?? true));
+  const linkState =
+    configured && params.plugin.config.isLinked
+      ? await params.plugin.config.isLinked(params.account, params.cfg)
+      : undefined;
+  const state = resolveChannelAccountState({
     enabled,
     configured,
-    ...projectSafeChannelAccountSnapshotFields(params.account),
-  };
-}
-
-async function inspectChannelAccount<ResolvedAccount>(params: {
-  plugin: ChannelPlugin<ResolvedAccount>;
-  cfg: OpenClawConfig;
-  accountId: string;
-}): Promise<ResolvedAccount | null> {
-  return (params.plugin.config.inspectAccount?.(params.cfg, params.accountId) ??
-    (await inspectReadOnlyChannelAccount({
-      channelId: params.plugin.id,
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }))) as ResolvedAccount | null;
+    linked: resolveChannelAccountLinked(linkState, described?.linked ?? snapshot.linked),
+    runtime: snapshot,
+    disabledReason: params.plugin.config.disabledReason?.(params.account, params.cfg),
+    unconfiguredReason: params.plugin.config.unconfiguredReason?.(params.account, params.cfg),
+    unlinkedReason: params.plugin.config.unlinkedReason?.(params.account, params.cfg),
+  });
+  const projectedSnapshot = { ...snapshot };
+  applyChannelAccountState(projectedSnapshot, state);
+  return redactChannelAccountSnapshotBaseUrl({
+    ...projectedSnapshot,
+    enabled,
+    accountId: normalizeOptionalString(snapshot.accountId) ? snapshot.accountId : params.accountId,
+    ...(params.probe !== undefined && snapshot.probe === undefined ? { probe: params.probe } : {}),
+  });
 }
 
 export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>(params: {
@@ -74,13 +92,13 @@ export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>
   if (!inspectedAccount) {
     return null;
   }
-  return await buildSnapshotFromAccount({
+  return buildChannelAccountSnapshotFromInspection({
     ...params,
-    account: inspectedAccount as ResolvedAccount,
+    account: inspectedAccount,
   });
 }
 
-export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
+export async function resolveChannelAccountSnapshot<ResolvedAccount>(params: {
   plugin: ChannelPlugin<ResolvedAccount>;
   cfg: OpenClawConfig;
   accountId: string;
@@ -88,11 +106,20 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
-  const inspectedAccount = await inspectChannelAccount(params);
-  const account =
-    inspectedAccount ?? params.plugin.config.resolveAccount(params.cfg, params.accountId);
-  return await buildSnapshotFromAccount({
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: params.runtime,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  const inspected = await buildReadOnlySourceChannelAccountSnapshot(params);
+  if (inspected) {
+    return inspected;
+  }
+  return await buildChannelAccountSnapshotFromAccount({
     ...params,
-    account,
+    account: params.plugin.config.resolveAccount(params.cfg, params.accountId),
   });
 }

@@ -1,10 +1,12 @@
 # QA Convex Credential Broker (v1)
 
 Standalone Convex project for shared `qa-lab` live credentials with lease locking.
+Keep private operator notes in `~/Projects/manager/docs/`, not in public docs.
 
 This broker exposes:
 
 - `POST /qa-credentials/v1/acquire`
+- `POST /qa-credentials/v1/payload-chunk`
 - `POST /qa-credentials/v1/heartbeat`
 - `POST /qa-credentials/v1/release`
 - `POST /qa-credentials/v1/admin/add`
@@ -56,6 +58,14 @@ Client URL policy:
 Maintainers can manage rows without using the Convex dashboard:
 
 ```bash
+pnpm openclaw qa credentials add \
+  --kind buzz \
+  --payload-file qa/buzz-credential.json
+
+pnpm openclaw qa credentials add \
+  --kind discord \
+  --payload-file qa/discord-credential.json
+
 pnpm openclaw qa credentials add \
   --kind telegram \
   --payload-file qa/telegram-credential.json
@@ -139,6 +149,41 @@ For `kind: "telegram"`, broker `admin/add` validates that payload includes:
 - `groupId` as a numeric chat id string
 - non-empty `driverToken`
 - non-empty `sutToken`
+
+For `kind: "telegram-test-userbot"`, broker `admin/add` accepts only Test
+Server schema version 1 with numeric chat, bot, and tester ids; a bot token and
+username; a base64 TDLib archive and SHA-256 hash; and a TDLib version.
+
+For `kind: "buzz"`, broker `admin/add` validates that payload includes:
+
+- `relayUrl` as a `wss://` URL, or `ws://` only for a loopback relay
+- `roomId` as a channel UUID
+- valid, distinct `driverPrivateKey` and `sutPrivateKey` values in nsec or
+  64-character hex form
+- optional `driverAuthTag` and `sutAuthTag` values matching the four-string
+  Buzz authorization tag JSON shape
+
+Use dedicated QA identities only. Never add a human owner or admin private key
+to the shared pool.
+
+For `kind: "discord"`, broker `admin/add` validates that payload includes:
+
+- `guildId` as a Discord snowflake string
+- `channelId` as a Discord snowflake string
+- non-empty `driverBotToken`
+- non-empty `sutBotToken`
+- `sutApplicationId` as a Discord snowflake string
+
+For `kind: "whatsapp"`, broker `admin/add` validates that payload includes:
+
+- `driverPhoneE164` as an E.164 phone number string
+- `sutPhoneE164` as a distinct E.164 phone number string
+- non-empty `driverAuthArchiveBase64`
+- non-empty `sutAuthArchiveBase64`
+- optional `groupJid`
+
+Other kinds are currently accepted as pass-through payloads. Add broker-side
+validation before treating a new kind as a hardened shared pool.
 
 Admin list (default redacted):
 

@@ -1,17 +1,12 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Matrix plugin module implements credentials write behavior.
 import type {
   saveBackfilledMatrixDeviceId as saveBackfilledMatrixDeviceIdType,
   saveMatrixCredentials as saveMatrixCredentialsType,
   touchMatrixCredentials as touchMatrixCredentialsType,
 } from "./credentials.js";
 
-type MatrixCredentialsRuntime = typeof import("./credentials.js");
-
-let matrixCredentialsRuntimePromise: Promise<MatrixCredentialsRuntime> | undefined;
-
-function loadMatrixCredentialsRuntime(): Promise<MatrixCredentialsRuntime> {
-  matrixCredentialsRuntimePromise ??= import("./credentials.js");
-  return matrixCredentialsRuntimePromise;
-}
+const loadMatrixCredentialsRuntime = createLazyRuntimeModule(() => import("./credentials.js"));
 
 export async function saveMatrixCredentials(
   ...args: Parameters<typeof saveMatrixCredentialsType>

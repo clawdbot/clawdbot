@@ -1,6 +1,7 @@
 import Foundation
 import SwabbleKit
 import Testing
+@testable import OpenClaw
 
 struct VoiceWakeTesterTests {
     @Test func `match respects gap requirement`() {
@@ -29,5 +30,24 @@ struct VoiceWakeTesterTests {
             ])
         let config = WakeWordGateConfig(triggers: ["claude"], minPostTriggerGap: 0.3)
         #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command == "do thing")
+    }
+
+    @Test func `trigger only fallback accepts bare test trigger`() {
+        let match = VoiceWakeRecognitionDebugSupport.triggerOnlyFallbackMatch(
+            transcript: "hey openclaw",
+            triggers: ["openclaw"],
+            trimWake: { WakeWordGate.stripWake(text: $0, triggers: $1) })
+
+        #expect(match?.command == "")
+        #expect(match?.trigger == "openclaw")
+    }
+
+    @Test func `trigger only fallback rejects trailing mention`() {
+        let match = VoiceWakeRecognitionDebugSupport.triggerOnlyFallbackMatch(
+            transcript: "tell me about openclaw",
+            triggers: ["openclaw"],
+            trimWake: { WakeWordGate.stripWake(text: $0, triggers: $1) })
+
+        #expect(match == nil)
     }
 }

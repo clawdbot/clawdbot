@@ -1,64 +1,20 @@
+// Gmail setup utilities write helper files and normalize Gmail setup settings.
 import fs from "node:fs";
 import path from "node:path";
-import { hasBinary } from "../agents/skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveExecutable } from "../infra/executable-path.js";
+import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { hasBinary } from "../skills/loading/config.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
 
 let cachedPythonPath: string | null | undefined;
-const MAX_OUTPUT_CHARS = 800;
-
-export function resetGmailSetupUtilsCachesForTest(): void {
-  cachedPythonPath = undefined;
-}
-
-function trimOutput(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.length <= MAX_OUTPUT_CHARS) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, MAX_OUTPUT_CHARS)}…`;
-}
-
-function formatCommandResultInternal(
-  command: string,
-  result: SpawnResult,
-  statusLabel: "failed" | "exited",
-): string {
-  const code = result.code ?? "null";
-  const signal = result.signal ? `, signal=${result.signal}` : "";
-  const killed = result.killed ? ", killed=true" : "";
-  const stderr = trimOutput(result.stderr);
-  const stdout = trimOutput(result.stdout);
-  const lines = [`${command} ${statusLabel} (code=${code}${signal}${killed})`];
-  if (stderr) {
-    lines.push(`stderr: ${stderr}`);
-  }
-  if (stdout) {
-    lines.push(`stdout: ${stdout}`);
-  }
-  return lines.join("\n");
-}
-
-function formatCommandFailure(command: string, result: SpawnResult): string {
-  return formatCommandResultInternal(command, result, "failed");
-}
-
-function formatCommandResult(command: string, result: SpawnResult): string {
-  return formatCommandResultInternal(command, result, "exited");
-}
+let gcloudBin: string | undefined;
 
 function formatJsonParseFailure(command: string, result: SpawnResult, err: unknown): string {
-  const reason = formatErrorMessage(err);
+  const reason = formatCommandOutput(formatErrorMessage(err));
   return `${command} returned invalid JSON: ${reason}\n${formatCommandResult(command, result)}`;
-}
-
-function formatCommand(command: string, args: string[]): string {
-  return [command, ...args].join(" ");
 }
 
 function findExecutablesOnPath(bins: string[]): string[] {
@@ -116,21 +72,47 @@ function ensureGcloudOnPath(): boolean {
   return false;
 }
 
-export async function resolvePythonExecutablePath(): Promise<string | undefined> {
+// gcloud requires a Python interpreter in this range to run; picking an
+// interpreter outside it makes `gcloud` fail to load. See `gcloud topic startup`.
+const MIN_GCLOUD_PYTHON: readonly [number, number] = [3, 10];
+const MAX_GCLOUD_PYTHON: readonly [number, number] = [3, 14];
+
+function isSupportedGcloudPythonVersion(major: number, minor: number): boolean {
+  if (major !== MIN_GCLOUD_PYTHON[0]) {
+    return false;
+  }
+  return minor >= MIN_GCLOUD_PYTHON[1] && minor <= MAX_GCLOUD_PYTHON[1];
+}
+
+async function resolvePythonExecutablePath(): Promise<string | undefined> {
   if (cachedPythonPath !== undefined) {
     return cachedPythonPath ?? undefined;
   }
   const candidates = findExecutablesOnPath(["python3", "python"]);
   for (const candidate of candidates) {
     const res = await runCommandWithTimeout(
-      [candidate, "-c", "import os, sys; print(os.path.realpath(sys.executable))"],
+      [
+        candidate,
+        "-c",
+        "import os, sys; print(os.path.realpath(sys.executable)); print('%d.%d' % sys.version_info[:2])",
+      ],
       { timeoutMs: 2_000 },
     );
     if (res.code !== 0) {
       continue;
     }
-    const resolved = res.stdout.trim().split(/\s+/)[0];
+    const lines = res.stdout.trim().split(/\r?\n/);
+    const resolved = lines[0]?.trim().split(/\s+/)[0];
     if (!resolved) {
+      continue;
+    }
+    const version = lines[1]?.trim().match(/^(\d+)\.(\d+)/);
+    if (!version) {
+      continue;
+    }
+    if (!isSupportedGcloudPythonVersion(Number(version[1]), Number(version[2]))) {
+      // Skip interpreters gcloud cannot use (e.g. macOS' bundled Python 3.9)
+      // so a compatible interpreter later on PATH is selected instead.
       continue;
     }
     try {
@@ -145,22 +127,18 @@ export async function resolvePythonExecutablePath(): Promise<string | undefined>
   return undefined;
 }
 
-async function gcloudEnv(): Promise<NodeJS.ProcessEnv | undefined> {
-  if (process.env.CLOUDSDK_PYTHON) {
-    return undefined;
-  }
+async function gcloudEnv(): Promise<NodeJS.ProcessEnv> {
   const pythonPath = await resolvePythonExecutablePath();
-  if (!pythonPath) {
-    return undefined;
-  }
-  return { CLOUDSDK_PYTHON: pythonPath };
+  // Always override inherited gcloud Python controls so the launcher cannot
+  // select a workspace-controlled interpreter or word-split injected args.
+  return { CLOUDSDK_PYTHON: pythonPath, CLOUDSDK_PYTHON_ARGS: undefined };
 }
 
 async function runGcloudCommand(
   args: string[],
   timeoutMs: number,
 ): Promise<Awaited<ReturnType<typeof runCommandWithTimeout>>> {
-  return await runCommandWithTimeout(["gcloud", ...args], {
+  return await runCommandWithTimeout([(gcloudBin ??= resolveExecutable("gcloud")), ...args], {
     timeoutMs,
     env: await gcloudEnv(),
   });
@@ -185,7 +163,7 @@ export async function ensureDependency(bin: string, brewArgs: string[]) {
     env: brewEnv,
   });
   if (result.code !== 0) {
-    throw new Error(`brew install failed for ${bin}: ${result.stderr || result.stdout}`);
+    throw new Error(formatCommandResult(`brew install for ${bin}`, result));
   }
   if (!hasBinary(bin)) {
     throw new Error(`${bin} still not available after brew install`);
@@ -202,14 +180,14 @@ export async function ensureGcloudAuth() {
   }
   const login = await runGcloudCommand(["auth", "login"], 600_000);
   if (login.code !== 0) {
-    throw new Error(login.stderr || "gcloud auth login failed");
+    throw new Error(formatCommandResult("gcloud auth login", login));
   }
 }
 
 export async function runGcloud(args: string[]) {
   const result = await runGcloudCommand(args, 120_000);
   if (result.code !== 0) {
-    throw new Error(result.stderr || result.stdout || "gcloud command failed");
+    throw new Error(formatCommandResult("gcloud command", result));
   }
   return result;
 }
@@ -266,6 +244,7 @@ export async function ensureTailscaleEndpoint(params: {
   mode: "off" | "serve" | "funnel";
   path: string;
   port?: number;
+  signal?: AbortSignal;
   target?: string;
   token?: string;
 }): Promise<string> {
@@ -273,13 +252,15 @@ export async function ensureTailscaleEndpoint(params: {
     return "";
   }
 
+  const tailscaleBin = resolveExecutable("tailscale");
   const statusArgs = ["status", "--json"];
-  const statusCommand = formatCommand("tailscale", statusArgs);
-  const status = await runCommandWithTimeout(["tailscale", ...statusArgs], {
+  const statusCommand = "tailscale status --json";
+  const status = await runCommandWithTimeout([tailscaleBin, ...statusArgs], {
     timeoutMs: 30_000,
+    signal: params.signal,
   });
   if (status.code !== 0) {
-    throw new Error(formatCommandFailure(statusCommand, status));
+    throw new Error(formatCommandResult(statusCommand, status));
   }
   let parsed: { Self?: { DNSName?: string } };
   try {
@@ -303,12 +284,12 @@ export async function ensureTailscaleEndpoint(params: {
   }
   const pathArg = normalizeServePath(params.path);
   const funnelArgs = [params.mode, "--bg", "--set-path", pathArg, "--yes", target];
-  const funnelCommand = formatCommand("tailscale", funnelArgs);
-  const funnelResult = await runCommandWithTimeout(["tailscale", ...funnelArgs], {
+  const funnelResult = await runCommandWithTimeout([tailscaleBin, ...funnelArgs], {
     timeoutMs: 30_000,
+    signal: params.signal,
   });
   if (funnelResult.code !== 0) {
-    throw new Error(formatCommandFailure(funnelCommand, funnelResult));
+    throw new Error(formatCommandResult(`tailscale ${params.mode}`, funnelResult));
   }
 
   const baseUrl = `https://${dnsName}${pathArg}`;

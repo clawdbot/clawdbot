@@ -1,11 +1,17 @@
+// Implements ACP session commands and runtime status formatting.
 import { logVerbose } from "../../globals.js";
-import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  commandReply,
+  matchCommandPrefix,
+  rejectNonOwnerCommand,
+  requireGatewayClientScope,
+} from "./command-gates.js";
 import {
   COMMAND,
   type AcpAction,
   resolveAcpAction,
   resolveAcpHelpText,
-  stopWithText,
 } from "./commands-acp/shared.js";
 import type {
   CommandHandler,
@@ -18,16 +24,17 @@ type AcpActionHandler = (
   tokens: string[],
 ) => Promise<CommandHandlerResult>;
 
-let lifecycleHandlersPromise: Promise<typeof import("./commands-acp/lifecycle.js")> | undefined;
-let runtimeOptionHandlersPromise:
-  | Promise<typeof import("./commands-acp/runtime-options.js")>
-  | undefined;
-let diagnosticHandlersPromise: Promise<typeof import("./commands-acp/diagnostics.js")> | undefined;
+const lifecycleHandlersLoader = createLazyImportLoader(() => import("./commands-acp/lifecycle.js"));
+const runtimeOptionHandlersLoader = createLazyImportLoader(
+  () => import("./commands-acp/runtime-options.js"),
+);
+const diagnosticHandlersLoader = createLazyImportLoader(
+  () => import("./commands-acp/diagnostics.js"),
+);
 
 async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise<AcpActionHandler> {
   if (action === "spawn" || action === "cancel" || action === "steer" || action === "close") {
-    lifecycleHandlersPromise ??= import("./commands-acp/lifecycle.js");
-    const handlers = await lifecycleHandlersPromise;
+    const handlers = await lifecycleHandlersLoader.load();
     return {
       spawn: handlers.handleAcpSpawnAction,
       cancel: handlers.handleAcpCancelAction,
@@ -46,8 +53,7 @@ async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise
     action === "model" ||
     action === "reset-options"
   ) {
-    runtimeOptionHandlersPromise ??= import("./commands-acp/runtime-options.js");
-    const handlers = await runtimeOptionHandlersPromise;
+    const handlers = await runtimeOptionHandlersLoader.load();
     return {
       status: handlers.handleAcpStatusAction,
       "set-mode": handlers.handleAcpSetModeAction,
@@ -60,8 +66,7 @@ async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise
     }[action];
   }
 
-  diagnosticHandlersPromise ??= import("./commands-acp/diagnostics.js");
-  const handlers = await diagnosticHandlersPromise;
+  const handlers = await diagnosticHandlersLoader.load();
   const diagnosticHandlers: Record<"doctor" | "install" | "sessions", AcpActionHandler> = {
     doctor: handlers.handleAcpDoctorAction,
     install: async (params, tokens) => handlers.handleAcpInstallAction(params, tokens),
@@ -70,7 +75,7 @@ async function loadAcpActionHandler(action: Exclude<AcpAction, "help">): Promise
   return diagnosticHandlers[action];
 }
 
-const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
+const ACP_OWNER_REQUIRED_ACTIONS = new Set<AcpAction>([
   "spawn",
   "cancel",
   "steer",
@@ -85,13 +90,9 @@ const ACP_MUTATING_ACTIONS = new Set<AcpAction>([
   "reset-options",
 ]);
 
-export const handleAcpCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-
-  const normalized = params.command.commandBodyNormalized;
-  if (!normalized.startsWith(COMMAND)) {
+export const handleAcpCommand: CommandHandler = async (params, _allowTextCommands) => {
+  const rest = matchCommandPrefix(params.command.commandBodyNormalized, COMMAND);
+  if (rest === null) {
     return null;
   }
 
@@ -100,21 +101,26 @@ export const handleAcpCommand: CommandHandler = async (params, allowTextCommands
     return { shouldContinue: false };
   }
 
-  const rest = normalized.slice(COMMAND.length).trim();
   const tokens = rest.split(/\s+/).filter(Boolean);
   const action = resolveAcpAction(tokens);
   if (action === "help") {
-    return stopWithText(resolveAcpHelpText());
+    return commandReply(resolveAcpHelpText());
   }
 
-  if (ACP_MUTATING_ACTIONS.has(action)) {
-    const scopeBlock = requireGatewayClientScopeForInternalChannel(params, {
+  if (ACP_OWNER_REQUIRED_ACTIONS.has(action)) {
+    const scopeBlock = requireGatewayClientScope(params, {
       label: "/acp",
       allowedScopes: ["operator.admin"],
       missingText: "This /acp action requires operator.admin on the internal channel.",
     });
     if (scopeBlock) {
       return scopeBlock;
+    }
+    // Command auth maps internal operator.admin scope to owner identity, so this
+    // second gate rejects external non-owners without blocking Gateway admins.
+    const nonOwner = rejectNonOwnerCommand(params, "/acp");
+    if (nonOwner) {
+      return nonOwner;
     }
   }
 

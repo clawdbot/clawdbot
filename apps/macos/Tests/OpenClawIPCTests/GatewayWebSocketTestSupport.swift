@@ -1,5 +1,5 @@
 import Foundation
-import OpenClawKit
+@testable import OpenClawKit
 
 extension WebSocketTasking {
     /// Keep unit-test doubles resilient to protocol additions.
@@ -9,26 +9,70 @@ extension WebSocketTasking {
 }
 
 enum GatewayWebSocketTestSupport {
-    static func connectChallengeData(nonce: String = "test-nonce") -> Data {
+    static let identityFreeOperatorConnectOptions = GatewayConnectOptions(
+        role: "operator",
+        scopes: GatewayChannelActor.defaultOperatorConnectScopes,
+        caps: [],
+        commands: [],
+        permissions: [:],
+        clientId: "openclaw-macos",
+        clientMode: "ui",
+        clientDisplayName: "OpenClaw macOS Test",
+        includeDeviceIdentity: false)
+
+    static func connectChallengeData(
+        nonce: String = "test-nonce",
+        ts: Int64 = 1_800_000_000_000) -> Data
+    {
         let json = """
         {
           "type": "event",
           "event": "connect.challenge",
-          "payload": { "nonce": "\(nonce)" }
+          "payload": { "nonce": "\(nonce)", "ts": \(ts) }
         }
         """
         return Data(json.utf8)
     }
 
     static func connectRequestID(from message: URLSessionWebSocketTask.Message) -> String? {
-        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard let obj = requestFrameObject(from: message) else { return nil }
         guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
             return nil
         }
         return obj["id"] as? String
     }
 
-    static func connectOkData(id: String) -> Data {
+    static func connectRequestParams(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
+        guard let obj = requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
+            return nil
+        }
+        return obj["params"] as? [String: Any]
+    }
+
+    static func connectScopes(from message: URLSessionWebSocketTask.Message) -> [String]? {
+        guard let obj = requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
+            return nil
+        }
+        let params = obj["params"] as? [String: Any]
+        return params?["scopes"] as? [String]
+    }
+
+    static func connectOkData(
+        id: String,
+        tickIntervalMs: Int = 30000,
+        deviceToken: String? = nil,
+        canvasPluginSurfaceURL: String? = nil,
+        methods: [String] = [],
+        capabilities: [String] = []) -> Data
+    {
+        let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
+        let pluginSurfaceField = canvasPluginSurfaceURL.map {
+            #", "pluginSurfaceUrls": { "canvas": "\#($0)" }"#
+        } ?? ""
+        let methodsJSON = methods.map { #""\#($0)""# }.joined(separator: ",")
+        let capabilitiesJSON = capabilities.map { #""\#($0)""# }.joined(separator: ",")
         let json = """
         {
           "type": "res",
@@ -38,14 +82,19 @@ enum GatewayWebSocketTestSupport {
             "type": "hello-ok",
             "protocol": 2,
             "server": { "version": "test", "connId": "test" },
-            "features": { "methods": [], "events": [] },
+            "features": {
+              "methods": [\(methodsJSON)],
+              "events": [],
+              "capabilities": [\(capabilitiesJSON)]
+            }\(pluginSurfaceField),
             "snapshot": {
               "presence": [ { "ts": 1 } ],
               "health": {},
               "stateVersion": { "presence": 0, "health": 0 },
               "uptimeMs": 0
             },
-            "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
+            "auth": { "role": "operator", "scopes": []\(deviceTokenField) },
+            "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": \(tickIntervalMs) }
           }
         }
         """
@@ -59,14 +108,13 @@ enum GatewayWebSocketTestSupport {
         canRetryWithDeviceToken: Bool = false,
         recommendedNextStep: String? = nil) -> Data
     {
-        let recommendedNextStepJson: String
-        if let recommendedNextStep {
-            recommendedNextStepJson = """
+        let recommendedNextStepJson = if let recommendedNextStep {
+            """
             ,
                           "recommendedNextStep": "\(recommendedNextStep)"
             """
         } else {
-            recommendedNextStepJson = ""
+            ""
         }
         let json = """
         {
@@ -74,6 +122,7 @@ enum GatewayWebSocketTestSupport {
           "id": "\(id)",
           "ok": false,
           "error": {
+            "code": "INVALID_REQUEST",
             "message": "\(message)",
             "details": {
               "code": "\(detailCode)",
@@ -87,7 +136,7 @@ enum GatewayWebSocketTestSupport {
     }
 
     static func requestID(from message: URLSessionWebSocketTask.Message) -> String? {
-        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard let obj = requestFrameObject(from: message) else { return nil }
         guard (obj["type"] as? String) == "req" else {
             return nil
         }
@@ -115,12 +164,20 @@ enum GatewayWebSocketTestSupport {
         """
         return Data(json.utf8)
     }
+
+    static func eventData(event: String = "presence", seq: Int) -> Data {
+        Data(
+            """
+            {"type":"event","event":"\(event)","payload":{},"seq":\(seq)}
+            """.utf8)
+    }
 }
 
 extension NSLock {
     @inline(__always)
     fileprivate func withLock<T>(_ body: () throws -> T) rethrows -> T {
-        self.lock(); defer { self.unlock() }
+        lock()
+        defer { self.unlock() }
         return try body()
     }
 }
@@ -155,6 +212,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func snapshotConnectRequestID() -> String? {
         self.lock.withLock { self.connectRequestID }
+    }
+
+    func snapshotSendCount() -> Int {
+        self.lock.withLock { self.sendCount }
     }
 
     func resume() {
@@ -193,7 +254,7 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
             self.receiveCount += 1
             return current
         }
-        if let receiveHook = self.receiveHook {
+        if let receiveHook {
             return try await receiveHook(self, receiveIndex)
         }
         if receiveIndex == 0 {
@@ -212,6 +273,21 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     func emitReceiveSuccess(_ message: URLSessionWebSocketTask.Message) {
         let handler = self.lock.withLock { self.pendingReceiveHandler }
         handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
+    }
+
+    func emitReceiveSuccessOnce(_ message: URLSessionWebSocketTask.Message) {
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
+            defer { self.pendingReceiveHandler = nil }
+            return self.pendingReceiveHandler
+        }
+        handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
+    }
+
+    func hasPendingReceiveHandler() -> Bool {
+        self.lock.withLock { self.pendingReceiveHandler != nil }
     }
 
     func emitReceiveFailure(_ error: Error = URLError(.networkConnectionLost)) {
@@ -245,7 +321,11 @@ final class GatewayTestWebSocketSession: WebSocketSessioning, @unchecked Sendabl
     }
 
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        _ = url
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        _ = request
         let task = self.taskFactory()
         self.lock.withLock {
             self.makeCount += 1

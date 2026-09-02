@@ -1,4 +1,22 @@
-export * from "./client-actions-core.js";
-export * from "./client-actions-observe.js";
-export * from "./client-actions-state.js";
-export * from "./client-actions-types.js";
+/**
+ * Public browser action client barrel.
+ *
+ * Re-exports the action helpers used by Browser tool registration and tests.
+ */
+export {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserDownload,
+  browserNavigate,
+  browserScreenshotAction,
+  browserWaitForDownload,
+} from "./client-actions-core.js";
+export {
+  browserConsoleMessages,
+  browserRequests,
+  browserErrors,
+  browserPageText,
+  browserEmulateSetting,
+  browserPdfSave,
+} from "./client-actions-observe.js";

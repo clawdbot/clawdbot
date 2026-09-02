@@ -1,8 +1,18 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+// Lmstudio plugin module implements stream behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createOpenAICompatibleCompletionsThinkingOffWrapper,
+  createPlainTextToolCallCompatWrapper,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  asPositiveSafeInteger,
+  asRecord,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -13,7 +23,7 @@ const log = createSubsystemLogger("extensions/lmstudio/stream");
 type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
 
-const preloadInFlight = new Map<string, Promise<void>>();
+const preloadInFlight = new Map<string, Promise<string | undefined>>();
 
 /**
  * Cooldown state for the LM Studio preload endpoint.
@@ -31,6 +41,7 @@ const preloadInFlight = new Map<string, Promise<void>>();
 type PreloadCooldownEntry = {
   untilMs: number;
   consecutiveFailures: number;
+  resolvedModelKey?: string;
 };
 
 const preloadCooldown = new Map<string, PreloadCooldownEntry>();
@@ -48,12 +59,18 @@ function recordPreloadSuccess(preloadKey: string): void {
   preloadCooldown.delete(preloadKey);
 }
 
-function recordPreloadFailure(preloadKey: string, now: number): PreloadCooldownEntry {
+function recordPreloadFailure(
+  preloadKey: string,
+  now: number,
+  resolvedModelKey?: string,
+): PreloadCooldownEntry {
   const existing = preloadCooldown.get(preloadKey);
   const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1;
+  const persistedResolvedModelKey = resolvedModelKey ?? existing?.resolvedModelKey;
   const entry: PreloadCooldownEntry = {
     consecutiveFailures,
     untilMs: now + computePreloadBackoffMs(consecutiveFailures),
+    ...(persistedResolvedModelKey ? { resolvedModelKey: persistedResolvedModelKey } : {}),
   };
   preloadCooldown.set(preloadKey, entry);
   return entry;
@@ -65,16 +82,9 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
     return undefined;
   }
   if (entry.untilMs <= now) {
-    preloadCooldown.delete(preloadKey);
     return undefined;
   }
   return entry;
-}
-
-/** Test-only hook for clearing preload cooldown state between cases. */
-export function __resetLmstudioPreloadCooldownForTest(): void {
-  preloadCooldown.clear();
-  preloadInFlight.clear();
 }
 
 function normalizeLmstudioModelKey(modelId: string): string {
@@ -87,19 +97,12 @@ function normalizeLmstudioModelKey(modelId: string): string {
 
 function resolveRequestedContextLength(model: StreamModel): number | undefined {
   const withContextTokens = model as StreamModel & { contextTokens?: unknown };
-  const contextTokens =
-    typeof withContextTokens.contextTokens === "number" &&
-    Number.isFinite(withContextTokens.contextTokens)
-      ? Math.floor(withContextTokens.contextTokens)
-      : undefined;
-  if (contextTokens && contextTokens > 0) {
+  const contextTokens = asPositiveSafeInteger(withContextTokens.contextTokens);
+  if (contextTokens !== undefined) {
     return contextTokens;
   }
-  const contextWindow =
-    typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
-      ? Math.floor(model.contextWindow)
-      : undefined;
-  if (contextWindow && contextWindow > 0) {
+  const contextWindow = asPositiveSafeInteger(model.contextWindow);
+  if (contextWindow !== undefined) {
     return contextWindow;
   }
   return undefined;
@@ -112,12 +115,99 @@ function resolveModelHeaders(model: StreamModel): Record<string, string> | undef
   return model.headers;
 }
 
+function shouldPreloadLmstudioModels(value: unknown): boolean {
+  const providerConfig = asRecord(value);
+  const params = asRecord(providerConfig.params);
+  return params.preload !== false;
+}
+
+function withLmstudioUsageCompat(model: StreamModel): StreamModel {
+  const compat = model.compat && typeof model.compat === "object" ? model.compat : {};
+  const unsupportedToolSchemaKeywords =
+    "unsupportedToolSchemaKeywords" in compat && Array.isArray(compat.unsupportedToolSchemaKeywords)
+      ? compat.unsupportedToolSchemaKeywords.filter(
+          (keyword): keyword is string => typeof keyword === "string",
+        )
+      : [];
+  const normalizedCompat = {
+    ...compat,
+    supportsUsageInStreaming: true,
+    // LM Studio's GGUF grammar rejects regex constraints; the shared transport
+    // removes this keyword recursively while preserving native tool calling.
+    unsupportedToolSchemaKeywords: uniqueStrings([...unsupportedToolSchemaKeywords, "pattern"]),
+  };
+  return {
+    ...model,
+    compat: normalizedCompat,
+  };
+}
+
+function withLmstudioResolvedModelKey(
+  model: StreamModel,
+  resolvedModelKey: string | undefined,
+): StreamModel {
+  if (!resolvedModelKey || model.id === resolvedModelKey) {
+    return model;
+  }
+  return {
+    ...model,
+    id: resolvedModelKey,
+  };
+}
+
+function resolveLmstudioModelKeyFromError(error: unknown): string | undefined {
+  let current = error;
+  const seen = new Set<object>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const record = current as { cause?: unknown; resolvedModelKey?: unknown };
+    const resolvedModelKey =
+      typeof record.resolvedModelKey === "string" ? record.resolvedModelKey.trim() : "";
+    if (resolvedModelKey) {
+      return resolvedModelKey;
+    }
+    current = record.cause;
+  }
+  return undefined;
+}
+
 function createPreloadKey(params: {
   baseUrl: string;
   modelKey: string;
   requestedContextLength?: number;
 }) {
   return `${params.baseUrl}::${params.modelKey}::${params.requestedContextLength ?? "default"}`;
+}
+
+function toLmstudioPreloadError(reason: unknown, message: string): Error {
+  return reason instanceof Error ? reason : new Error(message, { cause: reason });
+}
+
+function waitForLmstudioPreload(
+  preload: Promise<string | undefined>,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (!signal) {
+    return preload;
+  }
+  if (signal.aborted) {
+    return Promise.reject(toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () =>
+      reject(toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void preload.then(
+      (modelKey) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(modelKey);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toLmstudioPreloadError(error, "LM Studio model preload failed"));
+      },
+    );
+  });
 }
 
 async function ensureLmstudioModelLoadedBestEffort(params: {
@@ -127,7 +217,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
   options: StreamOptions;
   ctx: ProviderWrapStreamFnContext;
   modelHeaders?: Record<string, string>;
-}): Promise<void> {
+}): Promise<string> {
   const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
   const providerHeaders = { ...providerConfig?.headers, ...params.modelHeaders };
   const runtimeApiKey =
@@ -147,7 +237,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
           headers: providerHeaders,
         });
 
-  await ensureLmstudioModelLoaded({
+  return await ensureLmstudioModelLoaded({
     baseUrl: params.baseUrl,
     apiKey: runtimeApiKey ?? configuredApiKey,
     headers,
@@ -159,6 +249,14 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
 
 export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
+  // LM Studio does not ride the shared OpenAI provider hook stack, so the
+  // thinking-level payload rewrite must be composed here: without it, thinking
+  // "off" leaves the transport's defaulted reasoning_effort (an enabled level)
+  // in requests to binary-thinking servers.
+  const streamWithThinkingLevel = createOpenAICompatibleCompletionsThinkingOffWrapper(
+    createPlainTextToolCallCompatWrapper(underlying),
+    ctx.thinkingLevel,
+  );
   return (model, context, options) => {
     if (model.provider !== LMSTUDIO_PROVIDER_ID) {
       return underlying(model, context, options);
@@ -167,7 +265,13 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     if (!modelKey) {
       return underlying(model, context, options);
     }
-    const providerBaseUrl = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID]?.baseUrl;
+    // Cancellation belongs to this caller; never start or join a shared load after abort.
+    options?.signal?.throwIfAborted();
+    const providerConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
+    if (!shouldPreloadLmstudioModels(providerConfig)) {
+      return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
+    }
+    const providerBaseUrl = providerConfig?.baseUrl;
     const resolvedBaseUrl = resolveLmstudioInferenceBase(
       typeof model.baseUrl === "string" ? model.baseUrl : providerBaseUrl,
     );
@@ -180,7 +284,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
 
     const cooldownEntry = isPreloadCoolingDown(preloadKey, Date.now());
     const existing = preloadInFlight.get(preloadKey);
-    const preloadPromise: Promise<void> | undefined =
+    const preloadPromise: Promise<string | undefined> | undefined =
       existing ??
       (cooldownEntry
         ? undefined
@@ -194,15 +298,18 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
               modelHeaders: resolveModelHeaders(model),
             })
               .then(
-                () => {
+                (resolvedModelKey) => {
                   recordPreloadSuccess(preloadKey);
+                  return resolvedModelKey;
                 },
-                (error) => {
-                  const entry = recordPreloadFailure(preloadKey, Date.now());
+                (error: unknown) => {
+                  const resolvedModelKey = resolveLmstudioModelKeyFromError(error);
+                  const entry = recordPreloadFailure(preloadKey, Date.now(), resolvedModelKey);
                   throw Object.assign(new Error("preload-failed"), {
                     cause: error,
                     consecutiveFailures: entry.consecutiveFailures,
                     cooldownMs: entry.untilMs - Date.now(),
+                    resolvedModelKey,
                   });
                 },
               )
@@ -214,15 +321,20 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           })());
 
     return (async () => {
+      let resolvedModelKey: string | undefined;
       if (preloadPromise) {
         try {
-          await preloadPromise;
+          resolvedModelKey = await waitForLmstudioPreload(preloadPromise, options?.signal);
         } catch (error) {
+          // A caller owns its wait, not the shared model load needed by other
+          // in-flight requests; cancellation must never become preload backoff.
+          options?.signal?.throwIfAborted();
           const annotated = error as {
             cause?: unknown;
             consecutiveFailures?: number;
             cooldownMs?: number;
           };
+          resolvedModelKey = resolveLmstudioModelKeyFromError(error);
           const cause = annotated.cause ?? error;
           const failures = annotated.consecutiveFailures ?? 1;
           const cooldownSec = Math.max(0, Math.round((annotated.cooldownMs ?? 0) / 1000));
@@ -233,6 +345,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           );
         }
       } else if (cooldownEntry) {
+        resolvedModelKey = cooldownEntry.resolvedModelKey;
         log.debug(
           `LM Studio inference preload for "${modelKey}" skipped while backoff active (${cooldownEntry.consecutiveFailures} prior failures)`,
         );
@@ -240,15 +353,14 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       // LM Studio uses OpenAI-compatible streaming usage payloads when requested via
       // `stream_options.include_usage`. Force this compat flag at call time so usage
       // reporting remains enabled even when catalog entries omitted compat metadata.
-      const modelWithUsageCompat = {
-        ...model,
-        compat: {
-          ...(model.compat && typeof model.compat === "object" ? model.compat : {}),
-          supportsUsageInStreaming: true,
-        },
-      };
-      const stream = underlying(modelWithUsageCompat, context, options);
-      return stream instanceof Promise ? await stream : stream;
+      const streamModel = withLmstudioResolvedModelKey(model, resolvedModelKey);
+      const stream = streamWithThinkingLevel(
+        withLmstudioUsageCompat(streamModel),
+        context,
+        options,
+      );
+      const resolvedStream = stream instanceof Promise ? await stream : stream;
+      return resolvedStream;
     })();
   };
 }

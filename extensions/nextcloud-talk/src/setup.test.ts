@@ -1,13 +1,14 @@
+// Nextcloud Talk tests cover setup plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it } from "vitest";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import {
-  clearNextcloudTalkAccountFields,
   nextcloudTalkDmPolicy,
-  nextcloudTalkSetupAdapter,
+  nextcloudTalkSetupContract,
   normalizeNextcloudTalkBaseUrl,
   setNextcloudTalkAccountConfig,
   validateNextcloudTalkBaseUrl,
@@ -16,6 +17,12 @@ import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 describe("nextcloud talk setup", () => {
+  it("shows a bot install command with webhook, response, and reaction features", () => {
+    expect(nextcloudTalkSetupWizard.introNote?.lines.join("\n")).toContain(
+      "--feature webhook --feature response --feature reaction",
+    );
+  });
+
   it("normalizes and validates base urls", () => {
     expect(normalizeNextcloudTalkBaseUrl(" https://cloud.example.com/// ")).toBe(
       "https://cloud.example.com",
@@ -50,38 +57,53 @@ describe("nextcloud talk setup", () => {
       setNextcloudTalkAccountConfig(cfg, DEFAULT_ACCOUNT_ID, {
         apiUser: "bot",
       }),
-    ).toMatchObject({
+    ).toEqual({
       channels: {
         "nextcloud-talk": {
-          apiUser: "bot",
-        },
-      },
-    });
-
-    expect(clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"])).toMatchObject({
-      channels: {
-        "nextcloud-talk": {
+          enabled: true,
           baseUrl: "https://cloud.example.com",
-        },
-      },
-    });
-    expect(
-      clearNextcloudTalkAccountFields(cfg, DEFAULT_ACCOUNT_ID, ["botSecret"]),
-    ).not.toMatchObject({
-      channels: {
-        "nextcloud-talk": {
-          botSecret: expect.anything(),
-        },
-      },
-    });
-
-    expect(
-      clearNextcloudTalkAccountFields(cfg, "work", ["botSecret", "botSecretFile"]),
-    ).toMatchObject({
-      channels: {
-        "nextcloud-talk": {
+          botSecret: "top-secret",
+          apiUser: "bot",
           accounts: {
             work: {
+              botSecret: "work-secret",
+              botSecretFile: "/tmp/work-secret",
+              apiPassword: "api-secret",
+            },
+          },
+        },
+      },
+    });
+
+    const clearedDefault = setNextcloudTalkAccountConfig(cfg, DEFAULT_ACCOUNT_ID, {}, [
+      "botSecret",
+    ]);
+    expect(clearedDefault).toEqual({
+      channels: {
+        "nextcloud-talk": {
+          enabled: true,
+          baseUrl: "https://cloud.example.com",
+          accounts: {
+            work: {
+              botSecret: "work-secret",
+              botSecretFile: "/tmp/work-secret",
+              apiPassword: "api-secret",
+            },
+          },
+        },
+      },
+    });
+    expect(clearedDefault).not.toHaveProperty(["channels", "nextcloud-talk", "botSecret"]);
+
+    expect(setNextcloudTalkAccountConfig(cfg, "work", {}, ["botSecret", "botSecretFile"])).toEqual({
+      channels: {
+        "nextcloud-talk": {
+          enabled: true,
+          baseUrl: "https://cloud.example.com",
+          botSecret: "top-secret",
+          accounts: {
+            work: {
+              enabled: true,
               apiPassword: "api-secret",
             },
           },
@@ -90,7 +112,7 @@ describe("nextcloud talk setup", () => {
     });
   });
 
-  it("sets top-level DM policy state", async () => {
+  it("sets top-level DM policy state", () => {
     const base: CoreConfig = {
       channels: {
         "nextcloud-talk": {},
@@ -98,10 +120,12 @@ describe("nextcloud talk setup", () => {
     };
 
     expect(nextcloudTalkDmPolicy.getCurrent(base)).toBe("pairing");
-    expect(nextcloudTalkDmPolicy.setPolicy(base, "open")).toMatchObject({
+    expect(nextcloudTalkDmPolicy.setPolicy(base, "open")).toEqual({
       channels: {
         "nextcloud-talk": {
+          enabled: true,
           dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     });
@@ -189,31 +213,66 @@ describe("nextcloud talk setup", () => {
   });
 
   it("validates env/default-account constraints and applies config patches", () => {
-    const validateInput = nextcloudTalkSetupAdapter.validateInput;
-    const applyAccountConfig = nextcloudTalkSetupAdapter.applyAccountConfig;
+    const validateInput = nextcloudTalkSetupContract.validateInput;
+    const applyAccountConfig = nextcloudTalkSetupContract.applyAccountConfig;
     expect(validateInput).toBeTypeOf("function");
     expect(applyAccountConfig).toBeTypeOf("function");
+    if (!validateInput) {
+      throw new Error("Expected Nextcloud Talk setup validateInput");
+    }
 
     expect(
-      validateInput!({
+      validateInput({
         accountId: "work",
         input: { useEnv: true },
       } as never),
     ).toBe("NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.");
 
     expect(
-      validateInput!({
+      validateInput({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, baseUrl: "", secret: "" },
       } as never),
     ).toBe("Nextcloud Talk requires bot secret or --secret-file (or --use-env).");
 
     expect(
-      validateInput!({
+      validateInput({
         accountId: DEFAULT_ACCOUNT_ID,
         input: { useEnv: false, secret: "secret", baseUrl: "" },
       } as never),
     ).toBe("Nextcloud Talk requires --base-url.");
+
+    expect(
+      validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { useEnv: false, secret: "secret", baseUrl: "ftp://cloud.example.com" },
+      } as never),
+    ).toBe("URL must start with http:// or https://");
+
+    expect(
+      validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { useEnv: false, secret: "secret", baseUrl: "cloud.example.com" },
+      } as never),
+    ).toBe("URL must start with http:// or https://");
+
+    expect(
+      validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          useEnv: false,
+          secret: "secret",
+          baseUrl: " https://cloud.example.com/talk/// ",
+        },
+      } as never),
+    ).toBeNull();
+
+    expect(
+      validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: { useEnv: false, secret: "secret", baseUrl: "http://cloud.example.com" },
+      } as never),
+    ).toBeNull();
 
     expect(
       applyAccountConfig({
@@ -225,7 +284,7 @@ describe("nextcloud talk setup", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
           name: "Default",
-          baseUrl: "https://cloud.example.com///",
+          baseUrl: " https://cloud.example.com/// ",
           secret: "bot-secret",
         },
       } as never),
@@ -260,9 +319,10 @@ describe("nextcloud talk setup", () => {
           baseUrl: "https://cloud.example.com",
         },
       } as never),
-    ).toMatchObject({
+    ).toEqual({
       channels: {
         "nextcloud-talk": {
+          enabled: true,
           accounts: {
             work: {
               enabled: true,
@@ -275,12 +335,47 @@ describe("nextcloud talk setup", () => {
     });
   });
 
+  it("normalizes legacy CLI aliases before applying account config", async () => {
+    const prepareInput = nextcloudTalkSetupContract.prepareAccountConfigInput;
+    expect(prepareInput).toBeTypeOf("function");
+    if (!prepareInput) {
+      throw new Error("Expected Nextcloud Talk setup prepareAccountConfigInput");
+    }
+
+    const prepared = await prepareInput({
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: {
+        url: "https://cloud.example.com",
+        token: "bot-secret",
+        tokenFile: "/tmp/bot-secret",
+      },
+      runtime: {} as never,
+    });
+    expect(prepared).toEqual({
+      url: "https://cloud.example.com",
+      token: "bot-secret",
+      tokenFile: "/tmp/bot-secret",
+      baseUrl: "https://cloud.example.com",
+      secret: "bot-secret",
+      secretFile: "/tmp/bot-secret",
+    });
+
+    const passwordPrepared = await prepareInput({
+      cfg: {},
+      accountId: DEFAULT_ACCOUNT_ID,
+      input: { password: "legacy-secret" },
+      runtime: {} as never,
+    });
+    expect(passwordPrepared).toMatchObject({ secret: "legacy-secret" });
+  });
+
   it("clears stored bot secret fields when switching the default account to env", () => {
     type ApplyAccountConfigContext = Parameters<
-      typeof nextcloudTalkSetupAdapter.applyAccountConfig
+      typeof nextcloudTalkSetupContract.applyAccountConfig
     >[0];
 
-    const next = nextcloudTalkSetupAdapter.applyAccountConfig({
+    const next = nextcloudTalkSetupContract.applyAccountConfig({
       cfg: {
         channels: {
           "nextcloud-talk": {
@@ -304,7 +399,10 @@ describe("nextcloud talk setup", () => {
   });
 
   it("clears stored bot secret fields when the wizard switches to env", async () => {
-    const credential = nextcloudTalkSetupWizard.credentials[0];
+    const credential = expectDefined(
+      nextcloudTalkSetupWizard.credentials[0],
+      "Nextcloud Talk credential",
+    );
     const next = await credential.applyUseEnv?.({
       cfg: {
         channels: {
@@ -322,9 +420,66 @@ describe("nextcloud talk setup", () => {
     expect(next?.channels?.["nextcloud-talk"]).not.toHaveProperty("botSecret");
     expect(next?.channels?.["nextcloud-talk"]).not.toHaveProperty("botSecretFile");
   });
+
+  it("replaces only the selected account's API password when the wizard sets a credential", async () => {
+    const credential = expectDefined(
+      nextcloudTalkSetupWizard.credentials[1],
+      "Nextcloud Talk API credential",
+    );
+    const next = await credential.applySet?.({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            botSecret: "root-secret",
+            accounts: {
+              work: {
+                baseUrl: "https://cloud.example.com",
+                botSecret: "work-secret",
+                apiUser: "bot",
+                apiPassword: "old-password",
+                apiPasswordFile: "/run/secrets/old-api-password",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+      credentialValues: {},
+      value: "new-password",
+      resolvedValue: "new-password",
+    });
+
+    expect(next?.channels?.["nextcloud-talk"]?.botSecret).toBe("root-secret");
+    expect(next?.channels?.["nextcloud-talk"]?.accounts?.work).toEqual({
+      enabled: true,
+      baseUrl: "https://cloud.example.com",
+      botSecret: "work-secret",
+      apiUser: "bot",
+      apiPassword: "new-password",
+    });
+  });
 });
 
 describe("resolveNextcloudTalkAccount", () => {
+  it("ignores a blank bot secret file before credential precedence", () => {
+    const account = resolveNextcloudTalkAccount({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            baseUrl: "https://cloud.example.com",
+            botSecret: "inline-secret",
+            botSecretFile: "   ",
+          },
+        },
+      } as CoreConfig,
+    });
+
+    expect(account.secret).toBe("inline-secret");
+    expect(account.secretSource).toBe("config");
+    expect(account.tokenStatus).toBe("available");
+    expect(account.credentialDiagnostics).toBeUndefined();
+  });
+
   it("matches normalized configured account ids", () => {
     const account = resolveNextcloudTalkAccount({
       cfg: {
@@ -348,25 +503,59 @@ describe("resolveNextcloudTalkAccount", () => {
     expect(account.secretSource).toBe("config");
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked botSecretFile paths", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nextcloud-talk-"));
-    const secretFile = path.join(dir, "secret.txt");
-    const secretLink = path.join(dir, "secret-link.txt");
-    fs.writeFileSync(secretFile, "bot-secret\n", "utf8");
-    fs.symlinkSync(secretFile, secretLink);
+  it.runIf(process.platform !== "win32")(
+    "marks symlinked botSecretFile paths configured-unavailable",
+    () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nextcloud-talk-"));
+      const secretFile = path.join(dir, "secret.txt");
+      const secretLink = path.join(dir, "secret-link.txt");
+      fs.writeFileSync(secretFile, "bot-secret\n", "utf8");
+      fs.symlinkSync(secretFile, secretLink);
 
-    const cfg = {
-      channels: {
-        "nextcloud-talk": {
-          baseUrl: "https://cloud.example.com",
-          botSecretFile: secretLink,
+      const cfg = {
+        channels: {
+          "nextcloud-talk": {
+            baseUrl: "https://cloud.example.com",
+            botSecretFile: secretLink,
+          },
         },
-      },
-    } as CoreConfig;
+      } as CoreConfig;
 
-    const account = resolveNextcloudTalkAccount({ cfg });
+      const account = resolveNextcloudTalkAccount({ cfg });
+      expect(account.secret).toBe("");
+      expect(account.secretSource).toBe("secretFile");
+      expect(account.tokenStatus).toBe("configured_unavailable");
+      expect(account.credentialDiagnostics).toEqual([
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.nextcloud-talk.accounts.default.botSecretFile",
+          reason: "symlink",
+        },
+      ]);
+      expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(secretLink);
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  );
+
+  it("does not fall through from a missing explicit bot secret file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nextcloud-talk-missing-"));
+    const secretFile = path.join(dir, "missing-secret.txt");
+    const account = resolveNextcloudTalkAccount({
+      cfg: {
+        channels: {
+          "nextcloud-talk": {
+            baseUrl: "https://cloud.example.com",
+            botSecret: "inline-fallback",
+            botSecretFile: secretFile,
+          },
+        },
+      } as CoreConfig,
+    });
+
     expect(account.secret).toBe("");
-    expect(account.secretSource).toBe("none");
+    expect(account.secretSource).toBe("secretFile");
+    expect(account.tokenStatus).toBe("configured_unavailable");
+    expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(secretFile);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

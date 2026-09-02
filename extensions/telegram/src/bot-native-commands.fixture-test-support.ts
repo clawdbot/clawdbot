@@ -1,21 +1,20 @@
+// Telegram plugin module implements bot native commands.fixture test support behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { OpenClawConfig, TelegramAccountConfig } from "../runtime-api.js";
-import type { RegisterTelegramNativeCommandsParams } from "./bot-native-commands.js";
+import type { registerTelegramNativeCommands } from "./bot-native-commands.js";
 
-export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams;
+type RegisterTelegramNativeCommandsParams = Parameters<typeof registerTelegramNativeCommands>[0];
 
-export function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
+export type NativeCommandTestParams = RegisterTelegramNativeCommandsParams & {
+  allowFrom?: RegisterTelegramNativeCommandsParams["opts"]["allowFrom"];
+  groupAllowFrom?: RegisterTelegramNativeCommandsParams["opts"]["groupAllowFrom"];
+  replyToMode?: RegisterTelegramNativeCommandsParams["opts"]["replyToMode"];
+};
 
 export function createNativeCommandTestParams(
   params: Partial<NativeCommandTestParams> = {},
-): NativeCommandTestParams {
+): RegisterTelegramNativeCommandsParams {
   const log = vi.fn();
   return {
     bot:
@@ -37,14 +36,8 @@ export function createNativeCommandTestParams(
       } as unknown as RuntimeEnv),
     accountId: params.accountId ?? "default",
     telegramCfg: params.telegramCfg ?? ({} as TelegramAccountConfig),
-    allowFrom: params.allowFrom ?? [],
-    groupAllowFrom: params.groupAllowFrom ?? [],
-    replyToMode: params.replyToMode ?? "off",
-    textLimit: params.textLimit ?? 4000,
-    useAccessGroups: params.useAccessGroups ?? false,
     nativeEnabled: params.nativeEnabled ?? true,
     nativeSkillsEnabled: params.nativeSkillsEnabled ?? false,
-    nativeDisabledExplicit: params.nativeDisabledExplicit ?? false,
     resolveGroupPolicy:
       params.resolveGroupPolicy ??
       (() =>
@@ -57,7 +50,12 @@ export function createNativeCommandTestParams(
       ((_chatId, _messageThreadId) => ({ groupConfig: undefined, topicConfig: undefined })),
     shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
     telegramDeps: params.telegramDeps,
-    opts: params.opts ?? { token: "token" },
+    opts: {
+      ...(params.opts ?? { token: "token" }),
+      allowFrom: params.allowFrom ?? params.opts?.allowFrom ?? [],
+      groupAllowFrom: params.groupAllowFrom ?? params.opts?.groupAllowFrom ?? [],
+      replyToMode: params.replyToMode ?? params.opts?.replyToMode ?? "off",
+    },
   };
 }
 
@@ -68,6 +66,7 @@ export function createTelegramPrivateCommandContext(params?: {
   chatId?: number;
   userId?: number;
   username?: string;
+  threadId?: number;
 }) {
   return {
     match: params?.match ?? "",
@@ -75,6 +74,31 @@ export function createTelegramPrivateCommandContext(params?: {
       message_id: params?.messageId ?? 1,
       date: params?.date ?? Math.floor(Date.now() / 1000),
       chat: { id: params?.chatId ?? 100, type: "private" as const },
+      ...(params?.threadId != null ? { message_thread_id: params.threadId } : {}),
+      from: { id: params?.userId ?? 200, username: params?.username ?? "bob" },
+    },
+  };
+}
+
+export function createTelegramGroupCommandContext(params?: {
+  match?: string;
+  messageId?: number;
+  date?: number;
+  chatId?: number;
+  title?: string;
+  userId?: number;
+  username?: string;
+}) {
+  return {
+    match: params?.match ?? "",
+    message: {
+      message_id: params?.messageId ?? 2,
+      date: params?.date ?? Math.floor(Date.now() / 1000),
+      chat: {
+        id: params?.chatId ?? -1001234567890,
+        type: "supergroup" as const,
+        title: params?.title ?? "OpenClaw",
+      },
       from: { id: params?.userId ?? 200, username: params?.username ?? "bob" },
     },
   };

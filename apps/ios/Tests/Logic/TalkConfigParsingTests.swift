@@ -47,6 +47,16 @@ private let iOSSilenceTimeoutMs = 900
                 fallback: iOSSilenceTimeoutMs) == 1500)
     }
 
+    @Test func readsConfiguredSpeechLocale() {
+        let talk: [String: Any] = [
+            "speechLocale": " ru-RU ",
+        ]
+
+        #expect(
+            TalkConfigParsing.resolvedSpeechLocaleID(
+                TalkConfigParsing.bridgeFoundationDictionary(talk)) == "ru-RU")
+    }
+
     @Test func defaultsSilenceTimeoutMsWhenMissing() {
         #expect(TalkConfigParsing.resolvedSilenceTimeoutMs(nil, fallback: iOSSilenceTimeoutMs) == iOSSilenceTimeoutMs)
     }

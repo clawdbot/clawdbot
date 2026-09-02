@@ -1,43 +1,24 @@
-import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
+// Xai plugin module implements code execution shared behavior.
+import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
 import {
-  buildXaiResponsesToolBody,
-  resolveXaiResponseTextAndCitations,
+  requestXaiResponsesTool,
+  requireXaiResponseTextAndCitations,
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
 import {
-  coerceXaiToolConfig,
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
-import { type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
-export const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
+const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
+const XAI_DEFAULT_CODE_EXECUTION_MODEL = XAI_DEFAULT_MODEL_ID;
 
-export type XaiCodeExecutionConfig = {
-  apiKey?: unknown;
-  model?: unknown;
-  maxTurns?: unknown;
-};
-
-export type XaiCodeExecutionResponse = XaiWebSearchResponse & {
-  output?: Array<{
-    type?: string;
-  }>;
-};
-
-export type XaiCodeExecutionResult = {
+type XaiCodeExecutionResult = {
   content: string;
   citations: string[];
   usedCodeExecution: boolean;
   outputTypes: string[];
 };
-
-export function resolveXaiCodeExecutionConfig(
-  config?: Record<string, unknown>,
-): XaiCodeExecutionConfig {
-  return coerceXaiToolConfig(config) as XaiCodeExecutionConfig;
-}
 
 export function resolveXaiCodeExecutionModel(config?: Record<string, unknown>): string {
   return resolveNormalizedXaiToolModel({
@@ -80,22 +61,20 @@ export async function requestXaiCodeExecution(params: {
   maxTurns?: number;
   task: string;
 }): Promise<XaiCodeExecutionResult> {
-  return await postTrustedWebToolsJson(
+  return await requestXaiResponsesTool(
     {
-      url: XAI_CODE_EXECUTION_ENDPOINT,
-      timeoutSeconds: params.timeoutSeconds,
-      apiKey: params.apiKey,
-      body: buildXaiResponsesToolBody({
-        model: params.model,
-        inputText: params.task,
-        tools: [{ type: "code_interpreter" }],
-        maxTurns: params.maxTurns,
-      }),
-      errorLabel: "xAI",
+      ...params,
+      endpoint: XAI_CODE_EXECUTION_ENDPOINT,
+      inputText: params.task,
+      tools: [{ type: "code_interpreter" }],
+      reasoningEffort: params.model === XAI_DEFAULT_CODE_EXECUTION_MODEL ? "low" : undefined,
+      errorLabel: "xAI code execution failed",
     },
-    async (response) => {
-      const data = (await response.json()) as XaiCodeExecutionResponse;
-      const { content, citations } = resolveXaiResponseTextAndCitations(data);
+    (data) => {
+      const { content, citations } = requireXaiResponseTextAndCitations(
+        data,
+        "xAI code execution failed",
+      );
       const outputTypes = Array.isArray(data.output)
         ? [
             ...new Set(
@@ -114,12 +93,3 @@ export async function requestXaiCodeExecution(params: {
     },
   );
 }
-
-export const __testing = {
-  buildXaiCodeExecutionPayload,
-  requestXaiCodeExecution,
-  resolveXaiCodeExecutionConfig,
-  resolveXaiCodeExecutionMaxTurns,
-  resolveXaiCodeExecutionModel,
-  XAI_DEFAULT_CODE_EXECUTION_MODEL,
-} as const;

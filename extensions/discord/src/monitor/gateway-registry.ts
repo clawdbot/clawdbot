@@ -1,4 +1,5 @@
-import type { GatewayPlugin } from "@buape/carbon/gateway";
+// Discord plugin module implements gateway registry behavior.
+import type { GatewayPlugin } from "../internal/gateway.js";
 
 /**
  * Module-level registry of active Discord GatewayPlugin instances.

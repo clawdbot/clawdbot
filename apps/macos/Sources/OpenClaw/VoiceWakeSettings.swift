@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Observation
+import OpenClawKit
 import Speech
 import SwabbleKit
 import SwiftUI
@@ -20,9 +21,9 @@ struct VoiceWakeSettings: View {
     private let meter = MicLevelMonitor()
     @State private var micObserver = AudioInputDeviceObserver()
     @State private var micRefreshTask: Task<Void, Never>?
+    @State private var meterStartupTask: Task<Void, Never>?
     @State private var availableLocales: [Locale] = []
     @State private var triggerEntries: [TriggerEntry] = []
-    private let fieldLabelWidth: CGFloat = 140
     private let controlWidth: CGFloat = 240
     private let isPreview = ProcessInfo.processInfo.isPreview
 
@@ -43,112 +44,278 @@ struct VoiceWakeSettings: View {
         MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
+    private var selectedLocaleSupportsOnDeviceRecognition: Bool {
+        SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(localeID: self.state.voiceWakeLocaleID)
+    }
+
+    private var voiceSummaryPanel: some View {
+        let enabled = voiceWakeSupported && self.state.swabbleEnabled
+        let pushToTalk = voiceWakeSupported && self.state.voicePushToTalkEnabled
+        let statusColor: Color = !voiceWakeSupported ? .orange : enabled || pushToTalk ? .green : .secondary
+
+        return HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(statusColor.opacity(0.18))
+                Image(systemName: self.voiceSummaryIconName(enabled: enabled))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(statusColor)
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(self.voiceSummaryTitle(enabled: enabled, pushToTalk: pushToTalk))
+                    .font(.headline)
+                Text(self.voiceSummarySubtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 18)
+
+            if let meterError {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(meterError)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.06))
+        }
+    }
+
+    private func voiceSummaryIconName(enabled: Bool) -> String {
+        if !voiceWakeSupported {
+            return "exclamationmark.triangle.fill"
+        }
+        return enabled ? "waveform.badge.mic" : "mic.slash"
+    }
+
+    private func voiceSummaryTitle(enabled: Bool, pushToTalk: Bool) -> String {
+        if !voiceWakeSupported {
+            return "Voice Wake unavailable"
+        }
+        if enabled {
+            return "Voice Wake active"
+        }
+        if pushToTalk {
+            return "Push-to-talk active"
+        }
+        return "Voice controls idle"
+    }
+
+    private var voiceSummarySubtitle: String {
+        if !voiceWakeSupported {
+            return "Voice Wake requires macOS 26 or newer."
+        }
+        if self.state.swabbleEnabled {
+            return "Listening for \(self.sanitizedTriggers().prefix(2).joined(separator: ", "))."
+        }
+        if self.state.voicePushToTalkEnabled {
+            return "Hold Right Option to speak without a wake phrase."
+        }
+        return "Enable Voice Wake or push-to-talk to start voice commands."
+    }
+
+    private var unsupportedVoiceWakePanel: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.orange)
+                .frame(width: 28)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Voice Wake requires macOS 26 or newer")
+                    .font(.callout.weight(.semibold))
+                Text("The Voice Wake and push-to-talk controls are hidden on older macOS versions.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.orange.opacity(0.18))
+        }
+    }
+
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 14) {
-                SettingsToggleRow(
-                    title: "Enable Voice Wake",
-                    subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands. "
-                        + "Voice recognition runs fully on-device.",
-                    binding: self.voiceWakeBinding)
-                    .disabled(!voiceWakeSupported)
+            VStack(alignment: .leading, spacing: 20) {
+                SettingsPageHeader(
+                    title: "Voice & Talk",
+                    subtitle: "Wake phrases, push-to-talk, microphone input, and Talk Mode feedback.")
 
-                SettingsToggleRow(
-                    title: "Trigger Talk Mode",
-                    subtitle: """
-                    When a wake phrase is detected, activate Talk Mode for a full voice \
-                    conversation (STT, LLM response, TTS playback) instead of sending a \
-                    text message to the chat.
-                    """,
-                    binding: self.$state.voiceWakeTriggersTalkMode)
-                    .disabled(!self.state.swabbleEnabled)
+                self.voiceSummaryPanel
 
-                SettingsToggleRow(
-                    title: "Hold Right Option to talk",
-                    subtitle: """
-                    Push-to-talk mode that starts listening while you hold the key
-                    and shows the preview overlay.
-                    """,
-                    binding: self.$state.voicePushToTalkEnabled)
-                    .disabled(!voiceWakeSupported)
+                if voiceWakeSupported {
+                    SettingsCardGroup("Activation") {
+                        SettingsCardToggleRow(
+                            title: "Enable Voice Wake",
+                            subtitle: self.selectedLocaleSupportsOnDeviceRecognition
+                                ? """
+                                Listen for a wake phrase before running voice commands. \
+                                Wake-phrase recognition stays on this Mac.
+                                """
+                                : "On-device recognition is unavailable for the selected language on this Mac.",
+                            binding: self.voiceWakeBinding)
+                            .disabled(!self.selectedLocaleSupportsOnDeviceRecognition && !self.state.swabbleEnabled)
 
-                if !voiceWakeSupported {
-                    Label("Voice Wake requires macOS 26 or newer.", systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.yellow)
-                        .padding(8)
-                        .background(Color.secondary.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        SettingsCardToggleRow(
+                            title: "Trigger Talk Mode",
+                            subtitle: "Start a full voice conversation when a wake phrase is detected.",
+                            binding: self.$state.voiceWakeTriggersTalkMode)
+                            .disabled(!self.state.swabbleEnabled)
+
+                        SettingsCardToggleRow(
+                            title: "Hold Right Option to talk",
+                            subtitle: "Start listening while you hold the key and show the preview overlay.",
+                            binding: self.$state.voicePushToTalkEnabled)
+
+                        self.realtimeRelayToggle
+
+                        SettingsCardRow(
+                            title: "Talk configuration",
+                            subtitle: "Choose the realtime provider, model, voice, and transport in the Control UI.")
+                        {
+                            Button("Open in Dashboard") {
+                                Task {
+                                    await DashboardManager.shared.show(
+                                        atPath: DashboardRouteMap.talkSettingsPath)
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
+
+                        if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
+                            SettingsCardRow(
+                                title: "Push-to-talk paused",
+                                subtitle: "Push-to-Talk resumes when Talk Mode is turned off.")
+                            {
+                                Image(systemName: "pause.circle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+
+                        SettingsCardToggleRow(
+                            title: "Play phase-transition sounds",
+                            subtitle: """
+                            Play short sounds when Talk Mode switches between listening, thinking, and speaking.
+                            """,
+                            binding: self.$state.talkPhaseSoundsEnabled)
+
+                        SettingsCardToggleRow(
+                            title: "Right Option stops speech",
+                            subtitle: "Tap Right Option to interrupt speech and return to listening.",
+                            binding: self.$state.talkShiftToStopEnabled,
+                            showsDivider: false)
+                    }
+
+                    SettingsCardGroup("Recognition") {
+                        self.localePicker
+                        self.micPicker
+                        self.levelMeter
+                    }
+
+                    SettingsCardGroup("Test") {
+                        VoiceWakeTestCard(
+                            testState: self.$testState,
+                            isTesting: self.$isTesting,
+                            onToggle: self.toggleTest)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                    }
+
+                    self.chimeSection
+
+                    self.triggerTable
+                } else {
+                    self.unsupportedVoiceWakePanel
                 }
-
-                self.localePicker
-                self.micPicker
-                self.levelMeter
-
-                VoiceWakeTestCard(
-                    testState: self.$testState,
-                    isTesting: self.$isTesting,
-                    onToggle: self.toggleTest)
-
-                self.chimeSection
-
-                self.triggerTable
 
                 Spacer(minLength: 8)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-        }
-        .task {
-            guard !self.isPreview else { return }
-            await self.loadMicsIfNeeded()
-        }
-        .task {
-            guard !self.isPreview else { return }
-            await self.loadLocalesIfNeeded()
-        }
-        .task {
-            guard !self.isPreview else { return }
-            await self.restartMeter()
+            .settingsDetailContent()
         }
         .onAppear {
             guard !self.isPreview else { return }
-            self.startMicObserver()
-            self.loadTriggerEntries()
+            guard self.isActive else { return }
+            self.activateLivePreview()
         }
         .onChange(of: self.state.voiceWakeMicID) { _, _ in
             guard !self.isPreview else { return }
             self.updateSelectedMicName()
-            Task { await self.restartMeter() }
+            guard self.isActive else { return }
+            self.scheduleMeterRestart()
         }
         .onChange(of: self.isActive) { _, active in
             guard !self.isPreview else { return }
             if !active {
-                self.tester.stop()
-                self.isTesting = false
-                self.testState = .idle
-                self.testTimeoutTask?.cancel()
-                self.micRefreshTask?.cancel()
-                self.micRefreshTask = nil
-                Task { await self.meter.stop() }
-                self.micObserver.stop()
+                self.deactivateLivePreview()
                 self.syncTriggerEntriesToState()
             } else {
-                self.startMicObserver()
-                self.loadTriggerEntries()
+                self.activateLivePreview()
             }
         }
         .onDisappear {
             guard !self.isPreview else { return }
-            self.tester.stop()
-            self.isTesting = false
-            self.testState = .idle
-            self.testTimeoutTask?.cancel()
-            self.micRefreshTask?.cancel()
-            self.micRefreshTask = nil
-            self.micObserver.stop()
-            Task { await self.meter.stop() }
+            self.deactivateLivePreview()
             self.syncTriggerEntriesToState()
+        }
+    }
+
+    private func activateLivePreview() {
+        self.loadTriggerEntries()
+        guard voiceWakeSupported else {
+            self.deactivateLivePreview()
+            return
+        }
+        self.meterStartupTask?.cancel()
+        self.startMicObserver()
+        self.meterStartupTask = Task { @MainActor in
+            await self.loadMicsIfNeeded()
+            guard !Task.isCancelled, self.isActive else { return }
+            await self.loadLocalesIfNeeded()
+            guard !Task.isCancelled, self.isActive else { return }
+            await self.restartMeter()
+        }
+    }
+
+    private func deactivateLivePreview() {
+        self.tester.stop()
+        self.isTesting = false
+        self.testState = .idle
+        self.testTimeoutTask?.cancel()
+        self.micRefreshTask?.cancel()
+        self.micRefreshTask = nil
+        self.meterStartupTask?.cancel()
+        self.meterStartupTask = nil
+        self.micObserver.stop()
+        self.state.voiceWakeMeterActive = false
+        Task { await self.meter.stop() }
+    }
+
+    private func scheduleMeterRestart() {
+        guard voiceWakeSupported else {
+            self.state.voiceWakeMeterActive = false
+            Task { await self.meter.stop() }
+            return
+        }
+        self.meterStartupTask?.cancel()
+        self.meterStartupTask = Task { @MainActor in
+            guard !Task.isCancelled, self.isActive else { return }
+            await self.restartMeter()
         }
     }
 
@@ -161,83 +328,82 @@ struct VoiceWakeSettings: View {
     }
 
     private var triggerTable: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Trigger words")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-                Button {
-                    self.addWord()
-                } label: {
-                    Label("Add word", systemImage: "plus")
-                }
-                .disabled(self.triggerEntries
-                    .contains(where: { $0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+        SettingsCardGroup("Trigger Words") {
+            SettingsCardRow(
+                title: "Wake phrases",
+                subtitle: "Short phrases that start voice wake detection.")
+            {
+                HStack(spacing: 8) {
+                    Button {
+                        self.addWord()
+                    } label: {
+                        Label("Add word", systemImage: "plus")
+                    }
+                    .disabled(self.triggerEntries
+                        .contains(where: { $0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
 
-                Button("Reset defaults") {
-                    self.triggerEntries = defaultVoiceWakeTriggers.map { TriggerEntry(id: UUID(), value: $0) }
-                    self.syncTriggerEntriesToState()
+                    Button("Reset") {
+                        self.triggerEntries = defaultVoiceWakeTriggers.map { TriggerEntry(id: UUID(), value: $0) }
+                        self.syncTriggerEntriesToState()
+                    }
                 }
+                .buttonStyle(.bordered)
             }
 
-            VStack(spacing: 0) {
-                ForEach(self.$triggerEntries) { $entry in
-                    HStack(spacing: 8) {
-                        TextField("Wake word", text: $entry.value)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit {
+            self.triggerPhraseRows
+
+            TriggerPhraseHelpRow()
+        }
+    }
+
+    private var triggerPhraseRows: some View {
+        Group {
+            if self.triggerEntries.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "text.badge.plus")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22)
+                    Text("No wake phrases configured")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 14)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(self.$triggerEntries) { $entry in
+                        TriggerPhraseRow(
+                            value: $entry.value,
+                            showsDivider: entry.id != self.triggerEntries.last?.id,
+                            onSubmit: {
                                 self.syncTriggerEntriesToState()
-                            }
-
-                        Button {
-                            self.removeWord(id: entry.id)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Remove trigger word")
-                        .frame(width: 24)
-                    }
-                    .padding(8)
-
-                    if entry.id != self.triggerEntries.last?.id {
-                        Divider()
+                            },
+                            onRemove: {
+                                self.removeWord(id: entry.id)
+                            })
                     }
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
-
-            Text(
-                "OpenClaw reacts when any trigger appears in a transcription. "
-                    + "Keep them short to avoid false positives.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        }
+        .overlay(alignment: .bottom) {
+            Divider()
+                .padding(.leading, 14)
         }
     }
 
     private var chimeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Sounds")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-            }
-
+        SettingsCardGroup("Sounds") {
             self.chimeRow(
                 title: "Trigger sound",
                 selection: self.$state.voiceWakeTriggerChime)
 
             self.chimeRow(
                 title: "Send sound",
-                selection: self.$state.voiceWakeSendChime)
+                selection: self.$state.voiceWakeSendChime,
+                showsDivider: false)
         }
-        .padding(.top, 4)
     }
 
     private func addWord() {
@@ -314,12 +480,12 @@ struct VoiceWakeSettings: View {
         }
     }
 
-    private func chimeRow(title: String, selection: Binding<VoiceWakeChime>) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text(title)
-                .font(.callout.weight(.semibold))
-                .frame(width: self.fieldLabelWidth, alignment: .leading)
-
+    private func chimeRow(
+        title: SettingsTextValue,
+        selection: Binding<VoiceWakeChime>,
+        showsDivider: Bool = true) -> some View
+    {
+        SettingsCardRow(title: title, showsDivider: showsDivider) {
             Menu {
                 Button("No Sound") { self.selectChime(.none, binding: selection) }
                 Divider()
@@ -341,7 +507,7 @@ struct VoiceWakeSettings: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(6)
-                .frame(minWidth: self.controlWidth, maxWidth: .infinity, alignment: .leading)
+                .frame(width: self.controlWidth, alignment: .leading)
                 .background(Color(nsColor: .windowBackgroundColor))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
@@ -396,11 +562,8 @@ struct VoiceWakeSettings: View {
     }
 
     private var micPicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Microphone")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(title: "Microphone") {
                 Picker("Microphone", selection: self.$state.voiceWakeMicID) {
                     Text("System default").tag("")
                     if self.isSelectedMicUnavailable {
@@ -415,26 +578,28 @@ struct VoiceWakeSettings: View {
                 .frame(width: self.controlWidth)
             }
             if self.isSelectedMicUnavailable {
-                HStack(spacing: 10) {
-                    Color.clear.frame(width: self.fieldLabelWidth, height: 1)
-                    Text("Disconnected (using System default)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Text("Disconnected (using System default)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
             if self.loadingMics {
-                ProgressView().controlSize(.small)
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
         }
     }
 
     private var localePicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Recognition language")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(
+                title: "Recognition language",
+                subtitle: "Languages are tried in order. Models may need a first-use download on macOS 26.")
+            {
                 Picker("Language", selection: self.$state.voiceWakeLocaleID) {
                     let current = Locale(identifier: Locale.current.identifier)
                     Text("\(self.friendlyName(for: current)) (System)").tag(Locale.current.identifier)
@@ -448,69 +613,91 @@ struct VoiceWakeSettings: View {
                 .frame(width: self.controlWidth)
             }
 
-            if !self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Additional languages")
-                        .font(.footnote.weight(.semibold))
-                    ForEach(
-                        Array(self.state.voiceWakeAdditionalLocaleIDs.enumerated()),
-                        id: \.offset)
-                    { idx, localeID in
-                        HStack(spacing: 8) {
-                            Picker("Extra \(idx + 1)", selection: Binding(
-                                get: { localeID },
-                                set: { newValue in
-                                    guard self.state
-                                        .voiceWakeAdditionalLocaleIDs.indices
-                                        .contains(idx) else { return }
-                                    self.state
-                                        .voiceWakeAdditionalLocaleIDs[idx] =
-                                        newValue
-                                })) {
-                                    ForEach(self.availableLocales.map(\.identifier), id: \.self) { id in
-                                        Text(self.friendlyName(for: Locale(identifier: id))).tag(id)
-                                    }
-                                }
-                                .labelsHidden()
-                                    .frame(width: 220)
-
-                            Button {
-                                guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
-                                self.state.voiceWakeAdditionalLocaleIDs.remove(at: idx)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Remove language")
-                        }
-                    }
-
-                    Button {
-                        if let first = availableLocales.first {
-                            self.state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
-                        }
-                    } label: {
-                        Label("Add language", systemImage: "plus")
-                    }
-                    .disabled(self.availableLocales.isEmpty)
-                }
-                .padding(.top, 4)
-            } else {
-                Button {
-                    if let first = availableLocales.first {
-                        self.state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
-                    }
-                } label: {
-                    Label("Add additional language", systemImage: "plus")
-                }
-                .buttonStyle(.link)
-                .disabled(self.availableLocales.isEmpty)
-                .padding(.top, 4)
+            if !self.selectedLocaleSupportsOnDeviceRecognition {
+                Text("""
+                Voice Wake needs on-device recognition for its selected language. \
+                Push-to-talk and Talk Mode remain available.
+                """)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
             }
 
-            Text("Languages are tried in order. Models may need a first-use download on macOS 26.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            SettingsCardRow(
+                title: "Additional languages",
+                subtitle: self.additionalLanguagesSubtitle,
+                showsDivider: !self.state.voiceWakeAdditionalLocaleIDs.isEmpty)
+            {
+                if self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
+                    Button {
+                        self.addAdditionalLocale()
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.availableLocales.isEmpty)
+                }
+            }
+
+            if !self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
+                self.additionalLanguageRows
+            }
+        }
+    }
+
+    private var additionalLanguagesSubtitle: SettingsTextValue {
+        if self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
+            return "None configured."
+        }
+        return "Tried after the primary language."
+    }
+
+    private var additionalLanguageRows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(self.state.voiceWakeAdditionalLocaleIDs.enumerated()), id: \.offset) { idx, localeID in
+                AdditionalLanguageRow(
+                    index: idx,
+                    selection: self.additionalLocaleBinding(index: idx, fallback: localeID),
+                    localeIDs: self.availableLocales.map(\.identifier),
+                    localeName: { id in self.friendlyName(for: Locale(identifier: id)) },
+                    showsDivider: true,
+                    onRemove: {
+                        guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
+                        self.state.voiceWakeAdditionalLocaleIDs.remove(at: idx)
+                    })
+            }
+
+            SettingsCardRow(title: "Add another language", showsDivider: false) {
+                Button {
+                    self.addAdditionalLocale()
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .disabled(self.availableLocales.isEmpty)
+            }
+        }
+    }
+
+    private func additionalLocaleBinding(index: Int, fallback: String) -> Binding<String> {
+        Binding(
+            get: {
+                guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(index) else { return fallback }
+                return self.state.voiceWakeAdditionalLocaleIDs[index]
+            },
+            set: { newValue in
+                guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(index) else { return }
+                self.state.voiceWakeAdditionalLocaleIDs[index] = newValue
+            })
+    }
+
+    private func addAdditionalLocale() {
+        let selected = Set([self.state.voiceWakeLocaleID] + self.state.voiceWakeAdditionalLocaleIDs)
+        let next = self.availableLocales.first { !selected.contains($0.identifier) } ?? self.availableLocales.first
+        if let next {
+            self.state.voiceWakeAdditionalLocaleIDs.append(next.identifier)
         }
     }
 
@@ -555,6 +742,7 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func scheduleMicRefresh() {
+        guard voiceWakeSupported, self.isActive else { return }
         MicRefreshSupport.schedule(refreshTask: &self.micRefreshTask) {
             await self.loadMicsIfNeeded(force: true)
             await self.restartMeter()
@@ -590,11 +778,8 @@ struct VoiceWakeSettings: View {
     }
 
     private var levelMeter: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Live level")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(title: "Live level", showsDivider: false) {
                 MicLevelBar(level: self.meterLevel)
                     .frame(width: self.controlWidth, alignment: .leading)
                 Text(self.levelLabel)
@@ -606,6 +791,8 @@ struct VoiceWakeSettings: View {
                 Text(meterError)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
         }
     }
@@ -617,8 +804,22 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func restartMeter() async {
+        guard voiceWakeSupported else {
+            self.state.voiceWakeMeterActive = false
+            await self.meter.stop()
+            return
+        }
+        guard self.isActive else {
+            self.state.voiceWakeMeterActive = false
+            await self.meter.stop()
+            return
+        }
         self.meterError = nil
         await self.meter.stop()
+        guard !Task.isCancelled, self.isActive else {
+            self.state.voiceWakeMeterActive = false
+            return
+        }
         do {
             try await self.meter.start { [weak state] level in
                 Task { @MainActor in
@@ -626,9 +827,134 @@ struct VoiceWakeSettings: View {
                     self.meterLevel = level
                 }
             }
+            guard !Task.isCancelled, self.isActive else {
+                self.state.voiceWakeMeterActive = false
+                await self.meter.stop()
+                return
+            }
+            self.state.voiceWakeMeterActive = true
         } catch {
+            self.state.voiceWakeMeterActive = false
             self.meterError = error.localizedDescription
         }
+    }
+}
+
+private struct TriggerPhraseRow: View {
+    @Binding var value: String
+    let showsDivider: Bool
+    let onSubmit: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "quote.opening")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+
+            TextField("Wake phrase", text: self.$value)
+                .textFieldStyle(.roundedBorder)
+                .font(.callout.weight(.medium))
+                .frame(maxWidth: 420)
+                .onSubmit(self.onSubmit)
+
+            Spacer(minLength: 8)
+
+            Button(action: self.onRemove) {
+                Image(systemName: "trash")
+                    .font(.callout)
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+            .help("Remove trigger word")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            if self.showsDivider {
+                Divider()
+                    .padding(.leading, 50)
+            }
+        }
+    }
+}
+
+private struct AdditionalLanguageRow: View {
+    let index: Int
+    @Binding var selection: String
+    let localeIDs: [String]
+    let localeName: (String) -> String
+    let showsDivider: Bool
+    let onRemove: () -> Void
+
+    var body: some View {
+        SettingsCardRow(
+            title: .verbatim(String(
+                format: String(localized: "Language %lld"),
+                self.index + 2)),
+            subtitle: "Fallback recognition language.",
+            showsDivider: self.showsDivider)
+        {
+            HStack(spacing: 10) {
+                Picker("Language \(self.index + 2)", selection: self.$selection) {
+                    ForEach(self.localeIDs, id: \.self) { id in
+                        Text(self.localeName(id)).tag(id)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+
+                Button(action: self.onRemove) {
+                    Image(systemName: "trash")
+                        .font(.callout)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+                .help("Remove language")
+            }
+        }
+    }
+}
+
+private struct TriggerPhraseHelpRow: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+                .padding(.top, 1)
+
+            Text(
+                "OpenClaw reacts when any trigger appears in a transcription. " +
+                    "Keep phrases short to avoid false positives.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
+}
+
+extension VoiceWakeSettings {
+    private var realtimeRelayToggle: some View {
+        SettingsCardToggleRow(
+            title: "Use realtime Gateway relay",
+            subtitle: """
+            Use the Gateway's configured realtime voice session on this Mac. \
+            Requires realtime, gateway-relay, and agent-consult in Talk settings.
+            """,
+            binding: self.$state.talkRealtimeRelayEnabled)
     }
 }
 
@@ -637,37 +963,6 @@ struct VoiceWakeSettings_Previews: PreviewProvider {
     static var previews: some View {
         VoiceWakeSettings(state: .preview, isActive: true)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-    }
-}
-
-@MainActor
-extension VoiceWakeSettings {
-    static func exerciseForTesting() {
-        let state = AppState(preview: true)
-        state.swabbleEnabled = true
-        state.voicePushToTalkEnabled = true
-        state.swabbleTriggerWords = ["Claude", "Hey"]
-
-        let view = VoiceWakeSettings(state: state, isActive: true)
-        view.availableMics = [AudioInputDevice(uid: "mic-1", name: "Built-in")]
-        view.availableLocales = [Locale(identifier: "en_US")]
-        view.meterLevel = 0.42
-        view.meterError = "No input"
-        view.testState = .detected("ok")
-        view.isTesting = true
-        view.triggerEntries = [TriggerEntry(id: UUID(), value: "Claude")]
-
-        _ = view.body
-        _ = view.localePicker
-        _ = view.micPicker
-        _ = view.levelMeter
-        _ = view.triggerTable
-        _ = view.chimeSection
-
-        view.addWord()
-        if let entryId = view.triggerEntries.first?.id {
-            view.removeWord(id: entryId)
-        }
     }
 }
 #endif

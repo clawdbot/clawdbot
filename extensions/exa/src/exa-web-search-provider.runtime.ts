@@ -1,3 +1,6 @@
+// Exa provider module implements model/runtime integration.
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
@@ -5,7 +8,7 @@ import {
   parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -17,18 +20,25 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "instant"] as const;
 const EXA_FRESHNESS_VALUES = ["day", "week", "month", "year"] as const;
 const EXA_MAX_SEARCH_COUNT = 100;
+const EXA_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// Exa search responses are untrusted external bodies. Cap the success JSON the
+// same way other bundled providers do (16 MiB) so a misbehaving or hostile
+// endpoint cannot stream an unbounded body into memory before we parse it.
+const EXA_SEARCH_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 type ExaConfig = {
   apiKey?: string;
+  baseUrl?: string;
 };
 
 type ExaSearchType = (typeof EXA_SEARCH_TYPES)[number];
@@ -65,6 +75,26 @@ type ExaSearchResponse = {
   results?: unknown;
 };
 
+async function readExaSearchResults(
+  response: Response,
+  opts?: { maxBytes?: number },
+): Promise<ExaSearchResult[]> {
+  const maxBytes = opts?.maxBytes ?? EXA_SEARCH_JSON_MAX_BYTES;
+  const bytes = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ maxBytes: maxBytesLocal }) =>
+      new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
+  });
+  try {
+    return normalizeExaResults(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  } catch (cause) {
+    throw new Error("Exa API returned malformed JSON", { cause });
+  }
+}
+
+async function readExaErrorDetail(response: Response): Promise<string> {
+  return await readResponseTextLimited(response, EXA_ERROR_BODY_LIMIT_BYTES);
+}
+
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
@@ -82,9 +112,47 @@ function resolveExaConfig(searchConfig?: SearchConfigRecord): ExaConfig {
 
 function resolveExaApiKey(exa?: ExaConfig): string | undefined {
   return (
-    readConfiguredSecretString(exa?.apiKey, "tools.web.search.exa.apiKey") ??
+    readConfiguredSecretString(exa?.apiKey, "plugins.entries.exa.config.webSearch.apiKey") ??
     readProviderEnvValue(["EXA_API_KEY"])
   );
+}
+
+function invalidBaseUrlPayload(value: string) {
+  return {
+    error: "invalid_base_url",
+    message: `plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ${value}`,
+    docs: "https://docs.openclaw.ai/tools/exa-search",
+  };
+}
+
+function resolveExaSearchEndpoint(
+  exa?: ExaConfig,
+): { endpoint: string } | { error: string; message: string; docs: string } {
+  const configured = normalizeOptionalString(exa?.baseUrl);
+  if (!configured) {
+    return { endpoint: EXA_SEARCH_ENDPOINT };
+  }
+
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
+    return invalidBaseUrlPayload(configured);
+  }
+  const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    return invalidBaseUrlPayload(configured);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return invalidBaseUrlPayload(configured);
+  }
+
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+  parsed.pathname = pathname.endsWith("/search")
+    ? pathname
+    : `${pathname === "" ? "" : pathname}/search`;
+  parsed.hash = "";
+  return { endpoint: parsed.toString() };
 }
 
 function resolveExaDescription(result: ExaSearchResult): string {
@@ -124,11 +192,11 @@ function isErrorPayload(value: unknown): value is { error: string; message: stri
 }
 
 function resolveExaSearchCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     return fallback;
   }
-  return Math.max(1, Math.min(EXA_MAX_SEARCH_COUNT, Math.floor(parsed)));
+  return Math.min(EXA_MAX_SEARCH_COUNT, parsed);
 }
 
 function parseExaContents(
@@ -154,123 +222,61 @@ function parseExaContents(
   }
 
   const parsed: ExaContentsArgs = {};
-
-  const parseText = (
-    value: unknown,
-  ): ExaTextContentsOption | { error: string; message: string; docs: string } => {
-    if (typeof value === "boolean") {
-      return value;
-    }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return invalidContentsPayload("contents.text must be a boolean or an object.");
-    }
-    const obj = value as Record<string, unknown>;
-    for (const key of Object.keys(obj)) {
-      if (key !== "maxCharacters") {
-        return invalidContentsPayload(
-          `contents.text has unknown field "${key}". Only "maxCharacters" is allowed.`,
-        );
-      }
-    }
-    if ("maxCharacters" in obj && parsePositiveInteger(obj.maxCharacters) === undefined) {
-      return invalidContentsPayload("contents.text.maxCharacters must be a positive integer.");
-    }
-    return parsePositiveInteger(obj.maxCharacters)
-      ? { maxCharacters: parsePositiveInteger(obj.maxCharacters) }
-      : {};
+  const fieldsBySection: Record<string, readonly string[]> = {
+    text: ["maxCharacters"],
+    highlights: ["maxCharacters", "query", "numSentences", "highlightsPerUrl"],
+    summary: ["query"],
   };
 
-  const parseHighlights = (
-    value: unknown,
-  ): ExaHighlightsContentsOption | { error: string; message: string; docs: string } => {
+  for (const section of ["text", "highlights", "summary"] as const) {
+    if (!(section in raw)) {
+      continue;
+    }
+    const value = raw[section];
     if (typeof value === "boolean") {
-      return value;
+      parsed[section] = value;
+      continue;
     }
     if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return invalidContentsPayload("contents.highlights must be a boolean or an object.");
+      return invalidContentsPayload(`contents.${section} must be a boolean or an object.`);
     }
-    const obj = value as Record<string, unknown>;
-    const allowed = new Set(["maxCharacters", "query", "numSentences", "highlightsPerUrl"]);
-    for (const key of Object.keys(obj)) {
-      if (!allowed.has(key)) {
-        return invalidContentsPayload(
-          `contents.highlights has unknown field "${key}". Allowed fields are "maxCharacters", "query", "numSentences", and "highlightsPerUrl".`,
-        );
+
+    const option = value as Record<string, unknown>;
+    const fields = fieldsBySection[section] ?? [];
+    for (const key of Object.keys(option)) {
+      if (!fields.includes(key)) {
+        const allowed =
+          section === "highlights"
+            ? 'Allowed fields are "maxCharacters", "query", "numSentences", and "highlightsPerUrl".'
+            : `Only "${fields[0]}" is allowed.`;
+        return invalidContentsPayload(`contents.${section} has unknown field "${key}". ${allowed}`);
       }
     }
-    if ("maxCharacters" in obj && parsePositiveInteger(obj.maxCharacters) === undefined) {
-      return invalidContentsPayload(
-        "contents.highlights.maxCharacters must be a positive integer.",
-      );
-    }
-    if ("numSentences" in obj && parsePositiveInteger(obj.numSentences) === undefined) {
-      return invalidContentsPayload("contents.highlights.numSentences must be a positive integer.");
-    }
-    if ("highlightsPerUrl" in obj && parsePositiveInteger(obj.highlightsPerUrl) === undefined) {
-      return invalidContentsPayload(
-        "contents.highlights.highlightsPerUrl must be a positive integer.",
-      );
-    }
-    if ("query" in obj && typeof obj.query !== "string") {
-      return invalidContentsPayload("contents.highlights.query must be a string.");
-    }
-    return {
-      ...(parsePositiveInteger(obj.maxCharacters)
-        ? { maxCharacters: parsePositiveInteger(obj.maxCharacters) }
-        : {}),
-      ...(typeof obj.query === "string" ? { query: obj.query } : {}),
-      ...(parsePositiveInteger(obj.numSentences)
-        ? { numSentences: parsePositiveInteger(obj.numSentences) }
-        : {}),
-      ...(parsePositiveInteger(obj.highlightsPerUrl)
-        ? { highlightsPerUrl: parsePositiveInteger(obj.highlightsPerUrl) }
-        : {}),
-    };
-  };
 
-  const parseSummary = (
-    value: unknown,
-  ): ExaSummaryContentsOption | { error: string; message: string; docs: string } => {
-    if (typeof value === "boolean") {
-      return value;
-    }
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return invalidContentsPayload("contents.summary must be a boolean or an object.");
-    }
-    const obj = value as Record<string, unknown>;
-    for (const key of Object.keys(obj)) {
-      if (key !== "query") {
-        return invalidContentsPayload(
-          `contents.summary has unknown field "${key}". Only "query" is allowed.`,
-        );
+    for (const field of fields) {
+      if (
+        field !== "query" &&
+        field in option &&
+        parsePositiveInteger(option[field]) === undefined
+      ) {
+        return invalidContentsPayload(`contents.${section}.${field} must be a positive integer.`);
       }
     }
-    if ("query" in obj && typeof obj.query !== "string") {
-      return invalidContentsPayload("contents.summary.query must be a string.");
+    if (section !== "text" && "query" in option && typeof option.query !== "string") {
+      return invalidContentsPayload(`contents.${section}.query must be a string.`);
     }
-    return typeof obj.query === "string" ? { query: obj.query } : {};
-  };
 
-  if ("text" in raw) {
-    const parsedText = parseText(raw.text);
-    if (isErrorPayload(parsedText)) {
-      return parsedText;
+    const normalized: Record<string, unknown> = {};
+    for (const field of fields) {
+      if (field === "query") {
+        if (typeof option.query === "string") {
+          normalized.query = option.query;
+        }
+      } else if (parsePositiveInteger(option[field])) {
+        normalized[field] = parsePositiveInteger(option[field]);
+      }
     }
-    parsed.text = parsedText;
-  }
-  if ("highlights" in raw) {
-    const parsedHighlights = parseHighlights(raw.highlights);
-    if (isErrorPayload(parsedHighlights)) {
-      return parsedHighlights;
-    }
-    parsed.highlights = parsedHighlights;
-  }
-  if ("summary" in raw) {
-    const parsedSummary = parseSummary(raw.summary);
-    if (isErrorPayload(parsedSummary)) {
-      return parsedSummary;
-    }
-    parsed.summary = parsedSummary;
+    Object.assign(parsed, { [section]: normalized });
   }
 
   return { value: parsed };
@@ -315,6 +321,7 @@ function resolveFreshnessStartDate(freshness: ExaFreshness): string {
 
 async function runExaSearch(params: {
   apiKey: string;
+  endpoint: string;
   query: string;
   count: number;
   freshness?: ExaFreshness;
@@ -323,6 +330,7 @@ async function runExaSearch(params: {
   type: ExaSearchType;
   contents?: ExaContentsArgs;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<ExaSearchResult[]> {
   const body: Record<string, unknown> = {
     query: params.query,
@@ -342,8 +350,9 @@ async function runExaSearch(params: {
 
   return withTrustedWebSearchEndpoint(
     {
-      url: EXA_SEARCH_ENDPOINT,
+      url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -357,14 +366,10 @@ async function runExaSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const detail = await res.text();
+        const detail = await readExaErrorDetail(res);
         throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
       }
-      try {
-        return normalizeExaResults(await res.json());
-      } catch (error) {
-        throw new Error(`Exa API returned invalid JSON: ${String(error)}`, { cause: error });
-      }
+      return readExaSearchResults(res);
     },
   );
 }
@@ -373,14 +378,40 @@ function missingExaKeyPayload() {
   return {
     error: "missing_exa_api_key",
     message:
-      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure tools.web.search.exa.apiKey.",
+      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure plugins.entries.exa.config.webSearch.apiKey.",
     docs: "https://docs.openclaw.ai/tools/web",
   };
+}
+
+function buildExaCacheKey(params: {
+  endpoint: string;
+  type: ExaSearchType;
+  query: string;
+  count: number;
+  freshness?: ExaFreshness;
+  dateAfter?: string;
+  dateBefore?: string;
+  contents?: ExaContentsArgs;
+}): string {
+  const contents = params.contents ?? { highlights: true };
+
+  return buildSearchCacheKey([
+    "exa",
+    params.endpoint,
+    params.type,
+    params.query,
+    params.count,
+    params.freshness,
+    params.dateAfter,
+    params.dateBefore,
+    JSON.stringify(contents),
+  ]);
 }
 
 export async function executeExaWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -393,6 +424,11 @@ export async function executeExaWebSearchProviderTool(
   if (!apiKey) {
     return missingExaKeyPayload();
   }
+  const endpointResult = resolveExaSearchEndpoint(exaConfig);
+  if ("error" in endpointResult) {
+    return endpointResult;
+  }
+  const endpoint = endpointResult.endpoint;
 
   const query = readStringParam(params, "query", { required: true });
   const rawType = readStringParam(params, "type");
@@ -400,7 +436,12 @@ export async function executeExaWebSearchProviderTool(
     ? (rawType as ExaSearchType)
     : "auto";
   const count =
-    readNumberParam(params, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(params, "count", {
+      max: EXA_MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${EXA_MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const rawFreshness = readStringParam(params, "freshness");
   const freshness = normalizeExaFreshness(rawFreshness);
   if (rawFreshness && !freshness) {
@@ -442,19 +483,19 @@ export async function executeExaWebSearchProviderTool(
       ? parsedContents.value
       : undefined;
 
-  const cacheKey = buildSearchCacheKey([
-    "exa",
+  const resolvedCount = resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT);
+  const cacheKey = buildExaCacheKey({
+    endpoint,
     type,
     query,
-    resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT),
+    count: resolvedCount,
     freshness,
     dateAfter,
     dateBefore,
-    contents?.highlights ? JSON.stringify(contents.highlights) : undefined,
-    contents?.text ? JSON.stringify(contents.text) : undefined,
-    contents?.summary ? JSON.stringify(contents.summary) : undefined,
-  ]);
-  const cached = readCachedSearchPayload(cacheKey);
+    contents,
+  });
+  const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -462,16 +503,19 @@ export async function executeExaWebSearchProviderTool(
   const start = Date.now();
   const results = await runExaSearch({
     apiKey,
+    endpoint,
     query,
-    count: resolveExaSearchCount(count, DEFAULT_SEARCH_COUNT),
+    count: resolvedCount,
     freshness,
     dateAfter,
     dateBefore,
     type,
     contents,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal,
   });
 
+  signal?.throwIfAborted();
   const payload = {
     query,
     provider: "exa",
@@ -511,17 +555,18 @@ export async function executeExaWebSearchProviderTool(
     }),
   };
 
-  writeCachedSearchPayload(cacheKey, payload, resolveSearchCacheTtlMs(searchConfig));
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }
 
-export const __testing = {
-  normalizeExaResults,
-  normalizeExaFreshness,
+export const testing = {
   parseExaContents,
+  buildExaCacheKey,
   resolveExaApiKey,
-  resolveExaConfig,
   resolveExaDescription,
   resolveExaSearchCount,
+  resolveExaSearchEndpoint,
   resolveFreshnessStartDate,
+  readExaErrorDetail,
+  readExaSearchResults,
 } as const;

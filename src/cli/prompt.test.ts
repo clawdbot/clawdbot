@@ -1,13 +1,33 @@
+// Prompt tests cover CLI prompt input handling and cancellation behavior.
 import readline from "node:readline/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isYes, setVerbose, setYes } from "../globals.js";
-import { promptYesNo } from "./prompt.js";
+import { PromptInputClosedError, promptYesNo } from "./prompt.js";
 
 const readlineState = vi.hoisted(() => {
   const question = vi.fn(async () => "");
   const close = vi.fn();
-  const createInterface = vi.fn(() => ({ question, close }));
-  return { question, close, createInterface };
+  const listeners = new Map<string, Set<() => void>>();
+  const once = vi.fn((event: string, listener: () => void) => {
+    const current = listeners.get(event) ?? new Set<() => void>();
+    current.add(listener);
+    listeners.set(event, current);
+  });
+  const off = vi.fn((event: string, listener: () => void) => {
+    listeners.get(event)?.delete(listener);
+  });
+  const emit = (event: string) => {
+    const current = [...(listeners.get(event) ?? [])];
+    listeners.delete(event);
+    for (const listener of current) {
+      listener();
+    }
+  };
+  const resetListeners = () => {
+    listeners.clear();
+  };
+  const createInterface = vi.fn(() => ({ question, close, once, off }));
+  return { question, close, createInterface, emit, off, once, resetListeners };
 });
 
 vi.mock("node:readline/promises", () => ({
@@ -21,6 +41,9 @@ beforeEach(() => {
   readlineState.question.mockResolvedValue("");
   readlineState.close.mockClear();
   readlineState.createInterface.mockClear();
+  readlineState.off.mockClear();
+  readlineState.once.mockClear();
+  readlineState.resetListeners();
 });
 
 describe("promptYesNo", () => {
@@ -35,7 +58,7 @@ describe("promptYesNo", () => {
   it("asks the question and respects default", async () => {
     setYes(false);
     setVerbose(false);
-    expect(readline).toBeTruthy();
+    expect(readline.createInterface).toBe(readlineState.createInterface);
     readlineState.question.mockResolvedValueOnce("");
     const resultDefaultYes = await promptYesNo("Continue?", true);
     expect(resultDefaultYes).toBe(true);
@@ -47,5 +70,15 @@ describe("promptYesNo", () => {
     readlineState.question.mockResolvedValueOnce("y");
     const resultYes = await promptYesNo("Continue?", false);
     expect(resultYes).toBe(true);
+  });
+
+  it("rejects when input closes before an answer is received", async () => {
+    readlineState.question.mockReturnValueOnce(new Promise<string>(() => {}));
+
+    const result = promptYesNo("Continue?");
+    readlineState.emit("close");
+
+    await expect(result).rejects.toThrow(PromptInputClosedError);
+    expect(readlineState.close).toHaveBeenCalledTimes(1);
   });
 });

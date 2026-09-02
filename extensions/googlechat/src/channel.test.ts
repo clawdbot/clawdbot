@@ -1,23 +1,23 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Googlechat tests cover channel plugin behavior.
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/plugins/directory.ts";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   googlechatDirectoryAdapter,
+  googlechatMessageAdapter,
   googlechatOutboundAdapter,
   googlechatPairingTextAdapter,
   googlechatSecurityAdapter,
   googlechatThreadingAdapter,
 } from "./channel.adapters.js";
 
-const uploadGoogleChatAttachmentMock = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessageMock = vi.hoisted(() => vi.fn());
 const resolveGoogleChatAccountMock = vi.hoisted(() => vi.fn());
 const resolveGoogleChatOutboundSpaceMock = vi.hoisted(() => vi.fn());
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
-const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
 const probeGoogleChatMock = vi.hoisted(() => vi.fn());
 const startGoogleChatMonitorMock = vi.hoisted(() => vi.fn());
 
@@ -74,19 +74,6 @@ function mockGoogleChatOutboundSpaceResolution() {
   });
 }
 
-function mockGoogleChatMediaLoaders() {
-  loadOutboundMediaFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
-    buffer: Buffer.from("default-bytes"),
-    fileName: mediaUrl.split("/").pop() || "attachment",
-    contentType: "application/octet-stream",
-  }));
-  fetchRemoteMediaMock.mockImplementation(async () => ({
-    buffer: Buffer.from("remote-bytes"),
-    fileName: "remote.png",
-    contentType: "image/png",
-  }));
-}
-
 vi.mock("./channel.runtime.js", () => {
   return {
     googleChatChannelRuntime: {
@@ -94,7 +81,6 @@ vi.mock("./channel.runtime.js", () => {
       resolveGoogleChatWebhookPath: () => "/googlechat/webhook",
       sendGoogleChatMessage: (...args: unknown[]) => sendGoogleChatMessageMock(...args),
       startGoogleChatMonitor: (...args: unknown[]) => startGoogleChatMonitorMock(...args),
-      uploadGoogleChatAttachment: (...args: unknown[]) => uploadGoogleChatAttachmentMock(...args),
     },
   };
 });
@@ -105,10 +91,12 @@ vi.mock("./channel.deps.runtime.js", () => {
     GoogleChatConfigSchema: {},
     buildChannelConfigSchema: () => ({}),
     chunkTextForOutbound: (text: string, maxChars: number) => {
-      const words = text.split(/\s+/).filter(Boolean);
       const chunks: string[] = [];
       let current = "";
-      for (const word of words) {
+      for (const word of text.split(/\s+/)) {
+        if (!word) {
+          continue;
+        }
         const next = current ? `${current} ${word}` : word;
         if (current && next.length > maxChars) {
           chunks.push(current);
@@ -123,7 +111,6 @@ vi.mock("./channel.deps.runtime.js", () => {
       return chunks;
     },
     createAccountStatusSink: () => () => {},
-    fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMediaMock(...args),
     getChatChannelMeta: (id: string) => ({ id, name: id }),
     isGoogleChatSpaceTarget: (value: string) => value.toLowerCase().startsWith("spaces/"),
     isGoogleChatUserTarget: (value: string) => value.toLowerCase().startsWith("users/"),
@@ -131,25 +118,10 @@ vi.mock("./channel.deps.runtime.js", () => {
       const ids = Object.keys(cfg.channels?.googlechat?.accounts ?? {});
       return ids.length > 0 ? ids : ["default"];
     },
-    loadOutboundMediaFromUrl: (...args: unknown[]) => loadOutboundMediaFromUrlMock(...args),
     missingTargetError: (channel: string, hint: string) =>
       new Error(`${channel} target is required (${hint})`),
     normalizeGoogleChatTarget,
     PAIRING_APPROVED_MESSAGE: "approved",
-    resolveChannelMediaMaxBytes: (params: {
-      cfg: OpenClawConfig;
-      resolveChannelLimitMb: (args: {
-        cfg: OpenClawConfig;
-        accountId?: string;
-      }) => number | undefined;
-      accountId?: string;
-    }) => {
-      const limitMb = params.resolveChannelLimitMb({
-        cfg: params.cfg,
-        accountId: params.accountId,
-      });
-      return typeof limitMb === "number" ? limitMb * 1024 * 1024 : undefined;
-    },
     resolveDefaultGoogleChatAccountId: () => "default",
     resolveGoogleChatAccount: (...args: Parameters<typeof resolveGoogleChatAccountImpl>) =>
       resolveGoogleChatAccountMock(...args),
@@ -162,13 +134,17 @@ vi.mock("./channel.deps.runtime.js", () => {
 
 resolveGoogleChatAccountMock.mockImplementation(resolveGoogleChatAccountImpl);
 mockGoogleChatOutboundSpaceResolution();
-mockGoogleChatMediaLoaders();
 
 afterEach(() => {
   vi.clearAllMocks();
   resolveGoogleChatAccountMock.mockImplementation(resolveGoogleChatAccountImpl);
   mockGoogleChatOutboundSpaceResolution();
-  mockGoogleChatMediaLoaders();
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel.runtime.js");
+  vi.doUnmock("./channel.deps.runtime.js");
+  vi.resetModules();
 });
 
 function createGoogleChatCfg(): OpenClawConfig {
@@ -187,128 +163,121 @@ function createGoogleChatCfg(): OpenClawConfig {
   };
 }
 
-function setupRuntimeMediaMocks(params: { loadFileName: string; loadBytes: string }) {
-  const loadOutboundMediaFromUrl = vi.fn(async () => ({
-    buffer: Buffer.from(params.loadBytes),
-    fileName: params.loadFileName,
-    contentType: "image/png",
-  }));
-  const fetchRemoteMedia = vi.fn(async () => ({
-    buffer: Buffer.from("remote-bytes"),
-    fileName: "remote.png",
-    contentType: "image/png",
-  }));
-
-  loadOutboundMediaFromUrlMock.mockImplementation(loadOutboundMediaFromUrl);
-  fetchRemoteMediaMock.mockImplementation(fetchRemoteMedia);
-
-  return { loadOutboundMediaFromUrl, fetchRemoteMedia };
+function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
 }
 
-describe("googlechatPlugin outbound sendMedia", () => {
-  it("chunks outbound text without requiring Google Chat runtime initialization", () => {
-    const chunker = googlechatOutboundAdapter.base.chunker;
-
-    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
-  });
-
-  it("loads local media with mediaLocalRoots via runtime media loader", async () => {
-    const { loadOutboundMediaFromUrl, fetchRemoteMedia } = setupRuntimeMediaMocks({
-      loadFileName: "image.png",
-      loadBytes: "image-bytes",
-    });
-
-    uploadGoogleChatAttachmentMock.mockResolvedValue({
-      attachmentUploadToken: "token-1",
-    });
+describe("googlechatPlugin outbound", () => {
+  it("declares durable text and thread delivery with receipt proofs", async () => {
     sendGoogleChatMessageMock.mockResolvedValue({
       messageName: "spaces/AAA/messages/msg-1",
     });
 
     const cfg = createGoogleChatCfg();
 
-    const result = await googlechatOutboundAdapter.attachedResults.sendMedia({
-      cfg,
-      to: "spaces/AAA",
-      text: "caption",
-      mediaUrl: "/tmp/workspace/image.png",
-      mediaLocalRoots: ["/tmp/workspace"],
-      accountId: "default",
+    const proofs = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "googlechat",
+      adapter: googlechatMessageAdapter,
+      proofs: {
+        text: async () => {
+          const result = await googlechatMessageAdapter.send?.text?.({
+            cfg,
+            to: "spaces/AAA",
+            text: "hello",
+          });
+          expect(result?.receipt.parts[0]?.kind).toBe("text");
+          expect(result?.receipt.platformMessageIds).toEqual(["spaces/AAA/messages/msg-1"]);
+        },
+        thread: async () => {
+          sendGoogleChatMessageMock.mockClear();
+          await googlechatMessageAdapter.send?.text?.({
+            cfg,
+            to: "spaces/AAA",
+            text: "threaded",
+            threadId: "thread-1",
+          });
+          const request = requireMockArg(sendGoogleChatMessageMock) as {
+            space?: string;
+            thread?: string;
+          };
+          expect(request.space).toBe("spaces/AAA");
+          expect(request.thread).toBe("thread-1");
+        },
+        messageSendingHooks: () => {
+          expect(googlechatMessageAdapter.send?.text).toBeTypeOf("function");
+        },
+      },
     });
-
-    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
-      "/tmp/workspace/image.png",
-      expect.objectContaining({
-        mediaLocalRoots: ["/tmp/workspace"],
-      }),
-    );
-    expect(fetchRemoteMedia).not.toHaveBeenCalled();
-    expect(uploadGoogleChatAttachmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        space: "spaces/AAA",
-        filename: "image.png",
-        contentType: "image/png",
-      }),
-    );
-    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        space: "spaces/AAA",
-        text: "caption",
-      }),
-    );
-    expect(result).toEqual({
-      messageId: "spaces/AAA/messages/msg-1",
-      chatId: "spaces/AAA",
-    });
+    expect(proofs).toStrictEqual([
+      { capability: "text", status: "verified" },
+      { capability: "media", status: "not_declared" },
+      { capability: "poll", status: "not_declared" },
+      { capability: "payload", status: "not_declared" },
+      { capability: "silent", status: "not_declared" },
+      { capability: "replyTo", status: "not_declared" },
+      { capability: "thread", status: "verified" },
+      { capability: "nativeQuote", status: "not_declared" },
+      { capability: "messageSendingHooks", status: "verified" },
+      { capability: "batch", status: "not_declared" },
+      { capability: "reconcileUnknownSend", status: "not_declared" },
+      { capability: "afterSendSuccess", status: "not_declared" },
+      { capability: "afterCommit", status: "not_declared" },
+    ]);
   });
 
-  it("keeps remote URL media fetch on fetchRemoteMedia with maxBytes cap", async () => {
-    const { loadOutboundMediaFromUrl, fetchRemoteMedia } = setupRuntimeMediaMocks({
-      loadFileName: "unused.png",
-      loadBytes: "should-not-be-used",
-    });
-
-    uploadGoogleChatAttachmentMock.mockResolvedValue({
-      attachmentUploadToken: "token-2",
-    });
-    sendGoogleChatMessageMock.mockResolvedValue({
-      messageName: "spaces/AAA/messages/msg-2",
-    });
-
+  it("records the API thread separately from the containing space", async () => {
     const cfg = createGoogleChatCfg();
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-canonical",
+      threadName: "spaces/AAA/threads/canonical",
+    });
 
-    const result = await googlechatOutboundAdapter.attachedResults.sendMedia({
+    const canonical = await googlechatOutboundAdapter.attachedResults.sendText({
       cfg,
       to: "spaces/AAA",
-      text: "caption",
-      mediaUrl: "https://example.com/image.png",
-      accountId: "default",
+      text: "canonical",
+      threadId: "threads/requested",
     });
 
-    expect(fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/image.png",
-        maxBytes: 20 * 1024 * 1024,
-      }),
-    );
-    expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
-    expect(uploadGoogleChatAttachmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        space: "spaces/AAA",
-        filename: "remote.png",
-        contentType: "image/png",
-      }),
-    );
-    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        space: "spaces/AAA",
-        text: "caption",
-      }),
-    );
-    expect(result).toEqual({
-      messageId: "spaces/AAA/messages/msg-2",
+    expect(canonical.receipt.threadId).toBe("spaces/AAA/threads/canonical");
+    expect(canonical.receipt.parts[0]?.threadId).toBe("spaces/AAA/threads/canonical");
+    expect(canonical.receipt.raw?.[0]).toMatchObject({
       chatId: "spaces/AAA",
+      conversationId: "spaces/AAA",
     });
+
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-fallback",
+    });
+    const fallback = await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "fallback",
+      threadId: "threads/requested",
+    });
+    expect(fallback.receipt.threadId).toBe("threads/requested");
+
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-top-level",
+    });
+    const topLevel = await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "top level",
+    });
+    expect(topLevel.receipt.threadId).toBeUndefined();
+  });
+
+  it("renders and chunks outbound text without requiring Google Chat runtime initialization", () => {
+    const chunker = googlechatOutboundAdapter.base.chunker;
+
+    expect(chunker("**alpha** [docs](https://example.com)", 32_000)).toEqual([
+      "*alpha* <https://example.com|docs>",
+    ]);
   });
 });
 
@@ -342,6 +311,62 @@ describe("googlechatPlugin threading", () => {
     expect(
       googlechatThreadingAdapter.scopedAccountReplyToMode.resolveReplyToMode(defaultAccount),
     ).toBe("all");
+  });
+
+  it("uses the inbound thread resource as the current tool reply target", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          replyToMode: "all",
+        },
+      },
+    } as OpenClawConfig;
+    const hasRepliedRef = { value: false };
+
+    const context = googlechatThreadingAdapter.buildToolContext({
+      cfg,
+      accountId: "default",
+      context: {
+        To: "googlechat:spaces/AAA",
+        CurrentMessageId: "spaces/AAA/messages/msg-1",
+        ReplyToId: "spaces/AAA/threads/thread-1",
+      },
+      hasRepliedRef,
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "spaces/AAA",
+      currentMessageId: "spaces/AAA/threads/thread-1",
+      currentThreadTs: "spaces/AAA/threads/thread-1",
+      replyToMode: "all",
+      hasRepliedRef,
+    });
+  });
+
+  it("does not use message resources as implicit Google Chat reply targets", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          replyToMode: "all",
+        },
+      },
+    } as OpenClawConfig;
+
+    const context = googlechatThreadingAdapter.buildToolContext({
+      cfg,
+      accountId: "default",
+      context: {
+        To: "googlechat:spaces/AAA",
+        CurrentMessageId: "spaces/AAA/messages/msg-1",
+      },
+    });
+
+    expect(context).toMatchObject({
+      currentChannelId: "spaces/AAA",
+      replyToMode: "all",
+    });
+    expect(context.currentMessageId).toBeUndefined();
+    expect(context.currentThreadTs).toBeUndefined();
   });
 });
 
@@ -381,7 +406,9 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     if (result.ok) {
       throw new Error("Expected invalid target to fail");
     }
-    expect(result.error).toBeDefined();
+    expect(result.error.message).toBe(
+      "Google Chat target is required (<spaces/{space}|users/{user}>)",
+    );
   });
 
   it("errors when no target is provided", () => {
@@ -393,7 +420,9 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     if (result.ok) {
       throw new Error("Expected missing target to fail");
     }
-    expect(result.error).toBeDefined();
+    expect(result.error.message).toBe(
+      "Google Chat target is required (<spaces/{space}|users/{user}>)",
+    );
   });
 });
 
@@ -435,13 +464,14 @@ describe("googlechatPlugin outbound cfg threading", () => {
       cfg,
       accountId: "work",
     });
-    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        account,
-        space: "spaces/WORK",
-        text: expect.any(String),
-      }),
-    );
+    const request = requireMockArg(sendGoogleChatMessageMock) as {
+      account?: unknown;
+      space?: string;
+      text?: string;
+    };
+    expect(request.account).toBe(account);
+    expect(request.space).toBe("spaces/WORK");
+    expect(request.text).toBe(googlechatPairingTextAdapter.message);
   });
 
   it("threads resolved cfg into sendText account resolution", async () => {
@@ -476,113 +506,14 @@ describe("googlechatPlugin outbound cfg threading", () => {
       cfg,
       accountId: "default",
     });
-    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        account,
-        space: "spaces/AAA",
-        text: "hello",
-      }),
-    );
-  });
-
-  it("threads resolved cfg into sendMedia account and media loading path", async () => {
-    const cfg = {
-      channels: {
-        googlechat: {
-          serviceAccount: {
-            type: "service_account",
-          },
-          mediaMaxMb: 8,
-        },
-      },
+    const request = requireMockArg(sendGoogleChatMessageMock) as {
+      account?: unknown;
+      space?: string;
+      text?: string;
     };
-    const account = {
-      accountId: "default",
-      config: { mediaMaxMb: 20 },
-      credentialSource: "inline" as const,
-    };
-    const { fetchRemoteMedia } = setupRuntimeMediaMocks({
-      loadFileName: "unused.png",
-      loadBytes: "should-not-be-used",
-    });
-
-    resolveGoogleChatAccountMock.mockReturnValue(account);
-    resolveGoogleChatOutboundSpaceMock.mockResolvedValue("spaces/AAA");
-    uploadGoogleChatAttachmentMock.mockResolvedValue({
-      attachmentUploadToken: "token-1",
-    });
-    sendGoogleChatMessageMock.mockResolvedValue({
-      messageName: "spaces/AAA/messages/msg-2",
-    });
-
-    await googlechatOutboundAdapter.attachedResults.sendMedia({
-      cfg: cfg as never,
-      to: "users/123",
-      text: "photo",
-      mediaUrl: "https://example.com/file.png",
-      accountId: "default",
-    });
-
-    expect(resolveGoogleChatAccountMock).toHaveBeenCalledWith({
-      cfg,
-      accountId: "default",
-    });
-    expect(fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/file.png",
-        maxBytes: 8 * 1024 * 1024,
-      }),
-    );
-    expect(uploadGoogleChatAttachmentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        account,
-        space: "spaces/AAA",
-        filename: "remote.png",
-      }),
-    );
-    expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        account,
-        attachments: [{ attachmentUploadToken: "token-1", contentName: "remote.png" }],
-      }),
-    );
-  });
-
-  it("sends media without requiring Google Chat runtime initialization", async () => {
-    const { loadOutboundMediaFromUrl } = setupRuntimeMediaMocks({
-      loadFileName: "image.png",
-      loadBytes: "image-bytes",
-    });
-
-    uploadGoogleChatAttachmentMock.mockResolvedValue({
-      attachmentUploadToken: "token-cold",
-    });
-    sendGoogleChatMessageMock.mockResolvedValue({
-      messageName: "spaces/AAA/messages/msg-cold",
-    });
-
-    const cfg = createGoogleChatCfg();
-
-    await expect(
-      googlechatOutboundAdapter.attachedResults.sendMedia({
-        cfg,
-        to: "spaces/AAA",
-        text: "caption",
-        mediaUrl: "/tmp/workspace/image.png",
-        mediaLocalRoots: ["/tmp/workspace"],
-        accountId: "default",
-      }),
-    ).resolves.toEqual({
-      messageId: "spaces/AAA/messages/msg-cold",
-      chatId: "spaces/AAA",
-    });
-
-    expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
-      "/tmp/workspace/image.png",
-      expect.objectContaining({
-        mediaLocalRoots: ["/tmp/workspace"],
-      }),
-    );
+    expect(request.account).toBe(account);
+    expect(request.space).toBe("spaces/AAA");
+    expect(request.text).toBe("hello");
   });
 });
 
@@ -594,7 +525,7 @@ describe("googlechat directory", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: { allowFrom: ["users/alice", "googlechat:bob"] },
+          allowFrom: ["users/alice", "googlechat:bob"],
           groups: {
             "spaces/AAA": {},
             "spaces/BBB": {},
@@ -605,35 +536,29 @@ describe("googlechat directory", () => {
 
     const directory = expectDirectorySurface(googlechatDirectoryAdapter);
 
-    await expect(
-      directory.listPeers({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "users/alice" },
-        { kind: "user", id: "bob" },
-      ]),
-    );
+    const peers = await directory.listPeers({
+      cfg,
+      accountId: undefined,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "users/alice" },
+      { kind: "user", id: "bob" },
+    ]);
 
-    await expect(
-      directory.listGroups({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "group", id: "spaces/AAA" },
-        { kind: "group", id: "spaces/BBB" },
-      ]),
-    );
+    const groups = await directory.listGroups({
+      cfg,
+      accountId: undefined,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(groups).toStrictEqual([
+      { kind: "group", id: "spaces/AAA" },
+      { kind: "group", id: "spaces/BBB" },
+    ]);
   });
 
   it("normalizes spaced provider-prefixed dm allowlist entries", async () => {
@@ -641,27 +566,24 @@ describe("googlechat directory", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: { allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "] },
+          allowFrom: [" users/alice ", " googlechat:user:Bob@Example.com "],
         },
       },
     } as unknown as OpenClawConfig;
 
     const directory = expectDirectorySurface(googlechatDirectoryAdapter);
 
-    await expect(
-      directory.listPeers({
-        cfg,
-        accountId: undefined,
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { kind: "user", id: "users/alice" },
-        { kind: "user", id: "users/bob@example.com" },
-      ]),
-    );
+    const peers = await directory.listPeers({
+      cfg,
+      accountId: undefined,
+      query: undefined,
+      limit: undefined,
+      runtime: runtimeEnv,
+    });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "users/alice" },
+      { kind: "user", id: "users/bob@example.com" },
+    ]);
   });
 });
 
@@ -671,10 +593,8 @@ describe("googlechatPlugin security", () => {
       channels: {
         googlechat: {
           serviceAccount: { client_email: "bot@example.com" },
-          dm: {
-            policy: "allowlist",
-            allowFrom: ["  googlechat:user:Bob@Example.com  "],
-          },
+          dmPolicy: "allowlist",
+          allowFrom: ["  googlechat:user:Bob@Example.com  "],
         },
       },
     } as OpenClawConfig;
@@ -691,5 +611,27 @@ describe("googlechatPlugin security", () => {
     expect(googlechatPairingTextAdapter.normalizeAllowEntry("  users/Alice@Example.com  ")).toBe(
       "alice@example.com",
     );
+  });
+});
+
+describe("googlechatPlugin outbound sanitizeText", () => {
+  const sanitizeText = googlechatOutboundAdapter.base.sanitizeText;
+
+  it("strips internal tool-trace failure banners from outbound text (#90684)", () => {
+    const text =
+      "Visible answer.\n⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed";
+    const out = sanitizeText({ text });
+    expect(out).toBe("Visible answer.");
+    expect(out).not.toContain("failed");
+    expect(out).not.toContain("🛠️");
+  });
+
+  it("preserves ordinary assistant prose untouched", () => {
+    const text = "El pipeline tiene 3 deals abiertos por USD 12.000.";
+    expect(sanitizeText({ text })).toBe(text);
+  });
+
+  it("keeps CommonMark intact until chunks reach the send boundary", () => {
+    expect(sanitizeText({ text: "**bold** and ~~gone~~" })).toBe("**bold** and ~~gone~~");
   });
 });

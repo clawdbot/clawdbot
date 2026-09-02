@@ -1,6 +1,6 @@
 ---
 name: tag-duplicate-prs-issues
-description: Maintainer workflow for deciding whether an OpenClaw pull request or issue is a duplicate, gathering evidence with ghreplica and pr-search-cli, grouping related work in prtags, and syncing the duplicate grouping back to GitHub through prtags. Use when Codex needs to search for duplicate PRs or issues, create or reuse a duplicate group, enforce one-group-per-target discipline, save duplicate judgments in prtags, or prepare group state for comment sync.
+description: Use gitcrawl to search duplicate OpenClaw PRs/issues, group related work in prtags, and sync duplicate state to GitHub.
 ---
 
 # Tag Duplicate PRs and Issues
@@ -12,41 +12,23 @@ It is not for reviewing the implementation quality of a PR.
 
 ## Required Setup
 
-Do not start duplicate triage until this setup is complete.
+Do not write duplicate groups or annotations until this setup is complete.
+Read-only discovery can still proceed with `gitcrawl` and live `gh`.
 
-### Install the companion skills
+### Companion Skills
 
-Install these skills first because they teach the agent how to use the two main CLIs correctly:
-
-- `ghreplica` skill from the `ghreplica` repo at `skills/ghreplica/SKILL.md`
-- `prtags` skill from the `prtags` repo at `skills/prtags/SKILL.md`
-
-This skill assumes those two skills are available and can be used during the same run.
+Use `$gitcrawl` first for local candidate discovery.
+Use the `prtags` skill from the `prtags` repo at `skills/prtags/SKILL.md` when it is available.
 
 ### Install the CLIs
 
-Install `ghreplica` and `prtags` from their latest GitHub releases.
+Install `prtags` from its latest GitHub release.
 Do not rely on an old local build unless the maintainer explicitly wants to test unreleased behavior.
-
-`ghreplica` CLI install path:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/dutifuldev/ghreplica/main/scripts/install-ghr.sh | bash -s -- --bin-dir "$HOME/.local/bin"
-```
 
 `prtags` CLI install path:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dutifuldev/prtags/main/scripts/install-prtags.sh | bash -s -- --bin-dir "$HOME/.local/bin"
-```
-
-Use the `pr-search-cli` project with `uvx`.
-The command itself is `pr-search`.
-Do not require a permanent install unless the maintainer explicitly wants one.
-
-```bash
-uvx --from pr-search-cli pr-search status
-uvx --from pr-search-cli pr-search code similar 67144
 ```
 
 ### Authenticate prtags
@@ -61,15 +43,43 @@ prtags auth status
 
 The expected outcome is that `prtags` stores the logged-in maintainer identity locally and uses that account for authenticated writes.
 
-### Verify the tools before triage
+## Missing-Setup Rule
 
-Before using this skill, make sure all three tools are available:
+Do not require an up-front preflight before starting the workflow.
+Proceed with the normal steps until you actually need a tool or account state.
+
+As soon as you discover that `prtags` is missing or not logged in at the write step, stop immediately.
+Do not continue in a partial write mode after that point.
+
+If `prtags` is missing, ask the user to run:
 
 ```bash
-ghr repo view openclaw/openclaw
-prtags auth status
-uvx --from pr-search-cli pr-search status
+curl -fsSL https://raw.githubusercontent.com/dutifuldev/prtags/main/scripts/install-prtags.sh | bash -s -- --bin-dir "$HOME/.local/bin"
 ```
+
+If `prtags auth status` shows that the user is not logged in, ask the user to run:
+
+```bash
+prtags auth login
+```
+
+Resume only after the missing tool or login state has been fixed.
+
+## Read-Path Default
+
+For candidate discovery in this workflow, use `gitcrawl` first.
+Treat it as the local history and clustering layer for related issues, duplicate attempts, and closed threads.
+
+Use live `gh` or `gh api` for the target thread and for any candidate before making an actionable judgment.
+Use live GitHub when `gitcrawl` is missing or stale for a concrete reason, such as:
+
+- the target or candidate is not present yet
+- the local data is clearly stale or incomplete for the decision you need to make
+- `gitcrawl` errors, times out, or lacks the needed neighbor/search data
+
+When you fall back to live GitHub search, note that you did so and why.
+
+If a later `prtags` target-level write fails because its own mirror has not caught up, stop and report that the curation backend is missing the target object instead of forcing a fallback write.
 
 ## Goal
 
@@ -85,11 +95,12 @@ For each target PR or issue:
 
 Use the tools with these boundaries:
 
-- `ghreplica` is the raw evidence source
-  - use it for title/body/comment search, related PRs, overlapping files, overlapping ranges, and current PR or issue status
-- `pr-search-cli` is candidate generation and ranking
-  - use it to suggest likely duplicate PRs or issue-cluster context
-  - do not treat it as final truth
+- `gitcrawl` is candidate generation and historical context
+  - use it first for local title/body search, neighbors, clusters, and closed-thread discovery
+  - treat every candidate as a lead until live GitHub confirms it
+- `gh` is live GitHub truth
+  - use it for target state, body, comments, reviews, files, linked issues, and current open/closed/merged status
+  - use `gh search` only when `gitcrawl` is stale, missing data, or cannot express the needed query
 - `prtags` is the maintainer curation layer
   - use it to create or reuse one duplicate group
   - use it to save the duplicate status, confidence, rationale, and group summary
@@ -146,6 +157,7 @@ Examples:
 ## Evidence Checklist
 
 Before declaring a duplicate, gather evidence from at least two categories.
+`gitcrawl` neighbors, search hits, and cluster membership count as candidate generation, not as enough proof by themselves.
 
 For PRs:
 
@@ -168,20 +180,18 @@ If you only have wording similarity, that is not enough.
 ## Step 1: Read The Target
 
 Start by reading the target itself.
+Use live GitHub for current target state.
 
 For a PR:
 
 ```bash
-ghr pr view -R openclaw/openclaw <number> --comments
-ghr pr reviews -R openclaw/openclaw <number>
-ghr pr comments -R openclaw/openclaw <number>
+gh pr view <number> --json number,title,state,mergedAt,body,closingIssuesReferences,files,comments,reviews,statusCheckRollup
 ```
 
 For an issue:
 
 ```bash
-ghr issue view -R openclaw/openclaw <number> --comments
-ghr issue comments -R openclaw/openclaw <number>
+gh issue view <number> --json number,title,state,body,comments,closedAt
 ```
 
 Record:
@@ -194,70 +204,56 @@ Record:
 - whether it is open, closed, or merged
 - whether there is already a likely duplicate thread mentioned by humans
 
-## Step 2: Search Broadly With ghreplica
+## Step 2: Search Broadly With Gitcrawl
 
-Use `ghreplica` first because it is the most direct evidence source.
+Use `gitcrawl` first because it is the local OpenClaw history and clustering source.
+Do not switch to broad live GitHub search unless `gitcrawl` is missing data, stale, or failing.
 
-### PR duplicate search
-
-Run all of these when the target is a PR:
-
-```bash
-ghr search related-prs -R openclaw/openclaw <pr-number> --mode path_overlap --state all
-ghr search related-prs -R openclaw/openclaw <pr-number> --mode range_overlap --state all
-ghr search mentions -R openclaw/openclaw --query "<key phrase from title or body>" --mode fts --scope pull_requests --state all
-ghr search mentions -R openclaw/openclaw --query "<subsystem or error phrase>" --mode fts --scope issues --state all
-```
-
-Use `prs-by-paths` or `prs-by-ranges` when the likely duplicate surface is already known:
+Start with the target and nearby threads:
 
 ```bash
-ghr search prs-by-paths -R openclaw/openclaw --path src/example.ts --state all
-ghr search prs-by-ranges -R openclaw/openclaw --path src/example.ts --start 20 --end 80 --state all
+gitcrawl threads openclaw/openclaw --numbers <issue-or-pr-number> --include-closed --json
+gitcrawl neighbors openclaw/openclaw --number <issue-or-pr-number> --limit 20 --json
 ```
 
-### Issue duplicate search
-
-`ghreplica` does not have a special issue-to-issue “related issues” command.
-For issues, search mirrored text and linked PR context instead.
-
-Run targeted text searches:
+Then search key phrases and subsystem terms:
 
 ```bash
-ghr search mentions -R openclaw/openclaw --query "<issue title phrase>" --mode fts --scope issues --state all
-ghr search mentions -R openclaw/openclaw --query "<error message or symptom>" --mode fts --scope issues --state all
-ghr search mentions -R openclaw/openclaw --query "<subsystem phrase>" --mode fts --scope pull_requests --state all
+gitcrawl search openclaw/openclaw --query "<key phrase from title or body>" --mode hybrid --limit 20 --json
+gitcrawl search openclaw/openclaw --query "<subsystem or error phrase>" --mode hybrid --limit 20 --json
 ```
 
-Then inspect the candidate PRs or issues those searches uncover.
-
-## Step 3: Use pr-search-cli As A Hint Layer
-
-Use `pr-search-cli` after `ghreplica`.
-It is good at surfacing candidates quickly, but it is not the final decision-maker.
-Run it through the `pr-search` command.
-
-For a PR:
+Inspect likely clusters:
 
 ```bash
-uvx --from pr-search-cli pr-search -R openclaw/openclaw code similar <pr-number>
-uvx --from pr-search-cli pr-search -R openclaw/openclaw code clusters for-pr <pr-number>
-uvx --from pr-search-cli pr-search -R openclaw/openclaw issues for-pr <pr-number>
-uvx --from pr-search-cli pr-search -R openclaw/openclaw issues duplicate-prs
+gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
 ```
 
-Interpretation:
+For PRs, verify likely code overlap with live file data:
 
-- `code similar` suggests PRs with similar change shape
-- `code clusters for-pr` shows the PR’s nearby code cluster
-- `issues for-pr` shows which issue clusters the PR appears to belong to
-- `issues duplicate-prs` is useful for spotting already-known duplicate PR patterns
+```bash
+gh pr view <candidate-pr> --json number,title,state,mergedAt,files,body,comments,reviews
+```
 
-For an issue:
+For issues, verify likely duplicate issue state and comments live:
 
-- use `ghreplica` first to find candidate PRs or issue wording
-- if the issue has linked PRs or a likely implementation PR, run `pr-search-cli` on those PRs
-- treat issue-cluster output as supporting context, not as enough by itself to call the issue a duplicate
+```bash
+gh issue view <candidate-issue> --json number,title,state,body,comments,closedAt
+```
+
+## Step 3: Use Live GitHub Search For Gaps
+
+Use targeted live GitHub search after `gitcrawl` when:
+
+- the target is too new for the local store
+- comments or reviews matter and the local store lacks them
+- the exact phrase did not appear in local results but the issue/PR is current enough that GitHub should know it
+
+```bash
+gh search prs --repo openclaw/openclaw --match title,body --limit 50 -- "<key phrase>"
+gh search issues --repo openclaw/openclaw --match title,body --limit 50 -- "<key phrase>"
+gh search issues --repo openclaw/openclaw --match comments --limit 50 -- "<error or maintainer phrase>"
+```
 
 ## Step 4: Decide The Outcome
 
@@ -301,6 +297,9 @@ Reuse an existing group when:
 - it represents the same problem
 - it already contains clearly related members
 - adding the target would keep the group coherent
+
+Do not widen an existing group just because `gitcrawl` placed several PRs or issues near each other.
+Confirm that the actual implementation path and maintainer intent still match before adding the new member.
 
 Create a new group only when no existing group clearly fits.
 
@@ -377,6 +376,9 @@ prtags annotation group set <group-id> \
 ```
 
 When the evidence is incomplete, set `duplicate_status=candidate` and lower the confidence.
+
+If a per-PR or per-issue annotation write fails because `prtags` cannot resolve the target, do not force a fallback write path.
+Keep the group state you were able to write, report that the curation backend is still missing the target object, and defer the target-level annotation until `prtags` catches up.
 
 ## Step 8: Let prtags Sync The Group Comment
 

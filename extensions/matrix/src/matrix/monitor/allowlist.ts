@@ -1,3 +1,4 @@
+// Matrix plugin module implements allowlist behavior.
 import {
   resolveAllowlistMatchByCandidates,
   type AllowlistMatch,
@@ -17,17 +18,7 @@ function normalizeMatrixUser(raw?: string | null): string {
   if (!value.startsWith("@") || !value.includes(":")) {
     return normalizeLowercaseStringOrEmpty(value);
   }
-  const withoutAt = value.slice(1);
-  const splitIndex = withoutAt.indexOf(":");
-  if (splitIndex === -1) {
-    return normalizeLowercaseStringOrEmpty(value);
-  }
-  const localpart = normalizeLowercaseStringOrEmpty(withoutAt.slice(0, splitIndex));
-  const server = normalizeLowercaseStringOrEmpty(withoutAt.slice(splitIndex + 1));
-  if (!server) {
-    return normalizeLowercaseStringOrEmpty(value);
-  }
-  return `@${localpart}:${server}`;
+  return value;
 }
 
 export function normalizeMatrixUserId(raw?: string | null): string {
@@ -67,9 +58,7 @@ export function normalizeMatrixAllowList(list?: Array<string | number>) {
   return normalizeAllowList(list).map((entry) => normalizeMatrixAllowListEntry(entry));
 }
 
-export type MatrixAllowListMatch = AllowlistMatch<
-  "wildcard" | "id" | "prefixed-id" | "prefixed-user"
->;
+type MatrixAllowListMatch = AllowlistMatch<"wildcard" | "id" | "prefixed-id" | "prefixed-user">;
 
 type MatrixAllowListMatchSource = NonNullable<MatrixAllowListMatch["matchSource"]>;
 

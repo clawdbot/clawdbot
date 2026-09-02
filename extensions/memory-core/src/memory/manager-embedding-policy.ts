@@ -1,48 +1,16 @@
+// Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-
-type MemoryEmbeddingTextPart = {
-  type: "text";
-  text: string;
-};
-
-type MemoryEmbeddingInlineDataPart = {
-  type: "inline-data";
-  mimeType: string;
-  data: string;
-};
-
-type MemoryEmbeddingInput = {
-  text: string;
-  parts?: Array<MemoryEmbeddingTextPart | MemoryEmbeddingInlineDataPart>;
-};
+import {
+  estimateStructuredEmbeddingInputBytes,
+  estimateUtf8Bytes,
+  type EmbeddingInput,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 
 type MemoryEmbeddingChunk = {
   text: string;
-  embeddingInput?: MemoryEmbeddingInput;
+  embeddingInput?: EmbeddingInput;
 };
-
-function estimateUtf8Bytes(text: string): number {
-  if (!text) {
-    return 0;
-  }
-  return Buffer.byteLength(text, "utf8");
-}
-
-function estimateStructuredEmbeddingInputBytes(input: MemoryEmbeddingInput): number {
-  if (!input.parts?.length) {
-    return estimateUtf8Bytes(input.text);
-  }
-  let total = 0;
-  for (const part of input.parts) {
-    if (part.type === "text") {
-      total += estimateUtf8Bytes(part.text);
-    } else {
-      total += estimateUtf8Bytes(part.mimeType);
-      total += estimateUtf8Bytes(part.data);
-    }
-  }
-  return total;
-}
 
 export function filterNonEmptyMemoryChunks<T extends MemoryEmbeddingChunk>(chunks: T[]): T[] {
   return chunks.filter((chunk) => chunk.text.trim().length > 0);
@@ -80,15 +48,24 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
-export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i.test(
-    message,
-  );
+const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
+  /(rate[_ ]limit|too many requests|\b(?:429|5\d\d)\b|resource has been exhausted|cloudflare|tokens per day)/i;
+
+const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
+  /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
+
+const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
+  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b)/i;
+
+export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
+  return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
 }
 
-export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): boolean {
-  return /(413|payload too large|request too large|input too large|too many tokens|input limit|request size)/i.test(
-    message,
+export function isRetryableMemoryEmbeddingError(message: string): boolean {
+  return (
+    RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message) ||
+    (!isSplittableMemoryEmbeddingBatchError(message) &&
+      RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message))
   );
 }
 
@@ -106,24 +83,58 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
   waitForRetry: (delayMs: number) => Promise<void>;
   maxAttempts: number;
   baseDelayMs: number;
+  /** Caller-owned cancellation; an aborted caller stops the retry loop. */
+  signal?: AbortSignal;
 }): Promise<T> {
-  let attempt = 0;
-  let delayMs = params.baseDelayMs;
-  while (true) {
-    try {
-      return await params.run();
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      if (!params.isRetryable(message) || attempt >= params.maxAttempts) {
-        throw err;
-      }
-      await params.waitForRetry(delayMs);
-      delayMs *= 2;
-      attempt += 1;
+  return await retryAsync(params.run, {
+    attempts: params.maxAttempts,
+    minDelayMs: params.baseDelayMs,
+    maxDelayMs: Number.MAX_SAFE_INTEGER,
+    // Caller cancellation wins even when its timeout resembles a retryable
+    // provider error; otherwise abandoned searches start another request.
+    shouldRetry: (err) => !params.signal?.aborted && params.isRetryable(formatErrorMessage(err)),
+    sleep: params.waitForRetry,
+  });
+}
+
+export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
+  items: TInput[];
+  run: (items: TInput[]) => Promise<TOutput[]>;
+  isRetryable: (message: string) => boolean;
+  isSplittable: (message: string) => boolean;
+  waitForRetry: (delayMs: number) => Promise<void>;
+  maxAttempts: number;
+  baseDelayMs: number;
+  onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
+}): Promise<TOutput[]> {
+  try {
+    return await runMemoryEmbeddingRetryLoop({
+      run: async () => await params.run(params.items),
+      isRetryable: params.isRetryable,
+      waitForRetry: params.waitForRetry,
+      maxAttempts: params.maxAttempts,
+      baseDelayMs: params.baseDelayMs,
+    });
+  } catch (err) {
+    const message = formatErrorMessage(err);
+    if (params.items.length <= 1 || !params.isSplittable(message)) {
+      throw err;
     }
+
+    const splitAt = Math.ceil(params.items.length / 2);
+    params.onSplit?.({ itemCount: params.items.length, splitAt, message });
+    const left = await runMemoryEmbeddingBatchRetryWithSplit({
+      ...params,
+      items: params.items.slice(0, splitAt),
+    });
+    const right = await runMemoryEmbeddingBatchRetryWithSplit({
+      ...params,
+      items: params.items.slice(splitAt),
+    });
+    return [...left, ...right];
   }
 }
 
-export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): MemoryEmbeddingInput[] {
+export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): EmbeddingInput[] {
   return chunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
 }

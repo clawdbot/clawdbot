@@ -1,8 +1,35 @@
-import { requiresExecApproval, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
+/** Evaluates node-host exec policy from security, approval, and allowlist context. */
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  requiresExecApproval,
+  resolveExecModePolicy,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../infra/exec-approvals.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | null;
+/** One config owner for system.run and plugin-hosted execution. */
+export function resolveNodeExecConfigPolicy(params: {
+  cfg: OpenClawConfig;
+  agentId: string | undefined;
+  defaultSecurity: ExecSecurity;
+  defaultAsk: ExecAsk;
+}) {
+  const agentExec = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec
+    : undefined;
+  const globalExec = params.cfg.tools?.exec;
+  const layered = applyExecPolicyLayer(
+    applyExecPolicyLayer({ security: params.defaultSecurity, ask: params.defaultAsk }, globalExec),
+    agentExec,
+  );
+  return { agentExec, globalExec, ...resolveExecModePolicy(layered) };
+}
 
-export type SystemRunPolicyDecision = {
+type ExecApprovalDecision = "allow-once" | "allow-always" | null;
+
+type SystemRunPolicyDecision = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   shellWrapperBlocked: boolean;
@@ -21,6 +48,7 @@ export type SystemRunPolicyDecision = {
     }
 );
 
+/** Normalizes raw approval decisions from node-host payloads. */
 export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecision {
   if (value === "allow-once" || value === "allow-always") {
     return value;
@@ -28,8 +56,7 @@ export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecisio
   return null;
 }
 
-export function formatSystemRunAllowlistMissMessage(params?: {
-  shellWrapperBlocked?: boolean;
+function formatSystemRunAllowlistMissMessage(params?: {
   windowsShellWrapperBlocked?: boolean;
 }): string {
   if (params?.windowsShellWrapperBlocked) {
@@ -39,16 +66,10 @@ export function formatSystemRunAllowlistMissMessage(params?: {
       "approve once/always or run with --ask on-miss|always)"
     );
   }
-  if (params?.shellWrapperBlocked) {
-    return (
-      "SYSTEM_RUN_DENIED: allowlist miss " +
-      "(shell wrappers like sh/bash/zsh -c require approval; " +
-      "approve once/always or run with --ask on-miss|always)"
-    );
-  }
   return "SYSTEM_RUN_DENIED: allowlist miss";
 }
 
+/** Combines exec security, allowlist analysis, and approval state into an allow/deny decision. */
 export function evaluateSystemRunPolicy(params: {
   security: ExecSecurity;
   ask: ExecAsk;
@@ -129,7 +150,6 @@ export function evaluateSystemRunPolicy(params: {
       allowed: false,
       eventReason: "allowlist-miss",
       errorMessage: formatSystemRunAllowlistMissMessage({
-        shellWrapperBlocked,
         windowsShellWrapperBlocked,
       }),
       analysisOk,

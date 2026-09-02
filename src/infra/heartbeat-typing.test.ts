@@ -1,3 +1,4 @@
+// Covers heartbeat typing callback cadence and gating.
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -31,8 +32,10 @@ describe("createHeartbeatTypingCallbacks", () => {
         plugin,
       });
 
-      expect(callbacks).toBeDefined();
-      await callbacks?.onReplyStart();
+      if (callbacks === undefined) {
+        throw new Error("expected heartbeat typing callbacks for telegram target");
+      }
+      await callbacks.onReplyStart();
       expect(sendTyping).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(5_999);

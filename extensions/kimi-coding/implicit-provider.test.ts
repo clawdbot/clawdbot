@@ -1,5 +1,6 @@
+// Kimi Coding tests cover implicit provider plugin behavior.
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 
 async function runKimiCatalog(params: {
@@ -47,38 +48,88 @@ describe("Kimi implicit provider (#22409)", () => {
   it("publishes the Kimi provider when an API key is resolved", async () => {
     const provider = await runKimiCatalogProvider({ apiKey: "test-key" });
 
-    expect(provider).toMatchObject({
-      apiKey: "test-key",
+    expect(provider).toEqual({
       baseUrl: "https://api.kimi.com/coding/",
       api: "anthropic-messages",
+      headers: {
+        "User-Agent": "claude-code/0.1.0",
+      },
+      // Credential-aware catalog assembly may prioritize the configured default.
+      models: expect.arrayContaining([
+        {
+          id: "kimi-for-coding",
+          name: "Kimi Code",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 32768,
+        },
+        {
+          id: "kimi-for-coding-highspeed",
+          name: "Kimi K2.7 Code HighSpeed",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 32768,
+        },
+        {
+          id: "k3",
+          name: "Kimi K3",
+          reasoning: true,
+          thinkingLevelMap: {
+            off: null,
+            minimal: "low",
+            low: "low",
+            medium: "high",
+            high: "high",
+            xhigh: "max",
+            max: "max",
+          },
+          input: ["text", "image"],
+          compat: { codeMode: "preferred" },
+          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+          contextWindow: 1048576,
+          maxTokens: 131072,
+        },
+        {
+          id: "k3-256k",
+          name: "Kimi K3 (256k)",
+          reasoning: true,
+          thinkingLevelMap: {
+            off: null,
+            minimal: "low",
+            low: "low",
+            medium: "high",
+            high: "high",
+            xhigh: "max",
+            max: "max",
+          },
+          input: ["text", "image"],
+          compat: { codeMode: "preferred" },
+          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 131072,
+        },
+      ]),
+      apiKey: "test-key",
     });
+    expect(provider.models).toHaveLength(4);
   });
 
-  it("uses explicit legacy kimi-coding baseUrl when provided", async () => {
+  it("ignores retired kimi-coding provider overrides", async () => {
     const provider = await runKimiCatalogProvider({
       apiKey: "test-key",
       explicitProvider: {
         baseUrl: "https://kimi.example.test/coding/",
-      },
-    });
-
-    expect(provider.baseUrl).toBe("https://kimi.example.test/coding/");
-  });
-
-  it("merges explicit legacy kimi-coding headers on top of the built-in user agent", async () => {
-    const provider = await runKimiCatalogProvider({
-      apiKey: "test-key",
-      explicitProvider: {
         headers: {
           "User-Agent": "custom-kimi-client/1.0",
-          "X-Kimi-Tenant": "tenant-a",
         },
       },
     });
 
-    expect(provider.headers).toEqual({
-      "User-Agent": "custom-kimi-client/1.0",
-      "X-Kimi-Tenant": "tenant-a",
-    });
+    expect(provider.baseUrl).toBe("https://api.kimi.com/coding/");
+    expect(provider.headers).toEqual({ "User-Agent": "claude-code/0.1.0" });
   });
 });

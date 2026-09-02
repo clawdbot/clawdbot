@@ -1,36 +1,50 @@
+// Internal task registry facade used by runtime modules without exposing public SDK surface.
+import {
+  ensureTaskFlowRegistryReady,
+  reloadTaskFlowRegistryFromStore,
+} from "./task-flow-runtime-internal.js";
+import {
+  ensureTaskRegistryReady as ensureTaskRegistryReadyInternal,
+  reloadTaskRegistryFromStore as reloadTaskRegistryFromStoreInternal,
+} from "./task-registry.js";
+
+export function ensureTaskRuntimeStateReady(): void {
+  ensureTaskFlowRegistryReady();
+  ensureTaskRegistryReadyInternal();
+}
+
+export function reloadTaskRuntimeStateFromStore(): void {
+  reloadTaskFlowRegistryFromStore();
+  reloadTaskRegistryFromStoreInternal();
+}
+
 export {
+  assertTaskCancellationReadyById,
   cancelTaskById,
   createTaskRecord,
   deleteTaskRecordById,
   ensureTaskRegistryReady,
-  resetTaskRegistryControlRuntimeForTests,
-  findLatestTaskForOwnerKey,
-  findLatestTaskForFlowId,
-  findLatestTaskForRelatedSessionKey,
   findTaskByRunId,
+  finalizeTaskRecordByRunId,
   getTaskById,
-  getTaskRegistrySnapshot,
-  getTaskRegistrySummary,
+  hasActiveTaskForChildSessionKey,
+  listFreshTasksForOwnerKey,
+  listTaskRecordPage,
   listTaskRecords,
+  listTaskRecordsUnsorted,
   listTasksForFlowId,
   listTasksForOwnerKey,
-  listTasksForRelatedSessionKey,
   linkTaskToFlowById,
   markTaskLostById,
   markTaskRunningByRunId,
   markTaskTerminalById,
-  markTaskTerminalByRunId,
   maybeDeliverTaskTerminalUpdate,
+  publishTaskRecordAfterAtomicStore,
   recordTaskProgressByRunId,
-  resetTaskRegistryDeliveryRuntimeForTests,
   resolveTaskForLookupToken,
-  resetTaskRegistryForTests,
   isParentFlowLinkError,
-  setTaskRegistryControlRuntimeForTests,
-  setTaskRegistryDeliveryRuntimeForTests,
   setTaskCleanupAfterById,
-  setTaskProgressById,
   setTaskRunDeliveryStatusByRunId,
-  setTaskTimingById,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
+export type { TaskRecord } from "./task-registry.types.js";

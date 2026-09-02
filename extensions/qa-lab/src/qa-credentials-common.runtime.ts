@@ -1,5 +1,9 @@
+// Qa Lab plugin module implements qa credentials common behavior.
+import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+
 export const QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
-export const QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_HTTP";
+const QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_HTTP";
 
 type ErrorFactory = (message: string) => Error;
 
@@ -11,15 +15,15 @@ export function parseQaCredentialPositiveIntegerEnv(params: {
   env: NodeJS.ProcessEnv;
   fallback: number;
   key: string;
-  toError?: ErrorFactory;
+  createError?: ErrorFactory;
 }): number {
   const raw = params.env[params.key]?.trim();
   if (!raw) {
     return params.fallback;
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
-    throw (params.toError ?? makeError)(`${params.key} must be a positive integer.`);
+  const value = parseStrictPositiveInteger(raw);
+  if (value === undefined) {
+    throw (params.createError ?? makeError)(`${params.key} must be a positive integer.`);
   }
   return value;
 }
@@ -29,21 +33,17 @@ export function isQaCredentialTruthyOptIn(value: string | undefined) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-function isQaCredentialLoopbackHostname(hostname: string) {
-  return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
-}
-
 export function normalizeQaCredentialConvexSiteUrl(params: {
   env: NodeJS.ProcessEnv;
   raw: string;
-  toError?: ErrorFactory;
+  createError?: ErrorFactory;
 }): string {
-  const toError = params.toError ?? makeError;
+  const createError = params.createError ?? makeError;
   let url: URL;
   try {
     url = new URL(params.raw);
   } catch {
-    throw toError(
+    throw createError(
       `OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL, got "${params.raw || "<empty>"}".`,
     );
   }
@@ -52,13 +52,13 @@ export function normalizeQaCredentialConvexSiteUrl(params: {
     return text.endsWith("/") ? text.slice(0, -1) : text;
   }
   if (url.protocol !== "http:") {
-    throw toError("OPENCLAW_QA_CONVEX_SITE_URL must use https://.");
+    throw createError("OPENCLAW_QA_CONVEX_SITE_URL must use https://.");
   }
   const allowInsecureHttp = isQaCredentialTruthyOptIn(
     params.env[QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY],
   );
-  if (!allowInsecureHttp || !isQaCredentialLoopbackHostname(url.hostname)) {
-    throw toError(
+  if (!allowInsecureHttp || !isLoopbackHost(url.hostname)) {
+    throw createError(
       `OPENCLAW_QA_CONVEX_SITE_URL must use https://. http:// is only allowed for loopback hosts when ${QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY}=1.`,
     );
   }
@@ -70,7 +70,7 @@ export function normalizeQaCredentialEndpointPrefix(params: {
   fallback?: string;
   invalidAbsoluteMessage: string;
   invalidSegmentsMessage: string;
-  toError?: ErrorFactory;
+  createError?: ErrorFactory;
   value: string | undefined;
 }): string {
   const trimmed = params.value?.trim();
@@ -79,12 +79,12 @@ export function normalizeQaCredentialEndpointPrefix(params: {
   }
   const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   const normalized = prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-  const toError = params.toError ?? makeError;
+  const createError = params.createError ?? makeError;
   if (!normalized.startsWith("/") || normalized.startsWith("//")) {
-    throw toError(params.invalidAbsoluteMessage);
+    throw createError(params.invalidAbsoluteMessage);
   }
   if (normalized.includes("\\") || normalized.split("/").some((segment) => segment === "..")) {
-    throw toError(params.invalidSegmentsMessage);
+    throw createError(params.invalidSegmentsMessage);
   }
   return normalized;
 }

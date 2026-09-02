@@ -1,3 +1,4 @@
+// Discord plugin module implements channel access behavior.
 function readDiscordChannelPropertySafe(channel: unknown, key: string): unknown {
   if (!channel || typeof channel !== "object") {
     return undefined;
@@ -28,7 +29,35 @@ function resolveDiscordChannelNumberPropertySafe(
   return typeof value === "number" ? value : undefined;
 }
 
-export type DiscordChannelInfoSafe = {
+const DISCORD_CHANNEL_SNAKE_CASE_ALIASES: Record<string, string> = {
+  ownerId: "owner_id",
+  parentId: "parent_id",
+};
+
+function resolveDiscordChannelStringWithAliasSafe(
+  channel: unknown,
+  camelKey: string,
+): string | undefined {
+  const camelValue = resolveDiscordChannelStringPropertySafe(channel, camelKey);
+  if (camelValue !== undefined) {
+    return camelValue;
+  }
+
+  const snakeKey = DISCORD_CHANNEL_SNAKE_CASE_ALIASES[camelKey];
+  if (!snakeKey) {
+    return undefined;
+  }
+
+  const directSnakeValue = resolveDiscordChannelStringPropertySafe(channel, snakeKey);
+  if (directSnakeValue !== undefined) {
+    return directSnakeValue;
+  }
+
+  const rawData = readDiscordChannelPropertySafe(channel, "rawData");
+  return resolveDiscordChannelStringPropertySafe(rawData, snakeKey);
+}
+
+type DiscordChannelInfoSafe = {
   name?: string;
   topic?: string;
   type?: number;
@@ -41,22 +70,34 @@ export function resolveDiscordChannelNameSafe(channel: unknown): string | undefi
   return resolveDiscordChannelStringPropertySafe(channel, "name");
 }
 
+export function resolveDiscordChannelIdSafe(channel: unknown): string | undefined {
+  return resolveDiscordChannelStringPropertySafe(channel, "id");
+}
+
 export function resolveDiscordChannelTopicSafe(channel: unknown): string | undefined {
   return resolveDiscordChannelStringPropertySafe(channel, "topic");
 }
 
 export function resolveDiscordChannelParentIdSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringPropertySafe(channel, "parentId");
+  return resolveDiscordChannelStringWithAliasSafe(channel, "parentId");
+}
+
+function resolveDiscordChannelOwnerIdSafe(channel: unknown): string | undefined {
+  return resolveDiscordChannelStringWithAliasSafe(channel, "ownerId");
+}
+
+export function resolveDiscordChannelParentSafe(channel: unknown): unknown {
+  return readDiscordChannelPropertySafe(channel, "parent");
 }
 
 export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelInfoSafe {
-  const parent = readDiscordChannelPropertySafe(channel, "parent");
+  const parent = resolveDiscordChannelParentSafe(channel);
   return {
     name: resolveDiscordChannelNameSafe(channel),
     topic: resolveDiscordChannelTopicSafe(channel),
     type: resolveDiscordChannelNumberPropertySafe(channel, "type"),
-    parentId: resolveDiscordChannelStringPropertySafe(channel, "parentId"),
-    ownerId: resolveDiscordChannelStringPropertySafe(channel, "ownerId"),
+    parentId: resolveDiscordChannelParentIdSafe(channel),
+    ownerId: resolveDiscordChannelOwnerIdSafe(channel),
     parentName: resolveDiscordChannelNameSafe(parent),
   };
 }

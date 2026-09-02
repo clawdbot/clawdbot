@@ -1,7 +1,7 @@
+// Discord plugin module implements interactive dispatch behavior.
 import type { ChannelStructuredComponents } from "openclaw/plugin-sdk/channel-contract";
 import {
-  createInteractiveConversationBindingHelpers,
-  dispatchPluginInteractiveHandler,
+  createChannelInteractiveDispatcher,
   type PluginConversationBinding,
   type PluginConversationBindingRequestParams,
   type PluginConversationBindingRequestResult,
@@ -51,54 +51,24 @@ export type DiscordInteractiveHandlerRegistration = PluginInteractiveRegistratio
   "discord"
 >;
 
-export type DiscordInteractiveDispatchContext = Omit<
-  DiscordInteractiveHandlerContext,
-  | "interaction"
-  | "respond"
-  | "channel"
-  | "requestConversationBinding"
-  | "detachConversationBinding"
-  | "getCurrentConversationBinding"
-> & {
-  interaction: Omit<
-    DiscordInteractiveHandlerContext["interaction"],
-    "data" | "namespace" | "payload"
-  >;
-};
+const dispatchDiscordInteractive = createChannelInteractiveDispatcher<
+  "discord",
+  "interaction",
+  DiscordInteractiveHandlerContext
+>({
+  channel: "discord",
+  interactiveKey: "interaction",
+});
 
 export async function dispatchDiscordPluginInteractiveHandler(params: {
   data: string;
   interactionId: string;
-  ctx: DiscordInteractiveDispatchContext;
+  ctx: Parameters<typeof dispatchDiscordInteractive>[0]["ctx"];
   respond: DiscordInteractiveHandlerContext["respond"];
   onMatched?: () => Promise<void> | void;
 }) {
-  return await dispatchPluginInteractiveHandler<DiscordInteractiveHandlerRegistration>({
-    channel: "discord",
-    data: params.data,
+  return await dispatchDiscordInteractive({
+    ...params,
     dedupeId: params.interactionId,
-    onMatched: params.onMatched,
-    invoke: ({ registration, namespace, payload }) =>
-      registration.handler({
-        ...params.ctx,
-        channel: "discord",
-        interaction: {
-          ...params.ctx.interaction,
-          data: params.data,
-          namespace,
-          payload,
-        },
-        respond: params.respond,
-        ...createInteractiveConversationBindingHelpers({
-          registration,
-          senderId: params.ctx.senderId,
-          conversation: {
-            channel: "discord",
-            accountId: params.ctx.accountId,
-            conversationId: params.ctx.conversationId,
-            parentConversationId: params.ctx.parentConversationId,
-          },
-        }),
-      }),
   });
 }

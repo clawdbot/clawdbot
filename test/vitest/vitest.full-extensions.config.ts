@@ -1,3 +1,4 @@
+// Vitest full extensions config wires the full extensions test shard.
 import { createProjectShardVitestConfig } from "./vitest.project-shard-config.ts";
 import { fullSuiteVitestShards } from "./vitest.test-shards.mjs";
 

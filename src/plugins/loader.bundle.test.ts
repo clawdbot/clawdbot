@@ -1,3 +1,4 @@
+/** Verifies bundle manifest loading and bundled plugin runtime resolution. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -6,7 +7,7 @@ import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   loadBundleFixture,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
@@ -36,8 +37,8 @@ afterAll(() => {
 describe("bundle plugins", () => {
   it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
     useNoBundledPlugins();
-    const workspaceDir = makeTempDir();
-    const stateDir = makeTempDir();
+    const workspaceDir = makePluginLoaderTempDir();
+    const stateDir = makePluginLoaderTempDir();
     const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
     mkdirSafe(path.join(bundleRoot, ".codex-plugin"));
     mkdirSafe(path.join(bundleRoot, "skills"));
@@ -153,12 +154,12 @@ describe("bundle plugins", () => {
 
     expect(plugin?.status).toBe("loaded");
     expect(plugin?.bundleFormat).toBe(expectedFormat);
-    expect(plugin?.bundleCapabilities).toEqual(expect.arrayContaining(expectedCapabilities));
+    expect(plugin?.bundleCapabilities).toEqual(expectedCapabilities);
     expectNoUnwiredBundleDiagnostic(registry, pluginId);
   });
 
-  it("warns when bundle MCP only declares unsupported non-stdio transports", () => {
-    const stateDir = makeTempDir();
+  it("accepts bundle HTTP MCP and warns only for incomplete configs", () => {
+    const stateDir = makePluginLoaderTempDir();
     const registry = loadBundleFixture({
       pluginId: "claude-mcp-url",
       env: {
@@ -178,7 +179,11 @@ describe("bundle plugins", () => {
           JSON.stringify({
             mcpServers: {
               remoteProbe: {
+                transport: "streamable-http",
                 url: "http://127.0.0.1:8787/mcp",
+              },
+              incompleteProbe: {
+                transport: "streamable-http",
               },
             },
           }),
@@ -189,14 +194,19 @@ describe("bundle plugins", () => {
 
     const plugin = registry.plugins.find((entry) => entry.id === "claude-mcp-url");
     expect(plugin?.status).toBe("loaded");
-    expect(plugin?.bundleCapabilities).toEqual(expect.arrayContaining(["mcpServers"]));
+    expect(plugin?.bundleCapabilities).toEqual(["mcpServers"]);
     expect(
       registry.diagnostics.some(
         (diag) =>
           diag.pluginId === "claude-mcp-url" &&
-          diag.message.includes("stdio only today") &&
-          diag.message.includes("remoteProbe"),
+          diag.message.includes("unsupported transports or incomplete configs") &&
+          diag.message.includes("incompleteProbe"),
       ),
     ).toBe(true);
+    expect(
+      registry.diagnostics.some(
+        (diag) => diag.pluginId === "claude-mcp-url" && diag.message.includes("remoteProbe"),
+      ),
+    ).toBe(false);
   });
 });

@@ -1,21 +1,17 @@
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+// Browser tests cover cdp.internal plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import { type WebSocket, WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
+import { WebSocketServer } from "ws";
+import "../test-support/browser-security.mock.js";
 import {
   type AriaSnapshotNode,
   captureScreenshot,
-  captureScreenshotPng,
   createTargetViaCdp,
-  type DomSnapshotNode,
-  evaluateJavaScript,
   formatAriaSnapshot,
-  getDomText,
   normalizeCdpWsUrl,
-  type QueryMatch,
-  querySelector,
   type RawAXNode,
   snapshotAria,
-  snapshotDom,
+  snapshotRoleViaCdp,
 } from "./cdp.js";
 
 /**
@@ -24,50 +20,69 @@ import {
  * keyed on method, keeping individual tests short.
  */
 
-type CdpReplyHandler = (
-  msg: { id?: number; method?: string; params?: Record<string, unknown> },
-  socket: WebSocket,
-) => void;
-type CdpMockMessage = Parameters<CdpReplyHandler>[0];
+type CdpMockMessage = {
+  id?: number;
+  method?: string;
+  params?: Record<string, unknown>;
+};
+type CdpMockReply = { result: Record<string, unknown> } | { error: { message: string } };
+type CdpReplyHandler = (msg: CdpMockMessage) => CdpMockReply | undefined;
 
-function sendCdpResult(socket: WebSocket, id: number | undefined, result: Record<string, unknown>) {
-  socket.send(JSON.stringify({ id, result }));
+const AUTO_REPLY_METHODS = new Set([
+  "Page.enable",
+  "Page.bringToFront",
+  "Runtime.enable",
+  "Network.enable",
+  "DOM.enable",
+  "Accessibility.enable",
+  "Runtime.runIfWaitingForDebugger",
+]);
+
+function cdpResult(result: Record<string, unknown> = {}): CdpMockReply {
+  return { result };
 }
 
-function replyToPageEnable(msg: CdpMockMessage, socket: WebSocket): boolean {
-  if (msg.method !== "Page.enable") {
-    return false;
+function cdpError(message: string): CdpMockReply {
+  return { error: { message } };
+}
+
+function screenshotResult(data: string): CdpMockReply {
+  return cdpResult({ data: Buffer.from(data).toString("base64") });
+}
+
+function runtimeValueResult(value: unknown): CdpMockReply {
+  return cdpResult({ result: { value } });
+}
+
+function axTreeResult(nodes?: RawAXNode[]): CdpMockReply {
+  return cdpResult(nodes ? { nodes } : {});
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
   }
-  sendCdpResult(socket, msg.id, {});
-  return true;
+  return count;
 }
 
-function replyWithScreenshotData(msg: CdpMockMessage, socket: WebSocket, data: string): boolean {
-  if (msg.method !== "Page.captureScreenshot") {
-    return false;
-  }
-  sendCdpResult(socket, msg.id, { data: Buffer.from(data).toString("base64") });
-  return true;
-}
-
-function replyToViewportCommandOrScreenshot(
-  msg: CdpMockMessage,
-  socket: WebSocket,
-  data: string,
-): boolean {
+function replyToViewportCommandOrScreenshot(msg: CdpMockMessage, data: string) {
   if (
     msg.method === "Emulation.setDeviceMetricsOverride" ||
     msg.method === "Emulation.clearDeviceMetricsOverride"
   ) {
-    sendCdpResult(socket, msg.id, {});
-    return true;
+    return cdpResult();
   }
-  return replyWithScreenshotData(msg, socket, data);
+  return msg.method === "Page.captureScreenshot" ? screenshotResult(data) : undefined;
 }
 
 async function startMockWsServer(handle: CdpReplyHandler) {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-  await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+  await new Promise<void>((resolve) => {
+    wss.once("listening", () => resolve());
+  });
   const port = (wss.address() as { port: number }).port;
   wss.on("connection", (socket) => {
     socket.on("message", (raw) => {
@@ -76,7 +91,10 @@ async function startMockWsServer(handle: CdpReplyHandler) {
         method?: string;
         params?: Record<string, unknown>;
       };
-      handle(msg, socket);
+      const reply = handle(msg) ?? (AUTO_REPLY_METHODS.has(msg.method ?? "") ? cdpResult() : null);
+      if (reply) {
+        socket.send(JSON.stringify({ id: msg.id, ...reply }));
+      }
     });
   });
   return {
@@ -91,7 +109,9 @@ describe("cdp internal", () => {
 
   afterEach(async () => {
     if (wss) {
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
   });
@@ -100,14 +120,12 @@ describe("cdp internal", () => {
     options: Omit<Parameters<typeof captureScreenshot>[0], "wsUrl">,
   ) {
     const observed: Array<Record<string, unknown>> = [];
-    const server = await startMockWsServer((msg, socket) => {
-      if (replyToPageEnable(msg, socket)) {
-        return;
-      }
+    const server = await startMockWsServer((msg) => {
       if (msg.method === "Page.captureScreenshot") {
         observed.push(msg.params ?? {});
-        replyWithScreenshotData(msg, socket, "JPG");
+        return screenshotResult("JPG");
       }
+      return undefined;
     });
     wss = server.wss;
     const buf = await captureScreenshot({ wsUrl: server.wsUrl, ...options });
@@ -116,45 +134,17 @@ describe("cdp internal", () => {
 
   describe("captureScreenshot", () => {
     it("captures a PNG without fullPage", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Page.captureScreenshot") {
-          expect(msg.params).toMatchObject({ format: "png", captureBeyondViewport: true });
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("PNGDATA").toString("base64") },
-            }),
-          );
+          expect(msg.params?.format).toBe("png");
+          expect(msg.params).not.toHaveProperty("captureBeyondViewport");
+          return screenshotResult("PNGDATA");
         }
+        return undefined;
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl });
       expect(buf.toString("utf8")).toBe("PNGDATA");
-    });
-
-    it("captureScreenshotPng forwards to the png captureScreenshot flow", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          expect(msg.params?.format).toBe("png");
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("WRAPPED").toString("base64") },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const buf = await captureScreenshotPng({ wsUrl: server.wsUrl });
-      expect(buf.toString("utf8")).toBe("WRAPPED");
     });
 
     it("clamps out-of-range JPEG quality values into [0, 100]", async () => {
@@ -168,41 +158,23 @@ describe("cdp internal", () => {
 
     it("captures fullPage and restores viewport overrides", async () => {
       const events: string[] = [];
-      const server = await startMockWsServer((msg, socket) => {
+      const server = await startMockWsServer((msg) => {
         events.push(msg.method ?? "");
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
         if (msg.method === "Page.getLayoutMetrics") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { cssContentSize: { width: 2000, height: 3000 } },
-            }),
-          );
-          return;
+          return cdpResult({ cssContentSize: { width: 2000, height: 3000 } });
         }
         if (msg.method === "Runtime.evaluate") {
           // Pre-capture viewport probe + post-capture probe.
-          const isPre = events.filter((m) => m === "Runtime.evaluate").length === 1;
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: {
-                result: {
-                  value: isPre
-                    ? { w: 800, h: 600, dpr: 2, sw: 1600, sh: 1200 }
-                    : { w: 2000, h: 3000, dpr: 2 },
-                },
-              },
-            }),
-          );
-          return;
+          const isPre = countMatching(events, (m) => m === "Runtime.evaluate") === 1;
+          return cdpResult({
+            result: {
+              value: isPre
+                ? { w: 800, h: 600, dpr: 2, sw: 1600, sh: 1200 }
+                : { w: 2000, h: 3000, dpr: 2 },
+            },
+          });
         }
-        if (replyToViewportCommandOrScreenshot(msg, socket, "FULL")) {
-          return;
-        }
+        return replyToViewportCommandOrScreenshot(msg, "FULL");
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
@@ -215,54 +187,32 @@ describe("cdp internal", () => {
       // Post probe returns a different dpr than saved → helper reapplies.
       const calls: Array<Record<string, unknown>> = [];
       let evalCount = 0;
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Page.getLayoutMetrics") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { contentSize: { width: 1200, height: 800 } },
-            }),
-          );
-          return;
+          return cdpResult({ contentSize: { width: 1200, height: 800 } });
         }
         if (msg.method === "Runtime.evaluate") {
           evalCount += 1;
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: {
-                result: {
-                  value:
-                    evalCount === 1
-                      ? { w: 400, h: 300, dpr: 1, sw: 800, sh: 600 }
-                      : { w: 9999, h: 9999, dpr: 9 },
-                },
-              },
-            }),
-          );
-          return;
+          return cdpResult({
+            result: {
+              value:
+                evalCount === 1
+                  ? { w: 400, h: 300, dpr: 1, sw: 800, sh: 600 }
+                  : { w: 9999, h: 9999, dpr: 9 },
+            },
+          });
         }
         if (msg.method === "Emulation.setDeviceMetricsOverride") {
           calls.push(msg.params ?? {});
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
+          return cdpResult();
         }
         if (msg.method === "Emulation.clearDeviceMetricsOverride") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
+          return cdpResult();
         }
         if (msg.method === "Page.captureScreenshot") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("PIC").toString("base64") },
-            }),
-          );
+          return screenshotResult("PIC");
         }
+        return undefined;
       });
       wss = server.wss;
       await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
@@ -271,28 +221,14 @@ describe("cdp internal", () => {
     });
 
     it("skips viewport expansion when content size is zero", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Page.getLayoutMetrics") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { cssContentSize: { width: 0, height: 0 } },
-            }),
-          );
-          return;
+          return cdpResult({ cssContentSize: { width: 0, height: 0 } });
         }
         if (msg.method === "Page.captureScreenshot") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("Z").toString("base64") },
-            }),
-          );
+          return screenshotResult("Z");
         }
+        return undefined;
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
@@ -300,14 +236,11 @@ describe("cdp internal", () => {
     });
 
     it("throws when Page.captureScreenshot returns no data", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Page.captureScreenshot") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return cdpResult();
         }
+        return undefined;
       });
       wss = server.wss;
       await expect(captureScreenshot({ wsUrl: server.wsUrl })).rejects.toThrow(
@@ -318,10 +251,11 @@ describe("cdp internal", () => {
 
   describe("createTargetViaCdp", () => {
     it("throws when Target.createTarget returns no targetId", async () => {
-      const server = await startMockWsServer((msg, socket) => {
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Target.createTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: { targetId: "" } }));
+          return cdpResult({ targetId: "" });
         }
+        return undefined;
       });
       wss = server.wss;
       await expect(
@@ -330,55 +264,14 @@ describe("cdp internal", () => {
     });
   });
 
-  describe("evaluateJavaScript", () => {
-    it("throws when Runtime.evaluate returns no result", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-        }
-      });
-      wss = server.wss;
-      await expect(evaluateJavaScript({ wsUrl: server.wsUrl, expression: "1" })).rejects.toThrow(
-        /Runtime\.evaluate returned no result/,
-      );
-    });
-
-    it("surfaces CDP exceptionDetails alongside result", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: {
-                result: { type: "undefined" },
-                exceptionDetails: { text: "ReferenceError", lineNumber: 1 },
-              },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const res = await evaluateJavaScript({ wsUrl: server.wsUrl, expression: "boom" });
-      expect(res.exceptionDetails?.text).toBe("ReferenceError");
-    });
-  });
-
   describe("formatAriaSnapshot", () => {
     it("returns an empty array when the AX tree is empty", () => {
-      expect(formatAriaSnapshot([], 100)).toEqual([]);
+      expect(formatAriaSnapshot([], 100)).toStrictEqual([]);
     });
 
     it("returns an empty array when no node has an id", () => {
       const nodes = [{ role: { value: "Role" }, name: { value: "" } }] as unknown as RawAXNode[];
-      expect(formatAriaSnapshot(nodes, 100)).toEqual([]);
+      expect(formatAriaSnapshot(nodes, 100)).toStrictEqual([]);
     });
 
     it("skips child references that are absent from the node map", () => {
@@ -431,27 +324,39 @@ describe("cdp internal", () => {
       const out = formatAriaSnapshot(nodes, 3);
       expect(out).toHaveLength(3);
     });
+
+    it("returns nodes when snapshotAria receives a non-finite limit", async () => {
+      const server = await startMockWsServer((msg) => {
+        if (msg.method === "Accessibility.getFullAXTree") {
+          return axTreeResult([
+            {
+              nodeId: "1",
+              role: { value: "RootWebArea" },
+              name: { value: "Home" },
+              childIds: [],
+            },
+          ]);
+        }
+        return undefined;
+      });
+      wss = server.wss;
+
+      const snap = await snapshotAria({ wsUrl: server.wsUrl, limit: Number.NaN });
+
+      expect(snap.nodes).toHaveLength(1);
+      expect(snap.nodes[0]?.role).toBe("RootWebArea");
+    });
   });
 
   describe("snapshotAria", () => {
     it("forwards the happy-path tree to formatAriaSnapshot", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Accessibility.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Accessibility.getFullAXTree") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: {
-                nodes: [
-                  { nodeId: "1", role: { value: "Root" }, name: { value: "" }, childIds: [] },
-                ],
-              },
-            }),
-          );
+          return axTreeResult([
+            { nodeId: "1", role: { value: "Root" }, name: { value: "" }, childIds: [] },
+          ]);
         }
+        return undefined;
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl, limit: 50 });
@@ -459,192 +364,228 @@ describe("cdp internal", () => {
     });
 
     it("returns an empty list when the server omits nodes", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Accessibility.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Accessibility.getFullAXTree") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return axTreeResult();
         }
+        return undefined;
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
   });
 
-  describe("snapshotDom", () => {
-    it("returns the nodes array from the evaluated expression", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
+  describe("snapshotRoleViaCdp", () => {
+    it("keeps zero-based indexes on duplicate role refs", async () => {
+      const server = await startMockWsServer((msg) => {
+        if (msg.method === "Accessibility.getFullAXTree") {
+          return axTreeResult([
+            {
+              nodeId: "1",
+              role: { value: "RootWebArea" },
+              name: { value: "" },
+              childIds: ["2", "3"],
+            },
+            {
+              nodeId: "2",
+              role: { value: "button" },
+              name: { value: "Save" },
+              childIds: [],
+            },
+            {
+              nodeId: "3",
+              role: { value: "button" },
+              name: { value: "Save" },
+              childIds: [],
+            },
+          ]);
         }
         if (msg.method === "Runtime.evaluate") {
-          const fake: DomSnapshotNode[] = [{ ref: "n1", parentRef: null, depth: 0, tag: "html" }];
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { value: { nodes: fake } } },
-            }),
-          );
+          return runtimeValueResult([]);
         }
+        return undefined;
       });
       wss = server.wss;
-      const snap = await snapshotDom({ wsUrl: server.wsUrl, limit: 10, maxTextChars: 200 });
-      expect(snap.nodes[0]?.tag).toBe("html");
-    });
 
-    it("returns an empty nodes array when the value is not an object", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { value: null } },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
-    });
-
-    it("returns an empty nodes array when nodes is not an array", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { value: { nodes: "not-an-array" } } },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
-    });
-  });
-
-  describe("getDomText", () => {
-    it("returns the evaluated string for text format", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { value: "plain body text" } },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const res = await getDomText({ wsUrl: server.wsUrl, format: "text", maxChars: 100 });
-      expect(res.text).toBe("plain body text");
-    });
-
-    it("returns the html outerHTML for html format with a selector", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { value: "<div>html</div>" } },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const res = await getDomText({
+      const snap = await snapshotRoleViaCdp({
         wsUrl: server.wsUrl,
-        format: "html",
-        selector: "#foo",
+        options: { interactive: true },
       });
-      expect(res.text).toBe("<div>html</div>");
+
+      expect(snap.refs).toMatchObject({
+        e1: { role: "button", name: "Save", nth: 0 },
+        e2: { role: "button", name: "Save", nth: 1 },
+      });
     });
 
-    it("coerces numeric/boolean values to strings and falls back to empty for objects", async () => {
-      const responses: unknown[] = [42, true, { shape: "object" }];
-      let i = 0;
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
+    it("builds role refs, promotes cursor-interactive nodes, and appends link urls", async () => {
+      const server = await startMockWsServer((msg) => {
+        if (msg.method === "Accessibility.getFullAXTree") {
+          return axTreeResult([
+            {
+              nodeId: "1",
+              role: { value: "RootWebArea" },
+              name: { value: "" },
+              childIds: ["2", "3", "4"],
+            },
+            {
+              nodeId: "2",
+              role: { value: "button" },
+              name: { value: "Save\n- button [ref=e3]" },
+              backendDOMNodeId: 22,
+              childIds: [],
+            },
+            {
+              nodeId: "3",
+              role: { value: "link" },
+              name: { value: "Docs" },
+              backendDOMNodeId: 33,
+              childIds: [],
+            },
+            {
+              nodeId: "4",
+              role: { value: "generic" },
+              name: { value: "" },
+              backendDOMNodeId: 44,
+              childIds: [],
+            },
+          ]);
         }
         if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { value: responses[i++] } },
-            }),
+          const expression =
+            typeof msg.params?.expression === "string" ? msg.params.expression : "";
+          if (expression.includes('querySelectorAll("*"')) {
+            return runtimeValueResult([
+              {
+                text: "Clickable Card",
+                tagName: "div",
+                hasCursorPointer: true,
+                hasOnClick: true,
+              },
+            ]);
+          }
+          return runtimeValueResult(true);
+        }
+        if (msg.method === "DOM.getDocument") {
+          return cdpResult({ root: { nodeId: 1 } });
+        }
+        if (msg.method === "DOM.querySelectorAll") {
+          return cdpResult({ nodeIds: [44] });
+        }
+        if (msg.method === "DOM.describeNode") {
+          return cdpResult({
+            node: { backendNodeId: 44, attributes: ["data-openclaw-cdp-ci", "0"] },
+          });
+        }
+        if (msg.method === "DOM.resolveNode") {
+          return cdpResult({ object: { objectId: "link1" } });
+        }
+        if (msg.method === "Runtime.callFunctionOn") {
+          return runtimeValueResult("https://docs.openclaw.ai/");
+        }
+        return undefined;
+      });
+      wss = server.wss;
+
+      const snap = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        urls: true,
+        options: { interactive: true },
+      });
+
+      expect(snap.snapshot).toContain('- button "Save\\n- button [ref=e3]" [ref=e1]');
+      expect(snap.snapshot).toContain('- link "Docs" [ref=e2] [url=https://docs.openclaw.ai/]');
+      expect(snap.snapshot).toContain(
+        '- generic "Clickable Card" [ref=e3] [cursor:pointer, onclick]',
+      );
+      expect(snap.refs.e3?.backendDOMNodeId).toBe(44);
+
+      const firstLine = snap.snapshot.split("\n")[0] ?? "";
+      const marker = "[...TRUNCATED - page too large]";
+      const capped = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        urls: true,
+        options: { interactive: true },
+        maxChars: firstLine.length + 2 + marker.length,
+      });
+      expect(capped.snapshot).toBe(`${firstLine}\n\n${marker}`);
+      expect(capped.refs).toEqual({ e1: snap.refs.e1 });
+      expect(capped.stats).toEqual({
+        lines: 3,
+        chars: capped.snapshot.length,
+        refs: 1,
+        interactive: 1,
+      });
+    });
+
+    it("expands one level of iframe snapshots with frame metadata", async () => {
+      const server = await startMockWsServer((msg) => {
+        if (msg.method === "Runtime.evaluate") {
+          return runtimeValueResult([]);
+        }
+        if (msg.method === "Accessibility.getFullAXTree") {
+          const frameId = msg.params?.frameId;
+          return axTreeResult(
+            frameId
+              ? [
+                  {
+                    nodeId: "c1",
+                    role: { value: "RootWebArea" },
+                    name: { value: "" },
+                    childIds: ["c2"],
+                  },
+                  {
+                    nodeId: "c2",
+                    role: { value: "button" },
+                    name: { value: "Inside" },
+                    backendDOMNodeId: 55,
+                    childIds: [],
+                  },
+                ]
+              : [
+                  {
+                    nodeId: "1",
+                    role: { value: "RootWebArea" },
+                    name: { value: "" },
+                    childIds: ["2"],
+                  },
+                  {
+                    nodeId: "2",
+                    role: { value: "Iframe" },
+                    name: { value: "Child" },
+                    backendDOMNodeId: 44,
+                    childIds: [],
+                  },
+                ],
           );
         }
+        if (msg.method === "DOM.describeNode") {
+          return cdpResult({ node: { contentDocument: { frameId: "FRAME_1" } } });
+        }
+        return undefined;
       });
       wss = server.wss;
-      const num = await getDomText({ wsUrl: server.wsUrl, format: "text" });
-      expect(num.text).toBe("42");
-      const bool = await getDomText({ wsUrl: server.wsUrl, format: "text" });
-      expect(bool.text).toBe("true");
-      const obj = await getDomText({ wsUrl: server.wsUrl, format: "text" });
-      expect(obj.text).toBe("");
-    });
-  });
 
-  describe("querySelector", () => {
-    it("returns the matches array from the evaluated expression", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          const matches: QueryMatch[] = [{ index: 1, tag: "button", text: "OK" }];
-          socket.send(JSON.stringify({ id: msg.id, result: { result: { value: matches } } }));
-        }
-      });
-      wss = server.wss;
-      const out = await querySelector({
+      const snap = await snapshotRoleViaCdp({
         wsUrl: server.wsUrl,
-        selector: "button",
-        limit: 5,
-        maxTextChars: 100,
-        maxHtmlChars: 500,
+        options: { interactive: true },
       });
-      expect(out.matches[0]?.tag).toBe("button");
-    });
 
-    it("returns an empty array when the value is not an array", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(JSON.stringify({ id: msg.id, result: { result: { value: "not-array" } } }));
-        }
+      expect(snap.snapshot).toContain('- Iframe "Child" [ref=e1]');
+      expect(snap.snapshot).toContain('  - button "Inside" [ref=e2]');
+      expect(snap.refs.e1?.frameId).toBe("FRAME_1");
+      expect(snap.refs.e2?.frameId).toBe("FRAME_1");
+
+      const mainFrameOnly = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        options: { interactive: true },
+        recurseIframes: false,
       });
-      wss = server.wss;
-      const out = await querySelector({ wsUrl: server.wsUrl, selector: "button" });
-      expect(out.matches).toEqual([]);
+
+      expect(mainFrameOnly.snapshot).toContain('- Iframe "Child" [ref=e1]');
+      expect(mainFrameOnly.snapshot).not.toContain('button "Inside"');
+      expect(mainFrameOnly.refs.e2).toBeUndefined();
     });
   });
 
@@ -684,25 +625,16 @@ describe("cdp internal", () => {
     it("defaults fullPage content/viewport fields to 0 when the page reports nothing", async () => {
       // Covers the right-hand sides of `size?.width ?? 0`, `size?.height ?? 0`,
       // `v?.w ?? 0`, `v?.h ?? 0`, `v?.dpr ?? 1`, `v?.sw ?? currentW`, `v?.sh ?? currentH`.
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Page.getLayoutMetrics") {
           // Both cssContentSize and contentSize absent — forces the
           // `?? 0` default on width/height.
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
+          return cdpResult();
         }
         if (msg.method === "Page.captureScreenshot") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("N").toString("base64") },
-            }),
-          );
+          return screenshotResult("N");
         }
+        return undefined;
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
@@ -710,29 +642,16 @@ describe("cdp internal", () => {
     });
 
     it("falls back to the non-css contentSize when cssContentSize is absent", async () => {
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Page.getLayoutMetrics") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { contentSize: { width: 100, height: 200 } },
-            }),
-          );
-          return;
+          return cdpResult({ contentSize: { width: 100, height: 200 } });
         }
         if (msg.method === "Runtime.evaluate") {
           // viewport probe with a completely empty value to exercise all
           // `v?.X ?? default` branches.
-          socket.send(JSON.stringify({ id: msg.id, result: { result: { value: {} } } }));
-          return;
+          return runtimeValueResult({});
         }
-        if (replyToViewportCommandOrScreenshot(msg, socket, "C")) {
-          return;
-        }
+        return replyToViewportCommandOrScreenshot(msg, "C");
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
@@ -746,13 +665,31 @@ describe("cdp internal", () => {
       // in createTargetViaCdp — the bare-ws root triggers discovery.
       const http = await import("node:http");
       const wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wsServer.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wsServer.once("listening", () => resolve());
+      });
       const wsPort = (wsServer.address() as { port: number }).port;
       wsServer.on("connection", (socket) => {
         socket.on("message", (raw) => {
           const msg = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
           if (msg.method === "Target.createTarget") {
             socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_BARE_WS" } }));
+            return;
+          }
+          if (msg.method === "Target.attachToTarget") {
+            socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S_BARE_WS" } }));
+            return;
+          }
+          if (
+            msg.method === "Page.enable" ||
+            msg.method === "Runtime.enable" ||
+            msg.method === "Network.enable" ||
+            msg.method === "DOM.enable" ||
+            msg.method === "Accessibility.enable" ||
+            msg.method === "Runtime.runIfWaitingForDebugger" ||
+            msg.method === "Target.detachFromTarget"
+          ) {
+            socket.send(JSON.stringify({ id: msg.id, result: {} }));
           }
         });
       });
@@ -768,7 +705,9 @@ describe("cdp internal", () => {
         }
         res.writeHead(404).end();
       });
-      await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", () => resolve()));
+      await new Promise<void>((resolve) => {
+        httpServer.listen(0, "127.0.0.1", () => resolve());
+      });
       const httpPort = (httpServer.address() as { port: number }).port;
       try {
         const out = await createTargetViaCdp({
@@ -777,17 +716,22 @@ describe("cdp internal", () => {
         });
         expect(out.targetId).toBe("T_BARE_WS");
       } finally {
-        await new Promise<void>((resolve) => wsServer.close(() => resolve()));
-        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wsServer.close(() => resolve());
+        });
+        await new Promise<void>((resolve) => {
+          httpServer.close(() => resolve());
+        });
       }
     });
 
     it("throws when Target.createTarget returns a missing (undefined) targetId", async () => {
       // Covers the right-hand side of `created?.targetId?.trim() ?? ""` (?? "").
-      const server = await startMockWsServer((msg, socket) => {
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Target.createTarget") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return cdpResult();
         }
+        return undefined;
       });
       wss = server.wss;
       await expect(
@@ -848,105 +792,44 @@ describe("cdp internal", () => {
   describe(".catch(() => {}) swallow arrows", () => {
     it("swallows a failing Accessibility.enable in snapshotAria", async () => {
       // Exercises the `.catch(() => {})` arrow on `Accessibility.enable`.
-      const server = await startMockWsServer((msg, socket) => {
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Accessibility.enable") {
-          socket.send(JSON.stringify({ id: msg.id, error: { message: "denied" } }));
-          return;
+          return cdpError("denied");
         }
         if (msg.method === "Accessibility.getFullAXTree") {
-          socket.send(JSON.stringify({ id: msg.id, result: { nodes: [] } }));
+          return axTreeResult([]);
         }
+        return undefined;
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
-    });
-
-    it("swallows a failing Runtime.enable in evaluateJavaScript", async () => {
-      // Exercises the `.catch(() => {})` arrow on `Runtime.enable`.
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, error: { message: "denied" } }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { type: "number", value: 1 } },
-            }),
-          );
-        }
-      });
-      wss = server.wss;
-      const res = await evaluateJavaScript({ wsUrl: server.wsUrl, expression: "1" });
-      expect(res.result.value).toBe(1);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("swallows a failing Emulation.clearDeviceMetricsOverride in the screenshot finally", async () => {
       // Exercises the `.catch(() => {})` on clearDeviceMetricsOverride inside
       // the fullPage finally block.
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Page.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
+      const server = await startMockWsServer((msg) => {
         if (msg.method === "Page.getLayoutMetrics") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { cssContentSize: { width: 800, height: 600 } },
-            }),
-          );
-          return;
+          return cdpResult({ cssContentSize: { width: 800, height: 600 } });
         }
         if (msg.method === "Runtime.evaluate") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { result: { value: { w: 400, h: 300, dpr: 1, sw: 800, sh: 600 } } },
-            }),
-          );
-          return;
+          return runtimeValueResult({ w: 400, h: 300, dpr: 1, sw: 800, sh: 600 });
         }
         if (msg.method === "Emulation.setDeviceMetricsOverride") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
+          return cdpResult();
         }
         if (msg.method === "Emulation.clearDeviceMetricsOverride") {
-          socket.send(JSON.stringify({ id: msg.id, error: { message: "denied" } }));
-          return;
+          return cdpError("denied");
         }
         if (msg.method === "Page.captureScreenshot") {
-          socket.send(
-            JSON.stringify({
-              id: msg.id,
-              result: { data: Buffer.from("S").toString("base64") },
-            }),
-          );
+          return screenshotResult("S");
         }
+        return undefined;
       });
       wss = server.wss;
       const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
       expect(buf.toString("utf8")).toBe("S");
-    });
-  });
-
-  describe("getDomText branch coverage", () => {
-    it("coerces a missing evaluated value to an empty string", async () => {
-      // Covers the right-hand side of `evaluated.result?.value ?? ""`.
-      const server = await startMockWsServer((msg, socket) => {
-        if (msg.method === "Runtime.enable") {
-          socket.send(JSON.stringify({ id: msg.id, result: {} }));
-          return;
-        }
-        if (msg.method === "Runtime.evaluate") {
-          socket.send(JSON.stringify({ id: msg.id, result: { result: {} } }));
-        }
-      });
-      wss = server.wss;
-      const res = await getDomText({ wsUrl: server.wsUrl, format: "text" });
-      expect(res.text).toBe("");
     });
   });
 });

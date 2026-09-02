@@ -1,9 +1,9 @@
-import SwiftUI
+import BackgroundTasks
 import Foundation
 import OpenClawKit
 import os
+import SwiftUI
 import UIKit
-import BackgroundTasks
 @preconcurrency import UserNotifications
 
 private struct PendingWatchPromptAction {
@@ -11,9 +11,44 @@ private struct PendingWatchPromptAction {
     var actionId: String
     var actionLabel: String?
     var sessionKey: String?
+    var gatewayStableID: String?
 }
 
-private typealias PendingExecApprovalPrompt = ExecApprovalNotificationPrompt
+private typealias PendingExecApprovalPrompt = ApprovalNotificationPrompt
+
+/// BackgroundTasks expires on a background queue; settle there before a delayed
+/// main-actor waiter can report success or complete the same delivery twice.
+final class BackgroundWakeRefreshAttempt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var wakeTask: Task<Bool, Never>?
+    private var completion: ((Bool) -> Void)?
+
+    init(wakeTask: Task<Bool, Never>, completion: @escaping (Bool) -> Void) {
+        self.wakeTask = wakeTask
+        self.completion = completion
+    }
+
+    func complete(success: Bool) {
+        self.lock.lock()
+        guard let completion = self.completion else {
+            self.lock.unlock()
+            return
+        }
+        self.completion = nil
+        let wakeTask = self.wakeTask
+        self.wakeTask = nil
+        self.lock.unlock()
+
+        if !success {
+            wakeTask?.cancel()
+        }
+        completion(success)
+    }
+
+    func expire() {
+        self.complete(success: false)
+    }
+}
 
 @MainActor
 enum OpenClawAppModelRegistry {
@@ -22,20 +57,34 @@ enum OpenClawAppModelRegistry {
 
 @MainActor
 final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "Push")
-    private let backgroundWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "BackgroundWake")
-    private static let wakeRefreshTaskIdentifier = "ai.openclaw.ios.bgrefresh"
-    private var backgroundWakeTask: Task<Bool, Never>?
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "Push")
+    private let backgroundWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "BackgroundWake")
+    private static var wakeRefreshTaskIdentifier: String {
+        "\(appBundleIdentifier).bgrefresh"
+    }
+
+    private static var appBundleIdentifier: String {
+        guard let bundleId = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bundleId.isEmpty
+        else {
+            return "ai.openclawfoundation.app"
+        }
+
+        return bundleId
+    }
+
+    private var backgroundWakeAttempt: BackgroundWakeRefreshAttempt?
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
     private var pendingExecApprovalPrompts: [PendingExecApprovalPrompt] = []
-    private var pendingExecApprovalRequestedPushIDs: [String] = []
-    private var pendingExecApprovalResolvedPushIDs: [String] = []
+    private var pendingExecApprovalRequestedPushes: [ExecApprovalNotificationPrompt] = []
+    private var pendingExecApprovalResolvedPushes: [ExecApprovalNotificationPrompt] = []
+    private var pendingOpenURLs: [URL] = []
 
     weak var appModel: NodeAppModel? {
         didSet {
-            guard let model = self.resolvedAppModel() else { return }
-            if let token = self.pendingAPNsDeviceToken {
+            guard let model = resolvedAppModel() else { return }
+            if let token = pendingAPNsDeviceToken {
                 self.pendingAPNsDeviceToken = nil
                 Task { @MainActor in
                     model.updateAPNsDeviceToken(token)
@@ -50,7 +99,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                             promptId: action.promptId,
                             actionId: action.actionId,
                             actionLabel: action.actionLabel,
-                            sessionKey: action.sessionKey)
+                            sessionKey: action.sessionKey,
+                            gatewayStableID: action.gatewayStableID)
                     }
                 }
             }
@@ -63,21 +113,30 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                     }
                 }
             }
-            if !self.pendingExecApprovalRequestedPushIDs.isEmpty {
-                let pending = self.pendingExecApprovalRequestedPushIDs
-                self.pendingExecApprovalRequestedPushIDs.removeAll()
+            if !self.pendingExecApprovalRequestedPushes.isEmpty {
+                let pending = self.pendingExecApprovalRequestedPushes
+                self.pendingExecApprovalRequestedPushes.removeAll()
                 Task { @MainActor in
-                    for approvalId in pending {
-                        _ = await model.handleExecApprovalRequestedRemotePush(approvalId: approvalId)
+                    for push in pending {
+                        _ = await model.handleExecApprovalRequestedRemotePush(push)
                     }
                 }
             }
-            if !self.pendingExecApprovalResolvedPushIDs.isEmpty {
-                let pending = self.pendingExecApprovalResolvedPushIDs
-                self.pendingExecApprovalResolvedPushIDs.removeAll()
+            if !self.pendingExecApprovalResolvedPushes.isEmpty {
+                let pending = self.pendingExecApprovalResolvedPushes
+                self.pendingExecApprovalResolvedPushes.removeAll()
                 Task { @MainActor in
-                    for approvalId in pending {
-                        await model.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
+                    for push in pending {
+                        _ = await model.handleExecApprovalResolvedRemotePush(push)
+                    }
+                }
+            }
+            if !self.pendingOpenURLs.isEmpty {
+                let pending = self.pendingOpenURLs
+                self.pendingOpenURLs.removeAll()
+                Task { @MainActor in
+                    for url in pending {
+                        await self.handleOpenURL(url, model: model)
                     }
                 }
             }
@@ -88,16 +147,19 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         self.appModel ?? OpenClawAppModelRegistry.appModel
     }
 
-#if DEBUG
+    #if DEBUG
     func _test_resolvedAppModel() -> NodeAppModel? {
         self.resolvedAppModel()
     }
-#endif
+
+    func _test_wakeRefreshTaskIdentifier() -> String {
+        Self.wakeRefreshTaskIdentifier
+    }
+    #endif
 
     func application(
         _ application: UIApplication,
-        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
-    ) -> Bool
+        didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool
     {
         GatewayDiagnostics.log("app delegate: didFinishLaunching")
         if self.appModel == nil {
@@ -106,13 +168,63 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         self.registerBackgroundWakeRefreshTask()
         let notificationCenter = UNUserNotificationCenter.current()
         notificationCenter.delegate = self
-        ExecApprovalNotificationBridge.registerCategory(center: notificationCenter)
-        application.registerForRemoteNotifications()
+        ApprovalNotificationBridge.registerCategories(center: notificationCenter)
+        Task { @MainActor in
+            await self.registerForRemoteNotificationsIfEnrollmentReady(application)
+        }
         return true
     }
 
-    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        if let appModel = self.resolvedAppModel() {
+    func application(
+        _: UIApplication,
+        open url: URL,
+        options _: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool
+    {
+        guard DeepLinkParser.parse(url) != nil else { return false }
+        guard let model = resolvedAppModel() else {
+            self.pendingOpenURLs.append(url)
+            return true
+        }
+        Task { @MainActor in
+            await self.handleOpenURL(url, model: model)
+        }
+        return true
+    }
+
+    func handleOpenURL(_ url: URL, model: NodeAppModel) async {
+        guard let route = DeepLinkParser.parse(url) else { return }
+
+        switch route {
+        case .agent, .dashboard:
+            await model.handleDeepLink(url: url)
+        case let .gateway(link):
+            model.stageGatewaySetupLink(link)
+        }
+    }
+
+    private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
+        guard NotificationServingPreference.isEnabled() else { return }
+        guard !PushBuildConfig.current.usesOpenClawHostedRelay
+            || PushEnrollmentConsent.disclosureAccepted
+        else { return }
+        guard await Self.isNotificationAuthorizationAllowed() else { return }
+        application.registerForRemoteNotifications()
+    }
+
+    private static func isNotificationAuthorizationAllowed() async -> Bool {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        case .denied, .notDetermined:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
+    func application(_: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        if let appModel = resolvedAppModel() {
             Task { @MainActor in
                 appModel.updateAPNsDeviceToken(deviceToken)
             }
@@ -122,50 +234,42 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         self.pendingAPNsDeviceToken = deviceToken
     }
 
-    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
+    func application(_: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
         self.logger.error("APNs registration failed: \(error.localizedDescription, privacy: .public)")
     }
 
     func application(
-        _ application: UIApplication,
+        _: UIApplication,
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void)
     {
         self.logger.info("APNs remote notification received keys=\(userInfo.keys.count, privacy: .public)")
         Task { @MainActor in
-            let notificationCenter = LiveNotificationCenter()
-            if await ExecApprovalNotificationBridge.handleResolvedPushIfNeeded(
-                userInfo: userInfo,
-                notificationCenter: notificationCenter)
-            {
-                if let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo) {
-                    if let appModel = self.resolvedAppModel() {
-                        await appModel.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
-                    } else {
-                        self.pendingExecApprovalResolvedPushIDs.append(approvalId)
-                    }
+            if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
+                if let appModel = self.resolvedAppModel() {
+                    let handled = await appModel.handleExecApprovalResolvedRemotePush(push)
+                    completionHandler(handled ? .newData : .noData)
+                } else {
+                    self.pendingExecApprovalResolvedPushes.append(push)
+                    completionHandler(.newData)
                 }
-                completionHandler(.newData)
                 return
             }
             guard let appModel = self.resolvedAppModel() else {
-                if ExecApprovalNotificationBridge.payloadKind(userInfo: userInfo)
-                    == ExecApprovalNotificationBridge.requestedKind,
-                   let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo)
-                {
-                    self.pendingExecApprovalRequestedPushIDs.append(approvalId)
+                if let push = ApprovalNotificationBridge.parseRequestedPush(userInfo: userInfo) {
+                    self.pendingExecApprovalRequestedPushes.append(push)
                 }
                 self.logger.info("APNs wake skipped: appModel unavailable")
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_no_model")
                 completionHandler(.noData)
                 return
             }
-            let handled = await appModel.handleSilentPushWake(userInfo)
-            self.logger.info("APNs wake handled=\(handled, privacy: .public)")
-            if !handled {
+            let result = await appModel.handleSilentPushWake(userInfo)
+            self.logger.info("APNs wake handled=\(result.handled, privacy: .public)")
+            if !result.handled {
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_not_applied")
             }
-            completionHandler(handled ? .newData : .noData)
+            completionHandler(result == .newData ? .newData : .noData)
         }
     }
 
@@ -179,8 +283,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     private func registerBackgroundWakeRefreshTask() {
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: Self.wakeRefreshTaskIdentifier,
-            using: nil
-        ) { [weak self] task in
+            using: nil)
+        { [weak self] task in
             guard let refreshTask = task as? BGAppRefreshTask else {
                 task.setTaskCompleted(success: false)
                 return
@@ -196,35 +300,36 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             try BGTaskScheduler.shared.submit(request)
             let scheduledLogMessage =
                 "Scheduled background wake refresh reason=\(reason) "
-                + "delaySeconds=\(max(60, delay))"
+                    + "delaySeconds=\(max(60, delay))"
             self.backgroundWakeLogger.info(
-                "\(scheduledLogMessage, privacy: .public)"
-            )
+                "\(scheduledLogMessage, privacy: .public)")
         } catch {
             let failedLogMessage =
                 "Failed scheduling background wake refresh reason=\(reason) "
-                + "error=\(error.localizedDescription)"
+                    + "error=\(error.localizedDescription)"
             self.backgroundWakeLogger.error(
-                "\(failedLogMessage, privacy: .public)"
-            )
+                "\(failedLogMessage, privacy: .public)")
         }
     }
 
     private func handleBackgroundWakeRefresh(task: BGAppRefreshTask) {
         self.scheduleBackgroundWakeRefresh(afterSeconds: 15 * 60, reason: "reschedule")
-        self.backgroundWakeTask?.cancel()
+        self.backgroundWakeAttempt?.expire()
 
         let wakeTask = Task { @MainActor [weak self] in
             guard let self, let appModel = self.resolvedAppModel() else { return false }
             return await appModel.handleBackgroundRefreshWake(trigger: "bg_app_refresh")
         }
-        self.backgroundWakeTask = wakeTask
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) { success in
+            task.setTaskCompleted(success: success)
+        }
+        self.backgroundWakeAttempt = attempt
         task.expirationHandler = {
-            wakeTask.cancel()
+            attempt.expire()
         }
         Task {
             let applied = await wakeTask.value
-            task.setTaskCompleted(success: applied)
+            attempt.complete(success: applied)
             self.backgroundWakeLogger.info(
                 "Background wake refresh finished applied=\(applied, privacy: .public)")
         }
@@ -242,6 +347,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
 
         let promptId = userInfo[WatchPromptNotificationBridge.promptIDKey] as? String
         let sessionKey = userInfo[WatchPromptNotificationBridge.sessionKeyKey] as? String
+        let gatewayStableID = userInfo[WatchPromptNotificationBridge.gatewayStableIDKey] as? String
 
         switch response.actionIdentifier {
         case WatchPromptNotificationBridge.actionPrimaryIdentifier:
@@ -253,7 +359,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 promptId: promptId,
                 actionId: actionId,
                 actionLabel: actionLabel,
-                sessionKey: sessionKey)
+                sessionKey: sessionKey,
+                gatewayStableID: gatewayStableID)
         case WatchPromptNotificationBridge.actionSecondaryIdentifier:
             let actionId = (userInfo[WatchPromptNotificationBridge.actionSecondaryIDKey] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -263,7 +370,8 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 promptId: promptId,
                 actionId: actionId,
                 actionLabel: actionLabel,
-                sessionKey: sessionKey)
+                sessionKey: sessionKey,
+                gatewayStableID: gatewayStableID)
         default:
             break
         }
@@ -288,19 +396,20 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             promptId: promptId,
             actionId: actionId,
             actionLabel: actionLabel,
-            sessionKey: sessionKey)
+            sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID)
     }
 
-    private static func parseExecApprovalPrompt(
+    private static func parseApprovalPrompt(
         from response: UNNotificationResponse) -> PendingExecApprovalPrompt?
     {
-        ExecApprovalNotificationBridge.parsePrompt(
+        ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: response.actionIdentifier,
             userInfo: response.notification.request.content.userInfo)
     }
 
     private func routeWatchPromptAction(_ action: PendingWatchPromptAction) async {
-        guard let appModel = self.resolvedAppModel() else {
+        guard let appModel = resolvedAppModel() else {
             self.pendingWatchPromptActions.append(action)
             return
         }
@@ -308,12 +417,13 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             promptId: action.promptId,
             actionId: action.actionId,
             actionLabel: action.actionLabel,
-            sessionKey: action.sessionKey)
+            sessionKey: action.sessionKey,
+            gatewayStableID: action.gatewayStableID)
         _ = await appModel.handleBackgroundRefreshWake(trigger: "watch_prompt_action")
     }
 
-    private func routeExecApprovalPrompt(_ prompt: PendingExecApprovalPrompt) {
-        guard let appModel = self.resolvedAppModel() else {
+    private func routeApprovalPrompt(_ prompt: PendingExecApprovalPrompt) {
+        guard let appModel = resolvedAppModel() else {
             self.pendingExecApprovalPrompts.append(prompt)
             return
         }
@@ -323,13 +433,14 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
+        _: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void)
     {
         let userInfo = notification.request.content.userInfo
         if Self.isWatchPromptNotification(userInfo)
             || ExecApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
+            || PluginApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
         {
             completionHandler([.banner, .list, .sound])
             return
@@ -338,7 +449,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
+        _: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void)
     {
@@ -353,13 +464,13 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             }
             return
         }
-        if let prompt = Self.parseExecApprovalPrompt(from: response) {
+        if let prompt = Self.parseApprovalPrompt(from: response) {
             Task { @MainActor [weak self] in
                 guard let self else {
                     completionHandler()
                     return
                 }
-                self.routeExecApprovalPrompt(prompt)
+                self.routeApprovalPrompt(prompt)
                 completionHandler()
             }
             return
@@ -373,6 +484,7 @@ enum WatchPromptNotificationBridge {
     static let typeValue = "watch.prompt"
     static let promptIDKey = "openclaw.watch.promptId"
     static let sessionKeyKey = "openclaw.watch.sessionKey"
+    static let gatewayStableIDKey = "openclaw.watch.gatewayStableID"
     static let actionPrimaryIDKey = "openclaw.watch.action.primary.id"
     static let actionPrimaryLabelKey = "openclaw.watch.action.primary.label"
     static let actionSecondaryIDKey = "openclaw.watch.action.secondary.id"
@@ -388,6 +500,7 @@ enum WatchPromptNotificationBridge {
     static func scheduleMirroredWatchPromptNotificationIfNeeded(
         invokeID: String,
         params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?,
         sendResult: WatchNotificationSendResult) async
     {
         guard sendResult.queuedForDelivery || !sendResult.deliveredImmediately else { return }
@@ -395,7 +508,7 @@ enum WatchPromptNotificationBridge {
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else { return }
-        guard await self.requestNotificationAuthorizationIfNeeded() else { return }
+        guard await self.isNotificationAuthorizationAllowed() else { return }
 
         let normalizedActions = (params.actions ?? []).compactMap { action -> OpenClawWatchAction? in
             let id = action.id.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -408,24 +521,29 @@ enum WatchPromptNotificationBridge {
         let center = UNUserNotificationCenter.current()
         var categoryIdentifier = ""
         if !displayedActions.isEmpty {
-            let categoryID = "\(self.categoryPrefix)\(invokeID)"
+            let categoryID = "\(categoryPrefix)\(invokeID)"
             let category = UNNotificationCategory(
                 identifier: categoryID,
-                actions: self.categoryActions(displayedActions),
+                actions: categoryActions(displayedActions),
                 intentIdentifiers: [],
                 options: [])
-            await self.upsertNotificationCategory(category, center: center)
+            await upsertNotificationCategory(category, center: center)
             categoryIdentifier = categoryID
         }
 
         var userInfo: [AnyHashable: Any] = [
-            self.typeKey: self.typeValue,
+            typeKey: typeValue,
         ]
         if let promptId = params.promptId?.trimmingCharacters(in: .whitespacesAndNewlines), !promptId.isEmpty {
             userInfo[self.promptIDKey] = promptId
         }
         if let sessionKey = params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines), !sessionKey.isEmpty {
             userInfo[self.sessionKeyKey] = sessionKey
+        }
+        if let gatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !gatewayStableID.isEmpty
+        {
+            userInfo[self.gatewayStableIDKey] = gatewayStableID
         }
         for (index, action) in displayedActions.enumerated() {
             userInfo[self.actionIDKey(index: index)] = action.id
@@ -462,7 +580,7 @@ enum WatchPromptNotificationBridge {
             identifier: "watch.prompt.\(invokeID)",
             content: content,
             trigger: nil)
-        try? await self.addNotificationRequest(request, center: center)
+        try? await addNotificationRequest(request, center: center)
     }
 
     static func actionIDKey(index: Int) -> String {
@@ -475,14 +593,13 @@ enum WatchPromptNotificationBridge {
 
     private static func categoryActions(_ actions: [OpenClawWatchAction]) -> [UNNotificationAction] {
         actions.enumerated().map { index, action in
-            let identifier: String
-            switch index {
+            let identifier: String = switch index {
             case 0:
-                identifier = self.actionPrimaryIdentifier
+                self.actionPrimaryIdentifier
             case 1:
-                identifier = self.actionSecondaryIdentifier
+                self.actionSecondaryIdentifier
             default:
-                identifier = "\(self.actionIdentifierPrefix)\(index)"
+                "\(self.actionIdentifierPrefix)\(index)"
             }
             return UNNotificationAction(
                 identifier: identifier,
@@ -494,38 +611,20 @@ enum WatchPromptNotificationBridge {
     private static func notificationActionOptions(style: String?) -> UNNotificationActionOptions {
         switch style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "destructive":
-            return [.destructive]
+            [.destructive]
         case "foreground":
             // For mirrored watch actions, keep handling in background when possible.
-            return []
+            []
         default:
-            return []
+            []
         }
     }
 
-    private static func requestNotificationAuthorizationIfNeeded() async -> Bool {
+    private static func isNotificationAuthorizationAllowed() async -> Bool {
+        guard NotificationServingPreference.isEnabled() else { return false }
         let center = UNUserNotificationCenter.current()
-        let status = await self.notificationAuthorizationStatus(center: center)
-        switch status {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .notDetermined:
-            let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-            if !granted { return false }
-            let updatedStatus = await self.notificationAuthorizationStatus(center: center)
-            if self.isAuthorizationStatusAllowed(updatedStatus) {
-                // Refresh APNs registration immediately after the first permission grant so the
-                // gateway can receive a push registration without requiring an app relaunch.
-                await MainActor.run {
-                    UIApplication.shared.registerForRemoteNotifications()
-                }
-            }
-            return self.isAuthorizationStatusAllowed(updatedStatus)
-        case .denied:
-            return false
-        @unknown default:
-            return false
-        }
+        let status = await notificationAuthorizationStatus(center: center)
+        return self.isAuthorizationStatusAllowed(status)
     }
 
     private static func isAuthorizationStatusAllowed(_ status: UNAuthorizationStatus) -> Bool {
@@ -540,8 +639,8 @@ enum WatchPromptNotificationBridge {
     }
 
     private static func notificationAuthorizationStatus(
-        center: UNUserNotificationCenter
-    ) async -> UNAuthorizationStatus {
+        center: UNUserNotificationCenter) async -> UNAuthorizationStatus
+    {
         await withCheckedContinuation { continuation in
             center.getNotificationSettings { settings in
                 continuation.resume(returning: settings.authorizationStatus)
@@ -565,8 +664,8 @@ enum WatchPromptNotificationBridge {
 
     private static func addNotificationRequest(
         _ request: UNNotificationRequest,
-        center: UNUserNotificationCenter
-    ) async throws {
+        center: UNUserNotificationCenter) async throws
+    {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             center.add(request) { error in
                 ThrowingContinuationSupport.resumeVoid(continuation, error: error)
@@ -580,13 +679,15 @@ extension NodeAppModel {
         promptId: String?,
         actionId: String,
         actionLabel: String?,
-        sessionKey: String?) async
+        sessionKey: String?,
+        gatewayStableID: String?) async
     {
         let normalizedActionID = actionId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedActionID.isEmpty else { return }
 
         let normalizedPromptID = promptId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedSessionKey = sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedGatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedActionLabel = actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let event = WatchQuickReplyEvent(
@@ -595,47 +696,137 @@ extension NodeAppModel {
             actionId: normalizedActionID,
             actionLabel: (normalizedActionLabel?.isEmpty == false) ? normalizedActionLabel : nil,
             sessionKey: (normalizedSessionKey?.isEmpty == false) ? normalizedSessionKey : nil,
+            gatewayStableID: (normalizedGatewayStableID?.isEmpty == false) ? normalizedGatewayStableID : nil,
             note: "source=ios.notification",
-            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             transport: "ios.notification")
-        await self._bridgeConsumeMirroredWatchReply(event)
+        await _bridgeConsumeMirroredWatchReply(event)
     }
 }
 
 @main
 struct OpenClawApp: App {
+    @State private var appearanceModel: AppAppearanceModel
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
+    @State private var voiceLiveActivityCoordinator: VoiceLiveActivityCoordinator
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
-        let appModel = NodeAppModel()
+        OpenClawType.installUIKitAppearance()
+        let appModel = NodeAppModel(audioAdmissionInitiallyAllowed: false)
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reset-onboarding") {
+            // Reruns must exercise onboarding instead of saved pairing state.
+            GatewayOnboardingReset.resetBeforeStartup(
+                appModel: appModel,
+                instanceId: GatewaySettingsStore.currentInstanceID())
+        }
+        if Self.screenshotModeEnabled {
+            UIView.setAnimationsEnabled(false)
+            UserDefaults.standard.set(true, forKey: "gateway.onboardingComplete")
+            UserDefaults.standard.set(true, forKey: "gateway.hasConnectedOnce")
+            UserDefaults.standard.set(true, forKey: "onboarding.quickSetupDismissed")
+            appModel.enterScreenshotFixtureMode()
+            if Self.screenshotNotificationGuidanceEnabled {
+                appModel._debug_presentNotificationPermissionGuidancePromptForScreenshot()
+            }
+        }
+        #endif
         OpenClawAppModelRegistry.appModel = appModel
+        _appearanceModel = State(initialValue: AppAppearanceModel())
         _appModel = State(initialValue: appModel)
-        _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
+        _voiceLiveActivityCoordinator = State(initialValue: VoiceLiveActivityCoordinator())
+        _gatewayController = State(
+            initialValue: GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: !Self.screenshotModeEnabled,
+                deferDiscoveryUntilLocalNetworkRequest: true))
     }
 
     var body: some Scene {
         WindowGroup {
-            RootCanvas()
+            RootTabs()
+                .tint(OpenClawBrand.accent)
+                .font(OpenClawType.body)
+                .environment(self.appearanceModel)
+                .preferredColorScheme(self.appearanceModel.preference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
+                    if !Self.screenshotModeEnabled {
+                        self.voiceLiveActivityCoordinator.start(appModel: self.appModel)
+                    }
+                    self.appModel.setScenePhase(self.scenePhase)
                     self.appDelegate.appModel = self.appModel
+                    self.appDelegate.scenePhaseChanged(self.scenePhase)
+                    self.applyWindowTint()
+                    self.gatewayController.setScenePhase(self.scenePhase)
+                    #if DEBUG
+                    if Self.liveActivityVoicePreviewEnabled {
+                        LiveActivityManager.shared.startVoicePreview()
+                    }
+                    #endif
                 }
+                .onReceive(
+                    NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification),
+                    perform: { _ in
+                        OpenClawType.refreshUIKitAppearance(in: Self.connectedWindows())
+                    })
                 .onOpenURL { url in
-                    Task { await self.appModel.handleDeepLink(url: url) }
+                    // SwiftUI owns normal scene delivery; the delegate also queues URLs
+                    // that arrive before the scene has installed its model.
+                    Task { await self.appDelegate.handleOpenURL(url, model: self.appModel) }
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
+                    self.applyWindowTint()
                 }
         }
+    }
+
+    private static var screenshotModeEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")
+        #else
+        false
+        #endif
+    }
+
+    private static var screenshotNotificationGuidanceEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-notification-guidance")
+        #else
+        false
+        #endif
+    }
+
+    private static var liveActivityVoicePreviewEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-live-activity-voice-preview")
+        #else
+        false
+        #endif
+    }
+
+    @MainActor
+    private func applyWindowTint() {
+        for window in Self.connectedWindows() {
+            window.tintColor = OpenClawBrand.uiAccent
+        }
+    }
+
+    @MainActor
+    private static func connectedWindows() -> [UIWindow] {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
     }
 }
 

@@ -1,3 +1,4 @@
+// Sub-CLI registration: core subcommands plus lazily imported command groups.
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import {
@@ -15,18 +16,17 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 import {
-  registerSubCliByName as registerSubCliByNameCore,
-  registerSubCliCommands as registerSubCliCommandsCore,
+  registerSubCliByNameCore,
+  registerSubCliCommandsCore,
+  type SubCliRegistrationContext,
 } from "./register.subclis-core.js";
-import {
-  getSubCliCommandsWithSubcommands,
-  getSubCliEntries as getSubCliEntryDescriptors,
-  type SubCliDescriptor,
-} from "./subcli-descriptors.js";
+import { getSubCliEntriesCore as getSubCliEntryDescriptors } from "./subcli-descriptors.js";
 
-export { getSubCliCommandsWithSubcommands };
-
-type SubCliRegistrar = (program: Command) => Promise<void> | void;
+type SubCliRegistrar = (
+  program: Command,
+  argv: string[],
+  context: SubCliRegistrationContext,
+) => Promise<void> | void;
 
 const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   ...defineImportedProgramCommandGroupSpecs([
@@ -38,25 +38,37 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   ]),
 ];
 
-function resolveSubCliCommandGroups(): CommandGroupEntry[] {
-  return buildCommandGroupEntries(getSubCliEntryDescriptors(), entrySpecs, (register) => register);
+function resolveSubCliCommandGroups(
+  argv: string[],
+  context: SubCliRegistrationContext = {},
+): CommandGroupEntry[] {
+  return buildCommandGroupEntries(
+    getSubCliEntryDescriptors(),
+    entrySpecs,
+    (register) => async (program) => {
+      await register(program, argv, context);
+    },
+  );
 }
 
-export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return getSubCliEntryDescriptors();
-}
-
-export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
-  if (await registerSubCliByNameCore(program, name)) {
+/** Register one sub-CLI by name, including lazy command groups. */
+export async function registerSubCliByName(
+  program: Command,
+  name: string,
+  argv: string[] = process.argv,
+  context: SubCliRegistrationContext = {},
+): Promise<boolean> {
+  if (await registerSubCliByNameCore(program, name, argv, context)) {
     return true;
   }
-  return registerCommandGroupByName(program, resolveSubCliCommandGroups(), name);
+  return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);
 }
 
+/** Register sub-CLI commands according to eager/lazy startup policy. */
 export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
   registerSubCliCommandsCore(program, argv);
   const { primary } = resolveCliArgvInvocation(argv);
-  registerCommandGroups(program, resolveSubCliCommandGroups(), {
+  registerCommandGroups(program, resolveSubCliCommandGroups(argv), {
     eager: shouldEagerRegisterSubcommands(),
     primary,
     registerPrimaryOnly: Boolean(primary && shouldRegisterPrimarySubcommandOnly(argv)),

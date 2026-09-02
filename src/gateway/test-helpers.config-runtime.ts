@@ -1,18 +1,46 @@
+// Gateway config runtime test mock.
+// Wraps config IO with mutable test runtime state for integration tests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
+import type {
+  ReadConfigFileSnapshotForWriteResult,
+  ReadConfigFileSnapshotWithPluginMetadataResult,
+} from "../config/io.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
 type GatewayConfigModule = typeof import("../config/config.js");
+type GatewayConfigRuntime = Pick<
+  typeof import("../config/io.js"),
+  "resetConfigRuntimeState" | "getRuntimeConfigSnapshot" | "setRuntimeConfigSnapshot"
+>;
+type GatewayConfigOverrides = Pick<
+  GatewayConfigModule,
+  | "CONFIG_PATH"
+  | "STATE_DIR"
+  | "isNixMode"
+  | "applyConfigOverrides"
+  | "getRuntimeConfig"
+  | "parseConfigJson5"
+  | "validateConfigObject"
+  | "readConfigFileSnapshot"
+  | "readConfigFileSnapshotWithPluginMetadata"
+  | "readConfigFileSnapshotForWrite"
+  | "writeConfigFile"
+>;
 
-export function createGatewayConfigModuleMock(actual: GatewayConfigModule): GatewayConfigModule {
+/** Creates gateway-test overrides without importing the facade that re-exports mocked IO. */
+export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): GatewayConfigOverrides {
   const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
 
   const composeTestConfig = (baseConfig: Record<string, unknown>) => {
@@ -34,9 +62,17 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       ...fileDefaults,
       ...testState.agentConfig,
     };
-    const agents = testState.agentsConfig
-      ? { ...fileAgents, ...testState.agentsConfig, defaults }
-      : { ...fileAgents, defaults };
+    const testAgents = testState.agentsConfig;
+    const retainedFileAgents = { ...fileAgents };
+    if (testAgents && Object.hasOwn(testAgents, "list")) {
+      delete retainedFileAgents.entries;
+    }
+    if (testAgents && Object.hasOwn(testAgents, "entries")) {
+      delete retainedFileAgents.list;
+    }
+    const agents = testAgents
+      ? { ...retainedFileAgents, ...testAgents, defaults }
+      : { ...retainedFileAgents, defaults };
 
     const fileBindings = Array.isArray(baseConfig.bindings)
       ? (baseConfig.bindings as AgentBinding[])
@@ -110,17 +146,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     }
     const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
 
-    const fileCanvasHost =
-      baseConfig.canvasHost &&
-      typeof baseConfig.canvasHost === "object" &&
-      !Array.isArray(baseConfig.canvasHost)
-        ? ({ ...(baseConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
-        : {};
-    if (typeof testState.canvasHostPort === "number") {
-      fileCanvasHost.port = testState.canvasHostPort;
-    }
-    const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
-
     const hooks = testState.hooksConfig ?? baseConfig.hooks;
 
     const fileCron =
@@ -130,22 +155,25 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     if (typeof testState.cronEnabled === "boolean") {
       fileCron.enabled = testState.cronEnabled;
     }
+    if (typeof testState.cronTriggersEnabled === "boolean") {
+      fileCron.triggers = { enabled: testState.cronTriggersEnabled };
+    }
     if (typeof testState.cronStorePath === "string") {
-      fileCron.store = testState.cronStorePath;
+      writeConfigMachineState("cron.store", testState.cronStorePath);
     }
     const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
 
-    return {
+    const composed = {
       ...baseConfig,
       agents,
       bindings: testState.bindingsConfig ?? fileBindings,
       channels,
       session,
       gateway,
-      canvasHost,
       hooks,
       cron,
     } as OpenClawConfig;
+    return migratePersistedImplicitMainRoster(composed).config as OpenClawConfig;
   };
 
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
@@ -209,10 +237,12 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
 
   const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
     const configPath = resolveConfigPath();
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
-    await fs.writeFile(configPath, raw, "utf-8");
+    await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
     actual.resetConfigRuntimeState();
+    return {
+      persistedHash: "test-config-hash",
+      persistedConfig: composeTestConfig(cfg),
+    };
   });
 
   const readConfigFileSnapshotForWrite =
@@ -222,6 +252,22 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
         expectedConfigPath: resolveConfigPath(),
       },
     });
+  const readConfigFileSnapshotWithPluginMetadata =
+    async (): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
+      const snapshot = await readConfigFileSnapshot();
+      const validation = validateConfigObjectWithPlugins(snapshot.config, {
+        env: process.env,
+        pluginValidation: "skip",
+      });
+      return {
+        snapshot: {
+          ...snapshot,
+          valid: validation.ok,
+          issues: validation.ok ? [] : validation.issues,
+          warnings: validation.warnings,
+        },
+      };
+    };
 
   const loadTestConfig = () => {
     const configPath = resolveConfigPath();
@@ -251,7 +297,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
   };
 
   return {
-    ...actual,
     get CONFIG_PATH() {
       return resolveConfigPath();
     },
@@ -263,7 +308,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     },
     applyConfigOverrides: (cfg: OpenClawConfig) =>
       composeTestConfig(cfg as Record<string, unknown>),
-    loadConfig: loadRuntimeAwareTestConfig,
     getRuntimeConfig: loadRuntimeAwareTestConfig,
     parseConfigJson5: (raw: string) => {
       try {
@@ -278,6 +322,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       issues: [],
     }),
     readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
   };

@@ -1,60 +1,61 @@
+/**
+ * Public model-selection facade for persisted, configured, and allowed refs.
+ */
 import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-  toAgentModelListLike,
-} from "../config/model-input.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
-  resolveAgentModelFallbacksOverride,
-} from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-export { resolveThinkingDefault } from "./model-thinking-default.js";
+import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
+  type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
-  findNormalizedProviderValue,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
-  parseModelRef,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
 import {
-  buildAllowedModelSetWithFallbacks,
-  buildConfiguredAllowlistKeys,
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "./model-selection-config.js";
+import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
+import {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  getModelRefStatusWithFallbackModels,
   inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
-  resolveAllowedModelRefFromAliasIndex,
-  resolveAllowlistModelKey as resolveAllowlistModelKeyFromShared,
+  resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
-  resolveConfiguredOpenRouterCompatAlias,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
   type ModelAliasIndex,
-  type ModelRefStatus,
 } from "./model-selection-shared.js";
+export { resolveAllowedModelRefCore as resolveAllowedModelRef } from "./model-selection-resolve.js";
+export { buildAllowedModelSet } from "./model-selection-shared.js";
+export {
+  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalogCore,
+} from "./model-thinking-default.js";
 
-export type { ModelAliasIndex, ModelRef, ModelRefStatus };
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
 
-export type ThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
+export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
 
 export {
-  buildConfiguredAllowlistKeys,
+  normalizeStoredOverrideModel,
+  resolvePersistedOverrideModelRef,
+} from "./model-selection-persisted.js";
+
+export {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   findNormalizedProviderKey,
@@ -67,30 +68,22 @@ export {
   normalizeProviderId,
   normalizeProviderIdForAuth,
   parseModelRef,
+  resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelAliasFromPair,
   resolveModelRefFromString,
 };
-export { isCliProvider } from "./model-selection-cli.js";
+export {
+  isCliProvider,
+  prepareCliProviderClassifier,
+  type CliProviderClassifier,
+} from "./model-selection-cli.js";
+// Cron imports this narrow owner directly; the public facade must not fork its policy.
+export { getModelRefStatus } from "./model-selection-resolve.js";
 
-export function resolvePersistedOverrideModelRef(params: {
-  defaultProvider: string;
-  overrideProvider?: string;
-  overrideModel?: string;
-}): ModelRef | null {
-  const defaultProvider = params.defaultProvider.trim();
-  const overrideProvider = params.overrideProvider?.trim();
-  const overrideModel = params.overrideModel?.trim();
-  if (!overrideModel) {
-    return null;
-  }
-  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
-  return (
-    parseModelRef(encodedOverride, defaultProvider) ?? {
-      provider: overrideProvider || defaultProvider,
-      model: overrideModel,
-    }
-  );
+function normalizePersistedDefaultProvider(value: unknown): string {
+  return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
 }
 
 /**
@@ -98,21 +91,26 @@ export function resolvePersistedOverrideModelRef(params: {
  * Use this when callers intentionally want the last executed model identity.
  */
 export function resolvePersistedModelRef(params: {
-  defaultProvider: string;
-  runtimeProvider?: string;
-  runtimeModel?: string;
-  overrideProvider?: string;
-  overrideModel?: string;
+  defaultProvider?: unknown;
+  runtimeProvider?: unknown;
+  runtimeModel?: unknown;
+  overrideProvider?: unknown;
+  overrideModel?: unknown;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
 }): ModelRef | null {
-  const defaultProvider = params.defaultProvider.trim();
-  const runtimeProvider = params.runtimeProvider?.trim();
-  const runtimeModel = params.runtimeModel?.trim();
+  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
+  const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
+  const runtimeModel = normalizeOptionalString(params.runtimeModel);
   if (runtimeModel) {
     if (runtimeProvider) {
       return { provider: runtimeProvider, model: runtimeModel };
     }
     return (
-      parseModelRef(runtimeModel, defaultProvider) ?? {
+      parseModelRef(runtimeModel, defaultProvider, {
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
+      }) ?? {
         provider: defaultProvider,
         model: runtimeModel,
       }
@@ -122,6 +120,8 @@ export function resolvePersistedModelRef(params: {
     defaultProvider,
     overrideProvider: params.overrideProvider,
     overrideModel: params.overrideModel,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
 }
 
@@ -131,16 +131,20 @@ export function resolvePersistedModelRef(params: {
  * overrides before falling back to runtime identity.
  */
 export function resolvePersistedSelectedModelRef(params: {
-  defaultProvider: string;
-  runtimeProvider?: string;
-  runtimeModel?: string;
-  overrideProvider?: string;
-  overrideModel?: string;
+  defaultProvider?: unknown;
+  runtimeProvider?: unknown;
+  runtimeModel?: unknown;
+  overrideProvider?: unknown;
+  overrideModel?: unknown;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const override = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: params.overrideProvider,
     overrideModel: params.overrideModel,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (override) {
     return override;
@@ -149,89 +153,94 @@ export function resolvePersistedSelectedModelRef(params: {
     defaultProvider: params.defaultProvider,
     runtimeProvider: params.runtimeProvider,
     runtimeModel: params.runtimeModel,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
 }
 
-export function normalizeStoredOverrideModel(params: {
-  providerOverride?: string | null;
-  modelOverride?: string | null;
-}): { providerOverride?: string; modelOverride?: string } {
-  const providerOverride = params.providerOverride?.trim();
-  const modelOverride = params.modelOverride?.trim();
-  if (!providerOverride || !modelOverride) {
-    return {
-      providerOverride,
-      modelOverride,
-    };
+export async function canonicalizeCaseOnlyCatalogModelRef(params: {
+  raw: string | undefined;
+  cfg?: OpenClawConfig;
+  defaultProvider: string;
+  loadCatalog: () => Promise<ModelCatalogEntry[]>;
+  aliasIndex?: ModelAliasIndex;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
+  preserveAuthProfile?: boolean;
+}): Promise<string | undefined> {
+  const rawModel = normalizeOptionalString(params.raw);
+  if (!rawModel) {
+    return undefined;
   }
-
-  const providerPrefix = `${providerOverride.toLowerCase()}/`;
-  return {
-    providerOverride,
-    modelOverride: modelOverride.toLowerCase().startsWith(providerPrefix)
-      ? modelOverride.slice(providerOverride.length + 1).trim() || modelOverride
-      : modelOverride,
-  };
-}
-
-export function resolveAllowlistModelKey(
-  raw: string,
-  defaultProvider: string,
-  cfg?: OpenClawConfig,
-): string | null {
-  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider });
-}
-
-export function resolveDefaultModelForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-}): ModelRef {
-  const agentModelOverride = params.agentId
-    ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
-    : undefined;
-  const cfg =
-    agentModelOverride && agentModelOverride.length > 0
-      ? {
-          ...params.cfg,
-          agents: {
-            ...params.cfg.agents,
-            defaults: {
-              ...params.cfg.agents?.defaults,
-              model: {
-                ...toAgentModelListLike(params.cfg.agents?.defaults?.model),
-                primary: agentModelOverride,
-              },
-            },
-          },
-        }
-      : params.cfg;
-  return resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+  const split = splitTrailingAuthProfile(rawModel);
+  if (shouldKeepProfileQualifiedModelRefRaw(split.profile, params.preserveAuthProfile)) {
+    return rawModel;
+  }
+  if (!isCaseOnlyProviderModelRef(split.model)) {
+    return rawModel;
+  }
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    raw: split.model,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
-}
-
-function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
-  if (params.agentId) {
-    const override = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
-    if (override !== undefined) {
-      return override;
-    }
+  if (!resolved) {
+    return rawModel;
   }
-  return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
-
-export function resolveSubagentConfiguredModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): string | undefined {
-  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
-  return (
-    normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(agentConfig?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model)
+  const entry = findModelInCatalog(
+    await params.loadCatalog(),
+    resolved.ref.provider,
+    resolved.ref.model,
   );
+  return entry ? formatCatalogModelRef(entry, split.profile) : rawModel;
+}
+
+function hasExplicitProviderModelRef(raw: string): boolean {
+  const slash = raw.indexOf("/");
+  return slash > 0 && slash < raw.length - 1;
+}
+
+function isCaseOnlyProviderModelRef(raw: string): boolean {
+  return hasExplicitProviderModelRef(raw) && raw !== raw.toLowerCase();
+}
+
+function shouldKeepProfileQualifiedModelRefRaw(
+  profile: string | undefined,
+  preserveAuthProfile: boolean | undefined,
+): boolean {
+  return Boolean(profile && preserveAuthProfile === false);
+}
+
+function formatCatalogModelRef(entry: ModelCatalogEntry, profile: string | undefined): string {
+  return appendAuthProfileSuffix(`${entry.provider}/${entry.id}`, profile);
+}
+
+function appendAuthProfileSuffix(modelRef: string, profile: string | undefined): string {
+  return profile ? `${modelRef}@${profile}` : modelRef;
+}
+
+/**
+ * Resolve a normalized model string through a pre-built alias index, returning
+ * a fully qualified `provider/model` string.  If the value is already qualified
+ * or not a known alias, returns it unchanged.
+ */
+function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
+  const { model, profile } = splitTrailingAuthProfile(value);
+  // Already a provider/model ref — no alias resolution needed.
+  if (model.includes("/")) {
+    return appendAuthProfileSuffix(model, profile);
+  }
+  // Check if the value is a known alias; if so, resolve to provider/model.
+  // Unknown bare strings are returned as-is (don't guess the provider).
+  const aliasKey = normalizeLowercaseStringOrEmpty(model);
+  const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+  if (aliasMatch) {
+    return appendAuthProfileSuffix(`${aliasMatch.ref.provider}/${aliasMatch.ref.model}`, profile);
+  }
+  return appendAuthProfileSuffix(model, profile);
 }
 
 export function resolveSubagentSpawnModelSelection(params: {
@@ -243,118 +252,55 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  return (
+  const configured = resolveConfiguredSubagentSpawnModelSelection({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelOverride: params.modelOverride,
+    defaultProvider: runtimeDefault.provider,
+  });
+  if (configured) {
+    return configured;
+  }
+  const raw =
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
+    `${runtimeDefault.provider}/${runtimeDefault.model}`;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    defaultProvider: runtimeDefault.provider,
+  });
+  return resolveModelThroughAliases(raw, aliasIndex);
+}
+
+export function resolveConfiguredSubagentSpawnModelSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  modelOverride?: unknown;
+  defaultProvider?: string;
+  includeAgentPrimary?: boolean;
+}): string | undefined {
+  const raw =
     normalizeModelSelection(params.modelOverride) ??
     resolveSubagentConfiguredModelSelection({
       cfg: params.cfg,
       agentId: params.agentId,
-    }) ??
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
-    `${runtimeDefault.provider}/${runtimeDefault.model}`
-  );
-}
-
-export function buildAllowedModelSet(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-  agentId?: string;
-}): {
-  allowAny: boolean;
-  allowedCatalog: ModelCatalogEntry[];
-  allowedKeys: Set<string>;
-} {
-  return buildAllowedModelSetWithFallbacks({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    fallbackModels: resolveAllowedFallbacks({
+      includeAgentPrimary: params.includeAgentPrimary,
+    });
+  if (!raw) {
+    return undefined;
+  }
+  const defaultProvider =
+    normalizeOptionalString(params.defaultProvider) ??
+    resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId: params.agentId,
-    }),
-  });
-}
-
-export function getModelRefStatus(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  ref: ModelRef;
-  defaultProvider: string;
-  defaultModel?: string;
-}): ModelRefStatus {
-  return getModelRefStatusWithFallbackModels({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    ref: params.ref,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-    fallbackModels: resolveAllowedFallbacks({
-      cfg: params.cfg,
-    }),
-  });
-}
-
-function getModelRefStatusForResolve(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    defaultProvider: string;
-    defaultModel?: string;
-  },
-  ref: ModelRef,
-): ModelRefStatus {
-  return getModelRefStatus({
-    cfg: params.cfg,
-    catalog: params.catalog,
-    ref,
-    defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
-  });
-}
-
-export function resolveAllowedModelRef(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  raw: string;
-  defaultProvider: string;
-  defaultModel?: string;
-}):
-  | { ref: ModelRef; key: string }
-  | {
-      error: string;
-    } {
-  const trimmed = params.raw.trim();
-  if (!trimmed) {
-    return { error: "invalid model: empty" };
-  }
-
+    }).provider;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
+    defaultProvider,
   });
-
-  const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
-    cfg: params.cfg,
-    raw: trimmed,
-    defaultProvider: params.defaultProvider,
-  });
-  if (openrouterCompatRef) {
-    const status = getModelRefStatusForResolve(params, openrouterCompatRef);
-    if (!status.allowed) {
-      return { error: `model not allowed: ${status.key}` };
-    }
-    return { ref: openrouterCompatRef, key: status.key };
-  }
-
-  return resolveAllowedModelRefFromAliasIndex({
-    cfg: params.cfg,
-    raw: params.raw,
-    defaultProvider: params.defaultProvider,
-    aliasIndex,
-    getStatus: (ref) => getModelRefStatusForResolve(params, ref),
-  });
+  return resolveModelThroughAliases(raw, aliasIndex);
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */

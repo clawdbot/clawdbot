@@ -1,3 +1,4 @@
+// Tests inline reply directive parsing and whitespace-preserving behavior.
 import { describe, expect, it } from "vitest";
 import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
 
@@ -20,17 +21,19 @@ describe("stripInlineStatus", () => {
     expect(result.didStrip).toBe(true);
   });
 
-  it("collapses horizontal whitespace but keeps newlines", () => {
-    const result = stripInlineStatus("hello   world\n  indented  line");
-    expect(result.cleaned).toBe("hello world\n indented line");
-    // didStrip is true because whitespace normalization changed the string
-    expect(result.didStrip).toBe(true);
-  });
+  it.each(["hello \t  world\r\n\t indented  line  \r\n", "   ", "\n    code\n"])(
+    "leaves unrecognized text byte-identical: %j",
+    (body) => {
+      expect(stripInlineStatus(body)).toEqual({ cleaned: body, didStrip: false });
+    },
+  );
 
-  it("returns empty string for whitespace-only input", () => {
-    const result = stripInlineStatus("   ");
-    expect(result.cleaned).toBe("");
-    expect(result.didStrip).toBe(false);
+  it.each([
+    ["/status:\r\n    if ready:\r\n        run()  \r\n", "    if ready:\r\n        run()  \r\n"],
+    ["start  here /status and\tthere /STATUS\r\n    code", "start  here and\tthere\r\n    code"],
+    ["before\n\n/status\n\n    after", "before\n\n\n    after"],
+  ])("removes only status spans and their separators: %j", (body, cleaned) => {
+    expect(stripInlineStatus(body)).toEqual({ cleaned, didStrip: true });
   });
 });
 
@@ -46,6 +49,14 @@ describe("extractInlineSimpleCommand", () => {
     expect(result?.command).toBe("/help");
     expect(result?.cleaned).toBe("first line\nsecond line");
   });
+
+  it.each(["/help", "/commands", "/whoami", "/id"])(
+    "preserves code bytes when extracting %s",
+    (command) => {
+      const code = "    if ready:\r\n\t\trun('a  b')  \r\n";
+      expect(extractInlineSimpleCommand(`${command}\r\n${code}`)?.cleaned).toBe(code);
+    },
+  );
 
   it("returns null for empty body", () => {
     expect(extractInlineSimpleCommand("")).toBeNull();

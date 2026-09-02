@@ -1,8 +1,10 @@
-import { listProfilesForProvider } from "../agents/auth-profiles.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+// Shares media-generation runtime polling and response helpers across providers.
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveCapabilityModelRefForProviders } from "../../packages/media-generation-core/src/capability-model-ref.js";
+import type { MediaGenerationNormalizationMetadataInput } from "../../packages/media-generation-core/src/normalization.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
-import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import {
   resolveAgentModelFallbackValues,
@@ -10,25 +12,20 @@ import {
 } from "../config/model-input.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type {
-  MediaGenerationNormalizationMetadataInput,
-  MediaNormalizationEntry,
-  MediaNormalizationValue,
-} from "./normalization.types.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import { isProviderApiKeyConfigured } from "../plugin-sdk/provider-auth.js";
+import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
 
-export type ParsedProviderModelRef = {
+// Shared media-generation runtime helpers for provider fallback, request
+// timeout normalization, model selection, and capability value normalization.
+export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
+
+type ParsedProviderModelRef = {
   provider: string;
   model: string;
 };
-export type {
-  MediaGenerationNormalizationMetadataInput,
-  MediaNormalizationEntry,
-  MediaNormalizationValue,
-} from "./normalization.types.js";
 
+/** Records one provider/model failure in the common fallback-attempt shape. */
 export function recordCapabilityCandidateFailure(params: {
   attempts: FallbackAttempt[];
   provider: string;
@@ -46,23 +43,48 @@ export function recordCapabilityCandidateFailure(params: {
   });
 }
 
-export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
-  entry: MediaNormalizationEntry<TValue> | undefined,
-): entry is MediaNormalizationEntry<TValue> {
-  return Boolean(
-    entry &&
-    (entry.requested !== undefined ||
-      entry.applied !== undefined ||
-      entry.derivedFrom !== undefined ||
-      (entry.supportedValues?.length ?? 0) > 0),
-  );
+/** Reject edit requests before provider I/O, including providers with incomplete limits. */
+export function resolveReferenceImageCapabilityError(params: {
+  candidateRef: string;
+  inputImageCount: number;
+  edit?: { enabled: boolean; maxInputImages?: number };
+}): string | undefined {
+  if (params.inputImageCount === 0) {
+    return undefined;
+  }
+  if (!params.edit?.enabled) {
+    return `${params.candidateRef} does not support reference-image edit inputs`;
+  }
+  const maxInputImages = params.edit.maxInputImages ?? 10;
+  return params.inputImageCount > maxInputImages
+    ? `${params.candidateRef} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}, ${params.inputImageCount} requested`
+    : undefined;
 }
 
 const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
+function resolveMediaProviderDefaultTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? clampTimerTimeoutMs(timeoutMs)
+    : undefined;
+}
+
+/** Resolves a request timeout, preferring per-request over provider defaults. */
+export function resolveMediaProviderRequestTimeoutMs(params: {
+  timeoutMs?: number;
+  providerDefaultTimeoutMs?: number;
+}): number | undefined {
+  return (
+    resolveMediaProviderDefaultTimeoutMs(params.timeoutMs) ??
+    resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs)
+  );
+}
+
 type CapabilityProviderCandidate = {
   id: string;
+  aliases?: readonly string[];
   defaultModel?: string | null;
+  models?: readonly string[];
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
 
@@ -104,17 +126,11 @@ function isCapabilityProviderConfigured(params: {
       agentDir: params.agentDir,
     });
   }
-  if (resolveEnvApiKey(params.provider.id)?.apiKey) {
-    return true;
-  }
-  const agentDir = normalizeOptionalString(params.agentDir);
-  if (!agentDir) {
-    return false;
-  }
-  const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
+  return isProviderApiKeyConfigured({
+    provider: params.provider.id,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
   });
-  return listProfilesForProvider(store, params.provider.id).length > 0;
 }
 
 function resolveAutoCapabilityFallbackRefs(params: {
@@ -122,7 +138,7 @@ function resolveAutoCapabilityFallbackRefs(params: {
   agentDir?: string;
   listProviders: (cfg?: OpenClawConfig) => CapabilityProviderCandidate[];
 }): string[] {
-  const providerDefaults = new Map<string, string>();
+  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.listProviders(params.cfg)) {
     const providerId = normalizeOptionalString(provider.id);
     const modelId = normalizeOptionalString(provider.defaultModel);
@@ -138,22 +154,32 @@ function resolveAutoCapabilityFallbackRefs(params: {
     ) {
       continue;
     }
-    providerDefaults.set(providerId, `${providerId}/${modelId}`);
+    const aliases = (provider.aliases ?? []).flatMap((alias) => {
+      const normalized = normalizeOptionalString(alias);
+      return normalized ? [normalized] : [];
+    });
+    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
   }
 
   const defaultProvider = resolveCurrentDefaultProviderId(params.cfg);
+  const providerIds = [...providerDefaults.keys()].toSorted();
+  const matchesDefaultProvider = (providerId: string): boolean => {
+    const entry = providerDefaults.get(providerId);
+    return providerId === defaultProvider || (entry?.aliases ?? []).includes(defaultProvider);
+  };
   const orderedProviders = [
-    defaultProvider,
-    ...[...providerDefaults.keys()]
-      .filter((providerId) => providerId !== defaultProvider)
-      .toSorted(),
+    ...providerIds.filter(matchesDefaultProvider),
+    ...providerIds.filter((providerId) => !matchesDefaultProvider(providerId)),
   ];
+  // Keep the user's default text provider first when it also has media support;
+  // then add the remaining configured media providers deterministically.
   return orderedProviders.flatMap((providerId) => {
-    const ref = providerDefaults.get(providerId);
-    return ref ? [ref] : [];
+    const entry = providerDefaults.get(providerId);
+    return entry ? [entry.ref] : [];
   });
 }
 
+/** Builds ordered provider/model candidates for one media capability request. */
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -165,34 +191,63 @@ export function resolveCapabilityModelCandidates(params: {
 }): ParsedProviderModelRef[] {
   const candidates: ParsedProviderModelRef[] = [];
   const seen = new Set<string>();
-  const add = (raw: string | undefined) => {
-    const parsed = params.parseModelRef(raw);
-    if (!parsed) {
+  let providers: CapabilityProviderCandidate[] | undefined;
+  const getProviders = (): CapabilityProviderCandidate[] => {
+    providers ??= params.listProviders?.(params.cfg) ?? [];
+    return providers;
+  };
+  const resolveCandidate = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
+    const trimmed = normalizeOptionalString(raw);
+    if (!trimmed) {
+      return null;
+    }
+    if (!options.useProviderMetadata) {
+      return params.parseModelRef(raw);
+    }
+    return resolveCapabilityModelRefForProviders({
+      raw: trimmed,
+      providers: getProviders(),
+      parseModelRef: params.parseModelRef,
+    });
+  };
+  const add = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
+    const candidate = resolveCandidate(raw, options);
+    if (!candidate) {
       return;
     }
-    const key = `${parsed.provider}/${parsed.model}`;
+    const key = `${candidate.provider}/${candidate.model}`;
     if (seen.has(key)) {
       return;
     }
     seen.add(key);
-    candidates.push(parsed);
+    candidates.push(candidate);
   };
 
-  add(params.modelOverride);
-  add(resolveAgentModelPrimaryValue(params.modelConfig));
-  for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
-    add(fallback);
+  const override = (() => {
+    return resolveCandidate(params.modelOverride, { useProviderMetadata: true });
+  })();
+  if (override) {
+    // Explicit model overrides are authoritative and should not be expanded into
+    // auto provider fallback candidates.
+    return [override];
   }
-  const autoProviderFallbackEnabled =
-    params.autoProviderFallback ??
-    params.cfg.agents?.defaults?.mediaGenerationAutoProviderFallback !== false;
+
+  // Cross-provider fallback is a fixed product policy; Doctor removes the retired opt-out.
+  const autoProviderFallbackEnabled = params.autoProviderFallback ?? true;
+  add(params.modelOverride, { useProviderMetadata: true });
+  add(resolveAgentModelPrimaryValue(params.modelConfig), {
+    useProviderMetadata: autoProviderFallbackEnabled,
+  });
+  for (const fallback of resolveAgentModelFallbackValues(params.modelConfig)) {
+    add(fallback, { useProviderMetadata: autoProviderFallbackEnabled });
+  }
   if (autoProviderFallbackEnabled && params.listProviders) {
     for (const candidate of resolveAutoCapabilityFallbackRefs({
       cfg: params.cfg,
       agentDir: params.agentDir,
-      listProviders: params.listProviders,
+      listProviders: () => getProviders(),
     })) {
-      add(candidate);
+      add(candidate, { useProviderMetadata: false });
     }
   }
   return candidates;
@@ -258,6 +313,9 @@ function parseSizeValue(raw?: string | null): ParsedSize | null {
   if (!pair) {
     return null;
   }
+  if (!Number.isSafeInteger(pair.width) || !Number.isSafeInteger(pair.height)) {
+    return null;
+  }
   return {
     width: pair.width,
     height: pair.height,
@@ -277,7 +335,8 @@ function greatestCommonDivisor(a: number, b: number): number {
   return left || 1;
 }
 
-export function deriveAspectRatioFromSize(size?: string): string | undefined {
+/** Derives a reduced aspect ratio string from a WIDTHxHEIGHT size. */
+function deriveAspectRatioFromSize(size?: string): string | undefined {
   const parsed = parseSizeValue(size);
   if (!parsed) {
     return undefined;
@@ -286,6 +345,7 @@ export function deriveAspectRatioFromSize(size?: string): string | undefined {
   return `${parsed.width / divisor}:${parsed.height / divisor}`;
 }
 
+/** Chooses the closest supported aspect ratio for a request. */
 export function resolveClosestAspectRatio(params: {
   requestedAspectRatio?: string;
   requestedSize?: string;
@@ -325,6 +385,7 @@ export function resolveClosestAspectRatio(params: {
   return bestValue;
 }
 
+/** Chooses the closest supported size by aspect ratio and area. */
 export function resolveClosestSize(params: {
   requestedSize?: string;
   requestedAspectRatio?: string;
@@ -365,6 +426,7 @@ export function resolveClosestSize(params: {
   return bestValue;
 }
 
+/** Chooses the closest supported resolution by numeric rank or custom order. */
 export function resolveClosestResolution<TResolution extends string>(params: {
   requestedResolution?: TResolution;
   supportedResolutions?: readonly TResolution[];
@@ -376,6 +438,29 @@ export function resolveClosestResolution<TResolution extends string>(params: {
   }
   if (params.requestedResolution && supported.includes(params.requestedResolution)) {
     return params.requestedResolution;
+  }
+  const requestedNumeric = parseResolutionRank(params.requestedResolution);
+  if (requestedNumeric) {
+    let bestValue: TResolution | undefined;
+    let bestScore: { primary: number; secondary: number; tertiary: string } | null = null;
+    for (const candidate of supported) {
+      const candidateNumeric = parseResolutionRank(candidate);
+      if (!candidateNumeric || candidateNumeric.unit !== requestedNumeric.unit) {
+        continue;
+      }
+      const score = {
+        primary: Math.abs(candidateNumeric.value - requestedNumeric.value),
+        secondary: candidateNumeric.value < requestedNumeric.value ? 1 : 0,
+        tertiary: candidate,
+      };
+      if (compareScores(score, bestScore)) {
+        bestValue = candidate;
+        bestScore = score;
+      }
+    }
+    if (bestValue) {
+      return bestValue;
+    }
   }
   const order: readonly string[] = params.order ?? IMAGE_RESOLUTION_ORDER;
   const requestedIndex = params.requestedResolution
@@ -405,6 +490,25 @@ export function resolveClosestResolution<TResolution extends string>(params: {
   return bestValue;
 }
 
+function parseResolutionRank(
+  resolution: string | undefined,
+): { value: number; unit: "K" | "P" } | undefined {
+  const match = resolution?.trim().match(/^(\d+(?:\.\d+)?)([kp])$/iu);
+  if (!match) {
+    return undefined;
+  }
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  const unit = match[2]?.toUpperCase() === "K" ? "K" : "P";
+  return {
+    value: unit === "K" ? value * 1000 : value,
+    unit,
+  };
+}
+
+/** Rounds duration and clamps it to a provider maximum when supplied. */
 export function normalizeDurationToClosestMax(
   durationSeconds?: number,
   maxDurationSeconds?: number,
@@ -423,6 +527,7 @@ export function normalizeDurationToClosestMax(
   return Math.min(rounded, Math.max(1, Math.round(maxDurationSeconds)));
 }
 
+/** Builds user-visible metadata describing provider normalization decisions. */
 export function buildMediaGenerationNormalizationMetadata(params: {
   normalization?: MediaGenerationNormalizationMetadataInput;
   requestedSizeForDerivedAspectRatio?: string;
@@ -472,20 +577,16 @@ export function buildMediaGenerationNormalizationMetadata(params: {
   return metadata;
 }
 
+/** Throws a summarized error after all provider/model candidates fail. */
 export function throwCapabilityGenerationFailure(params: {
   capabilityLabel: string;
   attempts: FallbackAttempt[];
   lastError: unknown;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
-    throw params.lastError;
+    throw toErrorObject(params.lastError, "Non-Error thrown");
   }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
+  const summary = formatCapabilityFailureAttempts(params.attempts);
   throw new Error(
     `All ${params.capabilityLabel} models failed (${params.attempts.length}): ${summary}`,
     {
@@ -494,12 +595,53 @@ export function throwCapabilityGenerationFailure(params: {
   );
 }
 
+function formatCapabilityFailureAttempts(attempts: FallbackAttempt[]): string {
+  if (attempts.length === 0) {
+    return "unknown";
+  }
+
+  const abortedAttempts = attempts.filter(isAbortLikeFallbackAttempt);
+  if (abortedAttempts.length === 0) {
+    return attempts.map(formatCapabilityFailureAttempt).join(" | ");
+  }
+  if (abortedAttempts.length === attempts.length) {
+    return `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`;
+  }
+
+  const primaryFailures = attempts.filter((attempt) => !isAbortLikeFallbackAttempt(attempt));
+  return [
+    primaryFailures.map(formatCapabilityFailureAttempt).join(" | "),
+    `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`,
+  ].join(" | ");
+}
+
+function formatCapabilityFailureAttempt(attempt: FallbackAttempt): string {
+  return `${formatCapabilityAttemptRef(attempt)}: ${attempt.error}`;
+}
+
+function formatCapabilityAttemptRef(attempt: FallbackAttempt): string {
+  return `${attempt.provider}/${attempt.model}`;
+}
+
+function isAbortLikeFallbackAttempt(attempt: FallbackAttempt): boolean {
+  const message = attempt.error.trim().toLowerCase();
+  return (
+    message === "this operation was aborted" ||
+    message === "operation was aborted" ||
+    message.includes("operation was aborted") ||
+    message.includes("request was aborted")
+  );
+}
+
+/** Formats setup guidance when no model is configured for a media capability. */
 export function buildNoCapabilityModelConfiguredMessage(params: {
   capabilityLabel: string;
   modelConfigKey: string;
   providers: Array<{ id: string; defaultModel?: string | null }>;
   fallbackSampleRef?: string;
+  getProviderEnvVars?: typeof getDefaultProviderEnvVars;
 }): string {
+  const getProviderEnvVars = params.getProviderEnvVars ?? getDefaultProviderEnvVars;
   const sampleModel = params.providers.find(
     (provider) =>
       normalizeOptionalString(provider.id) && normalizeOptionalString(provider.defaultModel),

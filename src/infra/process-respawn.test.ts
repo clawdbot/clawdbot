@@ -1,12 +1,25 @@
+// Covers process respawn behavior across supervisors.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureFullEnv } from "../test-utils/env.js";
+import { captureFullEnv, deleteTestEnvValue } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
+const scheduleLaunchdHandoffMock = vi.hoisted(() =>
+  vi.fn(
+    (
+      ..._args: unknown[]
+    ): { ok: true; value: Promise<boolean> } | { ok: false; error: string } => ({
+      ok: true,
+      value: Promise.resolve(true),
+    }),
+  ),
+);
+const isContainerEnvironmentMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -17,22 +30,25 @@ vi.mock("node:child_process", async () => {
 vi.mock("./restart.js", () => ({
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
 }));
+vi.mock("../daemon/launchd-restart-handoff.js", () => ({
+  scheduleDetachedLaunchdRestartHandoff: (...args: unknown[]) =>
+    scheduleLaunchdHandoffMock(...args),
+}));
+vi.mock("./container-environment.js", () => ({
+  isContainerEnvironment: () => isContainerEnvironmentMock(),
+}));
 
-import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
+import {
+  respawnGatewayProcessForUpdate,
+  restartGatewayProcessWithFreshPid,
+} from "./process-respawn.js";
 
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
 const envSnapshot = captureFullEnv();
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
-function setPlatform(platform: string) {
-  if (!originalPlatformDescriptor) {
-    return;
-  }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
-  });
+function setPlatform(platform: NodeJS.Platform) {
+  mockProcessPlatform(platform);
 }
 
 afterEach(() => {
@@ -41,25 +57,44 @@ afterEach(() => {
   process.execArgv = [...originalExecArgv];
   spawnMock.mockClear();
   triggerOpenClawRestartMock.mockClear();
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
+  scheduleLaunchdHandoffMock.mockReset();
+  scheduleLaunchdHandoffMock.mockReturnValue({
+    ok: true,
+    value: Promise.resolve(true),
+  });
+  isContainerEnvironmentMock.mockReset();
+  isContainerEnvironmentMock.mockReturnValue(false);
+  vi.restoreAllMocks();
 });
 
 function clearSupervisorHints() {
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
-    delete process.env[key];
+    deleteTestEnvValue(key);
   }
 }
 
-function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: string }) {
+function mockDetachedChild(pid: number) {
+  return {
+    pid,
+    kill: vi.fn(),
+    on: vi.fn(),
+    unref: vi.fn(),
+  };
+}
+
+function expectLaunchdSupervisedWithHandoff(params?: { launchJobLabel?: string }) {
   setPlatform("darwin");
   if (params?.launchJobLabel) {
     process.env.LAUNCH_JOB_LABEL = params.launchJobLabel;
   }
   process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
   const result = restartGatewayProcessWithFreshPid();
-  expect(result).toEqual({ mode: "supervised" });
+  expect(result.mode).toBe("supervised");
+  expect(result.handoffSpawned).toBeInstanceOf(Promise);
+  expect(scheduleLaunchdHandoffMock).toHaveBeenCalledWith({
+    mode: "start-after-exit",
+    waitForPid: process.pid,
+  });
   expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   expect(spawnMock).not.toHaveBeenCalled();
 }
@@ -85,13 +120,51 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when launchd hints are present on macOS (no kickstart)", () => {
+  it("actively schedules relaunch when OpenClaw launchd markers are present on macOS", () => {
     clearSupervisorHints();
-    expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
+    expectLaunchdSupervisedWithHandoff({ launchJobLabel: "ai.openclaw.gateway" });
   });
 
-  it("returns supervised on macOS when launchd label is set (no kickstart)", () => {
-    expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
+  it("returns supervised for a real gateway launchd job without the injected marker", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(scheduleLaunchdHandoffMock).toHaveBeenCalledOnce();
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised for a real gateway XPC launchd job without the injected marker", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(scheduleLaunchdHandoffMock).toHaveBeenCalledOnce();
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised on macOS when launchd label is set", () => {
+    expectLaunchdSupervisedWithHandoff({ launchJobLabel: "ai.openclaw.gateway" });
+  });
+
+  it("returns failed when the launchd handoff cannot be scheduled", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    scheduleLaunchdHandoffMock.mockReturnValue({ ok: false, error: "spawn EPERM" });
+
+    expect(restartGatewayProcessWithFreshPid()).toEqual({
+      mode: "failed",
+      detail: "spawn EPERM",
+    });
   });
 
   it("launchd supervisor never returns failed regardless of triggerOpenClawRestart outcome", () => {
@@ -107,6 +180,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
     expect(result.mode).not.toBe("failed");
+    expect(scheduleLaunchdHandoffMock).toHaveBeenCalledOnce();
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
   });
 
@@ -118,21 +192,28 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
 
     expect(result.mode).toBe("supervised");
+    expect(scheduleLaunchdHandoffMock).not.toHaveBeenCalled();
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when XPC_SERVICE_NAME is set by launchd", () => {
+  it("does not treat inherited XPC_SERVICE_NAME as launchd supervision", () => {
     clearSupervisorHints();
     setPlatform("darwin");
-    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.mac";
+    process.env.OPENCLAW_PROFILE = "mac";
+
     const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
+
+    expect(result).toEqual({
+      mode: "disabled",
+      detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
+    });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("spawns detached child with current exec argv", () => {
+  it("uses in-process restart on unmanaged Unix so custom supervisors keep the tracked PID", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
     setPlatform("linux");
@@ -142,20 +223,16 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     const result = restartGatewayProcessWithFreshPid();
 
-    expect(result).toEqual({ mode: "spawned", pid: 4242 });
-    expect(spawnMock).toHaveBeenCalledWith(
-      process.execPath,
-      ["--import", "tsx", "/repo/dist/index.js", "gateway", "run"],
-      expect.objectContaining({
-        detached: true,
-        stdio: "inherit",
-      }),
-    );
+    expect(result).toEqual({
+      mode: "disabled",
+      detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns supervised when OPENCLAW_LAUNCHD_LABEL is set (stock launchd plist)", () => {
     clearSupervisorHints();
-    expectLaunchdSupervisedWithoutKickstart();
+    expectLaunchdSupervisedWithHandoff();
   });
 
   it("returns supervised when OPENCLAW_SYSTEMD_UNIT is set", () => {
@@ -164,6 +241,19 @@ describe("restartGatewayProcessWithFreshPid", () => {
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("exits to external supervision without invoking inherited native restart hooks", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    process.env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({ mode: "supervised" });
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -184,12 +274,15 @@ describe("restartGatewayProcessWithFreshPid", () => {
     setPlatform("linux");
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     process.env.OPENCLAW_SERVICE_KIND = "gateway";
-    spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
 
     const result = restartGatewayProcessWithFreshPid();
 
-    expect(result).toEqual({ mode: "spawned", pid: 4242 });
+    expect(result).toEqual({
+      mode: "disabled",
+      detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
+    });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns disabled on Windows without Scheduled Task markers", () => {
@@ -200,6 +293,21 @@ describe("restartGatewayProcessWithFreshPid", () => {
 
     expect(result.mode).toBe("disabled");
     expect(result.detail).toContain("Scheduled Task");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns disabled in containers so PID 1 stays alive for in-process restart", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+    isContainerEnvironmentMock.mockReturnValue(true);
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result).toEqual({
+      mode: "disabled",
+      detail: "container: use in-process restart to keep PID 1 alive",
+    });
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -218,7 +326,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns failed when spawn throws", () => {
+  it("does not attempt detached spawn on unmanaged Unix even if spawn would throw", () => {
     delete process.env.OPENCLAW_NO_RESPAWN;
     clearSupervisorHints();
     setPlatform("linux");
@@ -227,6 +335,151 @@ describe("restartGatewayProcessWithFreshPid", () => {
       throw new Error("spawn failed");
     });
     const result = restartGatewayProcessWithFreshPid();
+    expect(result).toEqual({
+      mode: "disabled",
+      detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("respawnGatewayProcessForUpdate", () => {
+  it("keeps OPENCLAW_NO_RESPAWN semantics for update restarts", () => {
+    clearSupervisorHints();
+    process.env.OPENCLAW_NO_RESPAWN = "1";
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result).toEqual({ mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("allows detached respawn on unmanaged Windows during updates", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.execArgv = [];
+    process.argv = [
+      "C:\\Program Files\\node.exe",
+      "C:\\openclaw\\node_modules\\.pnpm\\openclaw@2026.6.5\\node_modules\\openclaw\\dist\\index.js",
+      "gateway",
+      "run",
+    ];
+    spawnMock.mockReturnValue(mockDetachedChild(5151));
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(result.pid).toBe(5151);
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["C:\\openclaw\\node_modules\\openclaw\\openclaw.mjs", "gateway", "run"],
+      {
+        detached: true,
+        env: process.env,
+        stdio: "inherit",
+      },
+    );
+  });
+
+  it("rewrites a pnpm-versioned OpenClaw entry before detached update respawn", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.execArgv = [];
+    process.argv = [
+      "/usr/local/bin/node",
+      "/app/node_modules/.pnpm/openclaw@2026.6.5/node_modules/openclaw/dist/entry.js",
+      "gateway",
+      "run",
+    ];
+    spawnMock.mockReturnValue(mockDetachedChild(7171));
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["/app/node_modules/openclaw/openclaw.mjs", "gateway", "run"],
+      {
+        detached: true,
+        env: process.env,
+        stdio: "inherit",
+      },
+    );
+  });
+
+  it("does not rewrite another package's pnpm-versioned entry", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.execArgv = [];
+    const entry =
+      "/app/node_modules/.pnpm/@anthropic+sdk@1.0.0/node_modules/@anthropic/sdk/dist/index.js";
+    process.argv = ["/usr/local/bin/node", entry, "gateway", "run"];
+    spawnMock.mockReturnValue(mockDetachedChild(8181));
+
+    respawnGatewayProcessForUpdate();
+
+    expect(spawnMock).toHaveBeenCalledWith(process.execPath, [entry, "gateway", "run"], {
+      detached: true,
+      env: process.env,
+      stdio: "inherit",
+    });
+  });
+
+  it("spawns a detached update process when macOS only has inherited XPC state", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.mac";
+    process.execArgv = [];
+    process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
+    spawnMock.mockReturnValue(mockDetachedChild(6161));
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(result.pid).toBe(6161);
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["/repo/dist/index.js", "gateway", "run"],
+      {
+        detached: true,
+        env: process.env,
+        stdio: "inherit",
+      },
+    );
+  });
+
+  it("registers a no-op detached child error listener before unref", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.execArgv = [];
+    process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
+    const child = mockDetachedChild(9191);
+    spawnMock.mockReturnValue(child);
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(result.child).toBe(child);
+    expect(child.on).toHaveBeenCalledWith("error", expect.any(Function));
+    const errorListener = child.on.mock.calls.find(([event]) => event === "error")?.[1];
+    expect(() => errorListener?.(new Error("spawn ENOENT"))).not.toThrow();
+    expect(child.unref).toHaveBeenCalledOnce();
+    const onCallOrder = child.on.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
+    const unrefCallOrder = child.unref.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY;
+    expect(onCallOrder).toBeLessThan(unrefCallOrder);
+  });
+
+  it("returns failed when update detached respawn throws", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+
+    spawnMock.mockImplementation(() => {
+      throw new Error("spawn failed");
+    });
+
+    const result = respawnGatewayProcessForUpdate();
+
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
   });

@@ -1,3 +1,4 @@
+// Discord tests cover session key normalization plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
 

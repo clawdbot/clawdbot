@@ -1,26 +1,18 @@
-import type { BaseProbeResult, BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
-import { describe, expect, expectTypeOf, it } from "vitest";
-import { expectDirectoryIds } from "../../../test/helpers/channels/directory-ids.js";
+// Discord tests cover directory contract plugin behavior.
+import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { describe, expect, it } from "vitest";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
-import type { DiscordProbe } from "./probe.js";
-import type { DiscordTokenResolution } from "./token.js";
-
 describe("Discord directory contract", () => {
-  it("keeps public probe and token resolution aligned with base contracts", () => {
-    expectTypeOf<DiscordProbe>().toMatchTypeOf<BaseProbeResult>();
-    expectTypeOf<DiscordTokenResolution>().toMatchTypeOf<BaseTokenResolution>();
-  });
-
   it("lists peers/groups from config (numeric ids only)", async () => {
     const cfg = {
       channels: {
         discord: {
           token: "discord-test",
-          dm: { allowFrom: ["<@111>", "<@!333>", "nope"] },
+          allowFrom: ["<@111>", "<@!333>", "nope"],
           dms: { "222": {} },
           guilds: {
             "123": {
@@ -61,7 +53,7 @@ describe("Discord directory contract", () => {
       channels: {
         discord: {
           token: envSecret,
-          dm: { allowFrom: ["<@111>"] },
+          allowFrom: ["<@111>"],
           guilds: {
             "123": {
               channels: {
@@ -75,6 +67,29 @@ describe("Discord directory contract", () => {
 
     await expectDirectoryIds(listDiscordDirectoryPeersFromConfig, cfg, ["user:111"]);
     await expectDirectoryIds(listDiscordDirectoryGroupsFromConfig, cfg, ["channel:555"]);
+  });
+
+  it("uses account allowFrom before inherited root allowFrom", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          allowFrom: ["<@111>"],
+          accounts: {
+            work: {
+              allowFrom: ["<@222>"],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const entries = await listDiscordDirectoryPeersFromConfig({
+      cfg,
+      accountId: "work",
+      query: null,
+      limit: null,
+    });
+    expect(entries.map((entry) => entry.id)).toEqual(["user:222"]);
   });
 
   it("applies query and limit filtering for config-backed directories", async () => {

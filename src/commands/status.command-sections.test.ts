@@ -1,8 +1,13 @@
+// Status command section tests cover footer, health, and report section rendering.
 import { describe, expect, it } from "vitest";
+import { formatHealthChannelLines } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
+  buildStatusAgentsValue,
   buildStatusHealthRows,
+  buildStatusHeartbeatValue,
+  buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
@@ -13,6 +18,62 @@ import {
 } from "./status.command-sections.ts";
 
 describe("status.command-sections", () => {
+  it("does not label an arbitrary agent as the default in an explicit fleet", () => {
+    expect(
+      buildStatusAgentsValue({
+        agentStatus: {
+          defaultId: null,
+          bootstrapPendingCount: 0,
+          totalSessions: 0,
+          agents: [
+            {
+              id: "alpha",
+              workspaceDir: "/tmp/alpha",
+              bootstrapPending: false,
+              sessionsPath: "/tmp/alpha/sessions.json",
+              sessionsCount: 0,
+              lastUpdatedAt: null,
+              lastActiveAgeMs: null,
+            },
+            {
+              id: "beta",
+              workspaceDir: "/tmp/beta",
+              bootstrapPending: false,
+              sessionsPath: "/tmp/beta/sessions.json",
+              sessionsCount: 0,
+              lastUpdatedAt: null,
+              lastActiveAgeMs: null,
+            },
+          ],
+        },
+        formatTimeAgo: () => "now",
+      }),
+    ).toBe("2 · no workspaces bootstrapping · sessions 0");
+  });
+
+  it("shows when heartbeat is waiting for a delivery route", () => {
+    expect(
+      buildStatusHeartbeatValue({
+        summary: {
+          heartbeat: {
+            defaultAgentId: "main",
+            agents: [
+              {
+                agentId: "main",
+                enabled: true,
+                every: "30m",
+                everyMs: 1_800_000,
+                waitingForRoute: true,
+              },
+            ],
+          },
+        },
+      }),
+    ).toBe(
+      "30m (main; waiting for delivery route — set commands.ownerAllowFrom or channel allowFrom, or heartbeat.target)",
+    );
+  });
+
   it("formats security audit lines with finding caps and follow-up commands", () => {
     const lines = buildStatusSecurityAuditLines({
       securityAudit: {
@@ -54,7 +115,7 @@ describe("status.command-sections", () => {
     expect(lines.at(-1)).toBe("muted(Deep probe: cmd:openclaw security audit --deep)");
   });
 
-  it("builds verbose sessions rows and empty fallback rows", () => {
+  it("builds verbose sessions rows and returns no rows for empty sessions", () => {
     const verboseRows = buildStatusSessionsRows({
       recent: [
         {
@@ -63,11 +124,32 @@ describe("status.command-sections", () => {
           updatedAt: 1,
           age: 5_000,
           model: "gpt-5.4",
+          runtime: "OpenAI Codex",
           totalTokens: null,
           totalTokensFresh: false,
           remainingTokens: null,
           percentUsed: null,
           contextTokens: null,
+          configuredModel: "openai/gpt-5.4",
+          selectedModel: "openai/gpt-5.4",
+          modelSelectionReason: null,
+          flags: [],
+        },
+        {
+          key: "agent:main:cron:daily-digest",
+          kind: "cron",
+          updatedAt: 2,
+          age: 7_000,
+          model: "gpt-5.5",
+          runtime: "OpenClaw Default",
+          totalTokens: null,
+          totalTokensFresh: false,
+          remainingTokens: null,
+          percentUsed: null,
+          contextTokens: null,
+          configuredModel: "openai/gpt-5.5",
+          selectedModel: "openai/gpt-5.5",
+          modelSelectionReason: null,
           flags: [],
         },
       ],
@@ -85,6 +167,16 @@ describe("status.command-sections", () => {
         Kind: "direct",
         Age: "5000ms",
         Model: "gpt-5.4",
+        Runtime: "OpenAI Codex",
+        Tokens: "12k",
+        Cache: "cache ok",
+      },
+      {
+        Key: "agent:ma",
+        Kind: "cron",
+        Age: "7000ms",
+        Model: "gpt-5.5",
+        Runtime: "OpenClaw Default",
         Tokens: "12k",
         Cache: "cache ok",
       },
@@ -100,15 +192,78 @@ describe("status.command-sections", () => {
       muted: (value) => `muted(${value})`,
     });
 
-    expect(emptyRows).toEqual([
-      {
-        Key: "muted(no sessions yet)",
-        Kind: "",
-        Age: "",
-        Model: "",
-        Tokens: "",
-        Cache: "",
-      },
+    expect(emptyRows).toEqual([]);
+  });
+
+  it("shows configured default and selected session model when they differ", () => {
+    const lines = buildStatusModelSelectionLines({
+      recent: [
+        {
+          key: "agent:main:telegram:chat-1",
+          kind: "direct",
+          updatedAt: 1,
+          age: 5_000,
+          model: "deepseek-v4-flash",
+          configuredModel: "zhipu/glm-4.5-air",
+          selectedModel: "deepseek/deepseek-v4-flash",
+          modelSelectionReason: "session override",
+          runtime: "OpenClaw Default",
+          totalTokens: null,
+          totalTokensFresh: false,
+          remainingTokens: null,
+          percentUsed: null,
+          contextTokens: null,
+          flags: [],
+        },
+      ],
+      shortenText: (value) => value,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(lines).toEqual([
+      "warn(Session agent:main:telegram:chat-1 is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.)",
+      "  Configured default: zhipu/glm-4.5-air",
+      "  Session selected: deepseek/deepseek-v4-flash",
+      "  Reason: session override",
+      "  Clear with: /model default",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+    ]);
+  });
+
+  it("shows fallback-specific wording for auto-fallback model mismatches", () => {
+    const lines = buildStatusModelSelectionLines({
+      recent: [
+        {
+          key: "agent:main:telegram:chat-2",
+          kind: "direct",
+          updatedAt: 1,
+          age: 5_000,
+          model: "qwen3.6-blue",
+          configuredModel: "minimax/MiniMax-M3",
+          selectedModel: "ollama/qwen3.6-blue:35b-a3b",
+          modelSelectionReason: "fallback selected",
+          runtime: "OpenClaw Default",
+          totalTokens: null,
+          totalTokensFresh: false,
+          remainingTokens: null,
+          percentUsed: null,
+          contextTokens: null,
+          flags: [],
+        },
+      ],
+      shortenText: (value) => value,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(lines).toEqual([
+      "warn(Session agent:main:telegram:chat-2 is running ollama/qwen3.6-blue:35b-a3b (auto fallback); config primary is minimax/MiniMax-M3.)",
+      "  Configured default: minimax/MiniMax-M3",
+      "  Session selected: ollama/qwen3.6-blue:35b-a3b",
+      "  Reason: fallback selected",
+      "  Action: check provider availability or retry with /model",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     ]);
   });
 
@@ -134,6 +289,181 @@ describe("status.command-sections", () => {
       { Item: "Forum", Status: "muted(OFF)", Detail: "not configured" },
       { Item: "Matrix", Status: "ok(LINKED)", Detail: "linked" },
       { Item: "Pager", Status: "warn(UNLINKED)", Detail: "not linked" },
+    ]);
+  });
+
+  it.each([
+    { account: {}, status: "ok(OK)", detail: "healthy" },
+    {
+      account: { probe: { ok: false, error: "sync rejected" } },
+      status: "warn(WARN)",
+      detail: "failed (unknown) - sync rejected",
+    },
+    {
+      account: { healthState: "blocked" },
+      status: "warn(WARN)",
+      detail: "blocked",
+    },
+    {
+      account: { healthState: "unknown" },
+      status: "warn(WARN)",
+      detail: "unknown",
+    },
+    {
+      account: { statusState: "unstable" },
+      status: "warn(WARN)",
+      detail: "auth stabilizing",
+    },
+    {
+      account: { configured: false },
+      status: "muted(OFF)",
+      detail: "not configured",
+    },
+  ])("classifies the real channel health detail $detail", ({ account, status, detail }) => {
+    const health: HealthSummary = {
+      ok: true,
+      ts: 0,
+      durationMs: 42,
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      channels: {
+        whatsapp: {
+          accountId: "default",
+          configured: true,
+          linked: true,
+          healthState: "healthy",
+          ...account,
+        },
+      },
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+    };
+    const rows = buildStatusHealthRows({
+      health,
+      formatHealthChannelLines,
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({ Item: "WhatsApp", Status: status, Detail: detail });
+  });
+
+  it("marks activated plugin service failures as warnings in deep health rows", () => {
+    const health: HealthSummary = {
+      ok: true,
+      ts: 0,
+      durationMs: 42,
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      plugins: {
+        loaded: ["calendar"],
+        errors: [
+          {
+            id: "calendar",
+            origin: "workspace",
+            activated: true,
+            failurePhase: "service",
+            error: "service scheduler: address already in use",
+          },
+        ],
+      },
+    };
+    const rows = buildStatusHealthRows({
+      health,
+      formatHealthChannelLines,
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({
+      Item: "Plugin calendar",
+      Status: "warn(WARN)",
+      Detail: "failed - service scheduler: address already in use; run openclaw doctor",
+    });
+  });
+
+  it("shows blocked ingress even when the channel connection is healthy", () => {
+    const rows = buildStatusHealthRows({
+      health: {
+        ok: true,
+        ts: 0,
+        durationMs: 42,
+        heartbeatSeconds: 60,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        deliveryQueues: {
+          failed: [],
+          ingressPressure: [
+            {
+              channelId: "telegram",
+              accountId: "ops",
+              laneCount: 1,
+              pendingCount: 2,
+              claimedCount: 0,
+              blockedCount: 1,
+              oldestReceivedAt: Date.now(),
+            },
+          ],
+        },
+      },
+      formatHealthChannelLines: () => ["Telegram: healthy"],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toContainEqual({ Item: "Telegram", Status: "ok(OK)", Detail: "healthy" });
+    expect(rows).toContainEqual({
+      Item: "Delivery queue",
+      Status: "warn(WARN)",
+      Detail: expect.stringContaining(
+        "inbound telegram/ops: 1 pressured lane, 2 pending, 0 claimed, 1 blocked",
+      ),
+    });
+  });
+
+  it("adds degraded event-loop health to status rows", () => {
+    const rows = buildStatusHealthRows({
+      health: {
+        durationMs: 42,
+        eventLoop: {
+          degraded: true,
+          degradedSinceMs: 180_000,
+          reasons: ["event_loop_delay"],
+          intervalMs: 62_000,
+          delayP99Ms: 61_000,
+          delayMaxMs: 62_000,
+          utilization: 1,
+          cpuCoreRatio: 1,
+        },
+      } as HealthSummary,
+      formatHealthChannelLines: () => [],
+      ok: (value) => `ok(${value})`,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(rows).toEqual([
+      { Item: "Gateway", Status: "ok(reachable)", Detail: "42ms" },
+      {
+        Item: "Event loop",
+        Status: "warn(WARN)",
+        Detail:
+          "degraded for 3m · reasons event_loop_delay · max 62000ms · p99 61000ms · util 1 · cpu 1",
+      },
     ]);
   });
 

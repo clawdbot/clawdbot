@@ -22,7 +22,8 @@ original_quick_validate = sys.modules.get("quick_validate")
 sys.modules["quick_validate"] = fake_quick_validate
 
 import package_skill as package_skill_module
-from package_skill import package_skill
+
+package_skill = package_skill_module.package_skill
 
 if original_quick_validate is not None:
     sys.modules["quick_validate"] = original_quick_validate
@@ -154,6 +155,44 @@ class TestPackageSkillSecurity(TestCase):
         self.assertIn("self-output-skill/SKILL.md", names)
         self.assertIn("self-output-skill/script.py", names)
         self.assertNotIn("self-output-skill/self-output-skill.skill", names)
+
+    def test_archive_entry_order_is_deterministic(self):
+        skill_dir = self.create_skill("order-skill")
+        # Files across multiple levels, created in non-sorted order, so the
+        # filesystem/rglob enumeration order differs from a lexicographic sort.
+        (skill_dir / "zeta.md").write_text("z\n")
+        (skill_dir / "yankee.txt").write_text("y\n")
+        alpha = skill_dir / "alpha"
+        alpha.mkdir()
+        (alpha / "delta.txt").write_text("d\n")
+        (alpha / "bravo.txt").write_text("b\n")
+        nested = skill_dir / "zlib"
+        nested.mkdir()
+        (nested / "november.txt").write_text("n\n")
+        # "alpha-x.txt" discriminates entry-name ordering from Path-object
+        # ordering: "-" (0x2d) sorts before "/" (0x2f) in the archive entry
+        # name, but Path part-tuple ordering places it after the "alpha/" dir.
+        (skill_dir / "alpha-x.txt").write_text("x\n")
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+
+        result = package_skill(str(skill_dir), str(out_dir))
+
+        self.assertIsNotNone(result)
+        skill_file = out_dir / "order-skill.skill"
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = [name for name in archive.namelist() if not name.endswith("/")]
+        # Entries must be ordered by their archive entry name, regardless of
+        # filesystem enumeration or OS path-flavour, so archives are reproducible.
+        self.assertEqual(names, sorted(names))
+        # Lock the entry-name contract: "alpha-x.txt" precedes "alpha/bravo.txt"
+        # (Path-object sorting would invert these).
+        self.assertLess(
+            names.index("order-skill/alpha-x.txt"),
+            names.index("order-skill/alpha/bravo.txt"),
+        )
+        # Ensure the fixture actually spans multiple directories/files.
+        self.assertIn("order-skill/zlib/november.txt", names)
 
 
 if __name__ == "__main__":

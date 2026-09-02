@@ -4,8 +4,7 @@ import Foundation
 public enum LocationCurrentRequest {
     public typealias TimeoutRunner = @Sendable (
         _ timeoutMs: Int,
-        _ operation: @escaping @Sendable () async throws -> CLLocation
-    ) async throws -> CLLocation
+        _ operation: @escaping @Sendable () async throws -> CLLocation) async throws -> CLLocation
 
     @MainActor
     public static func resolve(
@@ -19,6 +18,7 @@ public enum LocationCurrentRequest {
         let now = Date()
         if let maxAgeMs,
            let cached = manager.location,
+           cached.timestamp <= now,
            now.timeIntervalSince(cached.timestamp) * 1000 <= Double(maxAgeMs)
         {
             return cached

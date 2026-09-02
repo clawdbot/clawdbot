@@ -1,26 +1,19 @@
-import { afterEach, describe, expect, it } from "vitest";
+// Covers path guard helpers for platform and symlink errors.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
-  hasNodeErrorCode,
-  isNodeError,
-  isNotFoundPathError,
   isPathInside,
-  isSymlinkOpenError,
+  isPathStrictlyInside,
   normalizeWindowsPathForComparison,
+  normalizeWindowsPathPreservingCase,
 } from "./path-guards.js";
 
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
 function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  mockProcessPlatform(platform);
 }
 
 afterEach(() => {
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
+  vi.restoreAllMocks();
 });
 
 describe("normalizeWindowsPathForComparison", () => {
@@ -33,38 +26,33 @@ describe("normalizeWindowsPathForComparison", () => {
   });
 });
 
-describe("node path error helpers", () => {
+describe("normalizeWindowsPathPreservingCase", () => {
+  // Callers create files from paths derived off this, so case must survive. The
+  // equivalence case below pins that case is the *only* thing that differs from the
+  // comparison variant; these rows pin the concrete shapes.
   it.each([
-    [{ code: "ENOENT" }, true],
-    [{ message: "nope" }, false],
-  ])("detects node-style error %j", (value, expected) => {
-    expect(isNodeError(value)).toBe(expected);
+    ["\\\\?\\C:\\Users\\Peter/Repo", "C:\\Users\\Peter\\Repo"],
+    ["\\\\?\\UNC\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
+    ["\\\\?\\unc\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
+    ["C:\\Users\\User\\OpenClaw\\src/Components", "C:\\Users\\User\\OpenClaw\\src\\Components"],
+    ["C:\\Users\\User\\OpenClaw  ", "C:\\Users\\User\\OpenClaw  "],
+  ])("normalizes windows path %s without lowercasing", (input, expected) => {
+    expect(normalizeWindowsPathPreservingCase(input)).toBe(expected);
   });
 
-  it.each([
-    [{ code: "ENOENT" }, "ENOENT", true],
-    [{ code: "ENOENT" }, "EACCES", false],
-  ])("matches node error code for %j", (value, code, expected) => {
-    expect(hasNodeErrorCode(value, code)).toBe(expected);
-  });
-
-  it.each([
-    [{ code: "ENOENT" }, true],
-    [{ code: "ENOTDIR" }, true],
-    [{ code: "EACCES" }, false],
-    [{ code: 404 }, false],
-  ])("classifies not-found path error for %j", (value, expected) => {
-    expect(isNotFoundPathError(value)).toBe(expected);
-  });
-
-  it.each([
-    [{ code: "ELOOP" }, true],
-    [{ code: "EINVAL" }, true],
-    [{ code: "ENOTSUP" }, true],
-    [{ code: "ENOENT" }, false],
-    [{ code: null }, false],
-  ])("classifies symlink-open error for %j", (value, expected) => {
-    expect(isSymlinkOpenError(value)).toBe(expected);
+  it("matches the comparison variant except for case", () => {
+    for (const input of [
+      "\\\\?\\C:\\Users\\Peter/Repo",
+      "\\\\?\\UNC\\Server\\Share\\Folder",
+      "\\\\?\\unc\\Server\\Share\\Folder",
+      "C:\\Users\\User\\OpenClaw\\src/Components",
+      "C:\\Users\\User\\OpenClaw  ",
+      "  C:\\Users\\User\\OpenClaw  ",
+    ]) {
+      expect(normalizeWindowsPathPreservingCase(input).toLowerCase()).toBe(
+        normalizeWindowsPathForComparison(input),
+      );
+    }
   });
 });
 
@@ -73,7 +61,17 @@ describe("isPathInside", () => {
     ["/workspace/root", "/workspace/root", true],
     ["/workspace/root", "/workspace/root/nested/file.txt", true],
     ["/workspace/root", "/workspace/root/..file.txt", true],
+    ["/workspace/root", "/workspace/root/..cache/cache.json", true],
     ["/workspace/root", "/workspace/root/../escape.txt", false],
+    ["/workspace/root", "/workspace/rootless/file.txt", false],
+    ["/workspace/root", "/workspace/root/a/b/c/d/e/file.txt", true],
+    ["/workspace/root", "/workspace/root/a/..", true],
+    ["/workspace/root", "/workspace/root/a/../..", false],
+    ["/workspace/root", "/workspace/root/a/b/../../../escape", false],
+    ["/", "/anything/at/all", true],
+    ["/", "/", true],
+    ["foo", "foo/bar", true],
+    ["foo", "../escape", false],
   ])("checks posix containment %s -> %s", (basePath, targetPath, expected) => {
     expect(isPathInside(basePath, targetPath)).toBe(expected);
   });
@@ -89,6 +87,29 @@ describe("isPathInside", () => {
       [String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`, false],
     ] as const) {
       expect(isPathInside(basePath, targetPath)).toBe(expected);
+    }
+  });
+});
+
+describe("isPathStrictlyInside", () => {
+  it.each([
+    ["/workspace/root", "/workspace/root", false],
+    ["/workspace/root", "/workspace/root/child", true],
+    ["/workspace/root", "/workspace/root/..cache/cache.json", true],
+    ["/workspace/root", "/workspace/root/../escape", false],
+  ])("checks strict posix containment %s -> %s", (basePath, targetPath, expected) => {
+    expect(isPathStrictlyInside(basePath, targetPath)).toBe(expected);
+  });
+
+  it("uses win32 path semantics for strict containment checks", () => {
+    setPlatform("win32");
+
+    for (const [basePath, targetPath, expected] of [
+      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root`, false],
+      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..cache\file.txt`, true],
+      [String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`, false],
+    ] as const) {
+      expect(isPathStrictlyInside(basePath, targetPath)).toBe(expected);
     }
   });
 });

@@ -1,27 +1,38 @@
+// Slack plugin module implements exec approvals behavior.
 import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   createChannelExecApprovalProfile,
   isChannelExecApprovalTargetRecipient,
 } from "openclaw/plugin-sdk/approval-client-runtime";
-import { doesApprovalRequestMatchChannelAccount } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount } from "./accounts.js";
+import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
 
-export function normalizeSlackApproverId(value: string | number): string | undefined {
+function normalizeSlackUserLikeId(value: string): string | undefined {
+  const upper = value.toUpperCase();
+  return /^[UW][A-Z0-9]+$/.test(upper) ? upper : undefined;
+}
+
+export function normalizeSlackApproverTarget(value: string | number): string | undefined {
   const trimmed = normalizeStringifiedOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
-  const prefixed = trimmed.match(/^(?:slack|user):([A-Z0-9]+)$/i);
-  if (prefixed?.[1]) {
-    return prefixed[1];
+  try {
+    const target = parseSlackTarget(trimmed, { defaultKind: "user" });
+    const id = target?.kind === "user" ? normalizeSlackUserLikeId(target.id) : undefined;
+    return target?.teamId && id
+      ? formatSlackTarget({ kind: "user", id, teamId: target.teamId.toUpperCase() })
+      : id;
+  } catch {
+    return undefined;
   }
-  const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
-  if (mention?.[1]) {
-    return mention[1];
-  }
-  return /^[UW][A-Z0-9]+$/i.test(trimmed) ? trimmed : undefined;
+}
+
+export function normalizeSlackApproverId(value: string | number): string | undefined {
+  const target = normalizeSlackApproverTarget(value);
+  return target?.startsWith("team:") ? undefined : target;
 }
 
 function resolveSlackOwnerApprovers(cfg: OpenClawConfig): string[] {
@@ -45,7 +56,7 @@ export function getSlackExecApprovalApprovers(params: {
   });
 }
 
-export function isSlackExecApprovalTargetRecipient(params: {
+function isSlackExecApprovalTargetRecipient(params: {
   cfg: OpenClawConfig;
   senderId?: string | null;
   accountId?: string | null;
@@ -64,19 +75,10 @@ const slackExecApprovalProfile = createChannelExecApprovalProfile({
   resolveApprovers: getSlackExecApprovalApprovers,
   normalizeSenderId: normalizeSlackApproverId,
   isTargetRecipient: isSlackExecApprovalTargetRecipient,
-  matchesRequestAccount: (params) =>
-    doesApprovalRequestMatchChannelAccount({
-      cfg: params.cfg,
-      request: params.request,
-      channel: "slack",
-      accountId: params.accountId,
-    }),
 });
 
 export const isSlackExecApprovalClientEnabled = slackExecApprovalProfile.isClientEnabled;
-export const isSlackExecApprovalApprover = slackExecApprovalProfile.isApprover;
 export const isSlackExecApprovalAuthorizedSender = slackExecApprovalProfile.isAuthorizedSender;
 export const resolveSlackExecApprovalTarget = slackExecApprovalProfile.resolveTarget;
-export const shouldHandleSlackExecApprovalRequest = slackExecApprovalProfile.shouldHandleRequest;
 export const shouldSuppressLocalSlackExecApprovalPrompt =
   slackExecApprovalProfile.shouldSuppressLocalPrompt;

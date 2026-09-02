@@ -1,13 +1,59 @@
+// Telegram plugin module implements command ui behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { buildCommandsPaginationKeyboard } from "openclaw/plugin-sdk/telegram-command-ui";
 import {
   buildBrowseProvidersButton,
   buildModelsKeyboard,
   buildProviderKeyboard,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
-export { buildCommandsPaginationKeyboard };
+export function buildCommandsPaginationKeyboard(
+  currentPage: number,
+  totalPages: number,
+  agentId?: string,
+): Array<Array<{ text: string; callback_data: string }>> {
+  const buttons: Array<{ text: string; callback_data: string }> = [];
+  const suffix = agentId ? `:${agentId}` : "";
+
+  if (currentPage > 1) {
+    buttons.push({
+      text: "◀ Prev",
+      callback_data: `commands_page_${currentPage - 1}${suffix}`,
+    });
+  }
+
+  buttons.push({
+    text: `${currentPage}/${totalPages}`,
+    callback_data: `commands_page_noop${suffix}`,
+  });
+
+  if (currentPage < totalPages) {
+    buttons.push({
+      text: "Next ▶",
+      callback_data: `commands_page_${currentPage + 1}${suffix}`,
+    });
+  }
+
+  return [buttons];
+}
+
+export function buildTelegramModelsMenuButtons(params: { providers: ProviderInfo[] }) {
+  return buildProviderKeyboard(params.providers);
+}
+
+export function buildTelegramModelsMenuChannelData(params: {
+  providers: ProviderInfo[];
+}): ReplyPayload["channelData"] | null {
+  if (params.providers.length === 0) {
+    return null;
+  }
+  return {
+    telegram: {
+      buttons: buildTelegramModelsMenuButtons(params),
+    },
+  };
+}
 
 export function buildTelegramCommandsListChannelData(params: {
   currentPage: number;
@@ -37,6 +83,25 @@ export function buildTelegramModelsProviderChannelData(params: {
   return {
     telegram: {
       buttons: buildProviderKeyboard(params.providers),
+    },
+  };
+}
+
+export function buildTelegramModelsAddProviderChannelData(params: {
+  providers: Array<{ id: string }>;
+}): ReplyPayload["channelData"] | null {
+  if (params.providers.length === 0) {
+    return null;
+  }
+  const buttons = params.providers.map((provider) => [
+    {
+      text: provider.id,
+      callback_data: buildTelegramNativeCommandCallbackData(`/models add ${provider.id}`),
+    },
+  ]);
+  return {
+    telegram: {
+      buttons,
     },
   };
 }

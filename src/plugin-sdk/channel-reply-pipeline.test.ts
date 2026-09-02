@@ -1,7 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
-import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+/**
+ * Tests channel reply pipeline prefix context and typing callback behavior.
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelReplyPipeline, type ReplyPrefixOptions } from "./channel-reply-pipeline.js";
 
 describe("createChannelReplyPipeline", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   it.each([
     {
       name: "builds prefix options without forcing typing support",
@@ -44,8 +54,16 @@ describe("createChannelReplyPipeline", () => {
         : input,
     );
 
-    expect(typeof pipeline.onModelSelected).toBe("function");
-    expect(typeof pipeline.responsePrefixContextProvider).toBe("function");
+    pipeline.onModelSelected({
+      provider: "openai",
+      model: "gpt-5.5",
+      thinkLevel: "high",
+    });
+    const prefixContext = pipeline.responsePrefixContextProvider();
+    expect(prefixContext.model).toBe("gpt-5.5");
+    expect(prefixContext.modelFull).toBe("openai/gpt-5.5");
+    expect(prefixContext.provider).toBe("openai");
+    expect(prefixContext.thinkingLevel).toBe("high");
 
     if (!expectTypingCallbacks) {
       expect(pipeline.typingCallbacks).toBeUndefined();
@@ -65,7 +83,7 @@ describe("createChannelReplyPipeline", () => {
     const pipeline = createChannelReplyPipeline({
       cfg: {},
       agentId: "main",
-      channel: "bluebubbles",
+      channel: "imessage",
       typingCallbacks: {
         onReplyStart,
         onIdle,
@@ -79,6 +97,32 @@ describe("createChannelReplyPipeline", () => {
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves the live response prefix from selected-model context", () => {
+    const pipeline = createChannelReplyPipeline({
+      cfg: { channels: { mattermost: { responsePrefix: "[{model} | {thinkingLevel}]" } } },
+      agentId: "main",
+      channel: "mattermost",
+    });
+
+    pipeline.onModelSelected({
+      provider: "openai",
+      model: "gpt-5.5",
+      thinkLevel: "high",
+    });
+
+    expect(pipeline.resolveResponsePrefix?.()).toBe("[gpt-5.5 | high]");
+  });
+
+  it("keeps existing SDK prefix options constructible without the live resolver", () => {
+    const options: ReplyPrefixOptions = {
+      responsePrefix: "[bot]",
+      responsePrefixContextProvider: () => ({ identityName: "bot" }),
+      onModelSelected: () => {},
+    };
+
+    expect(options.responsePrefix).toBe("[bot]");
+  });
+
   it("uses an explicit reply transform without resolving the channel plugin", () => {
     const transformReplyPayload = vi.fn((payload) => payload);
     const pipeline = createChannelReplyPipeline({
@@ -89,5 +133,56 @@ describe("createChannelReplyPipeline", () => {
     });
 
     expect(pipeline.transformReplyPayload).toBe(transformReplyPayload);
+  });
+
+  it.each([
+    { name: "rewrites", veto: false },
+    { name: "vetoes", veto: true },
+  ])("preserves the loaded plugin receiver when it $name a reply", ({ veto }) => {
+    const messaging = {
+      transformReplyPayload: vi.fn(function (
+        this: unknown,
+        { payload }: { payload: { text?: string } },
+      ) {
+        expect(this).toBe(messaging);
+        return veto
+          ? null
+          : payload.text
+            ? { ...payload, text: `${payload.text} transformed` }
+            : payload;
+      }),
+    };
+    const channelPlugin = {
+      id: "demo-channel",
+      meta: {},
+      messaging,
+    } as unknown as ChannelPlugin;
+    setActivePluginRegistry({
+      ...createEmptyPluginRegistry(),
+      channels: [
+        {
+          pluginId: "demo",
+          pluginName: "Demo",
+          plugin: channelPlugin,
+          source: "test",
+        },
+      ],
+    });
+
+    const pipeline = createChannelReplyPipeline({
+      cfg: {},
+      agentId: "main",
+      channel: "demo-channel",
+      accountId: "acct",
+    });
+
+    expect(pipeline.transformReplyPayload?.({ text: "reply" })).toEqual(
+      veto ? null : { text: "reply transformed" },
+    );
+    expect(messaging.transformReplyPayload).toHaveBeenCalledWith({
+      payload: { text: "reply" },
+      cfg: {},
+      accountId: "acct",
+    });
   });
 });

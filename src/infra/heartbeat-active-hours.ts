@@ -1,11 +1,15 @@
+// Evaluates heartbeat active-hours windows.
 import { resolveUserTimezone } from "../agents/date-time.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Heartbeat active-hours helpers interpret user/local/IANA timezones and treat
+// invalid config as permissive so bad schedules do not disable heartbeats.
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
 const ACTIVE_HOURS_TIME_PATTERN = /^(?:([01]\d|2[0-3]):([0-5]\d)|24:00)$/;
 
+/** Resolve the timezone used to evaluate heartbeat active hours. */
 function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "user") {
@@ -42,14 +46,9 @@ function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number 
   return hour * 60 + minute;
 }
 
-function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
+function resolveMinutesInTimeZone(nowMs: number, formatter: Intl.DateTimeFormat): number | null {
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      hourCycle: "h23",
-    }).formatToParts(new Date(nowMs));
+    const parts = formatter.formatToParts(new Date(nowMs));
     const map: Record<string, string> = {};
     for (const part of parts) {
       if (part.type !== "literal") {
@@ -67,6 +66,7 @@ function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | nul
   }
 }
 
+/** Return true when the current time is inside the configured heartbeat window. */
 export function isWithinActiveHours(
   cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
@@ -87,13 +87,23 @@ export function isWithinActiveHours(
   }
 
   const timeZone = resolveActiveHoursTimezone(cfg, active.timezone);
-  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), timeZone);
-  if (currentMin === null) {
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+  } catch {
     return true;
   }
 
-  if (endMin > startMin) {
-    return currentMin >= startMin && currentMin < endMin;
+  const currentMin = resolveMinutesInTimeZone(nowMs ?? Date.now(), formatter);
+  if (currentMin === null) {
+    return true;
   }
-  return currentMin >= startMin || currentMin < endMin;
+  return endMin > startMin
+    ? currentMin >= startMin && currentMin < endMin
+    : currentMin >= startMin || currentMin < endMin;
 }

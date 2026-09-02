@@ -1,5 +1,193 @@
 # Changelog
 
+## 2026.8.1
+
+### Changes
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.7.2
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.11
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.10
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.9
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.8
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.3
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.2
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.6.1
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.31
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.28
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.27
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.26
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.24
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.22
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.21
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.20
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.19
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.17
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+### Fixes
+
+- Matrix/E2EE: stop requesting MSC4222 `state_after` sync responses so homeservers with incomplete state-after data do not leave fresh encrypted rooms without outbound room encryptors. Fixes #82515. Thanks @nickdecooman.
+
+## 2026.5.16
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.14
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.12
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.10
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.8
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.6
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.4
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.3
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.2
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## Unreleased
+
+### Changes
+
+- Matrix/E2EE: add `openclaw matrix encryption setup` to enable Matrix encryption, bootstrap recovery, and print verification status from one setup flow. Thanks @gumadeiras.
+
+### Fixes
+
+- Matrix/E2EE: close the owner-side device verification loop when SAS lands via the CLI. `verify confirm-sas` now (1) awaits the rust-crypto verifier promise so the done-exchange and any cross-signing uploads triggered by `crossSignDevice` settle before the verb returns, (2) cross-signs the bot device on the auto-confirmed inbound SAS path (previously skipped), and (3) calls `trustOwnIdentityAfterSelfVerification` from the standalone `confirmMatrixVerificationSas` action so the operator's Element X clears the "Verify" prompt without waiting for a passive sync tick [AI-assisted]. Thanks @nklock.
+- Matrix/E2EE: stabilize recovery and broken-device QA flows while avoiding device-cleanup sync races that could leave shutdown-time crypto work running. Thanks @gumadeiras.
+
+## 2026.4.25
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.4.20
 
 ### Changes
@@ -76,7 +264,7 @@ collapsed here.
 
 ### Fixes
 
-- Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across BlueBubbles, Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing `dist/extensions/*/src/*` files during gateway startup.
+- Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing `dist/extensions/*/src/*` files during gateway startup.
 
 ## 2026.4.7
 
@@ -175,7 +363,7 @@ collapsed here.
 ### Fixes
 
 - Plugins/bundled runtimes: ship bundled plugin runtime sidecars like WhatsApp `light-runtime-api.js`, Matrix `runtime-api.js`, and other plugin runtime entry files in the npm package again, so global installs stop failing on missing bundled plugin runtime surfaces.
-- Plugins/Matrix: avoid duplicate `resolveMatrixAccountStringValues` runtime-api exports under Jiti so bundled Matrix installs no longer crash at startup with `Cannot redefine property: resolveMatrixAccountStringValues`. Fixes #52909 and #52891. Thanks @vincentkoc.
+- Plugins/Matrix: avoid duplicate `resolveMatrixAccountStringValues` runtime-api exports under source loaders so bundled Matrix installs no longer crash at startup with `Cannot redefine property: resolveMatrixAccountStringValues`. Fixes #52909 and #52891. Thanks @vincentkoc.
 
 ## 2026.3.22
 

@@ -1,13 +1,16 @@
+// Builds the channel setup list from bundled channels, installed plugins, and trusted catalog entries.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChatChannels } from "../../channels/chat-meta.js";
-import { type ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
+import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { isChannelVisibleInSetup } from "../../channels/plugins/exposure.js";
 import { normalizeChannelMeta } from "../../channels/plugins/meta-normalization.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../../channels/plugins/types.public.js";
+import { isStaticallyChannelConfigured } from "../../config/channel-configured-shared.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
+import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
   listSetupDiscoveryChannelPluginCatalogEntries,
@@ -19,13 +22,12 @@ type ChannelCatalogEntry = {
   meta: ChannelMeta;
 };
 
-export function shouldShowChannelInSetup(
-  meta: Pick<ChannelMeta, "exposure" | "showConfigured" | "showInSetup">,
-): boolean {
+/** Return true when channel metadata should appear in setup/onboarding choices. */
+export function shouldShowChannelInSetup(meta: Pick<ChannelMeta, "exposure">): boolean {
   return isChannelVisibleInSetup(meta);
 }
 
-export type ResolvedChannelSetupEntries = {
+type ResolvedChannelSetupEntries = {
   entries: ChannelCatalogEntry[];
   installedCatalogEntries: ChannelPluginCatalogEntry[];
   installableCatalogEntries: ChannelPluginCatalogEntry[];
@@ -37,10 +39,12 @@ function resolveWorkspaceDir(cfg: OpenClawConfig, workspaceDir?: string): string
   return workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
 }
 
+/** List channel ids contributed by currently installed manifest-backed plugins. */
 export function listManifestInstalledChannelIds(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  index?: InstalledPluginIndex;
 }): Set<ChannelChoice> {
   const resolvedConfig = applyPluginAutoEnable({
     config: params.cfg,
@@ -48,14 +52,16 @@ export function listManifestInstalledChannelIds(params: {
   }).config;
   const workspaceDir = resolveWorkspaceDir(resolvedConfig, params.workspaceDir);
   return new Set(
-    loadPluginManifestRegistry({
+    listManifestChannelContributionIds({
       config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
-    }).plugins.flatMap((plugin) => plugin.channels as ChannelChoice[]),
+      ...(params.index ? { index: params.index } : {}),
+    }).map((channelId) => channelId as ChannelChoice),
   );
 }
 
+/** Return true when a trusted catalog channel is already installed through plugin manifests. */
 export function isCatalogChannelInstalled(params: {
   cfg: OpenClawConfig;
   entry: ChannelPluginCatalogEntry;
@@ -65,6 +71,7 @@ export function isCatalogChannelInstalled(params: {
   return listManifestInstalledChannelIds(params).has(params.entry.id as ChannelChoice);
 }
 
+/** Merge configured channels and installable catalog channels into setup display buckets. */
 export function resolveChannelSetupEntries(params: {
   cfg: OpenClawConfig;
   installedPlugins: ChannelPlugin[];
@@ -107,6 +114,7 @@ export function resolveChannelSetupEntries(params: {
       (entry) =>
         !installedPluginIds.has(entry.id) &&
         !manifestInstalledIds.has(entry.id as ChannelChoice) &&
+        !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env) &&
         shouldShowChannelInSetup(entry.meta),
     )
     .map((entry) =>

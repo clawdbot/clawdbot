@@ -1,10 +1,12 @@
+// Minimax API module exposes the plugin public contract.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveMinimaxThinkingProfile } from "./thinking.js";
 
 const noopAuth = async () => ({ profiles: [] });
 const wizardGroup = {
   groupId: "minimax",
   groupLabel: "MiniMax",
-  groupHint: "M2.7 (recommended)",
+  groupHint: "M3 (recommended)",
 } as const;
 
 export function createMinimaxProvider(): ProviderPlugin {
@@ -14,6 +16,7 @@ export function createMinimaxProvider(): ProviderPlugin {
     hookAliases: ["minimax-cn"],
     docsPath: "/providers/minimax",
     envVars: ["MINIMAX_API_KEY"],
+    resolveThinkingProfile: ({ modelId }) => resolveMinimaxThinkingProfile(modelId),
     auth: [
       {
         id: "api-global",
@@ -52,6 +55,7 @@ export function createMinimaxPortalProvider(): ProviderPlugin {
     hookAliases: ["minimax-portal-cn"],
     docsPath: "/providers/minimax",
     envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+    resolveThinkingProfile: ({ modelId }) => resolveMinimaxThinkingProfile(modelId),
     auth: [
       {
         id: "oauth",

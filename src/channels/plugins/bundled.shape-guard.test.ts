@@ -1,9 +1,21 @@
+// Bundled shape guard tests cover bundled channel package metadata and export shape.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+
+vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
+  return {
+    ...actual,
+    resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
+  };
+});
 
 const bundledChannelEntrypointPaths = ["index.ts", "channel-entry.ts", "setup-entry.ts"] as const;
 
@@ -17,9 +29,16 @@ function restoreBundledPluginsDir(previousBundledPluginsDir: string | undefined)
   }
 }
 
-function alphaChannelMetadata({ includeSetup = false }: { includeSetup?: boolean } = {}) {
+function alphaChannelMetadata({
+  includeSetup = false,
+  rootDir = path.join(
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? path.resolve("extensions"),
+    "alpha",
+  ),
+}: { includeSetup?: boolean; rootDir?: string } = {}) {
   return {
     dirName: "alpha",
+    rootDir,
     manifest: {
       id: "alpha",
       channels: ["alpha"],
@@ -60,6 +79,38 @@ function mockAlphaDistExtensionRuntime() {
   }));
 }
 
+function writeAlphaSdkAliasDistFixture(pluginDir: string, label: string) {
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "index.js"),
+    [
+      'import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";',
+      "export default defineBundledChannelEntry({",
+      "  id: 'alpha',",
+      "  name: 'Alpha',",
+      "  description: 'Alpha',",
+      "  importMetaUrl: import.meta.url,",
+      "  plugin: { specifier: './plugin.js', exportName: 'plugin' },",
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "plugin.js"),
+    [
+      "export const plugin = {",
+      "  id: 'alpha',",
+      `  meta: { id: 'alpha', label: '${label}' },`,
+      "  capabilities: {},",
+      "  config: {},",
+      "};",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 function collectBundledChannelEntrypointOffenders(
   bundledPluginRoots: string[],
   isOffender: (source: string, filePath: string) => boolean,
@@ -83,7 +134,96 @@ function collectBundledChannelEntrypointOffenders(
   return offenders;
 }
 
+function listSourceBundledPluginRoots(): string[] {
+  const extensionsDir = path.resolve("extensions");
+  const externalRoots = listExternalSourceBundledPluginRoots(extensionsDir);
+  if (externalRoots) {
+    return externalRoots;
+  }
+
+  return fs
+    .readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(extensionsDir, entry.name))
+    .filter(
+      (entryPath) =>
+        fs.existsSync(path.join(entryPath, "package.json")) ||
+        fs.existsSync(path.join(entryPath, "openclaw.plugin.json")),
+    );
+}
+
+function listExternalSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  return (
+    listGitSourceBundledPluginRoots(extensionsDir) ??
+    listFindSourceBundledPluginRoots(extensionsDir)
+  );
+}
+
+function listGitSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  const result = spawnSync(
+    "git",
+    ["ls-files", "--", "extensions/*/package.json", "extensions/*/openclaw.plugin.json"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return packageMarkerPathsToRoots(result.stdout.split("\n"), extensionsDir);
+}
+
+function listFindSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      extensionsDir,
+      "-mindepth",
+      "2",
+      "-maxdepth",
+      "2",
+      "(",
+      "-name",
+      "package.json",
+      "-o",
+      "-name",
+      "openclaw.plugin.json",
+      ")",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return packageMarkerPathsToRoots(result.stdout.split("\n"), extensionsDir);
+}
+
+function packageMarkerPathsToRoots(markerPaths: string[], extensionsDir: string): string[] {
+  return [
+    ...new Set(
+      markerPaths
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => path.resolve(line))
+        .map((line) => path.dirname(line))
+        .filter((line) => path.dirname(line) === extensionsDir),
+    ),
+  ].toSorted();
+}
+
 afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
+  delete (globalThis as { __openclawBundledChannelReenter?: () => void })[
+    "__openclawBundledChannelReenter"
+  ];
   vi.resetModules();
   vi.doUnmock("../../plugins/bundled-channel-runtime.js");
   vi.doUnmock("../../plugins/bundled-plugin-metadata.js");
@@ -91,13 +231,50 @@ afterEach(() => {
   vi.doUnmock("../../plugins/manifest-registry.js");
   vi.doUnmock("../../plugins/channel-catalog-registry.js");
   vi.doUnmock("../../infra/boundary-file-read.js");
+  vi.doUnmock("./bundled-root.js");
   vi.doUnmock("jiti");
 });
 
 describe("bundled channel entry shape guards", () => {
-  const bundledPluginRoots = loadPluginManifestRegistry({ cache: true, config: {} })
-    .plugins.filter((plugin) => plugin.origin === "bundled")
-    .map((plugin) => plugin.rootDir);
+  const bundledPluginRoots = listSourceBundledPluginRoots();
+  let realBundledSourceTreeProbe: {
+    hasAccountInspector: boolean;
+    pluginIds: readonly string[];
+  };
+
+  beforeAll(async () => {
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
+      const actual =
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
+      return {
+        ...actual,
+        listBundledChannelPluginMetadata: (params: {
+          includeChannelConfigs: boolean;
+          includeSyntheticChannelConfigs: boolean;
+        }) =>
+          actual
+            .listBundledChannelPluginMetadata(params)
+            .filter((metadata) => metadata.manifest.id === "slack"),
+      };
+    });
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=real-bundled-source-tree-preload",
+    );
+    realBundledSourceTreeProbe = {
+      hasAccountInspector: typeof bundled.getBundledChannelAccountInspector("slack") === "function",
+      pluginIds: [...bundled.listBundledChannelPluginIds()],
+    };
+  });
+
+  it("lists source bundled plugin roots without in-process directory scans", () => {
+    expectNoReaddirSyncDuring(() => {
+      const roots = listSourceBundledPluginRoots();
+
+      expect(roots.length).toBeGreaterThan(0);
+      expect(roots.every((root) => path.dirname(root) === path.resolve("extensions"))).toBe(true);
+    });
+  });
 
   it("treats missing bundled discovery results as empty", async () => {
     vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
@@ -114,33 +291,13 @@ describe("bundled channel entry shape guards", () => {
       "./bundled.js?scope=missing-bundled-discovery",
     );
 
-    expect(bundled.listBundledChannelPlugins()).toEqual([]);
-    expect(bundled.listBundledChannelSetupPlugins()).toEqual([]);
+    expect(bundled.listBundledChannelPlugins()).toStrictEqual([]);
+    expect(bundled.listBundledChannelSetupPlugins()).toStrictEqual([]);
   });
 
   it("loads real bundled channel entry contracts from the source tree", async () => {
-    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
-      const actual =
-        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
-      return {
-        ...actual,
-        listBundledChannelPluginMetadata: (params: {
-          includeChannelConfigs: boolean;
-          includeSyntheticChannelConfigs: boolean;
-        }) =>
-          actual
-            .listBundledChannelPluginMetadata(params)
-            .filter((metadata) => metadata.manifest.id === "slack"),
-      };
-    });
-
-    const bundled = await importFreshModule<typeof import("./bundled.js")>(
-      import.meta.url,
-      "./bundled.js?scope=real-bundled-source-tree",
-    );
-
-    expect(bundled.listBundledChannelPluginIds()).toEqual(["slack"]);
-    expect(bundled.hasBundledChannelEntryFeature("slack", "accountInspect")).toBe(true);
+    expect(realBundledSourceTreeProbe.pluginIds).toEqual(["slack"]);
+    expect(realBundledSourceTreeProbe.hasAccountInspector).toBe(true);
   });
 
   it("fills sparse bundled channel plugin metadata from package metadata", async () => {
@@ -200,14 +357,12 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-package-metadata",
       );
 
-      const plugin = bundled.requireBundledChannelPlugin("alpha");
-      expect(plugin.meta).toMatchObject({
-        id: "alpha",
-        label: "Alpha",
-        selectionLabel: "Use Alpha",
-        docsPath: "/channels/alpha",
-        blurb: "Alpha channel metadata.",
-      });
+      const plugin = bundled.getBundledChannelPlugin("alpha");
+      expect(plugin?.meta.id).toBe("alpha");
+      expect(plugin?.meta.label).toBe("Alpha");
+      expect(plugin?.meta.selectionLabel).toBe("Use Alpha");
+      expect(plugin?.meta.docsPath).toBe("/channels/alpha");
+      expect(plugin?.meta.blurb).toBe("Alpha channel metadata.");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -222,7 +377,7 @@ describe("bundled channel entry shape guards", () => {
     fs.writeFileSync(
       path.join(pluginDir, "index.js"),
       [
-        "globalThis.__bundledOverrideRuntime = undefined;",
+        'globalThis["__bundledOverrideRuntime"] = undefined;',
         "const plugin = { id: 'alpha', meta: {}, capabilities: {}, config: {} };",
         "export default {",
         "  kind: 'bundled-channel-entry',",
@@ -231,7 +386,7 @@ describe("bundled channel entry shape guards", () => {
         "  description: 'Alpha',",
         "  register() {},",
         "  loadChannelPlugin() { return plugin; },",
-        "  setChannelRuntime(runtime) { globalThis.__bundledOverrideRuntime = runtime.marker; },",
+        '  setChannelRuntime(runtime) { globalThis["__bundledOverrideRuntime"] = runtime.marker; },',
         "};",
         "",
       ].join("\n"),
@@ -277,12 +432,78 @@ describe("bundled channel entry shape guards", () => {
 
       expect(metadataRootDir).toBe(tempRoot);
       expect(generatedRootDir).toBe(tempRoot);
-      expect(testGlobal.__bundledOverrideRuntime).toBe("ok");
-      expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
+      expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
+      expect(bundled.getBundledChannelPlugin("alpha")?.id).toBe("alpha");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
-      delete (globalThis as { __bundledOverrideRuntime?: unknown }).__bundledOverrideRuntime;
+      delete (globalThis as { __bundledOverrideRuntime?: unknown })["__bundledOverrideRuntime"];
+    }
+  });
+
+  it("falls back through the cached loader for package-local dist entries needing SDK aliases", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-package-dist-"));
+    const pluginDir = path.join(root, "extensions", "alpha", "dist");
+    writeAlphaSdkAliasDistFixture(pluginDir, "Package dist Alpha");
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n', "utf8");
+
+    vi.doMock("./bundled-root.js", () => ({
+      resolveBundledChannelRootScope: () => ({
+        packageRoot: root,
+        cacheKey: `${root}:package-local-dist`,
+      }),
+    }));
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: () => [
+        {
+          ...alphaChannelMetadata(),
+          source: {
+            source: path.join(root, "extensions", "alpha", "index.ts"),
+            built: path.join(root, "extensions", "alpha", "index.ts"),
+          },
+          rootDir: path.join(root, "extensions", "alpha"),
+        },
+      ],
+      resolveBundledChannelGeneratedPath: () => path.join(pluginDir, "index.js"),
+    }));
+
+    try {
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-package-local-dist-sdk-alias",
+      );
+
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Package dist Alpha");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back through the cached loader for direct override dist entries needing SDK aliases", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-direct-dist-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginsRoot = path.join(root, "bundled-plugins");
+    const pluginDir = path.join(pluginsRoot, "alpha", "dist");
+    writeAlphaSdkAliasDistFixture(pluginDir, "Direct dist Alpha");
+    fs.writeFileSync(path.join(pluginsRoot, "package.json"), '{"type":"module"}\n', "utf8");
+
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: () => [alphaChannelMetadata()],
+      resolveBundledChannelGeneratedPath: () => path.join(pluginDir, "index.js"),
+    }));
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = pluginsRoot;
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-direct-dist-sdk-alias",
+      );
+
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Direct dist Alpha");
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -295,7 +516,7 @@ describe("bundled channel entry shape guards", () => {
     fs.writeFileSync(
       path.join(pluginDir, "index.js"),
       [
-        "globalThis.__bundledOverrideRuntime = undefined;",
+        'globalThis["__bundledOverrideRuntime"] = undefined;',
         "const plugin = { id: 'alpha', meta: {}, capabilities: {}, config: {} };",
         "export default {",
         "  kind: 'bundled-channel-entry',",
@@ -304,7 +525,7 @@ describe("bundled channel entry shape guards", () => {
         "  description: 'Alpha',",
         "  register() {},",
         "  loadChannelPlugin() { return plugin; },",
-        "  setChannelRuntime(runtime) { globalThis.__bundledOverrideRuntime = runtime.marker; },",
+        '  setChannelRuntime(runtime) { globalThis["__bundledOverrideRuntime"] = runtime.marker; },',
         "};",
         "",
       ].join("\n"),
@@ -352,12 +573,12 @@ describe("bundled channel entry shape guards", () => {
       expect(metadataScanDir).toBe(pluginsRoot);
       expect(generatedRootDir).toBe(pluginsRoot);
       expect(generatedScanDir).toBe(pluginsRoot);
-      expect(testGlobal.__bundledOverrideRuntime).toBe("ok");
-      expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
+      expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
+      expect(bundled.getBundledChannelPlugin("alpha")?.id).toBe("alpha");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
-      delete (globalThis as { __bundledOverrideRuntime?: unknown }).__bundledOverrideRuntime;
+      delete (globalThis as { __bundledOverrideRuntime?: unknown })["__bundledOverrideRuntime"];
     }
   });
 
@@ -375,7 +596,7 @@ describe("bundled channel entry shape guards", () => {
       fs.writeFileSync(
         path.join(pluginDir, "index.js"),
         [
-          `globalThis.__bundledRootRuntime = globalThis.__bundledRootRuntime ?? [];`,
+          `globalThis["__bundledRootRuntime"] = globalThis["__bundledRootRuntime"] ?? [];`,
           "export default {",
           "  kind: 'bundled-channel-entry',",
           "  id: 'alpha',",
@@ -395,7 +616,7 @@ describe("bundled channel entry shape guards", () => {
           `    return { secretTargetRegistryEntries: [{ id: ${JSON.stringify(`channels.alpha.${label}.entry-token`)}, targetType: 'channel' }] };`,
           "  },",
           "  setChannelRuntime(runtime) {",
-          `    globalThis.__bundledRootRuntime.push(${JSON.stringify(`entry:${label}`)} + ':' + String(runtime.marker));`,
+          `    globalThis["__bundledRootRuntime"].push(${JSON.stringify(`entry:${label}`)} + ':' + String(runtime.marker));`,
           "  },",
           "};",
           "",
@@ -438,7 +659,7 @@ describe("bundled channel entry shape guards", () => {
       );
 
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(rootA, "dist", "extensions");
-      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Alpha A");
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Alpha A");
       expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup A");
       expect(bundled.getBundledChannelSecrets("alpha")?.secretTargetRegistryEntries?.[0]?.id).toBe(
         "channels.alpha.A.entry-token",
@@ -449,7 +670,7 @@ describe("bundled channel entry shape guards", () => {
       bundled.setBundledChannelRuntime("alpha", { marker: "first" } as never);
 
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(rootB, "dist", "extensions");
-      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Alpha B");
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Alpha B");
       expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup B");
       expect(bundled.getBundledChannelSecrets("alpha")?.secretTargetRegistryEntries?.[0]?.id).toBe(
         "channels.alpha.B.entry-token",
@@ -459,30 +680,108 @@ describe("bundled channel entry shape guards", () => {
       ).toBe("channels.alpha.B.setup-entry-token");
       bundled.setBundledChannelRuntime("alpha", { marker: "second" } as never);
 
-      expect(testGlobal.__bundledRootRuntime).toEqual(["entry:A:first", "entry:B:second"]);
+      expect(testGlobal["__bundledRootRuntime"]).toEqual(["entry:A:first", "entry:B:second"]);
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(rootA, { recursive: true, force: true });
       fs.rmSync(rootB, { recursive: true, force: true });
-      delete testGlobal.__bundledRootRuntime;
+      delete testGlobal["__bundledRootRuntime"];
     }
   });
 
-  it("loads setup-entry feature plugins without loading the main channel entry", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-only-"));
+  it("uses dist-runtime as the boundary root for packaged setup entries", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-runtime-root-"));
+    const pluginDir = path.join(root, "dist-runtime", "extensions", "alpha");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-setup-entry',",
+        "  loadSetupPlugin() {",
+        "    return {",
+        "      id: 'alpha',",
+        "      meta: { id: 'alpha', label: 'Setup dist-runtime' },",
+        "      capabilities: {},",
+        "      config: {},",
+        "    };",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    vi.doMock("./bundled-root.js", () => ({
+      resolveBundledChannelRootScope: () => ({
+        packageRoot: root,
+        cacheKey: `${root}:dist-runtime`,
+      }),
+    }));
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: () => [
+        alphaChannelMetadata({ includeSetup: true, rootDir: pluginDir }),
+      ],
+      resolveBundledChannelGeneratedPath: (
+        rootDir: string,
+        entry: BundledEntrySource | undefined,
+        pluginDirName?: string,
+      ) =>
+        path.join(
+          rootDir,
+          "dist-runtime",
+          "extensions",
+          pluginDirName ?? "alpha",
+          (entry?.built ?? entry?.source ?? "./index.js").replace(/^\.\//u, ""),
+        ),
+    }));
+
+    try {
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-dist-runtime-boundary",
+      );
+
+      expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup dist-runtime");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("swallows and caches bundled plugin and setup load failures", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-load-failure-"));
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     const pluginDir = path.join(root, "dist", "extensions", "alpha");
     const testGlobal = globalThis as typeof globalThis & {
-      __bundledSetupOnlyMainLoaded?: boolean;
-      __bundledSetupOnlySetupLoaded?: number;
-      __bundledSetupOnlyPluginLoaded?: boolean;
+      __bundledPluginFailureLoads?: number;
+      __bundledSetupFailureLoads?: number;
+      __bundledSecretsFailureLoads?: number;
+      __bundledSetupSecretsFailureLoads?: number;
     };
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf8",
+    );
+    fs.writeFileSync(
       path.join(pluginDir, "index.js"),
       [
-        "globalThis.__bundledSetupOnlyMainLoaded = true;",
-        "throw new Error('main entry loaded');",
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'alpha',",
+        "  name: 'Alpha',",
+        "  description: 'Alpha',",
+        "  register() {},",
+        "  loadChannelSecrets() {",
+        '    globalThis["__bundledSecretsFailureLoads"] = (globalThis["__bundledSecretsFailureLoads"] ?? 0) + 1;',
+        "    throw new Error('missing channel secrets dep');",
+        "  },",
+        "  loadChannelPlugin() {",
+        '    globalThis["__bundledPluginFailureLoads"] = (globalThis["__bundledPluginFailureLoads"] ?? 0) + 1;',
+        "    throw new Error('missing channel plugin dep');",
+        "  },",
+        "};",
         "",
       ].join("\n"),
       "utf8",
@@ -490,21 +789,15 @@ describe("bundled channel entry shape guards", () => {
     fs.writeFileSync(
       path.join(pluginDir, "setup-entry.js"),
       [
-        "globalThis.__bundledSetupOnlySetupLoaded = (globalThis.__bundledSetupOnlySetupLoaded ?? 0) + 1;",
         "export default {",
         "  kind: 'bundled-channel-setup-entry',",
-        "  features: { legacyStateMigrations: true },",
-        "  loadSetupPlugin() {",
-        "    globalThis.__bundledSetupOnlyPluginLoaded = true;",
-        "    throw new Error('setup plugin loaded');",
+        "  loadSetupSecrets() {",
+        '    globalThis["__bundledSetupSecretsFailureLoads"] = (globalThis["__bundledSetupSecretsFailureLoads"] ?? 0) + 1;',
+        "    throw new Error('missing setup secrets dep');",
         "  },",
-        "  loadLegacyStateMigrationDetector() {",
-        "    return ({ oauthDir }) => [{",
-        "      kind: 'copy',",
-        "      label: 'Alpha state',",
-        "      sourcePath: oauthDir + '/legacy.json',",
-        "      targetPath: oauthDir + '/alpha/legacy.json',",
-        "    }];",
+        "  loadSetupPlugin() {",
+        '    globalThis["__bundledSetupFailureLoads"] = (globalThis["__bundledSetupFailureLoads"] ?? 0) + 1;',
+        "    throw new Error('missing setup plugin dep');",
         "  },",
         "};",
         "",
@@ -519,33 +812,229 @@ describe("bundled channel entry shape guards", () => {
 
       const bundled = await importFreshModule<typeof import("./bundled.js")>(
         import.meta.url,
-        "./bundled.js?scope=bundled-setup-only-feature",
+        "./bundled.js?scope=bundled-load-failure",
       );
 
-      const detectors = bundled.listBundledChannelLegacyStateMigrationDetectors();
-      expect(
-        detectors.map((detector) =>
-          detector({ cfg: {}, env: {}, stateDir: "/state", oauthDir: "/oauth" } as never),
-        ),
-      ).toEqual([
-        [
-          {
-            kind: "copy",
-            label: "Alpha state",
-            sourcePath: "/oauth/legacy.json",
-            targetPath: "/oauth/alpha/legacy.json",
-          },
-        ],
-      ]);
-      expect(testGlobal.__bundledSetupOnlySetupLoaded).toBe(1);
-      expect(testGlobal.__bundledSetupOnlyMainLoaded).toBeUndefined();
-      expect(testGlobal.__bundledSetupOnlyPluginLoaded).toBeUndefined();
+      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSetupPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSetupPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSecrets("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSecrets("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSetupSecrets("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelSetupSecrets("alpha")).toBeUndefined();
+      expect(testGlobal["__bundledPluginFailureLoads"]).toBe(1);
+      expect(testGlobal["__bundledSetupFailureLoads"]).toBe(1);
+      expect(testGlobal["__bundledSecretsFailureLoads"]).toBe(1);
+      expect(testGlobal["__bundledSetupSecretsFailureLoads"]).toBe(1);
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(root, { recursive: true, force: true });
-      delete testGlobal.__bundledSetupOnlyMainLoaded;
-      delete testGlobal.__bundledSetupOnlySetupLoaded;
-      delete testGlobal.__bundledSetupOnlyPluginLoaded;
+      delete testGlobal["__bundledPluginFailureLoads"];
+      delete testGlobal["__bundledSetupFailureLoads"];
+      delete testGlobal["__bundledSecretsFailureLoads"];
+      delete testGlobal["__bundledSetupSecretsFailureLoads"];
+    }
+  });
+
+  it("falls back to a contained source-only registry root when generated lookup misses", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-source-fallback-"));
+    const outsideRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-bundled-source-fallback-outside-"),
+    );
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginsDir = path.join(root, "dist", "extensions");
+    const pluginDir = path.join(root, "extensions", "alpha");
+    const escapedPluginDir = path.join(outsideRoot, "escape");
+    const testGlobal = globalThis as typeof globalThis & {
+      __escapedBundledSourceLoaded?: boolean;
+    };
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(escapedPluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'alpha',",
+        "  name: 'Alpha',",
+        "  description: 'Alpha',",
+        "  register() {},",
+        "  loadChannelPlugin() {",
+        "    return { id: 'alpha', meta: { label: 'Source Alpha' }, capabilities: {}, config: {} };",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-setup-entry',",
+        "  loadSetupPlugin() {",
+        "    return { id: 'alpha', meta: { label: 'Setup Alpha' }, capabilities: {}, config: {} };",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(escapedPluginDir, "index.js"),
+      [
+        "globalThis.__escapedBundledSourceLoaded = true;",
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'escape',",
+        "  name: 'Escape',",
+        "  description: 'Escape',",
+        "  register() {},",
+        "  loadChannelPlugin() { return { id: 'escape', meta: {}, capabilities: {}, config: {} }; },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: () => [
+        {
+          ...alphaChannelMetadata({ includeSetup: true }),
+          rootDir: pluginDir,
+        },
+        {
+          dirName: "escape",
+          rootDir: escapedPluginDir,
+          source: {
+            source: path.join(escapedPluginDir, "index.js"),
+            built: path.join(escapedPluginDir, "index.js"),
+          },
+          manifest: {
+            id: "escape",
+            channels: ["escape"],
+          },
+        },
+      ],
+      resolveBundledChannelGeneratedPath: () => null,
+    }));
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = pluginsDir;
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-source-registry-fallback",
+      );
+
+      expect(bundled.getBundledChannelPlugin("alpha")?.meta.label).toBe("Source Alpha");
+      expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Setup Alpha");
+      expect(bundled.getBundledChannelPlugin("escape")).toBeUndefined();
+      expect(testGlobal["__escapedBundledSourceLoaded"]).toBeUndefined();
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(outsideRoot, { recursive: true, force: true });
+      delete testGlobal["__escapedBundledSourceLoaded"];
+    }
+  });
+
+  it("accepts canonical built entries through the active package symlink", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-alias-boundary-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const releaseRoot = path.join(root, "releases", "release-sha");
+    const currentRoot = path.join(root, "current");
+    const pluginDir = path.join(releaseRoot, "dist", "extensions", "alpha");
+    const setupEntryPath = path.join(pluginDir, "setup-entry.cjs");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.symlinkSync(releaseRoot, currentRoot, process.platform === "win32" ? "junction" : "dir");
+    fs.writeFileSync(
+      setupEntryPath,
+      [
+        "module.exports = {",
+        "  kind: 'bundled-channel-setup-entry',",
+        "  loadSetupPlugin() {",
+        "    return { id: 'alpha', meta: { label: 'Aliased Alpha' }, capabilities: {}, config: {} };",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
+      listBundledChannelPluginMetadata: () => [
+        {
+          ...alphaChannelMetadata({ includeSetup: true }),
+          rootDir: pluginDir,
+          setupSource: {
+            source: setupEntryPath,
+            built: setupEntryPath,
+          },
+        },
+      ],
+      resolveBundledChannelGeneratedPath: () => null,
+    }));
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(currentRoot, "dist", "extensions");
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-alias-boundary",
+      );
+
+      expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("Aliased Alpha");
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("caches undefined bundled plugin loads as unavailable", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-null-load-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginDir = path.join(root, "dist", "extensions", "alpha");
+    const testGlobal = globalThis as typeof globalThis & {
+      __bundledPluginUndefinedLoads?: number;
+    };
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'alpha',",
+        "  name: 'Alpha',",
+        "  description: 'Alpha',",
+        "  register() {},",
+        "  loadChannelPlugin() {",
+        '    globalThis["__bundledPluginUndefinedLoads"] = (globalThis["__bundledPluginUndefinedLoads"] ?? 0) + 1;',
+        "    return undefined;",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    mockAlphaDistExtensionRuntime();
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-undefined-load",
+      );
+
+      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
+      expect(testGlobal["__bundledPluginUndefinedLoads"]).toBe(1);
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      fs.rmSync(root, { recursive: true, force: true });
+      delete testGlobal["__bundledPluginUndefinedLoads"];
     }
   });
 
@@ -558,7 +1047,7 @@ describe("bundled channel entry shape guards", () => {
         source.includes('from "openclaw/plugin-sdk/channel-core"'),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps setup-entry legacy feature hints mirrored in package metadata", () => {
@@ -585,7 +1074,7 @@ describe("bundled channel entry shape guards", () => {
       }
     }
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled channel entrypoints free of static src imports", () => {
@@ -593,7 +1082,7 @@ describe("bundled channel entry shape guards", () => {
       /^(?:import|export)\s.+["']\.\/src\//mu.test(source),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps channel implementations off the broad core SDK surface", () => {
@@ -615,26 +1104,22 @@ describe("bundled channel entry shape guards", () => {
       }
     }
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps plugin-sdk channel-core free of chat metadata bootstrap imports", () => {
     const source = fs.readFileSync(path.resolve("src/plugin-sdk/channel-core.ts"), "utf8");
 
-    expect(source.includes("../channels/chat-meta.js")).toBe(false);
-    expect(source.includes("getChatChannelMeta")).toBe(false);
+    expect(source).not.toContain("../channels/chat-meta.js");
+    expect(source).not.toContain("getChatChannelMeta");
   });
 
   it("keeps bundled hot runtime barrels off the broad core SDK surface", () => {
-    const offenders = [
-      "extensions/googlechat/runtime-api.ts",
-      "extensions/irc/src/runtime-api.ts",
-      "extensions/matrix/src/runtime-api.ts",
-    ].filter((filePath) =>
+    const offenders = ["extensions/googlechat/runtime-api.ts"].filter((filePath) =>
       fs.readFileSync(path.resolve(filePath), "utf8").includes("openclaw/plugin-sdk/core"),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps runtime helper surfaces off bootstrap-registry", () => {
@@ -647,19 +1132,13 @@ describe("bundled channel entry shape guards", () => {
       fs.readFileSync(path.resolve(filePath), "utf8").includes("bootstrap-registry.js"),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension-shared off the broad runtime barrel", () => {
     const source = fs.readFileSync(path.resolve("src/plugin-sdk/extension-shared.ts"), "utf8");
 
-    expect(source.includes('from "./runtime.js"')).toBe(false);
-  });
-
-  it("keeps nextcloud-talk's private SDK surface off the broad runtime barrel", () => {
-    const source = fs.readFileSync(path.resolve("src/plugin-sdk/nextcloud-talk.ts"), "utf8");
-
-    expect(source.includes('from "./runtime.js"')).toBe(false);
+    expect(source).not.toContain('from "./runtime.js"');
   });
 
   it("keeps bundled doctor surfaces off the broad runtime barrel", () => {
@@ -675,26 +1154,54 @@ describe("bundled channel entry shape guards", () => {
         .includes('from "openclaw/plugin-sdk/runtime"'),
     );
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("breaks reentrant bundled channel discovery cycles with an empty fallback", async () => {
     const pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-reentrant-"));
-    const modulePath = path.join(pluginDir, "index.js");
-    fs.writeFileSync(modulePath, "export {};\n", "utf8");
+    const modulePath = path.join(pluginDir, "index.cjs");
+    fs.writeFileSync(
+      modulePath,
+      `
+const reenter = globalThis["__openclawBundledChannelReenter"];
+if (typeof reenter === "function") {
+  reenter();
+}
+module.exports = {
+  default: {
+    kind: "bundled-channel-entry",
+    id: "alpha",
+    name: "Alpha",
+    description: "Alpha",
+    configSchema: {},
+    register() {},
+    loadChannelPlugin() {
+      return {
+        id: "alpha",
+        meta: {},
+        capabilities: {},
+        config: {},
+      };
+    },
+  },
+};
+`,
+      "utf8",
+    );
 
-    vi.doMock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
       const actual =
-        await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
       return {
         ...actual,
-        listBundledPluginMetadata: () => [
+        listBundledChannelPluginMetadata: () => [
           {
             dirName: "alpha",
             idHint: "alpha",
+            rootDir: pluginDir,
             source: {
-              source: "./index.js",
-              built: "./index.js",
+              source: "./index.cjs",
+              built: "./index.cjs",
             },
             manifest: {
               id: "alpha",
@@ -702,11 +1209,11 @@ describe("bundled channel entry shape guards", () => {
             },
           },
         ],
-        resolveBundledPluginGeneratedPath: () => modulePath,
+        resolveBundledChannelGeneratedPath: () => modulePath,
       };
     });
     vi.doMock("../../infra/boundary-file-read.js", () => ({
-      openBoundaryFileSync: ({ absolutePath }: { absolutePath: string }) => ({
+      openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
         ok: true,
         path: absolutePath,
         fd: fs.openSync(absolutePath, "r"),
@@ -717,34 +1224,14 @@ describe("bundled channel entry shape guards", () => {
     }));
 
     let reentered = false;
-    vi.doMock("jiti", () => ({
-      createJiti: () => {
-        return () => {
-          if (!reentered) {
-            reentered = true;
-            expect(bundled.listBundledChannelPlugins()).toEqual([]);
-          }
-          return {
-            default: {
-              kind: "bundled-channel-entry",
-              id: "alpha",
-              name: "Alpha",
-              description: "Alpha",
-              configSchema: {},
-              register() {},
-              loadChannelPlugin() {
-                return {
-                  id: "alpha",
-                  meta: {},
-                  capabilities: {},
-                  config: {},
-                };
-              },
-            },
-          };
-        };
-      },
-    }));
+    (globalThis as { __openclawBundledChannelReenter?: () => void })[
+      "__openclawBundledChannelReenter"
+    ] = () => {
+      if (!reentered) {
+        reentered = true;
+        expect(bundled.listBundledChannelPlugins()).toStrictEqual([]);
+      }
+    };
 
     const bundled = await importFreshModule<typeof import("./bundled.js")>(
       import.meta.url,
@@ -779,6 +1266,7 @@ describe("bundled channel entry shape guards", () => {
       }
     }
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

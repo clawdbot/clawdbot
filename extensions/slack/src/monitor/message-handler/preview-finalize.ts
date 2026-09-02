@@ -1,8 +1,14 @@
+// Slack plugin module implements preview finalize behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { editSlackMessage } from "../../actions.js";
+import { editSlackRenderedMessage } from "../../actions.js";
 import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
+import { buildSlackEditTextPayload } from "../../edit-text.js";
 import { normalizeSlackOutboundText } from "../../format.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
+import { hasSlackNativeDataBlock } from "../../native-data-blocks.js";
+import { buildSlackNativeDataDeliveryPlan } from "../../native-data-fallback.js";
+import { truncateSlackTextByUtf8Bytes } from "../../truncate.js";
 
 type SlackReadbackMessage = {
   ts?: string;
@@ -14,14 +20,36 @@ function buildExpectedSlackEditText(params: {
   text: string;
   blocks?: (Block | KnownBlock)[];
 }): string {
-  const trimmed = normalizeSlackOutboundText(params.text.trim());
-  if (trimmed) {
-    return trimmed;
+  const trimmedText = params.text.trim();
+  if (trimmedText) {
+    return normalizeSlackOutboundText(trimmedText);
   }
   if (params.blocks?.length) {
-    return buildSlackBlocksFallbackText(params.blocks);
+    return normalizeSlackOutboundText(buildSlackBlocksFallbackText(params.blocks));
   }
   return " ";
+}
+
+function buildAcceptedSlackEditTexts(params: {
+  text: string;
+  blocks?: (Block | KnownBlock)[];
+}): Set<string> {
+  const expected = buildExpectedSlackEditText(params);
+  const texts = new Set([
+    expected,
+    normalizeSlackOutboundText(truncateSlackTextByUtf8Bytes(expected, SLACK_EDIT_TEXT_MAX_BYTES)),
+    normalizeSlackOutboundText(buildSlackEditTextPayload(params.text, params.blocks)),
+  ]);
+  if (params.blocks?.length && hasSlackNativeDataBlock(params.blocks)) {
+    const fallbackPlan = buildSlackNativeDataDeliveryPlan({
+      baseText: params.text,
+      blocks: params.blocks,
+    });
+    for (const message of fallbackPlan.fallbackMessages) {
+      texts.add(normalizeSlackOutboundText(message.text));
+    }
+  }
+  return texts;
 }
 
 function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boolean {
@@ -29,9 +57,37 @@ function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boo
     return !actual?.length;
   }
   if (!actual?.length) {
+    if (!hasSlackNativeDataBlock(expected)) {
+      return false;
+    }
+    const fallbackPlan = buildSlackNativeDataDeliveryPlan({
+      blocks: expected,
+    });
+    return fallbackPlan.fallbackMessages.every((message) => !message.blocks?.length);
+  }
+  if (JSON.stringify(expected) === JSON.stringify(actual)) {
+    return true;
+  }
+  if (!hasSlackNativeDataBlock(expected)) {
     return false;
   }
-  return JSON.stringify(expected) === JSON.stringify(actual);
+  try {
+    const fallbackPlan = buildSlackNativeDataDeliveryPlan({
+      blocks: expected,
+    });
+    const fallbackBlocks = fallbackPlan.fallbackMessages.flatMap((message) => message.blocks ?? []);
+    if (JSON.stringify(fallbackBlocks) === JSON.stringify(actual)) {
+      return true;
+    }
+    const fallbackText = fallbackPlan.fallbackMessages
+      .map((message) => message.text)
+      .filter(Boolean)
+      .join("\n\n");
+    const actualText = buildSlackBlocksFallbackText(actual);
+    return normalizeSlackOutboundText(actualText) === normalizeSlackOutboundText(fallbackText);
+  } catch {
+    return false;
+  }
 }
 
 async function readSlackMessageAfterEditError(params: {
@@ -47,8 +103,9 @@ async function readSlackMessageAfterEditError(params: {
       channel: params.channelId,
       ts: params.threadTs,
       latest: params.messageId,
+      oldest: params.messageId,
       inclusive: true,
-      limit: 100,
+      limit: 1,
     });
     const reply = (replyResult.messages ?? []).find(
       (message) => (message as SlackReadbackMessage | undefined)?.ts === params.messageId,
@@ -88,9 +145,13 @@ async function didSlackPreviewEditApplyAfterError(params: {
     text: params.text,
     blocks: params.blocks,
   });
+  const acceptedTexts = buildAcceptedSlackEditTexts({
+    text: params.text,
+    blocks: params.blocks,
+  });
   const actualText = normalizeSlackOutboundText((readback.text ?? "").trim());
   if (params.blocks?.length) {
-    return actualText === expectedText && blocksMatch(params.blocks, readback.blocks);
+    return acceptedTexts.has(actualText) && blocksMatch(params.blocks, readback.blocks);
   }
   return actualText === expectedText;
 }
@@ -106,13 +167,12 @@ export async function finalizeSlackPreviewEdit(params: {
   threadTs?: string;
 }): Promise<void> {
   try {
-    await editSlackMessage(params.channelId, params.messageId, params.text, {
+    await editSlackRenderedMessage(params.channelId, params.messageId, params.text, {
       token: params.token,
       accountId: params.accountId,
       client: params.client,
       ...(params.blocks?.length ? { blocks: params.blocks } : {}),
     });
-    return;
   } catch (err) {
     try {
       const applied = await didSlackPreviewEditApplyAfterError({
@@ -136,10 +196,3 @@ export async function finalizeSlackPreviewEdit(params: {
     throw err;
   }
 }
-
-export const __testing = {
-  buildExpectedSlackEditText,
-  blocksMatch,
-  didSlackPreviewEditApplyAfterError,
-  readSlackMessageAfterEditError,
-};

@@ -1,6 +1,8 @@
+// Covers provider usage summary loading across auth and plugin paths.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
+  getProviderUsageAuthWithPluginMock,
   getProviderUsageSnapshotWithPluginMock,
   resetProviderUsageSnapshotWithPluginMock,
 } from "./provider-usage-plugin-runtime.test-mocks.js";
@@ -15,6 +17,7 @@ import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
+const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
 
 describe("provider-usage.load", () => {
@@ -23,7 +26,7 @@ describe("provider-usage.load", () => {
     resetProviderUsageSnapshotWithPluginMock();
   });
 
-  it("loads snapshots for copilot gemini codex and xiaomi", async () => {
+  it("loads snapshots for copilot gemini codex and Xiaomi providers", async () => {
     resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
       async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
         switch (provider) {
@@ -39,7 +42,7 @@ describe("provider-usage.load", () => {
               displayName: "Gemini CLI",
               windows: [{ label: "Pro", usedPercent: 40 }],
             };
-          case "openai-codex":
+          case "openai":
             return {
               provider,
               displayName: "Codex",
@@ -50,6 +53,12 @@ describe("provider-usage.load", () => {
               provider,
               displayName: "Xiaomi",
               windows: [],
+            };
+          case "xiaomi-token-plan":
+            return {
+              provider,
+              displayName: "Xiaomi Token Plan",
+              windows: [{ label: "Token Plan", usedPercent: 15 }],
             };
           default:
             return null;
@@ -65,8 +74,9 @@ describe("provider-usage.load", () => {
       [
         { provider: "github-copilot", token: "copilot-token" },
         { provider: googleGeminiCliProvider, token: "gemini-token" },
-        { provider: "openai-codex", token: "codex-token", accountId: "acc-1" },
+        { provider: "openai", token: "codex-token", accountId: "acc-1" },
         { provider: "xiaomi", token: "xiaomi-token" },
+        { provider: "xiaomi-token-plan", token: "xiaomi-token-plan-token" },
       ],
       mockFetch,
     );
@@ -74,8 +84,9 @@ describe("provider-usage.load", () => {
     expect(summary.providers.map((provider) => provider.provider)).toEqual([
       "github-copilot",
       googleGeminiCliProvider,
-      "openai-codex",
+      "openai",
       "xiaomi",
+      "xiaomi-token-plan",
     ]);
     expect(
       summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
@@ -85,11 +96,14 @@ describe("provider-usage.load", () => {
         ?.windows[0]?.label,
     ).toBe("Pro");
     expect(
-      summary.providers.find((provider) => provider.provider === "openai-codex")?.windows[0]?.label,
+      summary.providers.find((provider) => provider.provider === "openai")?.windows[0]?.label,
     ).toBe("3h");
     expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
       [],
     );
+    expect(
+      summary.providers.find((provider) => provider.provider === "xiaomi-token-plan")?.windows,
+    ).toEqual([{ label: "Token Plan", usedPercent: 15 }]);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -127,10 +141,158 @@ describe("provider-usage.load", () => {
         [{ provider: "anthropic", token: "token-a" }],
         mockFetch,
       );
-      expect(summary.providers).toEqual([]);
+      expect(summary.providers).toStrictEqual([]);
     } finally {
       ignoredErrors.delete("HTTP 500");
     }
+  });
+
+  it("keeps balance-only summary snapshots", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
+      provider: "deepseek",
+      displayName: "DeepSeek",
+      windows: [],
+      summary: "Balance ¥42.50",
+    });
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [{ provider: "deepseek", token: "token-d" }],
+      mockFetch,
+    );
+
+    expect(summary.providers).toEqual([
+      {
+        provider: "deepseek",
+        displayName: "DeepSeek",
+        windows: [],
+        summary: "Balance ¥42.50",
+      },
+    ]);
+  });
+
+  it("keeps usage summary available when one provider fetch rejects", async () => {
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
+        if (provider === "anthropic") {
+          throw new Error("fetch failed");
+        }
+        const usageProvider = provider as ProviderUsageSnapshot["provider"];
+        return {
+          provider: usageProvider,
+          displayName: "Codex",
+          windows: [{ label: "3h", usedPercent: 12 }],
+        };
+      },
+    );
+    const mockFetch = createProviderUsageFetch(async () => {
+      throw new Error("legacy fetch should not run");
+    });
+
+    const summary = await loadUsageWithAuth(
+      loadProviderUsageSummary,
+      [
+        { provider: "anthropic", token: "token-a" },
+        { provider: "openai", token: "token-codex" },
+      ],
+      mockFetch,
+    );
+
+    expect(summary.providers).toEqual([
+      {
+        provider: "anthropic",
+        displayName: "Claude",
+        windows: [],
+        error: "fetch failed",
+      },
+      {
+        provider: "openai",
+        displayName: "Codex",
+        windows: [{ label: "3h", usedPercent: 12 }],
+      },
+    ]);
+  });
+
+  it("returns live siblings when one provider never resolves before the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => {
+        if (provider === "anthropic") {
+          return await new Promise<ProviderUsageSnapshot>(() => {});
+        }
+        return {
+          provider,
+          displayName: "Codex",
+          windows: [{ label: "3h", usedPercent: 12 }],
+        };
+      });
+      const summaryPromise = loadProviderUsageSummary({
+        auth: [
+          { provider: "anthropic", token: "token-a" },
+          { provider: "openai", token: "token-codex" },
+        ],
+        config: {},
+        env: {},
+        timeoutMs: 5_000,
+      });
+      let settled = false;
+      void summaryPromise.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      const settledAtDeadline = settled;
+      if (!settledAtDeadline) {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      const summary = await summaryPromise;
+
+      expect(settledAtDeadline).toBe(true);
+      expect(summary.providers).toEqual([
+        { provider: "anthropic", displayName: "Claude", windows: [], error: "Timeout" },
+        {
+          provider: "openai",
+          displayName: "Codex",
+          windows: [{ label: "3h", usedPercent: 12 }],
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps successful provider usage when a sibling auth hook rejects", async () => {
+    resolveProviderUsageAuthWithPluginMock.mockImplementation(async ({ provider }) => {
+      if (provider === "anthropic") {
+        throw new Error("auth failed");
+      }
+      return { token: `${provider}-token` };
+    });
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => ({
+      provider,
+      displayName: provider,
+      windows: [{ label: "5h", usedPercent: 12 }],
+    }));
+
+    const summary = await loadProviderUsageSummary({
+      providers: ["anthropic", "openai"],
+      config: {},
+      // Credential sources keep both providers past the plugin-auth gate so the
+      // sibling-isolation behavior under test is actually exercised.
+      env: { ANTHROPIC_API_KEY: "sk-ant-test", OPENAI_API_KEY: "sk-openai-test" },
+    });
+
+    expect(summary.providers).toEqual([
+      { provider: "anthropic", displayName: "Claude", windows: [], error: "auth failed" },
+      {
+        provider: "openai",
+        displayName: "openai",
+        windows: [{ label: "5h", usedPercent: 12 }],
+      },
+    ]);
   });
 
   it("throws when fetch is unavailable", async () => {
@@ -141,6 +303,7 @@ describe("provider-usage.load", () => {
         loadProviderUsageSummary({
           now: usageNow,
           auth: [{ provider: "xiaomi", token: "token-x" }],
+          env: {},
           fetch: undefined,
         }),
       ).rejects.toThrow("fetch is not available");

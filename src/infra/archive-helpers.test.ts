@@ -1,15 +1,15 @@
+// Tests archive helper behavior for filesystem packaging.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   createTarEntryPreflightChecker,
-  fileExists,
-  readJsonFile,
   resolveArchiveKind,
   resolvePackedRootDir,
-  withTimeout,
 } from "./archive.js";
+import { pathExists, withTimeout } from "./fs-safe.js";
+import { JsonFileReadError, readJsonFileStrict } from "./json-files.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-archive-helper-test-");
@@ -96,7 +96,9 @@ describe("archive helpers", () => {
 
   it("rejects when archive work exceeds the timeout", async () => {
     vi.useFakeTimers();
-    const late = new Promise<string>((resolve) => setTimeout(() => resolve("ok"), 50));
+    const late = new Promise<string>((resolve) => {
+      setTimeout(() => resolve("ok"), 50);
+    });
     const result = withTimeout(late, 1, "extract tar");
     const pending = expect(result).rejects.toThrow("extract tar timed out after 1ms");
     await vi.advanceTimersByTimeAsync(1);
@@ -104,26 +106,28 @@ describe("archive helpers", () => {
   });
 
   it("preflights tar entries for blocked link types, path escapes, and size budgets", () => {
-    const checker = createTarEntryPreflightChecker({
-      rootDir: "/tmp/dest",
-      limits: {
-        maxEntries: 1,
-        maxEntryBytes: 8,
-        maxExtractedBytes: 12,
-      },
-    });
+    const createChecker = () =>
+      createTarEntryPreflightChecker({
+        rootDir: "/tmp/dest",
+        limits: {
+          maxEntries: 1,
+          maxEntryBytes: 8,
+          maxExtractedBytes: 12,
+        },
+      });
 
     expectTarPreflightError(
-      checker,
+      createChecker(),
       { path: "package/link", type: "SymbolicLink", size: 0 },
       "tar entry is a link: package/link",
     );
     expectTarPreflightError(
-      checker,
+      createChecker(),
       { path: "../escape.txt", type: "File", size: 1 },
       /escapes destination|absolute/i,
     );
 
+    const checker = createChecker();
     checker({ path: "package/ok.txt", type: "File", size: 8 });
     expectTarPreflightError(
       checker,
@@ -143,7 +147,7 @@ describe("archive helpers", () => {
       },
     });
 
-    expect(() => checker({ path: "package", type: "Directory", size: 0 })).not.toThrow();
+    checker({ path: "package", type: "Directory", size: 0 });
     checker({ path: "package/a.txt", type: "File", size: 6 });
     expectTarPreflightError(
       checker,
@@ -159,9 +163,9 @@ describe("archive helpers", () => {
     await fs.writeFile(jsonPath, '{"ok":true}', "utf8");
     await fs.writeFile(badPath, "{not json", "utf8");
 
-    await expect(readJsonFile<{ ok: boolean }>(jsonPath)).resolves.toEqual({ ok: true });
-    await expect(readJsonFile(badPath)).rejects.toThrow();
-    await expect(fileExists(jsonPath)).resolves.toBe(true);
-    await expect(fileExists(path.join(dir, "missing.json"))).resolves.toBe(false);
+    await expect(readJsonFileStrict<{ ok: boolean }>(jsonPath)).resolves.toEqual({ ok: true });
+    await expect(readJsonFileStrict(badPath)).rejects.toBeInstanceOf(JsonFileReadError);
+    await expect(pathExists(jsonPath)).resolves.toBe(true);
+    await expect(pathExists(path.join(dir, "missing.json"))).resolves.toBe(false);
   });
 });

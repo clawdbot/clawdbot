@@ -1,12 +1,19 @@
+// Xai provider module implements model/runtime integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  coerceSecretRef,
+  ensureAuthProfileStore,
+  listUsableProviderAuthProfileIds,
+} from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
-  DEFAULT_TIMEOUT_SECONDS,
   formatCliCommand,
   getScopedCredentialValue,
   mergeScopedSearchConfig,
   normalizeCacheKey,
   readCache,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   resolveCacheTtlMs,
   resolveProviderWebSearchPluginConfig,
@@ -17,9 +24,9 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   requestXaiWebSearch,
   resolveXaiInlineCitations,
+  resolveXaiWebSearchEndpoint,
   resolveXaiWebSearchModel,
 } from "./web-search-shared.js";
 import { resolveEffectiveXSearchConfig, setPluginXSearchConfigValue } from "./x-search-config.js";
@@ -29,17 +36,14 @@ const XAI_WEB_SEARCH_CACHE = new Map<
   string,
   { value: Record<string, unknown>; insertedAt: number; expiresAt: number }
 >();
+const XAI_WEB_SEARCH_DEFAULT_TIMEOUT_SECONDS = 60;
+const XAI_PROVIDER_ID = "xai";
 
 const X_SEARCH_MODEL_OPTIONS = [
   {
     value: XAI_DEFAULT_X_SEARCH_MODEL,
     label: XAI_DEFAULT_X_SEARCH_MODEL,
-    hint: "default · fast, no reasoning",
-  },
-  {
-    value: "grok-4-1-fast",
-    label: "grok-4-1-fast",
-    hint: "fast with reasoning",
+    hint: "default · reasoning disabled",
   },
 ] as const;
 
@@ -60,7 +64,7 @@ export async function runXaiSearchProviderSetup(
   await ctx.prompter.note(
     [
       "x_search lets your agent search X (formerly Twitter) posts via xAI.",
-      "It reuses the same xAI API key you just configured for Grok web search.",
+      "It reuses the same xAI credential you configured for Grok web search.",
       `You can change this later with ${formatCliCommand("openclaw configure --section web")}.`,
     ].join("\n"),
     "X search",
@@ -72,7 +76,7 @@ export async function runXaiSearchProviderSetup(
       {
         value: "yes",
         label: "Yes, enable x_search",
-        hint: "Search X posts with the same xAI key",
+        hint: "Search X posts with the same xAI credential",
       },
       {
         value: "skip",
@@ -120,15 +124,18 @@ export async function runXaiSearchProviderSetup(
 function runXaiWebSearch(params: {
   query: string;
   model: string;
+  endpoint: string;
   apiKey: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
   cacheTtlMs: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
+  params.signal?.throwIfAborted();
   const cacheKey = normalizeCacheKey(
-    `grok:${params.model}:${String(params.inlineCitations)}:${params.query}`,
+    `grok:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
-  const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey);
+  const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
     return Promise.resolve({ ...cached.value, cached: true });
   }
@@ -139,9 +146,12 @@ function runXaiWebSearch(params: {
       query: params.query,
       model: params.model,
       apiKey: params.apiKey,
+      endpoint: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.inlineCitations,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     const payload = buildXaiWebSearchPayload({
       query: params.query,
       provider: "grok",
@@ -150,6 +160,7 @@ function runXaiWebSearch(params: {
       content: result.content,
       citations: result.citations,
       inlineCitations: result.inlineCitations,
+      truncated: result.truncated,
     });
 
     writeCache(XAI_WEB_SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
@@ -168,49 +179,240 @@ function resolveXaiToolSearchConfig(ctx: {
   );
 }
 
-function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined {
+function resolveConfiguredXaiWebSearchCredential(
+  searchConfig?: Record<string, unknown>,
+): string | undefined {
   return resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-    path: "tools.web.search.grok.apiKey",
-    envVars: ["XAI_API_KEY"],
+    path: "plugins.entries.xai.config.webSearch.apiKey",
+    envVars: [],
   });
 }
 
-export async function executeXaiWebSearchProviderTool(
-  ctx: { config?: Record<string, unknown>; searchConfig?: Record<string, unknown> },
-  args: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
-  const searchConfig = resolveXaiToolSearchConfig(ctx);
-  const apiKey = resolveXaiWebSearchCredential(searchConfig);
+function hasConfiguredXaiWebSearchCredentialRef(searchConfig?: Record<string, unknown>): boolean {
+  return coerceSecretRef(getScopedCredentialValue(searchConfig, "grok")) !== null;
+}
 
-  if (!apiKey) {
+type XaiResolvedWebSearchAuth = {
+  apiKey: string;
+  mode?: "api-key" | "oauth" | "token" | "aws-sdk";
+  profileId?: string;
+};
+
+async function resolveXaiProviderAuthCredential(params: {
+  config?: Record<string, unknown>;
+  agentDir?: string;
+  credentialPrecedence?: "profile-first" | "env-first";
+  forceRefresh?: boolean;
+  profileId?: string;
+}): Promise<XaiResolvedWebSearchAuth | undefined> {
+  try {
+    const config = params.config as OpenClawConfig | undefined;
+    const resolved = await resolveApiKeyForProvider({
+      provider: XAI_PROVIDER_ID,
+      cfg: config,
+      agentDir: params.agentDir,
+      ...(params.profileId
+        ? {
+            profileId: params.profileId,
+            lockedProfile: true,
+          }
+        : {}),
+      ...(params.forceRefresh ? { forceRefresh: true } : {}),
+      ...(params.credentialPrecedence ? { credentialPrecedence: params.credentialPrecedence } : {}),
+    });
+    const apiKey = typeof resolved.apiKey === "string" ? resolved.apiKey.trim() : "";
+    if (!apiKey) {
+      return undefined;
+    }
+    return {
+      apiKey,
+      mode: resolved.mode,
+      ...(resolved.profileId ? { profileId: resolved.profileId } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveXaiProviderApiKeyProfileFallback(params: {
+  config?: Record<string, unknown>;
+  agentDir?: string;
+}): Promise<XaiResolvedWebSearchAuth | undefined> {
+  const config = params.config as OpenClawConfig | undefined;
+  const usableProfiles = listUsableProviderAuthProfileIds({
+    agentDir: params.agentDir,
+    cfg: config,
+    provider: XAI_PROVIDER_ID,
+  });
+  if (!usableProfiles.agentDir || usableProfiles.profileIds.length === 0) {
+    return undefined;
+  }
+
+  const store = ensureAuthProfileStore(usableProfiles.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  for (const profileId of usableProfiles.profileIds) {
+    const profile = store.profiles[profileId];
+    if (!profile || profile.provider !== XAI_PROVIDER_ID || profile.type === "oauth") {
+      continue;
+    }
+    const resolved = await resolveXaiProviderAuthCredential({
+      agentDir: usableProfiles.agentDir,
+      config: params.config,
+      profileId,
+    });
+    if (resolved?.apiKey && resolved.mode !== "oauth") {
+      return resolved;
+    }
+  }
+
+  return undefined;
+}
+
+async function resolveXaiWebSearchAuth(
+  ctx: { config?: Record<string, unknown>; agentDir?: string },
+  searchConfig?: Record<string, unknown>,
+  options?: { forceRefresh?: boolean; profileId?: string },
+): Promise<XaiResolvedWebSearchAuth | undefined> {
+  const providerAuth = await resolveXaiProviderAuthCredential({
+    agentDir: ctx.agentDir,
+    config: ctx.config,
+    forceRefresh: options?.forceRefresh,
+    profileId: options?.profileId,
+  });
+  if (providerAuth?.mode === "oauth") {
+    return providerAuth;
+  }
+
+  const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
+  if (configured) {
+    return {
+      apiKey: configured,
+      mode: "api-key",
+    };
+  }
+  if (hasConfiguredXaiWebSearchCredentialRef(searchConfig)) {
+    return undefined;
+  }
+
+  return providerAuth;
+}
+
+async function resolveXaiWebSearchApiKeyFallback(
+  ctx: { config?: Record<string, unknown>; agentDir?: string },
+  searchConfig?: Record<string, unknown>,
+): Promise<XaiResolvedWebSearchAuth | undefined> {
+  const configured = resolveConfiguredXaiWebSearchCredential(searchConfig);
+  if (configured) {
+    return {
+      apiKey: configured,
+      mode: "api-key",
+    };
+  }
+  if (hasConfiguredXaiWebSearchCredentialRef(searchConfig)) {
+    return undefined;
+  }
+
+  const providerAuth = await resolveXaiProviderAuthCredential({
+    agentDir: ctx.agentDir,
+    config: ctx.config,
+    credentialPrecedence: "env-first",
+  });
+  if (providerAuth?.apiKey && providerAuth.mode !== "oauth") {
+    return providerAuth;
+  }
+
+  return await resolveXaiProviderApiKeyProfileFallback({
+    agentDir: ctx.agentDir,
+    config: ctx.config,
+  });
+}
+
+function isXaiUnauthorizedError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("xAI API error (401)");
+}
+
+function resolveXaiWebSearchTimeoutSeconds(searchConfig?: Record<string, unknown>): number {
+  return resolveTimeoutSeconds(
+    searchConfig?.timeoutSeconds,
+    XAI_WEB_SEARCH_DEFAULT_TIMEOUT_SECONDS,
+  );
+}
+
+export async function executeXaiWebSearchProviderTool(
+  ctx: {
+    config?: Record<string, unknown>;
+    searchConfig?: Record<string, unknown>;
+    agentDir?: string;
+  },
+  args: Record<string, unknown>,
+  executionContext?: { signal?: AbortSignal },
+): Promise<Record<string, unknown>> {
+  executionContext?.signal?.throwIfAborted();
+  const searchConfig = resolveXaiToolSearchConfig(ctx);
+  const auth = await resolveXaiWebSearchAuth(ctx, searchConfig);
+
+  if (!auth) {
     return {
       error: "missing_xai_api_key",
       message:
-        "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+        "web_search (grok) needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`. If you do not want to configure search credentials, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
 
   const query = readStringParam(args, "query", { required: true });
-  void readNumberParam(args, "count", { integer: true });
+  void readPositiveIntegerParam(args, "count", {
+    max: 10,
+    message: "count must be an integer from 1 to 10.",
+  });
 
-  return await runXaiWebSearch({
+  const request = {
     query,
     model: resolveXaiWebSearchModel(searchConfig),
-    apiKey,
-    timeoutSeconds: resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+    endpoint: resolveXaiWebSearchEndpoint(searchConfig),
+    timeoutSeconds: resolveXaiWebSearchTimeoutSeconds(searchConfig),
     inlineCitations: resolveXaiInlineCitations(searchConfig),
     cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-  });
+    ...(executionContext?.signal ? { signal: executionContext.signal } : {}),
+  };
+  try {
+    return await runXaiWebSearch({
+      ...request,
+      apiKey: auth.apiKey,
+    });
+  } catch (error) {
+    if (!isXaiUnauthorizedError(error) || !auth.profileId) {
+      throw error;
+    }
+    if (auth.mode === "oauth") {
+      const refreshed = await resolveXaiWebSearchAuth(ctx, searchConfig, {
+        forceRefresh: true,
+        profileId: auth.profileId,
+      });
+      if (refreshed?.apiKey && refreshed.apiKey !== auth.apiKey) {
+        return await runXaiWebSearch({
+          ...request,
+          apiKey: refreshed.apiKey,
+        });
+      }
+    }
+    const fallback = await resolveXaiWebSearchApiKeyFallback(ctx, searchConfig);
+    if (!fallback?.apiKey || fallback.apiKey === auth.apiKey) {
+      throw error;
+    }
+    return await runXaiWebSearch({
+      ...request,
+      apiKey: fallback.apiKey,
+    });
+  }
 }
 
-export const __testing = {
+export const testing = {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
   resolveXaiInlineCitations,
-  resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
-  requestXaiWebSearch,
+  resolveXaiWebSearchTimeoutSeconds,
 };

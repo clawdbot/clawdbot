@@ -1,0 +1,137 @@
+title: Subagent forked context
+
+scenario:
+  id: subagent-forked-context
+  surface: subagents
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-subagents
+  objective: Verify a native child executes with inherited requester history, not merely that the parent requests a fork.
+  successCriteria:
+    - Agent launches a bounded native subagent with context=fork and no visible code in its task.
+    - The mock provider observes the child task and inherited parent user turn in the same request.
+    - User-visible output contains the completed child's result, not a parent echo or spawn receipt.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/concepts/session-tool.md
+  codeRefs:
+    - src/agents/tools/sessions-spawn-tool.ts
+    - src/agents/subagents/spawn/subagent-spawn.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-assistant-text.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    summary: Run with mock-openai and --runtime-pair openclaw,codex to require child-request inherited history plus completion-derived output; live mode checks the visible delegated result.
+    channel: qa-channel
+    config:
+      contextNeedle: FORKED-CONTEXT-ALPHA
+      childResultPrefix: "FORKED-CONTEXT-CHILD:"
+      prompt: "Forked subagent context QA check. The visible code in this current conversation is FORKED-CONTEXT-ALPHA. Delegate to a native subagent to report the visible code from the requester transcript. Do not include the visible code in the child task text; the child must recover it from forked transcript context. Use forked context if the child needs the current transcript; otherwise it will not know the code. A spawn-accepted result is not the answer. Wait for the child completion, then make sure user-visible output includes the visible code."
+
+flow:
+  steps:
+    - name: forks current transcript context for the child
+      actions:
+        - call: reset
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:forked-context:${randomUUID()}`"
+        - set: parentPrompt
+          value:
+            expr: "`${config.prompt}\nQA parent correlation: ${sessionKey}`"
+        - set: requestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        # Yield ends the first parent turn; observe the resumed completion on the
+        # channel rather than treating agent.wait or spawn acceptance as the result.
+        - call: startAgentRun
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                ref: parentPrompt
+              taskTracking: false
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 30000)
+        - call: waitForCondition
+          saveAs: outbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && String(candidate.text ?? '').includes(config.contextNeedle) && (!env.mock || String(candidate.text ?? '').includes(config.childResultPrefix)) && !normalizeLowercaseStringOrEmpty(candidate.text).includes('waiting')).at(-1)"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - set: forkDebugRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`) : []"
+        - set: spawnRequest
+          value:
+            expr: "forkDebugRequests.find((request) => String(request.prompt ?? '').includes(parentPrompt) && request.plannedToolName === 'sessions_spawn')"
+        - assert:
+            expr: "!env.mock || (spawnRequest?.plannedToolArgs?.context === 'fork' && spawnRequest.plannedToolArgs.mode === 'run' && spawnRequest.plannedToolArgs.runtime !== 'acp' && !JSON.stringify(spawnRequest.plannedToolArgs).includes(config.contextNeedle))"
+            message: expected a bounded native sessions_spawn context=fork without the visible code in the child arguments
+        - set: acceptedRequest
+          value:
+            expr: "forkDebugRequests.find((request) => spawnRequest?.plannedToolCallId && request.toolOutputCallId === spawnRequest.plannedToolCallId && String(request.prompt ?? '').includes(parentPrompt))"
+        - set: acceptedChild
+          value:
+            expr: "acceptedRequest ? JSON.parse(acceptedRequest.toolOutput) : null"
+        - assert:
+            expr: "!env.mock || (acceptedChild?.status === 'accepted' && acceptedChild.context === 'fork' && typeof acceptedChild.childSessionKey === 'string')"
+            message: expected a successful fork receipt tied to the parent's sessions_spawn call
+        # Independently inspect provider input, not the mock's success decision.
+        # Codex renders historical roles inside conversation_context; OpenClaw
+        # retains separate user items. Neither task text nor instructions count.
+        - set: childRequests
+          value:
+            expr: |-
+              forkDebugRequests.flatMap((request) => {
+                const items = Array.isArray(request.body?.input) ? request.body.input : [];
+                const textOf = (item) => Array.isArray(item.content) ? item.content.filter((part) => part.type === 'input_text').map((part) => String(part.text ?? '')).join('\n').trim() : '';
+                const userTexts = items.filter((item) => item.role === 'user').map(textOf).filter((text) => !(text.includes('<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>') && text.endsWith('<<<END_OPENCLAW_INTERNAL_CONTEXT>>>')));
+                const latest = userTexts.at(-1) ?? '';
+                const projection = /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(latest);
+                const current = projection?.[2] ?? latest;
+                const task = /\[Subagent Context\] You are running as a subagent\b[\s\S]*?\[Subagent Task\]\s+([\s\S]*?)\s+Begin\. Execute the assigned task to completion\.$/.exec(current)?.[1];
+                if (!task || !task.startsWith('Report the visible code from the requester transcript.')) return [];
+                const history = userTexts.slice(0, -1).concat([...String(projection?.[1] ?? '').matchAll(/(?:^|\n\n)\[user\]\n([\s\S]*?)(?=\n\n\[[a-zA-Z]+\]\n|$)/g)].map((match) => match[1]));
+                const instructions = [request.body.instructions, ...items.filter((item) => item.role === 'developer' || item.role === 'system').map(textOf)].join('\n');
+                return [{ request, task, history, instructions }];
+              })
+        - assert:
+            expr: "!env.mock || childRequests.length > 0"
+            message: expected an executed child provider request, not only a parent spawn plan and outbound marker
+        - set: inheritedChildRequest
+          value:
+            expr: "childRequests.find((child) => !child.task.includes(config.contextNeedle) && child.history.some((text) => text.includes(parentPrompt)) && child.instructions.includes(`- Your session: ${acceptedChild.childSessionKey}.`) && child.instructions.includes(`- Requester session: ${sessionKey}.`))"
+        - assert:
+            expr: "!env.mock || Boolean(inheritedChildRequest)"
+            message: expected the accepted child provider request to contain inherited parent user history separately from its code-free task
+        - set: parentCompletionRequest
+          value:
+            expr: "forkDebugRequests.find((request) => (request.plannedToolName === 'message' ? request.plannedToolArgs?.message === `${config.childResultPrefix} ${config.contextNeedle}` : !request.plannedToolName) && (String(request.prompt ?? '').includes(`sourceSession=${acceptedChild?.childSessionKey} `) || String(request.allInputText ?? '').includes(`session_key: ${acceptedChild?.childSessionKey}\n`)))"
+        - assert:
+            expr: "!env.mock || Boolean(parentCompletionRequest)"
+            message:
+              expr: "`expected the parent completion request to deliver the accepted child's result; requests=${JSON.stringify(forkDebugRequests.map((request) => ({ cursor: request.cursor, tool: request.plannedToolName, resultMatches: request.plannedToolArgs?.message === `${config.childResultPrefix} ${config.contextNeedle}`, childSource: String(request.prompt ?? '').includes(`sourceSession=${acceptedChild?.childSessionKey} `) || String(request.allInputText ?? '').includes(`session_key: ${acceptedChild?.childSessionKey}\\n`) })))}`"
+        # Native Codex threads can rotate. Bind completion to the canonical parent:
+        # either its final reply or its successful message-tool call, according to
+        # the active delivery policy. The outbound channel result is checked above.
+        - if:
+            expr: "Boolean(env.mock)"
+            then:
+              - set: deliveryWireTool
+                value:
+                  expr: "parentCompletionRequest.plannedWireToolName ?? parentCompletionRequest.plannedToolName"
+              - set: deliveryTranscriptId
+                value:
+                  expr: "env.runtimeId !== 'codex' && parentCompletionRequest.plannedToolItemId ? `${parentCompletionRequest.plannedToolCallId}|${parentCompletionRequest.plannedToolItemId}` : parentCompletionRequest.plannedToolCallId"
+              - call: waitForCondition
+                saveAs: parentResultRecorded
+                args:
+                  - lambda:
+                      async: true
+                      expr: "(async () => { const summary = await readSessionTranscriptSummary(env, sessionKey); const recorded = parentCompletionRequest.plannedToolName ? summary.successfulToolCallEvents?.some((event) => event.name === deliveryWireTool && event.toolCallId === deliveryTranscriptId) : summary.finalText === `${config.childResultPrefix} ${config.contextNeedle}`; return recorded ? true : undefined; })()"
+                  - expr: liveTurnTimeoutMs(env, 10000)
+                  - 100
+      detailsExpr: "({ reply: outbound.text, childSessionKey: acceptedChild?.childSessionKey ?? null, childRequestCursor: inheritedChildRequest?.request.cursor ?? null, parentCompletionCursor: parentCompletionRequest?.cursor ?? null, inheritedParentHistory: Boolean(inheritedChildRequest), parentResultRecorded: env.mock ? parentResultRecorded : null })"

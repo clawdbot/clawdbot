@@ -1,23 +1,38 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+/**
+ * System prompt report builder.
+ *
+ * Session metadata uses this report to account for prompt size, bootstrap file
+ * injection, skills, and tool schema footprint without storing raw prompt text.
+ */
+import { createHash } from "node:crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
-import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
+import type { AgentTool } from "./runtime/index.js";
 
-function extractBetween(
-  input: string,
-  startMarker: string,
-  endMarker: string,
-): { text: string; found: boolean } {
+type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
+
+// Finalization rebuilds tool objects, while Code Mode updates retained descriptions.
+// Cache only the summary digest, with bounded key size and entry count.
+const toolSummaryHashCache = new Map<string, string>();
+const MAX_TOOL_SUMMARY_HASHES = 512;
+const MAX_CACHED_TOOL_SUMMARY_CHARS = 4_096;
+const toolSchemaStatsCache = new WeakMap<
+  object,
+  Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">
+>();
+
+function sha256(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
+}
+
+function extractBetween(input: string, startMarker: string, endMarker: string): string {
   const start = input.indexOf(startMarker);
   if (start === -1) {
-    return { text: "", found: false };
+    return "";
   }
   const end = input.indexOf(endMarker, start + startMarker.length);
-  if (end === -1) {
-    return { text: input.slice(start), found: true };
-  }
-  return { text: input.slice(start, end), found: true };
+  return end === -1 ? input.slice(start) : input.slice(start, end);
 }
 
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
@@ -36,36 +51,69 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
     .filter((b) => b.blockChars > 0);
 }
 
+function buildToolSchemaStats(
+  parameters: AgentTool["parameters"],
+): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
+  if (!parameters || typeof parameters !== "object") {
+    return { schemaChars: 0, schemaHash: sha256(""), propertiesCount: null };
+  }
+  const cached = toolSchemaStatsCache.get(parameters);
+  if (cached) {
+    return cached;
+  }
+  let schemaJson;
+  try {
+    schemaJson = JSON.stringify(parameters);
+  } catch {
+    schemaJson = "";
+  }
+  const stats = {
+    schemaChars: schemaJson.length,
+    schemaHash: sha256(schemaJson),
+    propertiesCount: (() => {
+      const schema = parameters as Record<string, unknown>;
+      const props = typeof schema.properties === "object" ? schema.properties : null;
+      if (!props || typeof props !== "object") {
+        return null;
+      }
+      return Object.keys(props as Record<string, unknown>).length;
+    })(),
+  };
+  // Tool parameter objects are reused across runs; cache their stable size/hash
+  // so report generation stays cheap during frequent prompt rebuilds.
+  toolSchemaStatsCache.set(parameters, stats);
+  return stats;
+}
+
+function resolveSummaryHash(summary: string): string {
+  if (summary.length > MAX_CACHED_TOOL_SUMMARY_CHARS) {
+    return sha256(summary);
+  }
+  const cached = toolSummaryHashCache.get(summary);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const hash = sha256(summary);
+  toolSummaryHashCache.set(summary, hash);
+  pruneMapToMaxSize(toolSummaryHashCache, MAX_TOOL_SUMMARY_HASHES);
+  return hash;
+}
+
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
-    const schemaChars = (() => {
-      if (!tool.parameters || typeof tool.parameters !== "object") {
-        return 0;
-      }
-      try {
-        return JSON.stringify(tool.parameters).length;
-      } catch {
-        return 0;
-      }
-    })();
-    const propertiesCount = (() => {
-      const schema =
-        tool.parameters && typeof tool.parameters === "object"
-          ? (tool.parameters as Record<string, unknown>)
-          : null;
-      const props = schema && typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })();
-    return { name, summaryChars, schemaChars, propertiesCount };
+    const schemaStats = buildToolSchemaStats(tool.parameters);
+    return { name, summaryChars, summaryHash: resolveSummaryHash(summary), ...schemaStats };
   });
 }
 
+function measureRenderedProjectContextChars(systemPrompt: string): number {
+  return extractBetween(systemPrompt, "\n# Project Context\n", "\n## Silent Replies\n").length;
+}
+
+/** Builds the stored report for a rendered system prompt and its inputs. */
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
   generatedAt: number;
@@ -79,18 +127,13 @@ export function buildSystemPromptReport(params: {
   bootstrapTruncation?: SessionSystemPromptReport["bootstrapTruncation"];
   sandbox?: SessionSystemPromptReport["sandbox"];
   systemPrompt: string;
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
+  injectedWorkspaceFiles: BootstrapInjectionStat[];
   skillsPrompt: string;
   tools: AgentTool[];
+  currentTurn?: SessionSystemPromptReport["currentTurn"];
 }): SessionSystemPromptReport {
-  const systemPrompt = params.systemPrompt.trim();
-  const projectContext = extractBetween(
-    systemPrompt,
-    "\n# Project Context\n",
-    "\n## Silent Replies\n",
-  );
-  const projectContextChars = projectContext.text.length;
+  const systemPromptChars = params.systemPrompt.length;
+  const projectContextChars = measureRenderedProjectContextChars(params.systemPrompt);
   const toolsEntries = buildToolsEntries(params.tools);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsEntries = parseSkillBlocks(params.skillsPrompt);
@@ -108,16 +151,16 @@ export function buildSystemPromptReport(params: {
     ...(params.bootstrapTruncation ? { bootstrapTruncation: params.bootstrapTruncation } : {}),
     sandbox: params.sandbox,
     systemPrompt: {
-      chars: systemPrompt.length,
+      chars: systemPromptChars,
+      hash: sha256(params.systemPrompt),
       projectContextChars,
-      nonProjectContextChars: Math.max(0, systemPrompt.length - projectContextChars),
+      nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
-    injectedWorkspaceFiles: buildBootstrapInjectionStats({
-      bootstrapFiles: params.bootstrapFiles,
-      injectedFiles: params.injectedFiles,
-    }),
+    ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
+    injectedWorkspaceFiles: params.injectedWorkspaceFiles,
     skills: {
       promptChars: params.skillsPrompt.length,
+      hash: sha256(params.skillsPrompt),
       entries: skillsEntries,
     },
     tools: {

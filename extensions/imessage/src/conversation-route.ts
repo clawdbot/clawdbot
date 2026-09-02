@@ -1,14 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Imessage plugin module implements conversation route behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  getSessionBindingService,
-  isPluginOwnedSessionBindingRecord,
   resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute,
+  type ConfiguredBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  deriveLastRoutePolicy,
-  resolveAgentIdFromSessionKey,
-  resolveAgentRoute,
-} from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveIMessageInboundConversationId } from "./conversation-id.js";
 
@@ -19,8 +16,8 @@ export function resolveIMessageConversationRoute(params: {
   peerId: string;
   sender: string;
   chatId?: number;
-}): ReturnType<typeof resolveAgentRoute> {
-  let route = resolveAgentRoute({
+}): ConfiguredBindingRouteResult {
+  const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: "imessage",
     accountId: params.accountId,
@@ -36,44 +33,33 @@ export function resolveIMessageConversationRoute(params: {
     chatId: params.chatId,
   });
   if (!conversationId) {
-    return route;
+    return { route, bindingResolution: null };
   }
 
-  route = resolveConfiguredBindingRoute({
-    cfg: params.cfg,
-    route,
-    conversation: {
-      channel: "imessage",
-      accountId: params.accountId,
-      conversationId,
-    },
-  }).route;
-
-  const runtimeBinding = getSessionBindingService().resolveByConversation({
+  const conversation = {
     channel: "imessage",
     accountId: params.accountId,
     conversationId,
+  };
+  const configuredRoute = resolveConfiguredBindingRoute({
+    cfg: params.cfg,
+    route,
+    conversation,
   });
-  const boundSessionKey = runtimeBinding?.targetSessionKey?.trim();
-  if (!runtimeBinding || !boundSessionKey) {
-    return route;
-  }
 
-  getSessionBindingService().touch(runtimeBinding.bindingId);
-  if (isPluginOwnedSessionBindingRecord(runtimeBinding)) {
+  const runtimeRoute = resolveRuntimeConversationBindingRoute({
+    route: configuredRoute.route,
+    conversation,
+  });
+  if (runtimeRoute.bindingRecord && !runtimeRoute.boundSessionKey) {
     logVerbose(`imessage: plugin-bound conversation ${conversationId}`);
-    return route;
+  } else if (runtimeRoute.boundSessionKey) {
+    logVerbose(
+      `imessage: routed via bound conversation ${conversationId} -> ${runtimeRoute.boundSessionKey}`,
+    );
   }
-
-  logVerbose(`imessage: routed via bound conversation ${conversationId} -> ${boundSessionKey}`);
   return {
-    ...route,
-    sessionKey: boundSessionKey,
-    agentId: resolveAgentIdFromSessionKey(boundSessionKey),
-    lastRoutePolicy: deriveLastRoutePolicy({
-      sessionKey: boundSessionKey,
-      mainSessionKey: route.mainSessionKey,
-    }),
-    matchedBy: "binding.channel",
+    route: runtimeRoute.route,
+    bindingResolution: runtimeRoute.bindingRecord ? null : configuredRoute.bindingResolution,
   };
 }

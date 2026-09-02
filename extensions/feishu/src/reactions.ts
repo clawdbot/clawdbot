@@ -1,11 +1,13 @@
+// Feishu plugin module implements reactions behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { assertFeishuApiSuccess } from "./api-response.js";
 import { createFeishuClient } from "./client.js";
 
-export type FeishuReaction = {
+type FeishuReaction = {
   reactionId: string;
   emojiType: string;
-  operatorType: "app" | "user";
+  operatorType: "app" | "user" | "unknown";
   operatorId: string;
 };
 
@@ -15,12 +17,6 @@ function resolveConfiguredFeishuClient(params: { cfg: ClawdbotConfig; accountId?
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
   return createFeishuClient(account);
-}
-
-function assertFeishuReactionApiSuccess(response: { code?: number; msg?: string }, action: string) {
-  if (response.code !== 0) {
-    throw new Error(`Feishu ${action} failed: ${response.msg || `code ${response.code}`}`);
-  }
 }
 
 /**
@@ -50,7 +46,7 @@ export async function addReactionFeishu(params: {
     data?: { reaction_id?: string };
   };
 
-  assertFeishuReactionApiSuccess(response, "add reaction");
+  assertFeishuApiSuccess(response, "Feishu add reaction failed");
 
   const reactionId = response.data?.reaction_id;
   if (!reactionId) {
@@ -79,7 +75,7 @@ export async function removeReactionFeishu(params: {
     },
   })) as { code?: number; msg?: string };
 
-  assertFeishuReactionApiSuccess(response, "remove reaction");
+  assertFeishuApiSuccess(response, "Feishu remove reaction failed");
 }
 
 /**
@@ -93,61 +89,65 @@ export async function listReactionsFeishu(params: {
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const reactions: FeishuReaction[] = [];
+  const seenPageTokens = new Set<string>();
+  let pageToken: string | undefined;
 
-  const response = (await client.im.messageReaction.list({
-    path: { message_id: messageId },
-    params: emojiType ? { reaction_type: emojiType } : undefined,
-  })) as {
-    code?: number;
-    msg?: string;
-    data?: {
-      items?: Array<{
-        reaction_id?: string;
-        reaction_type?: { emoji_type?: string };
-        operator_type?: string;
-        operator_id?: { open_id?: string; user_id?: string; union_id?: string };
-      }>;
+  while (true) {
+    const response = (await client.im.messageReaction.list({
+      path: { message_id: messageId },
+      params:
+        emojiType || pageToken
+          ? {
+              ...(emojiType ? { reaction_type: emojiType } : {}),
+              ...(pageToken ? { page_token: pageToken } : {}),
+            }
+          : undefined,
+    })) as {
+      code?: number;
+      msg?: string;
+      data?: {
+        items?: Array<{
+          reaction_id?: string;
+          reaction_type?: { emoji_type?: string };
+          operator?: {
+            operator_type?: string;
+            operator_id?: string;
+          };
+        }>;
+        has_more?: boolean;
+        page_token?: string;
+      };
     };
-  };
 
-  assertFeishuReactionApiSuccess(response, "list reactions");
+    assertFeishuApiSuccess(response, "Feishu list reactions failed");
 
-  const items = response.data?.items ?? [];
-  return items.map((item) => ({
-    reactionId: item.reaction_id ?? "",
-    emojiType: item.reaction_type?.emoji_type ?? "",
-    operatorType: item.operator_type === "app" ? "app" : "user",
-    operatorId:
-      item.operator_id?.open_id ?? item.operator_id?.user_id ?? item.operator_id?.union_id ?? "",
-  }));
+    for (const item of response.data?.items ?? []) {
+      reactions.push({
+        reactionId: item.reaction_id ?? "",
+        emojiType: item.reaction_type?.emoji_type ?? "",
+        operatorType:
+          item.operator?.operator_type === "app"
+            ? "app"
+            : item.operator?.operator_type === "user"
+              ? "user"
+              : "unknown",
+        operatorId: item.operator?.operator_id ?? "",
+      });
+    }
+
+    if (response.data?.has_more !== true) {
+      return reactions;
+    }
+
+    const nextPageToken = response.data.page_token?.trim();
+    if (!nextPageToken) {
+      throw new Error("Feishu reaction pagination is missing its next page token");
+    }
+    if (seenPageTokens.has(nextPageToken)) {
+      throw new Error("Feishu reaction pagination returned a repeated page token");
+    }
+    seenPageTokens.add(nextPageToken);
+    pageToken = nextPageToken;
+  }
 }
-
-/**
- * Common Feishu emoji types for convenience.
- * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
- */
-export const FeishuEmoji = {
-  // Common reactions
-  THUMBSUP: "THUMBSUP",
-  THUMBSDOWN: "THUMBSDOWN",
-  HEART: "HEART",
-  SMILE: "SMILE",
-  GRINNING: "GRINNING",
-  LAUGHING: "LAUGHING",
-  CRY: "CRY",
-  ANGRY: "ANGRY",
-  SURPRISED: "SURPRISED",
-  THINKING: "THINKING",
-  CLAP: "CLAP",
-  OK: "OK",
-  FIST: "FIST",
-  PRAY: "PRAY",
-  FIRE: "FIRE",
-  PARTY: "PARTY",
-  CHECK: "CHECK",
-  CROSS: "CROSS",
-  QUESTION: "QUESTION",
-  EXCLAMATION: "EXCLAMATION",
-} as const;
-
-export type FeishuEmojiType = (typeof FeishuEmoji)[keyof typeof FeishuEmoji];

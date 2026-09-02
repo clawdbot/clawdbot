@@ -6,6 +6,7 @@ import type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
 } from "../plugins/types.js";
 import { enablePluginInConfig } from "./provider-enable-config.js";
 import {
@@ -27,6 +28,7 @@ export type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
 };
 export type {
   CreateWebSearchProviderContractFieldsOptions,
@@ -36,9 +38,11 @@ export type {
 } from "./provider-web-search-contract-fields.js";
 
 type CreateWebSearchProviderSelectionOptions = CreateWebSearchProviderContractFieldsOptions & {
+  /** Plugin id to enable when this provider is selected through setup/configuration flows. */
   selectionPluginId?: string;
 };
 
+/** Build the public web-search provider hooks, including optional selection-time plugin enabling. */
 export function createWebSearchProviderContractFields(
   options: CreateWebSearchProviderSelectionOptions,
 ): Pick<

@@ -1,27 +1,24 @@
+/** Shared CLI runner test doubles for supervisor, bootstrap, and heartbeat seams. */
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
-import type { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import type { enqueueSystemEvent } from "../infra/system-events.js";
-import type { getProcessSupervisor } from "../process/supervisor/index.js";
-import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
-import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.test-support.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
-type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
-type SupervisorSpawnFn = ProcessSupervisor["spawn"];
-type EnqueueSystemEventFn = typeof enqueueSystemEvent;
-type RequestHeartbeatNowFn = typeof requestHeartbeatNow;
-type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+export {
+  createManagedRun,
+  enqueueSystemEventMock,
+  requestHeartbeatMock,
+  supervisorSpawnMock,
+} from "./cli-runner/execute.test-support.js";
+
+// Shared CLI runner test doubles. They replace supervisor/process and bootstrap
+// dependencies so CLI runner tests can assert process behavior deterministically.
 type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 };
 type ResolveBootstrapContextForRunMock = Mock<() => Promise<BootstrapContext>>;
-
-export const supervisorSpawnMock: UnknownMock = vi.fn();
-export const enqueueSystemEventMock: UnknownMock = vi.fn();
-export const requestHeartbeatNowMock: UnknownMock = vi.fn();
 
 const hoisted = vi.hoisted(
   (): {
@@ -36,91 +33,11 @@ const hoisted = vi.hoisted(
   },
 );
 
-setCliRunnerExecuteTestDeps({
-  getProcessSupervisor: () => ({
-    spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
-      supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
-    cancel: vi.fn(),
-    cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
-    getRecord: vi.fn(),
-  }),
-  enqueueSystemEvent: (
-    text: Parameters<EnqueueSystemEventFn>[0],
-    options: Parameters<EnqueueSystemEventFn>[1],
-  ) => enqueueSystemEventMock(text, options) as ReturnType<EnqueueSystemEventFn>,
-  requestHeartbeatNow: (options?: Parameters<RequestHeartbeatNowFn>[0]) =>
-    requestHeartbeatNowMock(options) as ReturnType<RequestHeartbeatNowFn>,
-});
-
 setCliRunnerPrepareTestDeps({
   makeBootstrapWarn: () => () => {},
   resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-  resolveOpenClawDocsPath: async () => null,
+  resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
 });
-
-type MockRunExit = {
-  reason:
-    | "manual-cancel"
-    | "overall-timeout"
-    | "no-output-timeout"
-    | "spawn-error"
-    | "signal"
-    | "exit";
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-  noOutputTimedOut: boolean;
-};
-
-type ManagedRunMock = {
-  runId: string;
-  pid: number;
-  startedAtMs: number;
-  stdin: undefined;
-  wait: Mock<() => Promise<MockRunExit>>;
-  cancel: Mock<() => void>;
-};
-
-export function createManagedRun(
-  exit: MockRunExit,
-  pid = 1234,
-): ManagedRunMock & Awaited<ReturnType<SupervisorSpawnFn>> {
-  return {
-    runId: "run-supervisor",
-    pid,
-    startedAtMs: Date.now(),
-    stdin: undefined,
-    wait: vi.fn().mockResolvedValue(exit),
-    cancel: vi.fn(),
-  };
-}
-
-export function mockSuccessfulCliRun() {
-  supervisorSpawnMock.mockResolvedValueOnce(
-    createManagedRun({
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 50,
-      stdout: "ok",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    }),
-  );
-}
-
-export function restoreCliRunnerPrepareTestDeps() {
-  setCliRunnerPrepareTestDeps({
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
-    resolveOpenClawDocsPath: async () => null,
-  });
-}
 
 beforeEach(() => {
   vi.unstubAllEnvs();

@@ -1,3 +1,4 @@
+// Slack plugin module implements blocks input behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
 
 export const SLACK_MAX_BLOCKS = 50;

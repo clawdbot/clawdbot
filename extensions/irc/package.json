@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/irc",
-  "version": "2026.4.20",
+  "version": "2026.8.1",
   "description": "OpenClaw IRC channel plugin",
   "type": "module",
   "devDependencies": {
@@ -11,11 +11,26 @@
       "./index.ts"
     ],
     "install": {
-      "minHostVersion": ">=2026.4.10"
+      "clawhubSpec": "clawhub:@openclaw/irc",
+      "npmSpec": "@openclaw/irc",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.9",
+      "allowInvalidConfigRecovery": true
     },
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "irc",
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "IRC_HOST",
+            "IRC_NICK"
+          ]
+        }
+      },
       "label": "IRC",
       "selectionLabel": "IRC (Server + Nick)",
       "detailLabel": "IRC",
@@ -26,10 +41,102 @@
         "internet-relay-chat"
       ],
       "systemImage": "network",
-      "configuredState": {
-        "specifier": "./configured-state",
-        "exportName": "hasIrcConfiguredState"
+      "setup": {
+        "fields": [
+          {
+            "key": "host",
+            "kind": "string",
+            "cli": {
+              "flags": "--host <host>",
+              "description": "IRC server host"
+            }
+          },
+          {
+            "key": "port",
+            "kind": "string",
+            "cli": {
+              "flags": "--port <port>",
+              "description": "IRC server port"
+            }
+          },
+          {
+            "key": "tls",
+            "kind": "boolean",
+            "cli": {
+              "flags": "--tls",
+              "description": "Use TLS for IRC"
+            }
+          },
+          {
+            "key": "nick",
+            "kind": "string",
+            "cli": {
+              "flags": "--nick <nick>",
+              "description": "IRC nickname"
+            }
+          },
+          {
+            "key": "username",
+            "kind": "string",
+            "cli": {
+              "flags": "--username <name>",
+              "description": "IRC username"
+            }
+          },
+          {
+            "key": "realname",
+            "kind": "string",
+            "cli": {
+              "flags": "--realname <name>",
+              "description": "IRC real name"
+            }
+          },
+          {
+            "key": "channels",
+            "kind": "string-list",
+            "cli": {
+              "flags": "--channels <names>",
+              "description": "IRC channels"
+            }
+          },
+          {
+            "key": "password",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--password <password>",
+              "description": "IRC server password"
+            }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": {
+              "flags": "--use-env",
+              "description": "Use IRC environment configuration"
+            },
+            "envVars": ["IRC_HOST", "IRC_NICK"]
+          }
+        ]
       }
+    },
+    "compat": {
+      "pluginApi": ">=2026.8.1"
+    },
+    "build": {
+      "openclawVersion": "2026.8.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
   }
 }

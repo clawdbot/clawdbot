@@ -1,0 +1,29 @@
+title: Codex auth profile mixed profiles
+
+scenario:
+  id: auth-profile-codex-mixed-profiles
+  surface: runtime
+  coverage:
+    primary:
+      - openai.codex-oauth-profiles-codex-plugin-auth
+    secondary:
+      - agent-runtime.auth-profile-selection-provider-selection
+      - openai.codex-oauth-profiles-doctor-repair
+  objective: Verify doctor repairs mixed legacy Codex OAuth and OpenAI API-key profiles into canonical SQLite state and the Codex auth bridge sends the selected OAuth profile to App Server.
+  successCriteria:
+    - The selected auth profile id is openai:qa-oauth.
+    - The openai:media-api API-key profile is present but not selected.
+    - Doctor removes the legacy JSON store after verifying its canonical per-agent SQLite import.
+    - The Gateway-backed Codex turn emits account/login/start with chatgptAuthTokens; evidence redacts token material.
+  docsRefs:
+    - docs/cli/doctor.md
+    - docs/plugins/codex-harness.md
+  codeRefs:
+    - src/commands/doctor-auth-flat-profiles.ts
+    - src/agents/auth-profiles/sqlite.ts
+    - extensions/codex/src/app-server/auth-bridge.ts
+    - test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts
+    summary: Run the isolated doctor-to-SQLite-to-Gateway-to-Codex-App-Server auth product path.

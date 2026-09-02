@@ -1,31 +1,40 @@
-import type { Stats } from "node:fs";
-import fs from "node:fs/promises";
+// Memory Host SDK helper module supports fs utils behavior.
+import { configureFsSafeNative } from "@openclaw/fs-safe/config";
+// fs-safe facade with native acceleration disabled by default for this package's
+// host-side memory file operations.
+export { root } from "@openclaw/fs-safe/root";
+export { isPathInside, isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
+export {
+  assertNoSymlinkParents,
+  readRegularFile,
+  statRegularFile,
+} from "@openclaw/fs-safe/advanced";
+export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
 
-export type RegularFileStatResult = { missing: true } | { missing: false; stat: Stats };
+const hasModeOverride = Object.keys(process.env).some((key) =>
+  /^(?:OPENCLAW_)?FS_SAFE_(?:NATIVE|PYTHON)_MODE$/u.test(
+    process.platform === "win32" ? key.toUpperCase() : key,
+  ),
+);
 
-export function isFileMissingError(
-  err: unknown,
-): err is NodeJS.ErrnoException & { code: "ENOENT" } {
-  return Boolean(
-    err &&
-    typeof err === "object" &&
-    "code" in err &&
-    (err as Partial<NodeJS.ErrnoException>).code === "ENOENT",
-  );
+if (!hasModeOverride) {
+  configureFsSafeNative({ mode: "off" });
 }
 
-export async function statRegularFile(absPath: string): Promise<RegularFileStatResult> {
-  let stat: Stats;
-  try {
-    stat = await fs.lstat(absPath);
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return { missing: true };
-    }
-    throw err;
+/**
+ * True for missing-file errors emitted by Node or fs-safe.
+ * The narrowed union stays stable; extra-path authorization handles `not-file` separately.
+ */
+export function isFileMissingError(
+  err: unknown,
+): err is NodeJS.ErrnoException & { code: "ENOENT" | "ENOTDIR" | "not-file" | "not-found" } {
+  if (!err || typeof err !== "object" || !("code" in err)) {
+    return false;
   }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    throw new Error("path required");
-  }
-  return { missing: false, stat };
+  return (
+    err.code === "ENOENT" ||
+    err.code === "ENOTDIR" ||
+    err.code === "not-file" ||
+    err.code === "not-found"
+  );
 }

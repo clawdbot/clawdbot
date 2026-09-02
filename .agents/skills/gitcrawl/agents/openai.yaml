@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gitcrawl"
+  short_description: "Search local OpenClaw issue and PR history before live GitHub triage"
+  default_prompt: "Use $gitcrawl to inspect OpenClaw issue and PR history, find related threads and duplicate candidates, then verify actionable decisions with live GitHub."

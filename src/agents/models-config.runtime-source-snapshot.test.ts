@@ -1,3 +1,5 @@
+// Verifies generated models.json preserves source secret markers from runtime snapshots.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
@@ -11,21 +13,20 @@ import {
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  clearPluginManifestRegistryCache: () => undefined,
-  loadPluginManifestRegistry: () => ({ plugins: [] }),
+  loadPluginManifestRegistryCore: () => ({ plugins: [] }),
 }));
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => ["OPENAI_API_KEY"],
-  PROVIDER_ENV_API_KEY_CANDIDATES: { openai: ["OPENAI_API_KEY"] },
-  resolveProviderEnvApiKeyCandidates: () => ({ openai: ["OPENAI_API_KEY"] }),
+  resolveProviderEnvAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: { openai: ["OPENAI_API_KEY"] },
+    authEvidenceMap: {},
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderConfigDefaultsWithPlugin: (config: OpenClawConfig) => config,
-  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
   normalizeProviderConfigWithPlugin: () => undefined,
-  resetProviderRuntimeHookCacheForTest: () => undefined,
   resolveProviderConfigApiKeyWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
@@ -46,8 +47,8 @@ let clearConfigCache: typeof import("../config/io.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/io.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/io.js").setRuntimeConfigSnapshot;
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
-let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
-let planOpenClawModelsJsonWithDeps: typeof import("./models-config.plan.js").planOpenClawModelsJsonWithDeps;
+let resetModelsJsonReadyCacheForTest: typeof import("./models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
+let planOpenClawModelsJsonWithDeps: typeof import("./models-config.plan.test-support.js").planOpenClawModelsJsonWithDeps;
 let readGeneratedModelsJson: typeof import("./models-config.test-utils.js").readGeneratedModelsJson;
 const fixtureSuite = createFixtureSuite("openclaw-models-runtime-source-");
 
@@ -55,9 +56,9 @@ beforeAll(async () => {
   await fixtureSuite.setup();
   ({ clearConfigCache, clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../config/io.js"));
-  ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
-    await import("./models-config.js"));
-  ({ planOpenClawModelsJsonWithDeps } = await import("./models-config.plan.js"));
+  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ resetModelsJsonReadyCacheForTest } = await import("./models-config-state.test-support.js"));
+  ({ planOpenClawModelsJsonWithDeps } = await import("./models-config.plan.test-support.js"));
   ({ readGeneratedModelsJson } = await import("./models-config.test-utils.js"));
 });
 
@@ -87,12 +88,47 @@ function createOpenAiApiKeySourceConfig(): OpenClawConfig {
 }
 
 function createOpenAiApiKeyRuntimeConfig(): OpenClawConfig {
+  // Runtime config simulates already-resolved secrets that must not be persisted.
   return {
     models: {
       providers: {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createCustomProviderApiKeySourceConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        litellm: {
+          baseUrl: "https://litellm.example/v1",
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_MODEL_LITELLM_API_KEY", // pragma: allowlist secret
+          },
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createCustomProviderApiKeyRuntimeConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        litellm: {
+          baseUrl: "https://litellm.example/v1",
+          apiKey: "sk-litellm-runtime-secret", // pragma: allowlist secret
           api: "openai-completions" as const,
           models: [],
         },
@@ -145,9 +181,13 @@ function createOpenAiHeaderRuntimeConfig(): OpenClawConfig {
   };
 }
 
+function getOpenAiProvider(config: OpenClawConfig) {
+  return expectDefined(config.models?.providers?.openai, "OpenAI provider config");
+}
+
 function createOpenAiSourceConfigWithHeadersAndApiKey(): OpenClawConfig {
   const config = createOpenAiHeaderSourceConfig();
-  config.models!.providers!.openai.apiKey = {
+  getOpenAiProvider(config).apiKey = {
     source: "env",
     provider: "default",
     id: "OPENAI_API_KEY", // pragma: allowlist secret
@@ -157,7 +197,7 @@ function createOpenAiSourceConfigWithHeadersAndApiKey(): OpenClawConfig {
 
 function createOpenAiRuntimeConfigWithHeadersAndApiKey(): OpenClawConfig {
   const config = createOpenAiHeaderRuntimeConfig();
-  config.models!.providers!.openai.apiKey = "sk-runtime-resolved"; // pragma: allowlist secret
+  getOpenAiProvider(config).apiKey = "sk-runtime-resolved"; // pragma: allowlist secret
   return config;
 }
 
@@ -187,6 +227,7 @@ async function planGeneratedProviders(params: {
   config: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
 }) {
+  // Planner assertions avoid filesystem noise for marker-projection cases.
   const plan = await planOpenClawModelsJsonWithDeps(
     {
       cfg: params.config,
@@ -213,6 +254,7 @@ async function planGeneratedProviders(params: {
 function expectOpenAiHeaderMarkers(
   providers: Record<string, { headers?: Record<string, string> }>,
 ) {
+  // Env header refs keep their id; non-env refs collapse to the shared sentinel.
   expect(providers.openai?.headers?.Authorization).toBe(
     "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
   );
@@ -220,11 +262,11 @@ function expectOpenAiHeaderMarkers(
 }
 
 describe("models-config runtime source snapshot", () => {
-  it("uses runtime source snapshot markers when passed the active runtime config", async () => {
+  it("uses runtime source snapshot markers when passed the active runtime config", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
-          openai: createOpenAiApiKeySourceConfig().models!.providers!.openai,
+          openai: getOpenAiProvider(createOpenAiApiKeySourceConfig()),
           moonshot: {
             baseUrl: "https://api.moonshot.ai/v1",
             apiKey: { source: "file", provider: "vault", id: "/moonshot/apiKey" },
@@ -237,7 +279,7 @@ describe("models-config runtime source snapshot", () => {
     const runtimeConfig: OpenClawConfig = {
       models: {
         providers: {
-          openai: createOpenAiApiKeyRuntimeConfig().models!.providers!.openai,
+          openai: getOpenAiProvider(createOpenAiApiKeyRuntimeConfig()),
           moonshot: {
             baseUrl: "https://api.moonshot.ai/v1",
             apiKey: "sk-runtime-moonshot", // pragma: allowlist secret
@@ -249,7 +291,7 @@ describe("models-config runtime source snapshot", () => {
     };
     const providers = enforceSourceManagedProviderSecrets({
       providers: runtimeConfig.models!.providers!,
-      sourceProviders: sourceConfig.models!.providers,
+      sourceConfigForSecrets: sourceConfig,
     })!;
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expect(providers.moonshot?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
@@ -281,6 +323,24 @@ describe("models-config runtime source snapshot", () => {
     });
   });
 
+  it("preserves source markers for custom-provider api keys after models status secret resolution", async () => {
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
+      unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
+      const sourceConfig = createCustomProviderApiKeySourceConfig();
+      const runtimeConfig = createCustomProviderApiKeyRuntimeConfig();
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await ensureOpenClawModelsJson(runtimeConfig, agentDir);
+        await expectGeneratedProviderApiKey(agentDir, "litellm", "OPENCLAW_MODEL_LITELLM_API_KEY"); // pragma: allowlist secret
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
   it("invalidates cached readiness when projected config changes under the same runtime snapshot", async () => {
     const agentDir = await fixtureSuite.createCaseDir("agent");
     await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
@@ -292,7 +352,7 @@ describe("models-config runtime source snapshot", () => {
         models: {
           providers: {
             openai: {
-              ...runtimeConfig.models!.providers!.openai,
+              ...getOpenAiProvider(runtimeConfig),
               baseUrl: "https://api.openai.com/v1",
               headers: {
                 "X-OpenClaw-Test": "one",
@@ -306,7 +366,7 @@ describe("models-config runtime source snapshot", () => {
         models: {
           providers: {
             openai: {
-              ...runtimeConfig.models!.providers!.openai,
+              ...getOpenAiProvider(runtimeConfig),
               baseUrl: "https://mirror.example/v1",
               headers: {
                 "X-OpenClaw-Test": "two",
@@ -362,5 +422,108 @@ describe("models-config runtime source snapshot", () => {
     });
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expectOpenAiHeaderMarkers(providers);
+  });
+
+  it("reapplies source markers when sourceConfigForSecrets uses mixed-case provider keys", async () => {
+    // Regression: provider keys in sourceConfigForSecrets may arrive as "OpenAI" while the
+    // merge boundary canonicalizes to "openai". The source-managed marker lookup must use the
+    // same provider-id normalizer, otherwise the resolved runtime apiKey leaks into models.json.
+    const mixedCaseSourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          OpenAI: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+    const providers = await planGeneratedProviders({
+      config: createOpenAiApiKeyRuntimeConfig(),
+      sourceConfigForSecrets: mixedCaseSourceConfig,
+    });
+    expect(Object.keys(providers).toSorted()).toEqual(["openai"]);
+    expect(providers.OpenAI).toBeUndefined();
+    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("reapplies source header markers when sourceConfigForSecrets uses mixed-case provider keys", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          " OpenAI ": {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions" as const,
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" }, // pragma: allowlist secret
+            headers: {
+              Authorization: {
+                source: "env",
+                provider: "default",
+                id: "OPENAI_HEADER_TOKEN", // pragma: allowlist secret
+              },
+              "X-Tenant-Token": {
+                source: "file",
+                provider: "vault",
+                id: "/providers/openai/tenantToken",
+              },
+            },
+            models: [],
+          },
+        },
+      },
+    };
+    const providers = await planGeneratedProviders({
+      config: createOpenAiRuntimeConfigWithHeadersAndApiKey(),
+      sourceConfigForSecrets: sourceConfig,
+    });
+    expect(Object.keys(providers).toSorted()).toEqual(["openai"]);
+    expect(providers.OpenAI).toBeUndefined();
+    expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    expectOpenAiHeaderMarkers(providers);
+  });
+
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])(
+    "prefers canonical source secret ownership when it appears %s a case variant",
+    async (_position, first) => {
+      const canonical = getOpenAiProvider(createOpenAiApiKeySourceConfig());
+      const caseVariant = {
+        ...canonical,
+        apiKey: {
+          source: "env" as const,
+          provider: "default",
+          id: "OPENAI_CASE_VARIANT",
+        },
+      };
+      const sourceProviders = first
+        ? { openai: canonical, OpenAI: caseVariant }
+        : { OpenAI: caseVariant, openai: canonical };
+      const providers = await planGeneratedProviders({
+        config: createOpenAiApiKeyRuntimeConfig(),
+        sourceConfigForSecrets: { models: { providers: sourceProviders } },
+      });
+
+      expect(Object.keys(providers)).toEqual(["openai"]);
+      expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
+    },
+  );
+
+  it("uses a valid case alias when the canonical source entry is not a provider record", () => {
+    const runtimeConfig = createOpenAiApiKeyRuntimeConfig();
+    const sourceProviders = {
+      openai: null,
+      OpenAI: getOpenAiProvider(createOpenAiApiKeySourceConfig()),
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+    const providers = enforceSourceManagedProviderSecrets({
+      providers: runtimeConfig.models!.providers!,
+      sourceConfigForSecrets: { models: { providers: sourceProviders } },
+    });
+
+    expect(providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
   });
 });

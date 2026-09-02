@@ -1,3 +1,5 @@
+// Web search credential tests cover precedence between configured credentials,
+// SecretRefs, and ambient environment fallbacks.
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../../test-utils/env.js";
 import { resolveWebSearchProviderCredential } from "./web-search-provider-credentials.js";
@@ -31,7 +33,24 @@ describe("resolveWebSearchProviderCredential", () => {
     });
   });
 
+  it.each(["$TEST_WEB_SEARCH_REF_KEY", "${TEST_WEB_SEARCH_REF_KEY}"])(
+    "resolves configured env SecretRef shorthand %s",
+    (credentialValue) => {
+      withEnv({ TEST_WEB_SEARCH_REF_KEY: "ref-test-value" }, () => {
+        expect(
+          resolveWebSearchProviderCredential({
+            credentialValue,
+            path: "tools.web.search.provider.apiKey",
+            envVars: ["TEST_WEB_SEARCH_KEY"],
+          }),
+        ).toBe("ref-test-value");
+      });
+    },
+  );
+
   it("does not override missing env SecretRefs with ambient env fallback", () => {
+    // An explicit SecretRef means "use this credential"; falling back to a
+    // different env var can silently route requests through the wrong account.
     withEnv(
       { TEST_WEB_SEARCH_REF_KEY: undefined, TEST_WEB_SEARCH_KEY: "ambient-test-value" },
       () => {
@@ -49,6 +68,24 @@ describe("resolveWebSearchProviderCredential", () => {
       },
     );
   });
+
+  it.each(["$TEST_WEB_SEARCH_REF_KEY", "${TEST_WEB_SEARCH_REF_KEY}"])(
+    "does not override missing env SecretRef shorthand %s with ambient env fallback",
+    (credentialValue) => {
+      withEnv(
+        { TEST_WEB_SEARCH_REF_KEY: undefined, TEST_WEB_SEARCH_KEY: "ambient-test-value" },
+        () => {
+          expect(
+            resolveWebSearchProviderCredential({
+              credentialValue,
+              path: "tools.web.search.provider.apiKey",
+              envVars: ["TEST_WEB_SEARCH_KEY"],
+            }),
+          ).toBeUndefined();
+        },
+      );
+    },
+  );
 
   it("does not override non-env SecretRefs with ambient env fallback", () => {
     withEnv({ TEST_WEB_SEARCH_KEY: "ambient-test-value" }, () => {

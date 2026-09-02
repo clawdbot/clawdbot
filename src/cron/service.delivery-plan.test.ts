@@ -1,11 +1,13 @@
+// Cron service delivery plan tests cover target selection for scheduled job output.
 import { describe, expect, it, vi } from "vitest";
-import type { ChannelId } from "../channels/plugins/types.js";
-import { CronService, type CronServiceDeps } from "./service.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
   createNoopLogger,
   withCronServiceForTest,
 } from "./service.test-harness.js";
+import type { CronServiceDeps } from "./service/state.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-delivery-" });
@@ -25,7 +27,7 @@ async function withCronService(
   run: (context: {
     cron: CronService;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
-    requestHeartbeatNow: ReturnType<typeof vi.fn>;
+    requestHeartbeat: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ) {
   await withCronServiceForTest(
@@ -108,7 +110,7 @@ describe("CronService delivery plan consistency", () => {
           delivered: true,
         })),
       },
-      async ({ cron, enqueueSystemEvent, requestHeartbeatNow }) => {
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
         const job = await addIsolatedAgentTurnJob(cron, {
           name: "announce-delivered",
           wakeMode: "now",
@@ -118,7 +120,7 @@ describe("CronService delivery plan consistency", () => {
         const result = await cron.run(job.id, "force");
         expect(result).toEqual({ ok: true, ran: true });
         expect(enqueueSystemEvent).not.toHaveBeenCalled();
-        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
       },
     );
   });

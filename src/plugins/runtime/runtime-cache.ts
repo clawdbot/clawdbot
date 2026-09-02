@@ -1,3 +1,4 @@
+/** Defines a lazily computed enumerable property on a runtime facade. */
 export function defineCachedValue(target: object, key: PropertyKey, create: () => unknown): void {
   let cached: unknown;
   let ready = false;

@@ -1,9 +1,7 @@
-export type OllamaEmbeddingClient = unknown;
-
+// Xai type declarations define plugin contracts.
 export const buildAssistantMessage: (...args: unknown[]) => unknown;
 export const buildOllamaChatRequest: (...args: unknown[]) => unknown;
 export const convertToOllamaMessages: (...args: unknown[]) => unknown;
-export const createConfiguredOllamaCompatNumCtxWrapper: (...args: unknown[]) => unknown;
 export const createConfiguredOllamaCompatStreamWrapper: (...args: unknown[]) => unknown;
 export const createConfiguredOllamaStreamFn: (...args: unknown[]) => unknown;
 export const createOllamaStreamFn: (...args: unknown[]) => unknown;

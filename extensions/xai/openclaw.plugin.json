@@ -1,41 +1,146 @@
 {
   "id": "xai",
+  "doctorContract": {
+    "configRepair": true
+  },
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["xai"],
+  "providerAuthAliases": {
+    "x-ai": "xai"
+  },
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "modelIdNormalization": {
+    "providers": {
+      "xai": {
+        "aliases": {
+          "grok-4.3-latest": "grok-4.3",
+          "grok-4.5-latest": "grok-4.5",
+          "grok-build-latest": "grok-4.5"
+        }
+      }
+    }
+  },
   "providerEndpoints": [
     {
       "endpointClass": "xai-native",
-      "hosts": ["api.x.ai", "api.grok.x.ai"]
+      "hosts": ["api.x.ai"]
     }
   ],
+  "providerRequest": {
+    "providers": {
+      "xai": {
+        "family": "xai"
+      }
+    }
+  },
+  "modelCatalog": {
+    "discovery": {
+      "xai": "refreshable"
+    },
+    "suppressions": [
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-0309",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-beta-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-experimental-beta-0304",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-experimental-beta-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-beta-0309",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      }
+    ]
+  },
   "syntheticAuthRefs": ["xai"],
-  "providerAuthEnvVars": {
-    "xai": ["XAI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "xai",
+        "envVars": ["XAI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "xai",
       "method": "api-key",
       "choiceId": "xai-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key",
+      "groupHint": "API key or OAuth",
+      "onboardingFeatured": true,
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
       "cliOption": "--xai-api-key <key>",
       "cliDescription": "xAI API key"
+    },
+    {
+      "provider": "xai",
+      "method": "oauth",
+      "choiceId": "xai-oauth",
+      "appGuidedAuth": "device-code",
+      "choiceLabel": "xAI OAuth",
+      "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or OAuth",
+      "onboardingFeatured": true
+    },
+    {
+      "provider": "xai",
+      "method": "device-code",
+      "choiceId": "xai-device-code",
+      "appGuidedAuth": "device-code",
+      "choiceLabel": "xAI device code",
+      "choiceHint": "Compatibility alias for xAI OAuth device-code sign-in",
+      "assistantVisibility": "manual-only",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or OAuth"
     }
   ],
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Grok Search API Key",
-      "help": "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
+      "help": "Optional xAI API key for Grok web search; xAI OAuth or XAI_API_KEY can satisfy it.",
       "sensitive": true
     },
     "webSearch.model": {
       "label": "Grok Search Model",
       "help": "Grok model override for web search."
+    },
+    "webSearch.baseUrl": {
+      "label": "Grok Search Base URL",
+      "help": "Optional xAI Responses API base URL for Grok web_search and x_search fallbacks."
     },
     "webSearch.inlineCitations": {
       "label": "Inline Citations",
@@ -43,15 +148,19 @@
     },
     "codeExecution.enabled": {
       "label": "Enable Code Execution",
-      "help": "Enable the code_execution tool for remote xAI sandbox analysis."
+      "help": "Expose code_execution on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
     },
     "xSearch.enabled": {
       "label": "Enable X Search",
-      "help": "Enable the x_search tool for searching X posts with xAI."
+      "help": "Expose x_search on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
     },
     "xSearch.model": {
       "label": "X Search Model",
       "help": "xAI model override for x_search."
+    },
+    "xSearch.baseUrl": {
+      "label": "X Search Base URL",
+      "help": "Optional xAI Responses API base URL for x_search requests."
     },
     "xSearch.inlineCitations": {
       "label": "X Search Inline Citations",
@@ -85,10 +194,51 @@
   "contracts": {
     "webSearchProviders": ["grok"],
     "videoGenerationProviders": ["xai"],
+    "mediaUnderstandingProviders": ["xai"],
+    "speechProviders": ["xai"],
+    "realtimeTranscriptionProviders": ["xai"],
+    "realtimeVoiceProviders": ["xai", "grok-voice", "xai-realtime-voice"],
+    "imageGenerationProviders": ["xai"],
     "tools": ["code_execution", "x_search"]
   },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+  "mediaUnderstandingProviderMetadata": {
+    "xai": {
+      "capabilities": ["audio"],
+      "autoPriority": {
+        "audio": 25
+      }
+    }
+  },
+  "toolMetadata": {
+    "code_execution": {
+      "authSignals": [
+        {
+          "provider": "xai"
+        }
+      ],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.xai.config",
+          "overlayPath": "webSearch",
+          "required": ["apiKey"]
+        }
+      ]
+    },
+    "x_search": {
+      "replaySafe": true,
+      "authSignals": [
+        {
+          "provider": "xai"
+        }
+      ],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.xai.config",
+          "overlayPath": "webSearch",
+          "required": ["apiKey"]
+        }
+      ]
+    }
   },
   "configSchema": {
     "type": "object",
@@ -104,6 +254,9 @@
           "model": {
             "type": "string"
           },
+          "baseUrl": {
+            "type": "string"
+          },
           "inlineCitations": {
             "type": "boolean"
           }
@@ -117,6 +270,9 @@
             "type": "boolean"
           },
           "model": {
+            "type": "string"
+          },
+          "baseUrl": {
             "type": "string"
           },
           "inlineCitations": {

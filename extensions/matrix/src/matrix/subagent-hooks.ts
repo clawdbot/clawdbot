@@ -1,12 +1,6 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import {
-  getSessionBindingService,
-  type SessionBindingRecord,
-} from "openclaw/plugin-sdk/conversation-binding-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+// Matrix plugin module implements subagent hooks behavior.
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
-import { resolveMatrixTargetIdentity } from "./target-ids.js";
 import {
   getMatrixThreadBindingManager,
   listAllBindings,
@@ -14,19 +8,6 @@ import {
   removeBindingRecord,
   resolveBindingKey,
 } from "./thread-bindings-shared.js";
-
-type MatrixSubagentSpawningEvent = {
-  threadRequested: boolean;
-  requester?: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
-  childSessionKey: string;
-  agentId: string;
-  label?: string;
-};
 
 type MatrixSubagentEndedEvent = {
   targetSessionKey: string;
@@ -54,165 +35,9 @@ type MatrixDeliveryOrigin = {
   threadId?: string;
 };
 
-type SpawningResult =
-  | {
-      status: "ok";
-      threadBindingReady?: boolean;
-      deliveryOrigin?: MatrixDeliveryOrigin;
-    }
-  | { status: "error"; error: string };
-
 type DeliveryTargetResult = {
   origin: MatrixDeliveryOrigin;
 };
-
-function summarizeError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return "error";
-}
-
-function resolveThreadBindingFlags(
-  api: OpenClawPluginApi,
-  accountId?: string,
-): { enabled: boolean; spawnSubagentSessions: boolean } {
-  const matrix = resolveMatrixBaseConfig(api.config);
-  const baseThreadBindings = matrix.threadBindings;
-  const accountThreadBindings = accountId
-    ? findMatrixAccountConfig(api.config, accountId)?.threadBindings
-    : undefined;
-  return {
-    enabled:
-      accountThreadBindings?.enabled ??
-      baseThreadBindings?.enabled ??
-      api.config.session?.threadBindings?.enabled ??
-      true,
-    spawnSubagentSessions:
-      accountThreadBindings?.spawnSubagentSessions ??
-      baseThreadBindings?.spawnSubagentSessions ??
-      false,
-  };
-}
-
-function resolveMatrixBindingThreadId(binding: SessionBindingRecord): string | undefined {
-  const { conversationId, parentConversationId } = binding.conversation;
-  return parentConversationId && parentConversationId !== conversationId
-    ? conversationId
-    : undefined;
-}
-
-function resolveMatrixBindingDeliveryOrigin(
-  binding: SessionBindingRecord,
-  fallbackAccountId: string,
-): MatrixDeliveryOrigin {
-  const boundRoomId =
-    binding.conversation.parentConversationId ?? binding.conversation.conversationId;
-  const threadId = resolveMatrixBindingThreadId(binding);
-  return {
-    channel: "matrix",
-    accountId: binding.conversation.accountId ?? fallbackAccountId,
-    to: `room:${boundRoomId}`,
-    ...(threadId ? { threadId } : {}),
-  };
-}
-
-export async function handleMatrixSubagentSpawning(
-  api: OpenClawPluginApi,
-  event: MatrixSubagentSpawningEvent,
-): Promise<SpawningResult | undefined> {
-  if (!event.threadRequested) {
-    return undefined;
-  }
-  const channel = event.requester?.channel?.trim().toLowerCase();
-  if (channel !== "matrix") {
-    return undefined;
-  }
-
-  // Normalize early so per-account config and manager lookup use the same id.
-  // Falls back to DEFAULT_ACCOUNT_ID so accounts.default.threadBindings.* is
-  // respected even when the requester omits accountId.
-  const accountId = normalizeOptionalString(event.requester?.accountId) || DEFAULT_ACCOUNT_ID;
-  const flags = resolveThreadBindingFlags(api, accountId);
-
-  if (!flags.enabled) {
-    return {
-      status: "error",
-      error:
-        "Matrix thread bindings are disabled (set channels.matrix.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).",
-    } satisfies SpawningResult;
-  }
-  if (!flags.spawnSubagentSessions) {
-    return {
-      status: "error",
-      error:
-        "Matrix thread-bound subagent spawns are disabled for this account (set channels.matrix.threadBindings.spawnSubagentSessions=true to enable).",
-    };
-  }
-
-  // Resolve the raw Matrix room ID from the requester's `to` field
-  // (e.g. "room:!abc123:example.org" → "!abc123:example.org").
-  const rawTo = normalizeOptionalString(event.requester?.to) ?? "";
-  const matrixTarget = rawTo ? resolveMatrixTargetIdentity(rawTo) : null;
-  const roomId = matrixTarget?.kind === "room" ? matrixTarget.id : "";
-
-  if (!roomId) {
-    return {
-      status: "error",
-      error:
-        "Cannot create Matrix thread binding: no room target in spawn request (requester.to must be a Matrix room ID).",
-    };
-  }
-
-  // Verify the thread binding manager is running for this account. The manager
-  // holds the captured Matrix client the SessionBindingAdapter needs to send
-  // the intro message that bootstraps the thread.
-  const manager = getMatrixThreadBindingManager(accountId);
-  if (!manager) {
-    return {
-      status: "error",
-      error: `No Matrix thread binding manager available for account "${accountId}". Is the Matrix channel running?`,
-    };
-  }
-
-  try {
-    // placement="child" tells the Matrix SessionBindingAdapter to:
-    // 1. Send an intro message to the room, creating a new thread root event
-    // 2. Use the returned event ID as boundConversationId (the thread ID)
-    // 3. Register the binding record in the in-memory store and persist it
-    //
-    // We do NOT call setBindingRecord here — the adapter's bind() handles
-    // record creation, thread creation, and persistence atomically.
-    const binding = await getSessionBindingService().bind({
-      targetSessionKey: event.childSessionKey,
-      targetKind: "subagent",
-      conversation: {
-        channel: "matrix",
-        accountId,
-        conversationId: roomId,
-      },
-      placement: "child",
-      metadata: {
-        agentId: event.agentId?.trim() || undefined,
-        label: normalizeOptionalString(event.label) || undefined,
-        boundBy: "system",
-      },
-    });
-    return {
-      status: "ok",
-      threadBindingReady: true,
-      deliveryOrigin: resolveMatrixBindingDeliveryOrigin(binding, accountId),
-    } satisfies SpawningResult;
-  } catch (err) {
-    return {
-      status: "error",
-      error: `Matrix thread bind failed: ${summarizeError(err)}`,
-    };
-  }
-}
 
 export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent): Promise<void> {
   const accountId = normalizeOptionalString(event.accountId) || undefined;
@@ -228,7 +53,11 @@ export async function handleMatrixSubagentEnded(event: MatrixSubagentEndedEvent)
     const reason = normalizeOptionalString(event.reason) || "subagent-ended";
     for (const binding of matching) {
       const bindingId = resolveBindingKey(binding);
-      const removed = await bindingService.unbind({ bindingId, reason });
+      const removed = await bindingService.unbind({
+        bindingId,
+        reason,
+        scope: { channel: "matrix", accountId: binding.accountId },
+      });
       if (removed.some((entry) => entry.bindingId === bindingId)) {
         removedBindingKeys.add(bindingId);
       }

@@ -1,5 +1,11 @@
+// Verifies talk config validation errors and warnings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "./config.js";
+import {
+  getRuntimeConfig,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+} from "./config.js";
 import { withTempHomeConfig } from "./test-helpers.js";
 
 describe("talk config validation fail-closed behavior", () => {
@@ -9,13 +15,27 @@ describe("talk config validation fail-closed behavior", () => {
     vi.restoreAllMocks();
   });
 
+  it("can load an unpinned runtime config without replacing the process snapshot", async () => {
+    await withTempHomeConfig({ gateway: { port: 19002 } }, async () => {
+      const unpinned = getRuntimeConfig({ skipPluginValidation: true, pin: false });
+
+      expect(unpinned.gateway?.port).toBe(19002);
+      expect(getRuntimeConfigSnapshot()).toBeNull();
+
+      const pinned = getRuntimeConfig();
+
+      expect(pinned.gateway?.port).toBe(19002);
+      expect(getRuntimeConfigSnapshot()).toBe(pinned);
+    });
+  });
+
   async function expectInvalidTalkConfig(config: unknown, messagePattern: RegExp) {
     await withTempHomeConfig(config, async () => {
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
       let thrown: unknown;
       try {
-        loadConfig();
+        getRuntimeConfig();
       } catch (error) {
         thrown = error;
       }

@@ -1,12 +1,12 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+// Matrix plugin module implements auth presence behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import {
-  resolveMatrixCredentialsDir,
-  resolveMatrixCredentialsFilename,
-} from "./src/storage-paths.js";
+  MATRIX_CREDENTIALS_MAX_ENTRIES,
+  MATRIX_CREDENTIALS_NAMESPACE,
+  normalizeMatrixStoredCredentials,
+  type MatrixCredentialStateRecord,
+} from "./src/matrix/credentials-state.js";
 
 type MatrixAuthPresenceParams =
   | {
@@ -15,42 +15,21 @@ type MatrixAuthPresenceParams =
     }
   | OpenClawConfig;
 
-function listMatrixCredentialPaths(
-  _cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): readonly string[] {
-  const credentialsDir = resolveMatrixCredentialsDir(resolveStateDir(env, os.homedir));
-  const paths = new Set<string>([
-    resolveMatrixCredentialsFilename(),
-    resolveMatrixCredentialsFilename("default"),
-  ]);
-
-  try {
-    const entries = fs.readdirSync(credentialsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isFile() && /^credentials(?:-[a-z0-9._-]+)?\.json$/i.test(entry.name)) {
-        paths.add(entry.name);
-      }
-    }
-  } catch {
-    // Missing credentials directories mean no persisted Matrix auth state.
-  }
-
-  return [...paths].map((filename) => path.join(credentialsDir, filename));
-}
-
 export function hasAnyMatrixAuth(
   params: MatrixAuthPresenceParams,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const cfg = params && typeof params === "object" && "cfg" in params ? params.cfg : params;
   const resolvedEnv =
     params && typeof params === "object" && "cfg" in params ? (params.env ?? env) : env;
-  return listMatrixCredentialPaths(cfg, resolvedEnv).some((filePath) => {
-    try {
-      return fs.existsSync(filePath);
-    } catch {
-      return false;
-    }
-  });
+  try {
+    const store = createPluginStateSyncKeyedStore<MatrixCredentialStateRecord>("matrix", {
+      namespace: MATRIX_CREDENTIALS_NAMESPACE,
+      maxEntries: MATRIX_CREDENTIALS_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+      env: resolvedEnv,
+    });
+    return store.entries().some((entry) => normalizeMatrixStoredCredentials(entry.value) !== null);
+  } catch {
+    return false;
+  }
 }

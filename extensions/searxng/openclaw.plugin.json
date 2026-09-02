@@ -1,5 +1,9 @@
 {
   "id": "searxng",
+  "icon": "https://cdn.simpleicons.org/searxng",
+  "activation": {
+    "onStartup": false
+  },
   "uiHints": {
     "webSearch.baseUrl": {
       "label": "SearXNG Base URL",

@@ -1,3 +1,4 @@
+// Public runner barrel for Gateway service lifecycle commands.
 export { runDaemonInstall } from "./install.js";
 export {
   runDaemonRestart,

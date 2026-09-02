@@ -1,13 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { SlackChannelConfig } from "openclaw/plugin-sdk/config-runtime";
+// Slack plugin module implements channel migration behavior.
+import type { OpenClawConfig, SlackChannelConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type SlackChannels = Record<string, SlackChannelConfig>;
 
 type MigrationScope = "account" | "global";
 
-export type SlackChannelMigrationResult = {
+type SlackChannelMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
   scopes: MigrationScope[];
@@ -35,7 +35,7 @@ function resolveAccountChannels(
   return { channels: matchKey ? accounts[matchKey]?.channels : undefined };
 }
 
-export function migrateSlackChannelsInPlace(
+function migrateSlackChannelsInPlace(
   channels: SlackChannels | undefined,
   oldChannelId: string,
   newChannelId: string,
@@ -52,7 +52,11 @@ export function migrateSlackChannelsInPlace(
   if (Object.hasOwn(channels, newChannelId)) {
     return { migrated: false, skippedExisting: true };
   }
-  channels[newChannelId] = channels[oldChannelId];
+  const channelConfig = channels[oldChannelId];
+  if (!channelConfig) {
+    return { migrated: false, skippedExisting: false };
+  }
+  channels[newChannelId] = channelConfig;
   delete channels[oldChannelId];
   return { migrated: true, skippedExisting: false };
 }

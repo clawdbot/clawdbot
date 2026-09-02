@@ -1,3 +1,4 @@
+/** Tests inactive channel variants in secrets runtime collection. */
 import { describe, expect, it } from "vitest";
 import "./runtime-channel-inactive-variants.test-support.ts";
 import {
@@ -151,12 +152,12 @@ describe("secrets runtime snapshot channel inactive variants", () => {
       provider: "default",
       id: "MISSING_SLACK_WORK_APP_TOKEN",
     });
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining(["channels.slack.appToken", "channels.slack.accounts.work.appToken"]),
-    );
+    const warningPaths = snapshot.warnings.map((warning) => warning.path);
+    expect(warningPaths).toContain("channels.slack.appToken");
+    expect(warningPaths).toContain("channels.slack.accounts.work.appToken");
   });
 
-  it("treats top-level Google Chat serviceAccount as inactive when enabled accounts use serviceAccountRef", async () => {
+  it("treats top-level Google Chat serviceAccount as inactive when enabled accounts override it", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         channels: {
@@ -169,7 +170,7 @@ describe("secrets runtime snapshot channel inactive variants", () => {
             accounts: {
               work: {
                 enabled: true,
-                serviceAccountRef: {
+                serviceAccount: {
                   source: "env",
                   provider: "default",
                   id: "GOOGLECHAT_WORK_SERVICE_ACCOUNT",

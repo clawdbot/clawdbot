@@ -1,23 +1,14 @@
+// Zalouser tests cover accounts plugin behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
-  getZcaUserInfo,
-  listEnabledZalouserAccounts,
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
-  resolveZalouserAccount,
   resolveZalouserAccountSync,
 } from "./accounts.js";
-import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
-
-vi.mock("./zalo-js.js", () => ({
-  checkZaloAuthenticated: vi.fn(),
-  getZaloUserInfo: vi.fn(),
-}));
-
-const mockCheckAuthenticated = vi.mocked(checkZaloAuthenticated);
-const mockGetUserInfo = vi.mocked(getZaloUserInfo);
+const originalZalouserProfile = process.env.ZALOUSER_PROFILE;
+const originalZcaProfile = process.env.ZCA_PROFILE;
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -25,10 +16,21 @@ function asConfig(value: unknown): OpenClawConfig {
 
 describe("zalouser account resolution", () => {
   beforeEach(() => {
-    mockCheckAuthenticated.mockReset();
-    mockGetUserInfo.mockReset();
     delete process.env.ZALOUSER_PROFILE;
     delete process.env.ZCA_PROFILE;
+  });
+
+  afterEach(() => {
+    if (originalZalouserProfile === undefined) {
+      delete process.env.ZALOUSER_PROFILE;
+    } else {
+      process.env.ZALOUSER_PROFILE = originalZalouserProfile;
+    }
+    if (originalZcaProfile === undefined) {
+      delete process.env.ZCA_PROFILE;
+    } else {
+      process.env.ZCA_PROFILE = originalZcaProfile;
+    }
   });
 
   it("returns default account id when no accounts are configured", () => {
@@ -49,6 +51,23 @@ describe("zalouser account resolution", () => {
     });
 
     expect(listZalouserAccountIds(cfg)).toEqual(["default", "personal", "work"]);
+  });
+
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = asConfig({
+      channels: {
+        zalouser: {
+          profile: "personal",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    });
+
+    expect(listZalouserAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultZalouserAccountId(cfg)).toBe("default");
+    expect(resolveZalouserAccountSync({ cfg }).profile).toBe("personal");
   });
 
   it("uses configured defaultAccount when present", () => {
@@ -213,54 +232,5 @@ describe("zalouser account resolution", () => {
     });
 
     expect(resolveZalouserAccountSync({ cfg, accountId: "work" }).profile).toBe("explicit-profile");
-  });
-
-  it("checks authentication during async account resolution", async () => {
-    mockCheckAuthenticated.mockResolvedValueOnce(true);
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          accounts: {
-            default: {},
-          },
-        },
-      },
-    });
-
-    const resolved = await resolveZalouserAccount({ cfg, accountId: "default" });
-    expect(mockCheckAuthenticated).toHaveBeenCalledWith("default");
-    expect(resolved.authenticated).toBe(true);
-  });
-
-  it("filters disabled accounts when listing enabled accounts", async () => {
-    mockCheckAuthenticated.mockResolvedValue(true);
-    const cfg = asConfig({
-      channels: {
-        zalouser: {
-          accounts: {
-            default: { enabled: true },
-            work: { enabled: false },
-          },
-        },
-      },
-    });
-
-    const accounts = await listEnabledZalouserAccounts(cfg);
-    expect(accounts.map((account) => account.accountId)).toEqual(["default"]);
-  });
-
-  it("maps account info helper from zalo-js", async () => {
-    mockGetUserInfo.mockResolvedValueOnce({
-      userId: "123",
-      displayName: "Alice",
-      avatar: "https://example.com/avatar.png",
-    });
-    expect(await getZcaUserInfo("default")).toEqual({
-      userId: "123",
-      displayName: "Alice",
-    });
-
-    mockGetUserInfo.mockResolvedValueOnce(null);
-    expect(await getZcaUserInfo("default")).toBeNull();
   });
 });

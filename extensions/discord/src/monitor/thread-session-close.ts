@@ -1,22 +1,23 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/config-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+// Discord plugin module implements thread session close behavior.
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  deleteSessionEntry,
+  listSessionEntries,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
- * Marks every session entry in the store whose key contains {@link threadId}
- * as "reset" by setting `updatedAt` to 0.
- *
- * This mirrors how the daily / idle session reset works: zeroing `updatedAt`
- * makes `evaluateSessionFreshness` treat the session as stale on the next
- * inbound message, so the bot starts a fresh conversation without deleting
- * any on-disk transcript history.
+ * Closes every session entry in the store whose key contains {@link threadId}.
+ * The explicit lifecycle deletion archives the old transcript and guarantees
+ * that a later inbound message starts a fresh session in every reset mode.
  */
 export async function closeDiscordThreadSessions(params: {
   cfg: OpenClawConfig;
-  accountId: string;
   threadId: string;
 }): Promise<number> {
-  const { cfg, accountId, threadId } = params;
+  const { cfg, threadId } = params;
 
   const normalizedThreadId = normalizeOptionalLowercaseString(threadId) ?? "";
   if (!normalizedThreadId) {
@@ -37,27 +38,37 @@ export async function closeDiscordThreadSessions(params: {
     return segmentRe.test(key);
   }
 
-  // Resolve the store file. We pass `accountId` as `agentId` here to mirror
-  // how other Discord subsystems resolve their per-account sessions stores.
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: accountId });
-
+  // Session keys are agent-scoped (agent:<agentId>:discord:...), so the store
+  // must resolve per routed agent — resolving with the channel account id
+  // would target a nonexistent agent's store and silently close nothing.
   let resetCount = 0;
 
-  await updateSessionStore(storePath, (store) => {
-    for (const [key, entry] of Object.entries(store)) {
-      if (!entry || !sessionKeyContainsThreadId(key)) {
+  for (const agentId of listAgentIds(cfg)) {
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    // agentId selects the owner DB: with a fixed custom store every agent
+    // resolves the same storePath, so storePath alone re-reads the default
+    // owner. readOnly keeps this fleet-wide scan from creating or registering
+    // agent databases while handling a thread archive/delete event.
+    for (const { sessionKey, entry } of listSessionEntries({
+      agentId,
+      storePath,
+      readOnly: true,
+    })) {
+      if (!sessionKeyContainsThreadId(sessionKey)) {
         continue;
       }
-      if (entry.updatedAt === 0) {
-        continue;
+      const deleted = await deleteSessionEntry({
+        archiveTranscript: true,
+        expectedSessionId: entry.sessionId ?? null,
+        expectedUpdatedAt: entry.updatedAt,
+        sessionKey,
+        storePath,
+      });
+      if (deleted) {
+        resetCount += 1;
       }
-      // Setting updatedAt to 0 signals that this session is stale.
-      // evaluateSessionFreshness will create a new session on the next message.
-      entry.updatedAt = 0;
-      resetCount += 1;
     }
-    return resetCount;
-  });
+  }
 
   return resetCount;
 }

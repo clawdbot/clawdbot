@@ -1,15 +1,13 @@
-import { normalizeAnyChannelId } from "../channels/registry.js";
+// Maps CLI send dependency sources into outbound send dependencies with legacy aliases.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveLegacyOutboundSendDepKeys,
   type OutboundSendDeps,
 } from "../infra/outbound/send-deps.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-/**
- * CLI-internal send function sources, keyed by channel ID.
- * Each value is a lazily-loaded send function for that channel.
- */
-export type CliOutboundSendSource = { [channelId: string]: unknown };
+export type CliOutboundSendSource = {
+  [channelId: string]: unknown;
+};
 
 function normalizeLegacyChannelStem(raw: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(
@@ -27,7 +25,7 @@ function resolveChannelIdFromLegacySourceKey(key: string): string | undefined {
     return undefined;
   }
   const normalizedStem = normalizeLegacyChannelStem(match[1] ?? "");
-  return normalizeAnyChannelId(normalizedStem) ?? (normalizedStem || undefined);
+  return normalizedStem || undefined;
 }
 
 /**

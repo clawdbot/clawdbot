@@ -1,28 +1,31 @@
+// Memory Core plugin module implements flush plan behavior.
 import {
-  DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
   resolveCronStyleNow,
+  resolveEffectiveCompactionReserveTokens,
   SILENT_REPLY_TOKEN,
   type MemoryFlushPlan,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveMemoryCoreNowMs } from "./time.js";
 
-export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
-export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
+const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
 const MEMORY_FLUSH_TARGET_HINT =
   "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
 const MEMORY_FLUSH_APPEND_ONLY_HINT =
   "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
 const MEMORY_FLUSH_READ_ONLY_HINT =
-  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
+  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
 const MEMORY_FLUSH_REQUIRED_HINTS = [
   MEMORY_FLUSH_TARGET_HINT,
   MEMORY_FLUSH_APPEND_ONLY_HINT,
   MEMORY_FLUSH_READ_ONLY_HINT,
 ];
 
-export const DEFAULT_MEMORY_FLUSH_PROMPT = [
+const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "Pre-compaction memory flush.",
   MEMORY_FLUSH_TARGET_HINT,
   MEMORY_FLUSH_READ_ONLY_HINT,
@@ -31,7 +34,7 @@ export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
-export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
+const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   "Pre-compaction memory flush turn.",
   "The session is near auto-compaction; capture durable memories to disk.",
   MEMORY_FLUSH_TARGET_HINT,
@@ -53,7 +56,7 @@ function formatDateStampInTimezone(nowMs: number, timezone: string): string {
   if (year && month && day) {
     return `${year}-${month}-${day}`;
   }
-  return new Date(nowMs).toISOString().slice(0, 10);
+  return new Date(resolveMemoryCoreNowMs(nowMs)).toISOString().slice(0, 10);
 }
 
 function normalizeNonNegativeInt(value: unknown): number | null {
@@ -96,42 +99,49 @@ export function buildMemoryFlushPlan(
   params: {
     cfg?: OpenClawConfig;
     nowMs?: number;
+    contextWindowTokens?: number;
   } = {},
 ): MemoryFlushPlan | null {
   const resolved = params;
-  const nowMs = Number.isFinite(resolved.nowMs) ? (resolved.nowMs as number) : Date.now();
+  const nowMs = resolveMemoryCoreNowMs(resolved.nowMs);
   const cfg = resolved.cfg;
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
   if (defaults?.enabled === false) {
     return null;
   }
 
-  const softThresholdTokens =
+  let softThresholdTokens =
     normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const forceFlushTranscriptBytes =
     parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
-  const reserveTokensFloor =
-    normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
-    DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+  let reserveTokensFloor = DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
+  const contextWindowTokens = normalizeNonNegativeInt(params.contextWindowTokens);
+  if (contextWindowTokens !== null && contextWindowTokens > 0) {
+    reserveTokensFloor = resolveEffectiveCompactionReserveTokens({
+      contextTokenBudget: contextWindowTokens,
+      reserveTokens: reserveTokensFloor,
+    });
+    softThresholdTokens = Math.min(
+      softThresholdTokens,
+      Math.floor((contextWindowTokens - reserveTokensFloor) / 2),
+    );
+  }
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
   const relativePath = `memory/${dateStamp}.md`;
 
-  const promptBase = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
-  );
+  const promptBase = ensureNoReplyHint(ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_PROMPT));
   const systemPrompt = ensureNoReplyHint(
-    ensureMemoryFlushSafetyHints(
-      defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
-    ),
+    ensureMemoryFlushSafetyHints(DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT),
   );
 
   return {
     softThresholdTokens,
     forceFlushTranscriptBytes,
     reserveTokensFloor,
+    model: defaults?.model?.trim() || undefined,
     prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
     systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,

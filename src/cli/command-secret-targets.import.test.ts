@@ -1,11 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Command secret target import tests cover lazy import safety for secret target metadata.
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("command secret targets module import", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
+  let lazyImportProbe: {
+    channelsError: unknown;
+    listSecretTargetRegistryEntries: ReturnType<typeof vi.fn>;
+    modelsHasApiKey: boolean;
+    qrRemoteHasToken: boolean;
+  };
 
-  it("does not touch the registry during module import", async () => {
+  beforeAll(async () => {
     const listSecretTargetRegistryEntries = vi.fn(() => {
       throw new Error("registry touched too early");
     });
@@ -16,15 +20,54 @@ describe("command secret targets module import", () => {
     }));
 
     const mod = await import("./command-secret-targets.js");
+    let channelsError: unknown;
+    try {
+      mod.getChannelsCommandSecretTargetIds();
+    } catch (error) {
+      channelsError = error;
+    }
+    lazyImportProbe = {
+      channelsError,
+      listSecretTargetRegistryEntries,
+      modelsHasApiKey: mod.getModelsCommandSecretTargetIds().has("models.providers.*.apiKey"),
+      qrRemoteHasToken: mod.getQrRemoteCommandSecretTargetIds().has("gateway.remote.token"),
+    };
+  });
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("does not touch the registry during module import", async () => {
+    expect(lazyImportProbe.modelsHasApiKey).toBe(true);
+    expect(lazyImportProbe.qrRemoteHasToken).toBe(true);
+    expect(lazyImportProbe.channelsError).toEqual(new Error("registry touched too early"));
+    expect(lazyImportProbe.listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads registry lazily for agent runtime plugin credential targets", async () => {
+    const listSecretTargetRegistryEntries = vi.fn(() => [
+      {
+        id: "plugins.entries.example.config.webSearch.apiKey",
+        pathPatternSegments: ["plugins", "entries", "example", "config", "webSearch", "apiKey"],
+      },
+      { id: "plugins.entries.example.config.other.apiKey" },
+      { id: "channels.telegram.botToken" },
+    ]);
+
+    vi.doMock("../secrets/target-registry.js", () => ({
+      discoverConfigSecretTargetsByIds: vi.fn(() => []),
+      listSecretTargetRegistryEntries,
+    }));
+
+    const mod = await import("./command-secret-targets.js");
 
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
-    expect(mod.getModelsCommandSecretTargetIds().has("models.providers.*.apiKey")).toBe(true);
-    expect(mod.getQrRemoteCommandSecretTargetIds().has("gateway.remote.token")).toBe(true);
-    expect(
-      mod.getAgentRuntimeCommandSecretTargetIds().has("agents.defaults.memorySearch.remote.apiKey"),
-    ).toBe(true);
-    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
-    expect(() => mod.getChannelsCommandSecretTargetIds()).toThrow("registry touched too early");
+    const ids = mod.getAgentRuntimeCommandSecretTargetIds({ config: {} });
+    expect(ids.has("memory.search.remote.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.example.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.example.config.other.apiKey")).toBe(false);
+    expect(ids.has("channels.telegram.botToken")).toBe(false);
     expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
   });
 
@@ -126,11 +169,53 @@ describe("command secret targets module import", () => {
     expect(targets.has("channels.discord.token")).toBe(false);
     expect(targets.has("channels.telegram.gatewayToken")).toBe(false);
     expect(targets.has("channels.telegram.gatewayTokenRef")).toBe(false);
-    expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
-    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({ includePersistedAuthState: false }),
+    expect(targets.has("gateway.auth.token")).toBe(true);
+    expect(targets.has("gateway.auth.password")).toBe(true);
+    expect(targets.has("gateway.remote.token")).toBe(true);
+    expect(targets.has("gateway.remote.password")).toBe(true);
+    expect(targets.has("memory.search.remote.apiKey")).toBe(true);
+    const pluginCall = listReadOnlyChannelPluginsForConfig.mock.calls[0] as unknown as
+      | [unknown, { includePersistedAuthState?: boolean }]
+      | undefined;
+    expect(typeof pluginCall?.[0]).toBe("object");
+    expect(pluginCall?.[1]?.includePersistedAuthState).toBe(false);
+    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
+  });
+
+  it("can omit channel targets from status targets without plugin discovery", async () => {
+    const listSecretTargetRegistryEntries = vi.fn(() => {
+      throw new Error("registry touched too early");
+    });
+    const listReadOnlyChannelPluginsForConfig = vi.fn(() => {
+      throw new Error("channel plugin metadata touched too early");
+    });
+
+    vi.doMock("../secrets/target-registry.js", () => ({
+      discoverConfigSecretTargetsByIds: vi.fn(() => []),
+      listSecretTargetRegistryEntries,
+    }));
+    vi.doMock("../channels/plugins/read-only.js", () => ({
+      listReadOnlyChannelPluginsForConfig,
+    }));
+
+    const mod = await import("./command-secret-targets.js");
+    const targets = mod.getStatusCommandSecretTargetIds(
+      {
+        channels: {
+          telegram: { botToken: "123456:ABCDEF" },
+        },
+      },
+      process.env,
+      { includeChannelTargets: false },
     );
+
+    expect(targets.has("memory.search.remote.apiKey")).toBe(true);
+    expect(targets.has("gateway.auth.token")).toBe(true);
+    expect(targets.has("gateway.auth.password")).toBe(true);
+    expect(targets.has("gateway.remote.token")).toBe(true);
+    expect(targets.has("gateway.remote.password")).toBe(true);
+    expect(targets.has("channels.telegram.botToken")).toBe(false);
+    expect(listReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
   });
 });

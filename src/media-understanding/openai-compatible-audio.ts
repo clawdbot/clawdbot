@@ -1,7 +1,11 @@
-import path from "node:path";
+import { OPENAI_AUDIO_TRANSCRIPTIONS_API } from "./openai-audio-api.js";
+// OpenAI-compatible audio transcription adapter for providers exposing the
+// /audio/transcriptions API shape.
 import {
   assertOkOrThrowHttpError,
+  buildAudioTranscriptionFormData,
   postTranscriptionRequest,
+  readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "./shared.js";
@@ -13,66 +17,58 @@ type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
   provider?: string;
 };
 
+// Shared implementation for OpenAI-style /audio/transcriptions providers.
 function resolveModel(model: string | undefined, fallback: string): string {
   const trimmed = model?.trim();
   return trimmed || fallback;
 }
 
-function resolveUploadFileName(fileName?: string, mime?: string): string {
-  const trimmed = fileName?.trim();
-  const baseName = trimmed ? path.basename(trimmed) : "audio";
-  const lowerMime = mime?.trim().toLowerCase();
-
-  if (/\.aac$/i.test(baseName)) {
-    return `${baseName.slice(0, -4) || "audio"}.m4a`;
-  }
-  if (!path.extname(baseName) && lowerMime === "audio/aac") {
-    return `${baseName || "audio"}.m4a`;
-  }
-  return baseName;
-}
-
+/** Sends an OpenAI-compatible audio transcription request and returns validated text output. */
 export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
+  const apiKey = params.auth?.kind === "api-key" ? params.auth.apiKey : params.apiKey;
+  // Explicit auth:none suppresses bearer headers even if legacy apiKey params are present.
+  const defaultHeaders =
+    params.auth?.kind === "none" || !apiKey
+      ? undefined
+      : {
+          authorization: `Bearer ${apiKey}`,
+        };
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
       defaultBaseUrl: params.defaultBaseUrl,
       headers: params.headers,
       request: params.request,
-      defaultHeaders: {
-        authorization: `Bearer ${params.apiKey}`,
-      },
+      defaultHeaders,
       provider: params.provider,
-      api: "openai-audio-transcriptions",
+      api: OPENAI_AUDIO_TRANSCRIPTIONS_API,
       capability: "audio",
       transport: "media-understanding",
     });
   const url = `${baseUrl}/audio/transcriptions`;
 
   const model = resolveModel(params.model, params.defaultModel);
-  const form = new FormData();
-  const fileName = resolveUploadFileName(params.fileName, params.mime);
-  const bytes = new Uint8Array(params.buffer);
-  const blob = new Blob([bytes], {
-    type: params.mime ?? "application/octet-stream",
+  // Keep multipart construction centralized so provider tests cover filename and MIME behavior.
+  const form = buildAudioTranscriptionFormData({
+    buffer: params.buffer,
+    fileName: params.fileName,
+    mime: params.mime,
+    fields: {
+      model,
+      language: params.language,
+      prompt: params.prompt,
+    },
   });
-  form.append("file", blob, fileName);
-  form.append("model", model);
-  if (params.language?.trim()) {
-    form.append("language", params.language.trim());
-  }
-  if (params.prompt?.trim()) {
-    form.append("prompt", params.prompt.trim());
-  }
 
   const { response: res, release } = await postTranscriptionRequest({
     url,
     headers,
     body: form,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     pinDns: false,
     allowPrivateNetwork,
@@ -82,9 +78,9 @@ export async function transcribeOpenAiCompatibleAudio(
   try {
     await assertOkOrThrowHttpError(res, "Audio transcription failed");
 
-    const payload = (await res.json()) as { text?: string };
+    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed");
     const text = requireTranscriptionText(
-      payload.text,
+      typeof payload.text === "string" ? payload.text : undefined,
       "Audio transcription response missing text",
     );
     return { text, model };

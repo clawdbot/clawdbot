@@ -1,3 +1,4 @@
+/** Fetch mock shape used by tests that replace global fetch. */
 export type FetchMock = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 type FetchPreconnectOptions = {

@@ -1,4 +1,5 @@
-import { loadConfig } from "../config.js";
+// Runtime maintenance config reads current config and falls back for narrow helpers/tests.
+import { getRuntimeConfig } from "../config.js";
 import type { SessionMaintenanceConfig } from "../types.base.js";
 import {
   resolveMaintenanceConfigFromInput,
@@ -8,7 +9,7 @@ import {
 export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
   let maintenance: SessionMaintenanceConfig | undefined;
   try {
-    maintenance = loadConfig().session?.maintenance;
+    maintenance = getRuntimeConfig().session?.maintenance;
   } catch {
     // Config may not be available in narrow test/runtime helpers.
   }

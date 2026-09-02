@@ -1,0 +1,124 @@
+name: OpenGrep — PR Diff
+
+# Runs the high-precision OpenGrep rule super-config against only first-party
+# source paths changed by a pull request. Keeping PR scans diff-scoped makes
+# findings attributable to the proposed change instead of surfacing unrelated
+# repository-wide backlog.
+#
+# For a repository-wide scan, use the manual OpenGrep — Full workflow.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/actions/ensure-base-commit/**"
+      - ".github/workflows/opengrep-precise.yml"
+      - ".github/workflows/opengrep-precise-full.yml"
+      - ".semgrepignore"
+      - "apps/**"
+      - "extensions/**"
+      - "packages/**"
+      - "scripts/**"
+      - "security/opengrep/**"
+      - "src/**"
+
+concurrency:
+  group: opengrep-pr-diff-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  scan:
+    name: Scan changed paths (precise)
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Resolve PR scan base
+        id: scan-base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Resolve the scan's merge parent before fetching a stale event-payload base.
+          base="$(node scripts/lib/merge-head-diff-base.mjs --base "$BASE_SHA" --head HEAD --prefer-first-parent)"
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure PR base commit
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ steps.scan-base.outputs.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
+      - name: Install opengrep
+        env:
+          # Pin the official Linux asset and its published digest. The upstream
+          # installer validates tags through an unauthenticated GitHub API and
+          # can fail before scanning even when this fixed release is available.
+          OPENGREP_VERSION: v1.27.1
+          OPENGREP_LINUX_X64_SHA256: 58053da76672bbeb5b0a5441021c58338707052e10f81d777140ca879bd491ce
+        run: |
+          set -euo pipefail
+          binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"
+          trap 'rm -f "$binary"' EXIT
+          curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 10 --max-time 300 \
+            -o "$binary" \
+            "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/opengrep_manylinux_x86"
+          printf '%s  %s\n' "$OPENGREP_LINUX_X64_SHA256" "$binary" | sha256sum --check
+          install_dir="${RUNNER_TEMP}/openclaw-opengrep"
+          mkdir -p "$install_dir"
+          install -m 0755 "$binary" "$install_dir/opengrep"
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Verify opengrep
+        run: opengrep --version
+
+      - name: Run opengrep on PR diff
+        env:
+          OPENCLAW_OPENGREP_BASE_REF: ${{ steps.scan-base.outputs.sha }}...HEAD
+        # Findings from precise rules block this workflow. Pull requests scan
+        # changed first-party source paths only so findings stay attributable to
+        # the PR diff. Test/fixture/QA path exclusions live in `.semgrepignore`
+        # at the repo root and are picked up automatically.
+        run: |
+          mkdir -p .opengrep-out
+          scripts/run-opengrep.sh --changed --sarif --error
+
+      - name: Prepare SARIF for GitHub Code Scanning
+        id: github-sarif
+        if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
+        run: >-
+          node scripts/opengrep-github-sarif.mjs .opengrep-out/precise.sarif
+          > .opengrep-out/precise.github.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        # Never publish a partial conversion; the raw audit artifact stays intact.
+        if: always() && steps.github-sarif.outcome == 'success'
+        with:
+          sarif_file: .opengrep-out/precise.github.sarif
+          category: opengrep-pr-diff
+
+      - name: Upload SARIF as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: opengrep-pr-diff-sarif
+          path: .opengrep-out/precise.sarif
+          if-no-files-found: error
+          retention-days: 30

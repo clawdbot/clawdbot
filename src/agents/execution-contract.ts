@@ -1,5 +1,8 @@
+/**
+ * Resolves strict agentic execution contracts for provider/model pairs.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-scope.js";
 
 /**
@@ -14,7 +17,7 @@ import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-s
  * bare names. The adversarial review in #64227 flagged this as a quality
  * gap on completion-gate criterion 1.
  */
-function stripProviderPrefix(modelId: string): string {
+export function stripProviderPrefix(modelId: string): string {
   const normalizedModelId = modelId.trim();
   const match = /^([^/:]+)[/:](.+)$/.exec(normalizedModelId);
   return (match?.[2] ?? normalizedModelId).toLowerCase();
@@ -38,8 +41,7 @@ const STRICT_AGENTIC_MODEL_ID_PATTERN = /^gpt-5(?:[.o-]|$)/i;
 /**
  * Supported provider + model combinations where strict-agentic is the intended
  * runtime contract. Kept as a narrow helper so both the execution-contract
- * resolver and the `update_plan` auto-enable gate converge on the same
- * definition of "GPT-5-family openai/openai-codex run". The embedded
+ * resolver uses for the GPT-5-family OpenAI strict-agentic default. The embedded
  * `mock-openai` QA lane intentionally piggybacks on that contract so repo QA
  * can exercise the same incomplete-turn recovery rules end to end.
  */
@@ -48,7 +50,7 @@ export function isStrictAgenticSupportedProviderModel(params: {
   modelId?: string | null;
 }): boolean {
   const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
-  if (provider !== "openai" && provider !== "openai-codex" && provider !== "mock-openai") {
+  if (provider !== "openai" && provider !== "mock-openai") {
     return false;
   }
   const modelId = typeof params.modelId === "string" ? params.modelId : "";
@@ -57,9 +59,9 @@ export function isStrictAgenticSupportedProviderModel(params: {
 }
 
 /**
- * Returns the effective execution contract for an embedded Pi run.
+ * Returns the effective execution contract for an embedded OpenClaw run.
  *
- * strict-agentic is a GPT-5-family openai/openai-codex-only runtime contract,
+ * strict-agentic is a GPT-5-family OpenAI-only runtime contract,
  * so an unsupported provider/model pair always collapses to `"default"`
  * regardless of what the caller passed or what config says — the contract
  * is inert off-provider. Within the supported lane, the behavior matrix is:
@@ -69,19 +71,18 @@ export function isStrictAgenticSupportedProviderModel(params: {
  * - Supported provider/model + explicit `"default"` in config ⇒ `"default"`
  *   (opt-out honored).
  * - Supported provider/model + unspecified ⇒ `"strict-agentic"` so the
- *   no-stall completion-gate criterion applies to out-of-the-box GPT-5 runs
- *   without requiring every user to set the flag.
- * - Unsupported provider/model (anything that is not openai or openai-codex
+ *   structured plan tool and non-visible turn recovery apply to out-of-the-box
+ *   GPT-5 runs without requiring every user to set the flag.
+ * - Unsupported provider/model (anything that is not openai
  *   with a gpt-5-family model id) ⇒ `"default"`, even when the config
- *   explicitly sets `"strict-agentic"`. The retry guard and blocked-exit
- *   helpers all check this lane again, so an explicit `"strict-agentic"`
- *   on an unsupported lane is a no-op rather than a hard failure.
+ *   explicitly sets `"strict-agentic"`. The structured guards check this lane
+ *   again, so an explicit `"strict-agentic"` on an unsupported lane is a no-op
+ *   rather than a hard failure.
  *
- * This means explicit opt-out still works, but the gate criterion
- * "GPT-5.4 no longer stalls after planning" now covers unconfigured
- * installations, not only users who opted in manually.
+ * Explicit opt-out still works. Assistant prose is never classified to decide
+ * whether a turn represents planning, progress, or completion.
  */
-export function resolveEffectiveExecutionContract(params: {
+function resolveEffectiveExecutionContract(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string | null;
@@ -94,7 +95,7 @@ export function resolveEffectiveExecutionContract(params: {
     agentId: params.agentId ?? undefined,
   });
   const explicit = resolveAgentExecutionContract(params.config, sessionAgentId);
-  // strict-agentic is a GPT-5-family openai/openai-codex runtime contract
+  // strict-agentic is a GPT-5-family OpenAI runtime contract
   // regardless of whether it was set explicitly or auto-activated. On an
   // unsupported provider/model pair the contract is inert either way, so
   // the effective value collapses to "default".

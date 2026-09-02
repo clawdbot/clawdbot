@@ -1,3 +1,4 @@
+// Allowlist match tests cover channel sender matching across static and pattern allowlists.
 import { describe, expect, it } from "vitest";
 import {
   resolveAllowlistMatchByCandidates,

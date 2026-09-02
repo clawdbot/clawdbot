@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+/** Tests core secret target registry queries without plugin discovery. */
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildTalkTestProviderConfig,
@@ -8,7 +9,12 @@ import {
 import {
   discoverConfigSecretTargetsByIds,
   resolveConfigSecretTargetByPath,
+  resolveSecretPlanTargetByPathCore,
 } from "./target-registry.js";
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: () => ({ plugins: [] }),
+}));
 
 describe("secret target registry", () => {
   it("supports filtered discovery by target ids", () => {
@@ -29,12 +35,50 @@ describe("secret target registry", () => {
     expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
   });
 
-  it("resolves config targets by exact path including sibling ref metadata", () => {
-    const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
+  it("preserves dotted provider header keys during discovery", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              "X.Trace": { source: "env", provider: "default", id: "TRACE_HEADER" },
+            },
+            request: {
+              headers: {
+                "X.Request.Trace": {
+                  source: "env",
+                  provider: "default",
+                  id: "REQUEST_TRACE_HEADER",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
 
-    expect(target).not.toBeNull();
-    expect(target?.entry?.id).toBe("channels.googlechat.serviceAccount");
-    expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
+    const targets = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["models.providers.*.headers.*", "models.providers.*.request.headers.*"]),
+    );
+
+    expect(targets.map(({ path }) => path).toSorted()).toEqual([
+      'models.providers.openai.headers["X.Trace"]',
+      'models.providers.openai.request.headers["X.Request.Trace"]',
+    ]);
+  });
+
+  it("resolves talk realtime provider api key targets", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "talk",
+      "realtime",
+      "providers",
+      "openai",
+      "apiKey",
+    ]);
+
+    expect(target?.entry?.id).toBe("talk.realtime.providers.*.apiKey");
+    expect(target?.providerId).toBe("openai");
   });
 
   it("returns null when no config target path matches", () => {
@@ -43,17 +87,18 @@ describe("secret target registry", () => {
     expect(target).toBeNull();
   });
 
-  it("includes exa webSearch api key target path", () => {
-    const target = resolveConfigSecretTargetByPath([
-      "plugins",
-      "entries",
-      "exa",
-      "config",
-      "webSearch",
-      "apiKey",
-    ]);
+  it("resolves plan targets by owning config document", () => {
+    const configTarget = resolveSecretPlanTargetByPathCore({
+      configFile: "openclaw.json",
+      pathSegments: ["models", "providers", "openai", "apiKey"],
+    });
+    const authProfileTarget = resolveSecretPlanTargetByPathCore({
+      configFile: "auth-profile-store",
+      pathSegments: ["profiles", "openai:default", "key"],
+    });
 
-    expect(target).not.toBeNull();
-    expect(target?.entry?.id).toBe("plugins.entries.exa.config.webSearch.apiKey");
+    expect(configTarget?.entry.targetType).toBe("models.providers.apiKey");
+    expect(configTarget?.providerId).toBe("openai");
+    expect(authProfileTarget?.entry.targetType).toBe("auth-profiles.api_key.key");
   });
 });

@@ -1,96 +1,350 @@
 import AppKit
+import KeyboardShortcuts
 import Observation
 import OpenClawDiscovery
-import OpenClawIPC
 import OpenClawKit
 import SwiftUI
 
 struct GeneralSettings: View {
+    enum Page {
+        case general
+        case connection
+    }
+
+    private static let remoteFieldWidth: CGFloat = 320
+    private static let remoteSecretFieldWidth: CGFloat = 300
+
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
+    @AppStorage(computerControlEnabledKey, store: AppDefaults.standard)
+    private var computerControlEnabled: Bool = true
+    @AppStorage(computerControlProviderKey, store: AppDefaults.standard)
+    private var computerControlProviderRaw: String = ComputerControlProvider.peekaboo.rawValue
+    let page: Page
+    let isActive: Bool
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
         localDisplayName: InstanceIdentity.displayName)
-    @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
+    private var gatewayStatus: GatewayEnvironmentStatus {
+        self.gatewayManager.environmentStatus
+    }
+
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
+    @State private var cookieSyncManager = CookieSyncManager.shared
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
     }
 
-    private var remoteLabelWidth: CGFloat {
-        88
+    init(state: AppState, page: Page = .general, isActive: Bool = true) {
+        self.state = state
+        self.page = page
+        self.isActive = isActive
     }
 
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 12) {
-                    SettingsToggleRow(
-                        title: "OpenClaw active",
-                        subtitle: "Pause to stop the OpenClaw gateway; no messages will be processed.",
-                        binding: self.activeBinding)
-
-                    self.connectionSection
-
-                    Divider()
-
-                    SettingsToggleRow(
-                        title: "Launch at login",
-                        subtitle: "Automatically start OpenClaw after you sign in.",
-                        binding: self.$state.launchAtLogin)
-
-                    SettingsToggleRow(
-                        title: "Show Dock icon",
-                        subtitle: "Keep OpenClaw visible in the Dock instead of menu-bar-only mode.",
-                        binding: self.$state.showDockIcon)
-
-                    SettingsToggleRow(
-                        title: "Play menu bar icon animations",
-                        subtitle: "Enable idle blinks and wiggles on the status icon.",
-                        binding: self.$state.iconAnimationsEnabled)
-
-                    SettingsToggleRow(
-                        title: "Allow Canvas",
-                        subtitle: "Allow the agent to show and control the Canvas panel.",
-                        binding: self.$state.canvasEnabled)
-
-                    SettingsToggleRow(
-                        title: "Allow Camera",
-                        subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
-                        binding: self.$cameraEnabled)
-
-                    SettingsToggleRow(
-                        title: "Enable Peekaboo Bridge",
-                        subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-                        binding: self.$state.peekabooBridgeEnabled)
-
-                    SettingsToggleRow(
-                        title: "Enable debug tools",
-                        subtitle: "Show the Debug tab with development utilities.",
-                        binding: self.$state.debugPaneEnabled)
-                }
-
-                Spacer(minLength: 12)
-                HStack {
-                    Spacer()
-                    Button("Quit OpenClaw") { NSApp.terminate(nil) }
-                        .buttonStyle(.borderedProminent)
+            VStack(alignment: .leading, spacing: 20) {
+                switch self.page {
+                case .general:
+                    self.generalPage
+                case .connection:
+                    self.connectionPage
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 22)
-            .padding(.bottom, 16)
+            .settingsDetailContent()
         }
         .onAppear {
-            guard !self.isPreview else { return }
-            self.refreshGatewayStatus()
+            self.updateActiveWork(active: self.isActive)
+        }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
         }
         .onChange(of: self.state.canvasEnabled) { _, enabled in
             if !enabled {
                 CanvasManager.shared.hideAll()
+            }
+        }
+        .onChange(of: self.state.quickChatEnabled) { _, enabled in
+            QuickChatController.shared.setEnabled(enabled)
+        }
+        .onChange(of: self.computerControlEnabled) { _, _ in
+            self.state.applyComputerControlHostState()
+        }
+        .onChange(of: self.computerControlProviderRaw) { _, _ in
+            self.state.applyComputerControlHostState()
+        }
+        .onDisappear { self.gatewayDiscovery.stop() }
+    }
+
+    private var generalPage: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsPageHeader(
+                title: "General",
+                subtitle: "Everyday OpenClaw app behavior.")
+
+            self.openClawStatusPanel
+
+            SettingsCardGroup("App") {
+                SettingsCardToggleRow(
+                    title: "Launch at login",
+                    subtitle: .verbatim(
+                        self
+                            .launchAtLoginPresentation.subtitle),
+                    binding: self.$state.launchAtLogin)
+                    .disabled(self.launchAtLoginPresentation.isDisabled)
+
+                SettingsCardToggleRow(
+                    title: "Show Dock icon",
+                    subtitle: """
+                    Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.
+                    """,
+                    binding: self.$state.showDockIcon)
+
+                SettingsCardToggleRow(
+                    title: "Play menu bar icon animations",
+                    subtitle: "Enable idle blinks and wiggles on the status icon.",
+                    binding: self.$state.iconAnimationsEnabled)
+
+                SettingsCardToggleRow(
+                    title: "Quick Chat",
+                    subtitle: "Show a floating composer for quick messages, summoned with a global shortcut.",
+                    binding: self.$state.quickChatEnabled)
+
+                SettingsCardRow(
+                    title: "Quick Chat shortcut",
+                    subtitle: "Global shortcut that opens a floating chat bar for the main thread.",
+                    showsDivider: false)
+                {
+                    KeyboardShortcuts.Recorder(for: .toggleQuickChat)
+                }
+                .disabled(!self.state.quickChatEnabled)
+            }
+
+            SettingsCardGroup("Capabilities") {
+                SettingsCardToggleRow(
+                    title: "Allow Canvas",
+                    subtitle: "Allow the agent to show and control the Canvas panel.",
+                    binding: self.$state.canvasEnabled)
+
+                SettingsCardToggleRow(
+                    title: "Allow Camera",
+                    subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
+                    binding: self.$cameraEnabled)
+
+                SettingsCardToggleRow(
+                    title: "Allow Computer Control",
+                    subtitle: """
+                    Starts enabled. After this Mac is paired and macOS access is granted, the paired Gateway can \
+                    move the pointer, click, and type without per-action confirmation. High risk.
+                    """,
+                    binding: self.$computerControlEnabled)
+
+                self.computerControlProviderRow
+
+                if self.computerControlEnabled {
+                    ComputerControlReadinessView(
+                        provider: self.selectedComputerControlProvider,
+                        cuaDriverAvailable: self.cuaDriverBundled)
+                }
+
+                SettingsCardToggleRow(
+                    title: "Enable Peekaboo Bridge",
+                    subtitle: """
+                    Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. \
+                    Requires Computer Control; otherwise run Peekaboo's own Mac app.
+                    """,
+                    binding: self.peekabooBridgeBinding,
+                    showsDivider: false)
+                    .disabled(!self.computerControlEnabled)
+            }
+
+            SettingsCardGroup("Browser") {
+                SettingsCardRow(
+                    title: "Browser login",
+                    subtitle: "Copy cookies from a Chrome-family profile into an isolated managed profile.",
+                    showsDivider: false)
+                {
+                    Button("Import…") {
+                        Task { @MainActor in
+                            switch await BrowserProfileImportModel.shared.refresh(force: true) {
+                            case .offering:
+                                // The banner lives in the dashboard window; force
+                                // offers must surface it even if that window is closed.
+                                AppNavigationActions.openDashboard()
+                            case let .unavailable(title, message):
+                                let alert = NSAlert()
+                                alert.messageText = title
+                                alert.informativeText = message
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.state.connectionMode != .local)
+                }
+            }
+
+            SettingsCardGroup("Cookie sync") {
+                SettingsCardToggleRow(
+                    title: "Sync cookies to the remote computer",
+                    subtitle: """
+                    Continuously copy this Mac's logged-in cookies for the domains below into the remote OpenClaw \
+                    browser profile. Off by default.
+                    """,
+                    binding: self.$state.cookieSyncEnabled)
+                    .disabled(self.state.connectionMode != .remote)
+
+                SettingsCardRow(
+                    title: "Domains",
+                    subtitle: "Cookies are only synced for these domains; an empty list means nothing is synced.")
+                {
+                    DomainAllowlistEditor(domains: self.$state.cookieSyncDomains)
+                        .frame(width: 320)
+                }
+                .disabled(self.state.connectionMode != .remote)
+
+                SettingsCardRow(
+                    title: "Target profile",
+                    subtitle: "Managed profile on the remote computer that receives the cookies.")
+                {
+                    TextField("imported", text: self.$state.cookieSyncIntoProfile)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                .disabled(self.state.connectionMode != .remote)
+
+                SettingsCardRow(
+                    title: "Status",
+                    subtitle: .verbatim(self.cookieSyncStatusDetail),
+                    showsDivider: self.state.connectionMode != .remote)
+                {
+                    Label(self.cookieSyncStatusTitle, systemImage: self.cookieSyncStatusIcon)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(self.cookieSyncStatusColor)
+                }
+
+                if self.state.connectionMode != .remote {
+                    SettingsCardRow(
+                        title: "Remote mode required",
+                        subtitle: "Cookie sync applies when OpenClaw runs on another computer (remote mode).",
+                        showsDivider: false)
+                    {
+                        EmptyView()
+                    }
+                }
+            }
+
+            SettingsCardGroup("Developer") {
+                SettingsCardToggleRow(
+                    title: "Enable debug tools",
+                    subtitle: "Show the Debug page with development utilities.",
+                    binding: self.$state.debugPaneEnabled,
+                    showsDivider: false)
+            }
+
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("App session")
+                        .font(.callout.weight(.medium))
+                    Text("Quit only when you want to stop the menu bar app completely.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 18)
+                Button("Quit") { AppDelegate.requestTermination() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
+            .padding(.top, 2)
+        }
+    }
+
+    private var openClawStatusPanel: some View {
+        let presentation = GeneralStatusPresentation.resolve(
+            mode: self.state.connectionMode,
+            isPaused: self.state.isPaused,
+            controlState: ControlChannel.shared.state,
+            localFailure: self.gatewayManager.lastFailureReason)
+
+        return HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(self.statusColor(presentation.tone).opacity(0.18))
+                Image(systemName: presentation.symbolName)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(self.statusColor(presentation.tone))
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: presentation.title)
+                    .font(.headline)
+                Text(verbatim: presentation.subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 20)
+
+            if presentation.showsConnectionAction {
+                Button("Open Connection Settings") {
+                    AppNavigationActions.openSettings(tab: .connection)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+            Toggle("OpenClaw active", isOn: self.activeBinding)
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.06))
+        }
+    }
+
+    private func statusColor(_ tone: GatewayConnectionTone) -> Color {
+        switch tone {
+        case .healthy: .green
+        case .transient: .orange
+        case .attention: .red
+        }
+    }
+
+    private var connectionPage: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsPageHeader(
+                title: "Connection",
+                subtitle: "Choose where the Gateway runs and how this Mac app reaches it.")
+
+            self.connectionStatusPanel
+            self.gatewayModeGroup
+
+            if self.state.connectionMode != .remote,
+               self.state.gatewayConfigConflict != nil
+            {
+                SettingsCardGroup("Remote Access") {
+                    GatewayConfigConflictRecoveryView(state: self.state)
+                }
+            }
+
+            switch self.state.connectionMode {
+            case .unconfigured:
+                EmptyView()
+            case .local:
+                self.localGatewayGroup
+            case .remote:
+                self.remoteCard
             }
         }
     }
@@ -101,56 +355,211 @@ struct GeneralSettings: View {
             set: { self.state.isPaused = !$0 })
     }
 
-    private var connectionSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("OpenClaw runs")
-                .font(.title3.weight(.semibold))
-                .frame(maxWidth: .infinity, alignment: .leading)
+    /// Reflects the effective bridge state: off (and disabled) whenever Computer Control is off,
+    /// so the row matches the host that actually runs instead of a standalone toggle.
+    private var peekabooBridgeBinding: Binding<Bool> {
+        Binding(
+            get: { self.computerControlEnabled && self.state.peekabooBridgeEnabled },
+            set: { self.state.peekabooBridgeEnabled = $0 })
+    }
 
-            Picker("Mode", selection: self.$state.connectionMode) {
-                Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
-                Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
-                Text("Remote (another host)").tag(AppState.ConnectionMode.remote)
+    private func updateActiveWork(active: Bool) {
+        guard !self.isPreview else { return }
+        if active {
+            self.refreshGatewayStatus()
+            if self.page == .connection {
+                self.gatewayDiscovery.start()
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .frame(width: 260, alignment: .leading)
+        } else {
+            self.gatewayDiscovery.stop()
+        }
+    }
 
-            if self.state.connectionMode == .unconfigured {
-                Text("Pick Local or Remote to start the Gateway.")
+    private var connectionStatusPanel: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(self.connectionStatusTint.opacity(0.18))
+                Image(systemName: self.connectionStatusIcon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(self.connectionStatusTint)
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(self.connectionStatusTitle)
+                    .font(.headline)
+                Text(self.connectionStatusSubtitle)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if self.state.connectionMode == .local {
-                // In Nix mode, gateway is managed declaratively - no install buttons.
-                if !self.isNixMode {
-                    self.gatewayInstallerCard
+            Spacer(minLength: 18)
+
+            if ControlChannel.shared.state == .connected,
+               self.localGatewayFailure == nil,
+               let ping = ControlChannel.shared.lastPingMs
+            {
+                Text("\(Int(ping)) ms")
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.green.opacity(0.16), in: Capsule())
+                    .foregroundStyle(.green)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.06))
+        }
+    }
+
+    private var connectionStatusIcon: String {
+        switch self.state.connectionMode {
+        case .local: "desktopcomputer"
+        case .remote: self.state.remoteTransport == .ssh ? "point.3.connected.trianglepath.dotted" : "network"
+        case .unconfigured: "questionmark.circle"
+        }
+    }
+
+    private var connectionStatusTint: Color {
+        if self.localGatewayFailure != nil { return .red }
+        switch ControlChannel.shared.state {
+        case .connected: return .green
+        case .connecting, .disconnected, .degraded: return .orange
+        }
+    }
+
+    private var connectionStatusTitle: String {
+        switch self.state.connectionMode {
+        case .local: "Local Gateway"
+        case .remote: self.state.remoteTransport == .ssh ? "Remote Gateway via SSH" : "Remote Gateway direct"
+        case .unconfigured: "Gateway not configured"
+        }
+    }
+
+    private var connectionStatusSubtitle: String {
+        if let failure = self.localGatewayFailure { return failure }
+        switch self.state.connectionMode {
+        case .local:
+            return self.gatewayManager.installation == .external
+                ? "OpenClaw connects to an independently managed Gateway on this Mac."
+                : "OpenClaw starts and monitors the Gateway on this Mac."
+        case .remote:
+            let target = self.state.remoteTransport == .ssh ? self.state.remoteTarget : self.state.remoteUrl
+            let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                return "Enter a remote endpoint so this Mac app can attach cleanly."
+            }
+            return "\(self.controlStatusLine) · \(trimmed)"
+        case .unconfigured:
+            return "Choose local or remote before the app can attach to a Gateway."
+        }
+    }
+
+    private var localGatewayFailure: String? {
+        self.state.connectionMode == .local ? self.gatewayManager.lastFailureReason : nil
+    }
+
+    private var gatewayModeGroup: some View {
+        SettingsCardGroup("Gateway") {
+            SettingsCardRow(
+                title: "OpenClaw runs",
+                subtitle: "Pick whether this app owns a local Gateway or attaches to another host.",
+                showsDivider: self.state.connectionMode == .unconfigured)
+            {
+                Picker("Gateway location", selection: self.$state.connectionMode) {
+                    Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
+                    Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
+                    Text("Remote (another host)").tag(AppState.ConnectionMode.remote)
                 }
-                TailscaleIntegrationSection(
-                    connectionMode: self.state.connectionMode,
-                    isPaused: self.state.isPaused)
-                self.healthRow
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(width: 260, alignment: .trailing)
             }
 
-            if self.state.connectionMode == .remote {
-                self.remoteCard
+            if self.state.connectionMode == .unconfigured {
+                SettingsCardRow(
+                    title: "Setup needed",
+                    subtitle: """
+                    Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.
+                    """,
+                    showsDivider: false)
+                {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                }
             }
         }
     }
 
+    private var localGatewayGroup: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsCardGroup("Local Gateway") {
+                if !self.isNixMode {
+                    switch self.gatewayManager.installation {
+                    case .managed:
+                        self.gatewayInstallerCard
+                    case .external:
+                        SettingsCardRow(
+                            title: "Independently managed Gateway",
+                            subtitle: "This app connects without installing or updating its CLI runtime.")
+                        {
+                            Text(self.gatewayManager.status.label).font(.caption)
+                        }
+                    case .unreadable:
+                        Text(GatewayProcessManager.Installation.ownershipFailure)
+                            .foregroundStyle(.orange)
+                            .padding(14)
+                    }
+                }
+                self.healthRow
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+            }
+
+            TailscaleIntegrationSection(
+                connectionMode: self.state.connectionMode,
+                isPaused: self.state.isPaused)
+        }
+    }
+
     private var remoteCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            self.remoteTransportRow
+        VStack(alignment: .leading, spacing: 20) {
+            SettingsCardGroup("Remote Access") {
+                self.remoteTransportRow
+
+                if self.state.remoteTransport == .ssh {
+                    self.remoteSshRow
+                } else {
+                    self.remoteDirectRow
+                }
+                self.remoteTokenRow
+                GatewayConfigConflictRecoveryView(state: self.state)
+            }
+
+            SettingsCardGroup("Discovery & Status") {
+                self.remoteDiscoveryRow
+                self.remoteStatusRow
+                self.controlChannelRow
+                self.remoteTipRow
+            }
 
             if self.state.remoteTransport == .ssh {
-                self.remoteSshRow
-            } else {
-                self.remoteDirectRow
+                self.remoteAdvancedGroup
             }
-            self.remoteTokenRow
+        }
+        .transition(.opacity)
+    }
 
+    private var remoteDiscoveryRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Nearby gateways")
+                .font(.callout.weight(.medium))
             GatewayDiscoveryInlineList(
                 discovery: self.gatewayDiscovery,
                 currentTarget: self.state.remoteTarget,
@@ -159,92 +568,115 @@ struct GeneralSettings: View {
             { gateway in
                 self.applyDiscoveredGateway(gateway)
             }
-            .padding(.leading, self.remoteLabelWidth + 10)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .overlay(alignment: .bottom) {
+            Divider()
+                .padding(.leading, 14)
+        }
+    }
 
-            self.remoteStatusView
-                .padding(.leading, self.remoteLabelWidth + 10)
-
-            if self.state.remoteTransport == .ssh {
-                DisclosureGroup(isExpanded: self.$showRemoteAdvanced) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        LabeledContent("Identity file") {
-                            TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 280)
-                        }
-                        LabeledContent("Project root") {
-                            TextField("/home/you/Projects/openclaw", text: self.$state.remoteProjectRoot)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 280)
-                        }
-                        LabeledContent("CLI path") {
-                            TextField("/Applications/OpenClaw.app/.../openclaw", text: self.$state.remoteCliPath)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 280)
-                        }
-                    }
-                    .padding(.top, 4)
-                } label: {
-                    Text("Advanced")
-                        .font(.callout.weight(.semibold))
-                }
-            }
-
-            // Diagnostics
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Control channel")
-                    .font(.caption.weight(.semibold))
-                if !self.isControlStatusDuplicate || ControlChannel.shared.lastPingMs != nil {
-                    let status = self.isControlStatusDuplicate ? nil : self.controlStatusLine
-                    let ping = ControlChannel.shared.lastPingMs.map { "Ping \(Int($0)) ms" }
-                    let line = [status, ping].compactMap(\.self).joined(separator: " · ")
-                    if !line.isEmpty {
-                        Text(line)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let hb = HeartbeatStore.shared.lastEvent {
-                    let ageText = age(from: Date(timeIntervalSince1970: hb.ts / 1000))
-                    Text("Last heartbeat: \(hb.status) · \(ageText)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                if let authLabel = ControlChannel.shared.authSourceLabel {
-                    Text(authLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if self.state.remoteTransport == .ssh {
-                Text("Tip: enable Tailscale for stable remote access.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } else {
-                Text("Tip: use Tailscale Serve so the gateway has a valid HTTPS cert.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+    @ViewBuilder
+    private var remoteStatusRow: some View {
+        if self.remoteStatus != .idle {
+            SettingsCardRow(title: "Remote test") {
+                self.remoteStatusView
             }
         }
-        .transition(.opacity)
-        .onAppear { self.gatewayDiscovery.start() }
-        .onDisappear { self.gatewayDiscovery.stop() }
+    }
+
+    private var controlChannelRow: some View {
+        SettingsCardRow(
+            title: "Control channel",
+            subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim))
+        {
+            Text(self.controlStatusLine)
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(self.connectionStatusTint.opacity(0.16), in: Capsule())
+                .foregroundStyle(self.connectionStatusTint)
+        }
+    }
+
+    private var controlChannelSubtitle: String? {
+        var parts: [String] = []
+        if let ping = ControlChannel.shared.lastPingMs {
+            parts.append("Ping \(Int(ping)) ms")
+        }
+        if let hb = HeartbeatStore.shared.lastEvent {
+            let ageText = age(from: Date(timeIntervalSince1970: hb.ts / 1000))
+            parts.append("Last heartbeat \(hb.status) · \(ageText)")
+        }
+        if let authLabel = ControlChannel.shared.authSourceLabel {
+            parts.append(authLabel)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
+    private var remoteTipRow: some View {
+        SettingsCardRow(
+            title: "Recommended setup",
+            subtitle: self.state.remoteTransport == .ssh
+                ? "Use Tailscale plus an SSH tunnel for stable private access."
+                : "Use Tailscale Serve so the gateway has a valid HTTPS certificate.",
+            showsDivider: false)
+        {
+            Image(systemName: "lightbulb.fill")
+                .foregroundStyle(.yellow)
+        }
+    }
+
+    private var remoteAdvancedGroup: some View {
+        SettingsCardGroup("Advanced") {
+            DisclosureGroup(isExpanded: self.$showRemoteAdvanced) {
+                VStack(alignment: .leading, spacing: 12) {
+                    self.advancedTextField(
+                        "Identity file",
+                        placeholder: "/Users/you/.ssh/id_ed25519",
+                        text: self.$state.remoteIdentity)
+                    self.advancedTextField(
+                        "Project root",
+                        placeholder: "/home/you/Projects/openclaw",
+                        text: self.$state.remoteProjectRoot)
+                    self.advancedTextField(
+                        "CLI path",
+                        placeholder: "/Applications/OpenClaw.app/.../openclaw",
+                        text: self.$state.remoteCliPath)
+                }
+                .padding(.top, 10)
+            } label: {
+                Text("SSH command details")
+                    .font(.callout.weight(.medium))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+        }
+    }
+
+    private func advancedTextField(_ title: String, placeholder: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            TextField(placeholder, text: text)
+                .textFieldStyle(.roundedBorder)
+        }
     }
 
     private var remoteTransportRow: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text("Transport")
-                .font(.callout.weight(.semibold))
-                .frame(width: self.remoteLabelWidth, alignment: .leading)
+        SettingsCardRow(
+            title: "Transport",
+            subtitle: "SSH keeps the Gateway private; direct is best for HTTPS or Tailscale Serve.")
+        {
             Picker("Transport", selection: self.$state.remoteTransport) {
                 Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
                 Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
             }
             .pickerStyle(.segmented)
-            .frame(maxWidth: 320)
+            .frame(width: 320)
         }
     }
 
@@ -253,59 +685,52 @@ struct GeneralSettings: View {
         let validationMessage = CommandResolver.sshTargetValidationMessage(trimmedTarget)
         let canTest = !trimmedTarget.isEmpty && validationMessage == nil
 
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("SSH target")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+        return VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(title: "SSH target", subtitle: "User and host for the remote Gateway machine.") {
                 TextField("user@host[:22]", text: self.$state.remoteTarget)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
+                    .frame(width: Self.remoteFieldWidth)
                 self.remoteTestButton(disabled: !canTest)
             }
             if let validationMessage {
                 Text(validationMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
-                    .padding(.leading, self.remoteLabelWidth + 10)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
         }
     }
 
     private var remoteDirectRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Gateway")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.remoteLabelWidth, alignment: .leading)
-                TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
-                self.remoteTestButton(
-                    disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        SettingsCardRow(title: "Gateway URL", subtitle: "The WebSocket URL exposed by the remote Gateway.") {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: Self.remoteFieldWidth)
+                    self.remoteTestButton(
+                        disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                Text("Use wss:// for public hosts. ws:// is allowed for localhost, LAN, .local, and Tailnet hosts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text(
-                "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, self.remoteLabelWidth + 10)
         }
     }
 
     private var remoteTokenRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Gateway token")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.remoteLabelWidth, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(
+                title: "Gateway token",
+                subtitle: "Used when the remote gateway requires token auth.",
+                showsDivider: self.state.gatewayConfigConflict != nil)
+            {
                 SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: .infinity)
+                    .frame(width: Self.remoteSecretFieldWidth)
             }
-            Text("Used when the remote gateway requires token auth.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, self.remoteLabelWidth + 10)
             if self.state.remoteTokenUnsupported {
                 Text(
                     "The current gateway.remote.token value is not plain text. "
@@ -313,7 +738,8 @@ struct GeneralSettings: View {
                         + "enter a plaintext token here to replace it.")
                     .font(.caption)
                     .foregroundStyle(.orange)
-                    .padding(.leading, self.remoteLabelWidth + 10)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
         }
     }
@@ -329,16 +755,12 @@ struct GeneralSettings: View {
             }
         }
         .buttonStyle(.borderedProminent)
+        .frame(minWidth: 116)
         .disabled(self.remoteStatus == .checking || disabled)
     }
 
     private var controlStatusLine: String {
-        switch ControlChannel.shared.state {
-        case .connected: "Connected"
-        case .connecting: "Connecting…"
-        case .disconnected: "Disconnected"
-        case let .degraded(msg): msg
-        }
+        GatewayConnectionPresentation(state: ControlChannel.shared.state).statusLine
     }
 
     @ViewBuilder
@@ -368,11 +790,6 @@ struct GeneralSettings: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
         }
-    }
-
-    private var isControlStatusDuplicate: Bool {
-        guard case let .failed(message) = self.remoteStatus else { return false }
-        return message == self.controlStatusLine
     }
 
     private var gatewayInstallerCard: some View {
@@ -431,97 +848,138 @@ struct GeneralSettings: View {
     }
 
     private func refreshGatewayStatus() {
-        Task {
-            let status = await Task.detached(priority: .utility) {
-                GatewayEnvironment.check()
-            }.value
-            self.gatewayStatus = status
-        }
+        guard self.state.connectionMode == .local, self.gatewayManager.installation == .managed else { return }
+        self.gatewayManager.refreshEnvironmentStatus(force: true)
     }
 
     private var gatewayStatusColor: Color {
+        if self.localGatewayFailure != nil { return .red }
         switch self.gatewayStatus.kind {
-        case .ok: .green
-        case .checking: .secondary
-        case .missingNode, .missingGateway, .incompatible, .error: .orange
+        case .ok: return .green
+        case .checking: return .secondary
+        case .missingNode, .missingGateway, .incompatible, .error: return .orange
+        }
+    }
+}
+
+extension GeneralSettings {
+    @ViewBuilder
+    private var computerControlProviderRow: some View {
+        if self.computerControlEnabled {
+            SettingsCardRow(
+                title: "Computer Control provider",
+                subtitle: "Choose the node-local automation backend for snapshots and actions.")
+            {
+                Picker("Computer Control provider", selection: self.computerControlProviderBinding) {
+                    Text(ComputerControlProvider.peekaboo.displayName)
+                        .tag(ComputerControlProvider.peekaboo)
+                    Text(self.cuaDriverBundled ? "CUA" : "CUA (driver not bundled)")
+                        .tag(ComputerControlProvider.cua)
+                        .disabled(!self.cuaDriverBundled)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 220, alignment: .trailing)
+            }
         }
     }
 
-    private var healthCard: some View {
-        let snapshot = self.healthStore.snapshot
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(self.healthStore.state.tint)
-                    .frame(width: 10, height: 10)
-                Text(self.healthStore.summaryLine)
-                    .font(.callout.weight(.semibold))
-            }
+    private var cuaDriverBundled: Bool {
+        CuaDriverArtifact.bundledExecutableURL != nil
+    }
 
-            if let snap = snapshot {
-                let linkId = snap.channelOrder?.first(where: {
-                    if let summary = snap.channels[$0] { return summary.linked != nil }
-                    return false
-                }) ?? snap.channels.keys.first(where: {
-                    if let summary = snap.channels[$0] { return summary.linked != nil }
-                    return false
-                })
-                let linkLabel =
-                    linkId.flatMap { snap.channelLabels?[$0] } ??
-                    linkId?.capitalized ??
-                    "Link channel"
-                let linkAge = linkId.flatMap { snap.channels[$0]?.authAgeMs }
-                Text("\(linkLabel) auth age: \(healthAgeString(linkAge))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Session store: \(snap.sessions.path) (\(snap.sessions.count) entries)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if let recent = snap.sessions.recent.first {
-                    let lastActivity = recent.updatedAt != nil
-                        ? relativeAge(from: Date(timeIntervalSince1970: (recent.updatedAt ?? 0) / 1000))
-                        : "unknown"
-                    Text("Last activity: \(recent.key) \(lastActivity)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Text("Last check: \(relativeAge(from: self.healthStore.lastSuccess))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if let error = self.healthStore.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                Text("Health check pending…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+    private var selectedComputerControlProvider: ComputerControlProvider {
+        ComputerControlProvider.current()
+    }
 
-            HStack(spacing: 12) {
-                Button {
-                    Task { await self.healthStore.refresh(onDemand: true) }
-                } label: {
-                    if self.healthStore.isRefreshing {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label("Run Health Check", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(self.healthStore.isRefreshing)
+    private var computerControlProviderBinding: Binding<ComputerControlProvider> {
+        Binding(
+            get: { self.selectedComputerControlProvider },
+            set: { provider in
+                guard provider != .cua || self.cuaDriverBundled else { return }
+                self.computerControlProviderRaw = provider.rawValue
+            })
+    }
 
-                Divider().frame(height: 18)
-
-                Button {
-                    self.revealLogs()
-                } label: {
-                    Label("Reveal Logs", systemImage: "doc.text.magnifyingglass")
-                }
-            }
+    private var cookieSyncStatusTitle: String {
+        switch self.cookieSyncManager.state {
+        case .stopped: "Stopped"
+        case .running: "Running"
+        case .error: "Error"
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(10)
+    }
+
+    private var cookieSyncStatusDetail: String {
+        switch self.cookieSyncManager.state {
+        case .stopped:
+            self.cookieSyncManager.lastSummary.map { "Last sync: \($0)" } ?? "Cookie sync is not active."
+        case .running:
+            self.cookieSyncManager.lastSummary ?? "Watching this Mac's browser cookie store for changes."
+        case let .error(message):
+            message
+        }
+    }
+
+    private var cookieSyncStatusIcon: String {
+        switch self.cookieSyncManager.state {
+        case .stopped: "stop.circle"
+        case .running: "checkmark.circle.fill"
+        case .error: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var cookieSyncStatusColor: Color {
+        switch self.cookieSyncManager.state {
+        case .stopped: .secondary
+        case .running: .green
+        case .error: .orange
+        }
+    }
+}
+
+private struct DomainAllowlistEditor: View {
+    @Binding var domains: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(self.domains.indices, id: \.self) { index in
+                HStack(spacing: 8) {
+                    TextField("example.com", text: self.binding(for: index))
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { self.normalizeEntries() }
+
+                    Button("Remove") {
+                        self.domains.remove(at: index)
+                        self.normalizeEntries()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            Button("Add domain") {
+                guard !self.domains.contains(where: {
+                    $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }) else { return }
+                self.domains.append("")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .onDisappear { self.normalizeEntries() }
+    }
+
+    private func binding(for index: Int) -> Binding<String> {
+        Binding(
+            get: { self.domains.indices.contains(index) ? self.domains[index] : "" },
+            set: { value in
+                guard self.domains.indices.contains(index) else { return }
+                self.domains[index] = value
+            })
+    }
+
+    private func normalizeEntries() {
+        self.domains = CookieSyncManager.normalizedDomains(self.domains)
     }
 }
 
@@ -599,15 +1057,39 @@ extension GeneralSettings {
         alert.runModal()
     }
 
+    private var launchAtLoginPresentation: LaunchAtLoginPresentation {
+        .resolve(
+            profile: .current,
+            bundleLocationAllowsPersistentIntegration: self.state.bundleLocationAllowsPersistentIntegration,
+            isEnabled: self.state.launchAtLogin)
+    }
+
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
     }
 }
 
-private func healthAgeString(_ ms: Double?) -> String {
-    guard let ms else { return "unknown" }
-    return msToAge(ms)
+struct LaunchAtLoginPresentation: Equatable {
+    let subtitle: String
+    let isDisabled: Bool
+
+    static func resolve(
+        profile: AppProfile,
+        bundleLocationAllowsPersistentIntegration: Bool,
+        isEnabled: Bool) -> Self
+    {
+        if profile.isActive {
+            return Self(
+                subtitle: String(localized: "Launch at login is unavailable while an app profile is active."),
+                isDisabled: true)
+        }
+        return Self(
+            subtitle: bundleLocationAllowsPersistentIntegration
+                ? String(localized: "Automatically start OpenClaw after you sign in.")
+                : String(localized: "Move OpenClaw to Applications before enabling launch at login."),
+            isDisabled: !bundleLocationAllowsPersistentIntegration && !isEnabled)
+    }
 }
 
 #if DEBUG
@@ -616,44 +1098,6 @@ struct GeneralSettings_Previews: PreviewProvider {
         GeneralSettings(state: .preview)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
             .environment(TailscaleService.shared)
-    }
-}
-
-@MainActor
-extension GeneralSettings {
-    static func exerciseForTesting() {
-        let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .ssh
-        state.remoteTarget = "user@host:2222"
-        state.remoteUrl = "wss://gateway.example.ts.net"
-        state.remoteToken = "example-token"
-        state.remoteIdentity = "/tmp/id_ed25519"
-        state.remoteProjectRoot = "/tmp/openclaw"
-        state.remoteCliPath = "/tmp/openclaw"
-
-        let view = GeneralSettings(state: state)
-        view.gatewayStatus = GatewayEnvironmentStatus(
-            kind: .ok,
-            nodeVersion: "1.0.0",
-            gatewayVersion: "1.0.0",
-            requiredGateway: nil,
-            message: "Gateway ready")
-        view.remoteStatus = .failed("SSH failed")
-        view.showRemoteAdvanced = true
-        _ = view.body
-
-        state.connectionMode = .unconfigured
-        _ = view.body
-
-        state.connectionMode = .local
-        view.gatewayStatus = GatewayEnvironmentStatus(
-            kind: .error("Gateway offline"),
-            nodeVersion: nil,
-            gatewayVersion: nil,
-            requiredGateway: nil,
-            message: "Gateway offline")
-        _ = view.body
     }
 }
 #endif

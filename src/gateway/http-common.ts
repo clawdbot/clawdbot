@@ -1,6 +1,20 @@
+// Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
+// body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { z } from "zod";
+import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
+import {
+  clearHttpResponseRepresentationHeaders,
+  sendHttpRequestRejection,
+} from "../infra/http-request-lifecycle.js";
+import {
+  logRejectedLargePayload,
+  parseContentLengthHeader,
+} from "../logging/diagnostic-payload.js";
 import type { GatewayAuthResult } from "./auth.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 import { readJsonBody } from "./hooks.js";
+import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
 
 /**
  * Apply baseline security headers that are safe for all response types (API JSON,
@@ -21,21 +35,32 @@ export function setDefaultSecurityHeaders(
   }
 }
 
+/** Finish a failed request without rewriting committed headers or orphaning its transport. */
+export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  if (!res.headersSent) {
+    clearHttpResponseRepresentationHeaders(res);
+    res.setHeader("Cache-Control", "no-store");
+    res.statusMessage = "Internal Server Error";
+    respondPlainText(res, 500, res.statusMessage);
+    return;
+  }
+
+  // Ending would frame a partial chunked body as a complete successful response.
+  res.destroy();
+}
+
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
 }
 
-export function sendText(res: ServerResponse, status: number, body: string) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
-  res.end(body);
-}
-
 export function sendMethodNotAllowed(res: ServerResponse, allow = "POST") {
   res.setHeader("Allow", allow);
-  sendText(res, 405, "Method Not Allowed");
+  respondPlainText(res, 405, "Method Not Allowed");
 }
 
 export function sendUnauthorized(res: ServerResponse) {
@@ -61,6 +86,16 @@ export function sendGatewayAuthFailure(res: ServerResponse, authResult: GatewayA
     sendRateLimited(res, authResult.retryAfterMs);
     return;
   }
+  if (authResult.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    sendJson(res, 403, {
+      error: {
+        message:
+          "Proxy client attribution is required. Configure gateway.trustedProxies narrowly and make the proxy overwrite or safely rebuild forwarded client headers.",
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
+    return;
+  }
   sendUnauthorized(res);
 }
 
@@ -68,6 +103,52 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   sendJson(res, 400, {
     error: { message, type: "invalid_request_error" },
   });
+}
+
+export function parseGatewayJsonRequest<T extends z.ZodType>(
+  res: ServerResponse,
+  body: unknown,
+  schema: T,
+): z.output<T> | undefined {
+  const parsed = schema.safeParse(body);
+  if (parsed.success) {
+    return parsed.data;
+  }
+  const issue = parsed.error.issues[0];
+  sendInvalidRequest(
+    res,
+    issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body",
+  );
+  return undefined;
+}
+
+function buildMissingScopeForbiddenBody(
+  missingScope: string | undefined,
+  requiredScopes?: readonly string[],
+) {
+  const details =
+    typeof missingScope === "string" && missingScope.length > 0
+      ? buildMissingScopeErrorDetails({
+          missingScope,
+          requiredScopes: requiredScopes ?? [missingScope],
+        })
+      : undefined;
+  return {
+    ok: false,
+    error: {
+      type: "forbidden",
+      message: `missing scope: ${missingScope}`,
+      ...(details ? { details } : {}),
+    },
+  };
+}
+
+export function sendMissingScopeForbidden(
+  res: ServerResponse,
+  missingScope: string | undefined,
+  requiredScopes?: readonly string[],
+) {
+  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope, requiredScopes));
 }
 
 export async function readJsonBodyOrError(
@@ -78,15 +159,28 @@ export async function readJsonBodyOrError(
   const body = await readJsonBody(req, maxBytes);
   if (!body.ok) {
     if (body.error === "payload too large") {
-      sendJson(res, 413, {
-        error: { message: "Payload too large", type: "invalid_request_error" },
+      const contentLength = parseContentLengthHeader(req.headers?.["content-length"]);
+      logRejectedLargePayload({
+        surface: "gateway.http.json",
+        limitBytes: maxBytes,
+        reason: "json_body_limit",
+        ...(contentLength !== undefined ? { bytes: contentLength } : {}),
       });
-      return undefined;
     }
-    if (body.error === "request body timeout") {
-      sendJson(res, 408, {
-        error: { message: "Request body timeout", type: "invalid_request_error" },
-      });
+    if (body.error === "payload too large" || body.error === "request body timeout") {
+      const tooLarge = body.error === "payload too large";
+      await sendHttpRequestRejection(
+        req,
+        res,
+        tooLarge ? 413 : 408,
+        JSON.stringify({
+          error: {
+            message: tooLarge ? "Payload too large" : "Request body timeout",
+            type: "invalid_request_error",
+          },
+        }),
+        "application/json; charset=utf-8",
+      );
       return undefined;
     }
     sendInvalidRequest(res, body.error);
@@ -99,12 +193,22 @@ export function writeDone(res: ServerResponse) {
   res.write("data: [DONE]\n\n");
 }
 
+export const SSE_CONTENT_TYPE = "text/event-stream; charset=utf-8";
+
 export function setSseHeaders(res: ServerResponse) {
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Content-Type", SSE_CONTENT_TYPE);
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
+}
+
+/** Abort reason used when the HTTP client disconnects before delivery. */
+class ClientDisconnectError extends Error {
+  constructor(message = "HTTP client disconnected") {
+    super(message);
+    this.name = "ClientDisconnectError";
+  }
 }
 
 export function watchClientDisconnect(
@@ -126,9 +230,21 @@ export function watchClientDisconnect(
   const handleClose = () => {
     onDisconnect?.();
     if (!abortController.signal.aborted) {
-      abortController.abort();
+      abortController.abort(new ClientDisconnectError());
     }
   };
+  const stopWatchingResponseErrors = () => {
+    res.off("error", handleClose);
+    res.off("close", stopWatchingResponseErrors);
+  };
+  // Finalizers release socket watchers before res.end(); keep its error
+  // listener until close so a failed flush cannot become process-fatal.
+  res.on("error", handleClose);
+  res.once("close", stopWatchingResponseErrors);
+  if (res.destroyed || sockets.some((socket) => socket.destroyed)) {
+    handleClose();
+    return () => {};
+  }
   for (const socket of sockets) {
     socket.on("close", handleClose);
   }

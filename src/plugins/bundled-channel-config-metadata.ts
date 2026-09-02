@@ -1,18 +1,23 @@
-import fs from "node:fs";
+/** Loads bundled channel config schema metadata from source or public surface modules. */
 import path from "node:path";
-import { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
+import {
+  buildChannelConfigSchema,
+  buildJsonChannelConfigSchema,
+} from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import {
   normalizeBundledPluginStringList,
   trimBundledPluginString,
 } from "./bundled-plugin-scan.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
+import { pluginCacheExistsSync } from "./plugin-cache-files.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
 const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
@@ -23,15 +28,13 @@ const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
   path.join("src", "config-schema.cts"),
   path.join("src", "config-schema.cjs"),
 ] as const;
-const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api", "runtime-api", "api"] as const;
+const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api"] as const;
 
 type ChannelConfigSurface = {
-  schema: Record<string, unknown>;
+  schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;
   runtime?: ChannelConfigRuntimeSchema;
 };
-
-const jitiLoaders: PluginJitiLoaderCache = new Map();
 
 function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurface {
   if (!value || typeof value !== "object") {
@@ -39,6 +42,24 @@ function isBuiltChannelConfigSchema(value: unknown): value is ChannelConfigSurfa
   }
   const candidate = value as { schema?: unknown };
   return Boolean(candidate.schema && typeof candidate.schema === "object");
+}
+
+function isJsonSchemaConfigSurface(value: unknown): value is JsonSchemaObject {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.safeParse === "function" || typeof candidate.toJSONSchema === "function") {
+    return false;
+  }
+  return (
+    typeof candidate.type === "string" ||
+    Array.isArray(candidate.anyOf) ||
+    Array.isArray(candidate.oneOf) ||
+    Array.isArray(candidate.allOf) ||
+    Array.isArray(candidate.enum) ||
+    Object.hasOwn(candidate, "const")
+  );
 }
 
 function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelConfigSurface | null {
@@ -55,6 +76,9 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
     if (isBuiltChannelConfigSchema(value)) {
       return value;
     }
+    if (isJsonSchemaConfigSurface(value)) {
+      return buildJsonChannelConfigSchema(value);
+    }
     if (value && typeof value === "object") {
       return buildChannelConfigSchema(value as never);
     }
@@ -69,27 +93,27 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
   return null;
 }
 
-function getJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: jitiLoaders,
+function getModuleLoader(modulePath: string, rootDir: string) {
+  return getCachedPluginModuleLoader({
     modulePath,
+    rootDir,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    jitiFilename: import.meta.url,
+    loaderFilename: import.meta.url,
   });
 }
 
 function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
   for (const relativePath of SOURCE_CONFIG_SCHEMA_CANDIDATES) {
     const candidate = path.join(pluginDir, relativePath);
-    if (fs.existsSync(candidate)) {
+    if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
   for (const basename of PUBLIC_CONFIG_SURFACE_BASENAMES) {
     for (const extension of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
       const candidate = path.join(pluginDir, `${basename}${extension}`);
-      if (fs.existsSync(candidate)) {
+      if (pluginCacheExistsSync(candidate)) {
         return candidate;
       }
     }
@@ -97,9 +121,12 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
   return undefined;
 }
 
-function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
+function loadChannelConfigSurfaceModuleSync(
+  modulePath: string,
+  rootDir: string,
+): ChannelConfigSurface | null {
   try {
-    const imported = getJiti(modulePath)(modulePath) as Record<string, unknown>;
+    const imported = getModuleLoader(modulePath, rootDir)(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;
@@ -114,7 +141,7 @@ function resolvePackageChannelMeta(
   return channelMeta?.id?.trim() === channelId ? channelMeta : undefined;
 }
 
-export function collectBundledChannelConfigs(params: {
+export function collectBundledChannelConfigsCore(params: {
   pluginDir: string;
   manifest: PluginManifest;
   packageManifest?: OpenClawPackageManifest;
@@ -129,7 +156,9 @@ export function collectBundledChannelConfigs(params: {
   }
 
   const surfaceModulePath = resolveChannelConfigSchemaModulePath(params.pluginDir);
-  const surface = surfaceModulePath ? loadChannelConfigSurfaceModuleSync(surfaceModulePath) : null;
+  const surface = surfaceModulePath
+    ? loadChannelConfigSurfaceModuleSync(surfaceModulePath, params.pluginDir)
+    : null;
 
   for (const channelId of channelIds) {
     const existing = existingChannelConfigs[channelId];
@@ -175,6 +204,9 @@ export function collectBundledChannelConfigs(params: {
         : preferOver.length > 0
           ? { preferOver }
           : {}),
+      ...((existing?.commands ?? channelMeta?.commands)
+        ? { commands: existing?.commands ?? channelMeta?.commands }
+        : {}),
     };
   }
 

@@ -1,8 +1,11 @@
+// Shared get-reply test fixtures for sessions, directives, and mocked runtimes.
 import { expect, vi, type Mock } from "vitest";
-import type { MsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext, MsgContext } from "../templating.js";
+import type { ReasoningLevel, ThinkLevel } from "../thinking.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 
-export function buildGetReplyCtx(overrides: Partial<MsgContext> = {}): MsgContext {
-  return {
+export function buildGetReplyCtx(overrides: Partial<MsgContext> = {}): FinalizedRuntimeMsgContext {
+  return finalizeInboundContext({
     Provider: "telegram",
     Surface: "telegram",
     ChatType: "direct",
@@ -15,11 +18,13 @@ export function buildGetReplyCtx(overrides: Partial<MsgContext> = {}): MsgContex
     To: "telegram:123",
     Timestamp: 1710000000000,
     ...overrides,
-  };
+  });
 }
 
-export function buildGetReplyGroupCtx(overrides: Partial<MsgContext> = {}): MsgContext {
-  return {
+export function buildGetReplyGroupCtx(
+  overrides: Partial<MsgContext> = {},
+): FinalizedRuntimeMsgContext {
+  return finalizeInboundContext({
     Provider: "telegram",
     Surface: "telegram",
     OriginatingChannel: "telegram",
@@ -35,7 +40,7 @@ export function buildGetReplyGroupCtx(overrides: Partial<MsgContext> = {}): MsgC
     To: "telegram:-100123",
     Timestamp: 1710000000000,
     ...overrides,
-  };
+  });
 }
 
 export function buildNativeResetContext(): MsgContext {
@@ -77,6 +82,18 @@ export function createGetReplySessionState(overrides: Record<string, unknown> = 
   };
 }
 
+export function registerGetReplyBaselineBypass(): void {
+  vi.doMock("../../sessions/session-diff-baseline.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../sessions/session-diff-baseline.js")>();
+    return {
+      ...actual,
+      ensureSessionDiffBaseline: vi.fn(
+        async (params: Parameters<typeof actual.ensureSessionDiffBaseline>[0]) => params.entry,
+      ),
+    };
+  });
+}
+
 export function createGetReplyContinueDirectivesResult(params: {
   body: string;
   abortKey: string;
@@ -86,6 +103,10 @@ export function createGetReplyContinueDirectivesResult(params: {
   commandSource: string;
   senderIsOwner: boolean;
   resetHookTriggered: boolean;
+  provider?: string;
+  model?: string;
+  resolvedThinkLevel?: ThinkLevel;
+  resolvedReasoningLevel?: ReasoningLevel;
 }) {
   return {
     kind: "continue" as const,
@@ -114,18 +135,19 @@ export function createGetReplyContinueDirectivesResult(params: {
       elevatedAllowed: false,
       elevatedFailures: [],
       defaultActivation: "always",
-      resolvedThinkLevel: undefined,
+      resolvedThinkLevel: params.resolvedThinkLevel,
       resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
+      resolvedReasoningLevel: params.resolvedReasoningLevel ?? "off",
       resolvedElevatedLevel: "off",
       execOverrides: undefined,
       blockStreamingEnabled: false,
       blockReplyChunking: undefined,
       resolvedBlockStreamingBreak: undefined,
-      provider: "openai",
-      model: "gpt-4o-mini",
+      provider: params.provider ?? "openai",
+      model: params.model ?? "gpt-4o-mini",
       modelState: {
         resolveDefaultThinkingLevel: async () => undefined,
+        resolveThinkingCatalog: async () => [],
       },
       contextTokens: 0,
       inlineStatusRequested: false,
@@ -139,6 +161,7 @@ export function createGetReplyContinueDirectivesResult(params: {
 export function registerGetReplyRuntimeOverrides(handles: {
   resolveReplyDirectives: (...args: unknown[]) => unknown;
   initSessionState: (...args: unknown[]) => unknown;
+  resolveReplySessionPreprocessingState?: (...args: unknown[]) => unknown;
   handleInlineActions?: (...args: unknown[]) => unknown;
 }): void {
   vi.doMock("./get-reply-directives.js", () => ({
@@ -150,6 +173,12 @@ export function registerGetReplyRuntimeOverrides(handles: {
   }));
   vi.doMock("./session.js", () => ({
     initSessionState: (...args: unknown[]) => handles.initSessionState(...args),
+    resolveReplySessionPreprocessingState: (...args: unknown[]) =>
+      handles.resolveReplySessionPreprocessingState?.(...args) ?? {
+        sessionEntry: undefined,
+        sessionKey: "agent:main:telegram:123",
+        storePath: "/tmp/sessions.json",
+      },
   }));
 }
 
@@ -157,20 +186,18 @@ export function expectResolvedTelegramTimezone(
   resolveReplyDirectives: Mock,
   userTimezone = "America/New_York",
 ): void {
-  expect(resolveReplyDirectives).toHaveBeenCalledWith(
-    expect.objectContaining({
-      cfg: expect.objectContaining({
-        channels: expect.objectContaining({
-          telegram: expect.objectContaining({
-            botToken: "resolved-telegram-token",
-          }),
-        }),
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            userTimezone,
-          }),
-        }),
-      }),
-    }),
-  );
+  expect(resolveReplyDirectives).toHaveBeenCalledTimes(1);
+  const call = resolveReplyDirectives.mock.calls.at(0)?.[0] as
+    | {
+        cfg?: {
+          channels?: { telegram?: { botToken?: unknown } };
+          agents?: { defaults?: { userTimezone?: unknown } };
+        };
+      }
+    | undefined;
+  if (!call) {
+    throw new Error("expected resolveReplyDirectives call");
+  }
+  expect(call.cfg?.channels?.telegram?.botToken).toBe("resolved-telegram-token");
+  expect(call.cfg?.agents?.defaults?.userTimezone).toBe(userTimezone);
 }

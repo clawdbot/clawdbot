@@ -1,3 +1,5 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Perplexity provider module implements model/runtime integration.
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
@@ -6,27 +8,20 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
   createPerplexityWebSearchProviderBase,
+  hasPerplexityLegacyOverride,
+  resolvePerplexityConfig,
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
 
-type PerplexityWebSearchRuntime = typeof import("./perplexity-web-search-provider.runtime.js");
-
-let perplexityWebSearchRuntimePromise: Promise<PerplexityWebSearchRuntime> | undefined;
-
-function loadPerplexityWebSearchRuntime(): Promise<PerplexityWebSearchRuntime> {
-  perplexityWebSearchRuntimePromise ??= import("./perplexity-web-search-provider.runtime.js");
-  return perplexityWebSearchRuntimePromise;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const loadPerplexityWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./perplexity-web-search-provider.runtime.js"),
+);
 
 function createPerplexityParameters(transport?: string): Record<string, unknown> {
   const properties: Record<string, unknown> = {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-10).",
       minimum: 1,
       maximum: 10,
@@ -62,13 +57,13 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
       description: "Native Perplexity Search API only. Domain filter (max 20).",
     };
     properties.max_tokens = {
-      type: "number",
+      type: "integer",
       description: "Native Perplexity Search API only. Total content budget across all results.",
       minimum: 1,
       maximum: 1000000,
     };
     properties.max_tokens_per_page = {
-      type: "number",
+      type: "integer",
       description: "Native Perplexity Search API only. Max tokens extracted per page.",
       minimum: 1,
     };
@@ -81,21 +76,15 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
   };
 }
 
-function hasPerplexityLegacyOverride(searchConfig?: Record<string, unknown>): boolean {
-  const perplexity = isRecord(searchConfig?.perplexity) ? searchConfig.perplexity : undefined;
-  return (
-    (typeof perplexity?.baseUrl === "string" && perplexity.baseUrl.trim().length > 0) ||
-    (typeof perplexity?.model === "string" && perplexity.model.trim().length > 0)
-  );
-}
-
 function createPerplexityToolDefinition(
   searchConfig?: Record<string, unknown>,
   runtimeTransport?: string,
 ): WebSearchProviderToolDefinition {
   const schemaTransport =
     runtimeTransport ??
-    (hasPerplexityLegacyOverride(searchConfig) ? "chat_completions" : undefined);
+    (hasPerplexityLegacyOverride(resolvePerplexityConfig(searchConfig))
+      ? "chat_completions"
+      : undefined);
 
   return {
     description:
@@ -103,9 +92,10 @@ function createPerplexityToolDefinition(
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path.",
     parameters: createPerplexityParameters(schemaTransport),
-    execute: async (args) => {
+    execute: async (args, context) => {
+      context?.signal?.throwIfAborted();
       const { executePerplexitySearch } = await loadPerplexityWebSearchRuntime();
-      return await executePerplexitySearch(args, searchConfig);
+      return await executePerplexitySearch(args, searchConfig, context?.signal);
     },
   };
 }

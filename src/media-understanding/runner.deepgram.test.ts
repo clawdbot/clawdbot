@@ -1,3 +1,5 @@
+// Deepgram runner tests cover provider options, headers, baseUrl overrides, and
+// request transport merging.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
@@ -76,34 +78,34 @@ describe("runCapability deepgram provider options", () => {
                   punctuate: true,
                 },
               },
-              deepgram: { smartFormat: true },
-              models: [
-                {
-                  provider: "deepgram",
-                  model: "nova-3",
-                  baseUrl: "https://entry.example",
+            },
+            models: [
+              {
+                provider: "deepgram",
+                model: "nova-3",
+                capabilities: ["audio"],
+                baseUrl: "https://entry.example",
+                headers: {
+                  "X-Entry": "3",
+                  "X-Entry-Managed": "secretref-managed",
+                },
+                request: {
                   headers: {
-                    "X-Entry": "3",
-                    "X-Entry-Managed": "secretref-managed",
+                    "X-Entry-Request": "entry",
                   },
-                  request: {
-                    headers: {
-                      "X-Entry-Request": "entry",
-                    },
-                    tls: {
-                      serverName: "deepgram.internal",
-                    },
-                  },
-                  providerOptions: {
-                    deepgram: {
-                      detectLanguage: false,
-                      punctuate: false,
-                      smart_format: true,
-                    },
+                  tls: {
+                    serverName: "deepgram.internal",
                   },
                 },
-              ],
-            },
+                providerOptions: {
+                  deepgram: {
+                    detectLanguage: false,
+                    punctuate: false,
+                    smart_format: true,
+                  },
+                },
+              },
+            ],
           },
         },
       } as unknown as OpenClawConfig;
@@ -116,9 +118,14 @@ describe("runCapability deepgram provider options", () => {
         media,
         providerRegistry,
       });
-      expect(result.outputs[0]?.text).toBe("ok");
+      expect(result.outputs).toHaveLength(1);
+      const [output] = result.outputs;
+      if (!output) {
+        throw new Error("Expected Deepgram media output");
+      }
+      expect(output.text).toBe("ok");
       expect(seenBaseUrl).toBe("https://entry.example");
-      expect(seenHeaders).toMatchObject({
+      expect(seenHeaders).toStrictEqual({
         "X-Provider": "1",
         "X-Provider-Managed": "secretref-managed",
         "X-Config": "2",
@@ -126,7 +133,7 @@ describe("runCapability deepgram provider options", () => {
         "X-Entry": "3",
         "X-Entry-Managed": "secretref-managed",
       });
-      expect(seenQuery).toMatchObject({
+      expect(seenQuery).toStrictEqual({
         detect_language: false,
         punctuate: false,
         smart_format: true,

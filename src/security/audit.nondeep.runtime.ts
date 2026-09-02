@@ -1,3 +1,4 @@
+/** Non-deep audit facade for cheap summary/config findings. */
 export {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
@@ -23,7 +24,7 @@ export {
   collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,
   collectStateDeepFilesystemFindings,
-  collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.async.js";
+export { collectWorkspaceSkillSymlinkEscapeFindings } from "../skills/security/workspace-audit.js";
 export { collectPluginsTrustFindings } from "./audit-plugins-trust.js";

@@ -1,3 +1,4 @@
+// Tests typing indicator policy across internal, quiet, and visible channels.
 import { describe, expect, it } from "vitest";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 

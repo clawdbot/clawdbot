@@ -8,21 +8,55 @@
  */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
+import {
+  collectExplicitAllowlist,
+  collectExplicitDenylist,
+  mergeAlsoAllowPolicy,
+  resolveToolProfilePolicy,
+} from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { resolvePluginTools } from "../plugins/tools.js";
-import { VERSION } from "../version.js";
-import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
+import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
+import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
+import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
-function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
+function resolvePluginToolPolicy(config: OpenClawConfig): {
+  toolAllowlist?: string[];
+  toolDenylist?: string[];
+} {
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(config.tools?.profile),
+    config.tools?.alsoAllow,
+  );
+  const globalPolicy = pickSandboxToolPolicy(config.tools);
+  const toolAllowlist = collectExplicitAllowlist([profilePolicy, globalPolicy]);
+  const toolDenylist = collectExplicitDenylist([profilePolicy, globalPolicy]);
+  return {
+    ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
+    ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
+  };
+}
+
+export function resolvePluginToolsForMcp(params: {
+  config: OpenClawConfig;
+  agentSessionKey?: string;
+  agentId?: string;
+}): AnyAgentTool[] {
+  const context = { config: params.config, ...resolveToolsMcpSessionContext(params) };
+  const pluginToolPolicy = resolvePluginToolPolicy(params.config);
+  const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
+    context,
+    ...pluginToolPolicy,
+  });
   return resolvePluginTools({
-    context: { config },
+    context,
+    ...pluginToolPolicy,
     suppressNameConflicts: true,
+    runtimeRegistry,
   });
 }
 
@@ -30,62 +64,38 @@ export function createPluginToolsMcpServer(
   params: {
     config?: OpenClawConfig;
     tools?: AnyAgentTool[];
+    agentSessionKey?: string;
+    agentId?: string;
   } = {},
 ): Server {
-  const cfg = params.config ?? loadConfig();
-  const tools = params.tools ?? resolveTools(cfg);
-  const handlers = createPluginToolsMcpHandlers(tools);
-
-  const server = new Server(
-    { name: "openclaw-plugin-tools", version: VERSION },
-    { capabilities: { tools: {} } },
-  );
-
-  server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    return await handlers.callTool(request.params);
-  });
-
-  return server;
+  const cfg = params.config ?? getRuntimeConfig();
+  const tools =
+    params.tools ??
+    resolvePluginToolsForMcp({
+      config: cfg,
+      agentSessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+    });
+  return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
 }
 
 export async function servePluginToolsMcp(): Promise<void> {
-  // MCP stdio requires stdout to stay protocol-only.
+  // MCP stdio requires stdout to stay protocol-only, including during plugin
+  // tool discovery before the transport is connected.
   routeLogsToStderr();
 
-  const config = loadConfig();
-  const tools = resolveTools(config);
+  const config = getRuntimeConfig();
+  const tools = resolvePluginToolsForMcp({ config, agentId: resolveToolsMcpAgentId() });
   const server = createPluginToolsMcpServer({ config, tools });
   if (tools.length === 0) {
     process.stderr.write("plugin-tools-serve: no plugin tools found\n");
   }
 
-  const transport = new StdioServerTransport();
-
-  let shuttingDown = false;
-  const shutdown = () => {
-    if (shuttingDown) {
-      return;
-    }
-    shuttingDown = true;
-    process.stdin.off("end", shutdown);
-    process.stdin.off("close", shutdown);
-    process.off("SIGINT", shutdown);
-    process.off("SIGTERM", shutdown);
-    void server.close();
-  };
-
-  process.stdin.once("end", shutdown);
-  process.stdin.once("close", shutdown);
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-
-  await server.connect(transport);
+  await connectToolsMcpServerToStdio(server);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  servePluginToolsMcp().catch((err) => {
+  servePluginToolsMcp().catch((err: unknown) => {
     process.stderr.write(`plugin-tools-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });

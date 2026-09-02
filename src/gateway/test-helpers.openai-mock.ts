@@ -1,3 +1,5 @@
+// OpenAI mock helpers provide deterministic fake Responses API streams for
+// gateway OpenAI-compatible HTTP tests.
 type OpenAIResponsesParams = {
   input?: unknown[];
 };
@@ -30,7 +32,7 @@ function extractLastUserText(input: unknown[]): string {
       const text = content
         .filter(
           (c): c is { type: "input_text"; text: string } =>
-            !!c &&
+            Boolean(c) &&
             typeof c === "object" &&
             (c as { type?: unknown }).type === "input_text" &&
             typeof (c as { text?: unknown }).text === "string",
@@ -164,38 +166,6 @@ function buildSseResponse(events: unknown[]): Response {
   });
 }
 
-export function buildOpenAIResponsesTextSse(text: string): Response {
-  return buildSseResponse([
-    {
-      type: "response.output_item.added",
-      item: {
-        type: "message",
-        id: "msg_test_1",
-        role: "assistant",
-        content: [],
-        status: "in_progress",
-      },
-    },
-    {
-      type: "response.output_item.done",
-      item: {
-        type: "message",
-        id: "msg_test_1",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
-    },
-    {
-      type: "response.completed",
-      response: {
-        status: "completed",
-        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-      },
-    },
-  ]);
-}
-
 async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
   const events: OpenAIResponseStreamEvent[] = [];
   for await (const event of fakeOpenAIResponsesStream(params)) {
@@ -218,7 +188,7 @@ export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {
 
     if (isResponsesRequest(url)) {
       const bodyText =
-        typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
+        (init as { body?: unknown } | undefined)?.body !== undefined
           ? decodeBodyText((init as { body?: unknown }).body)
           : input instanceof Request
             ? await input.clone().text()

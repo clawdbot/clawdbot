@@ -1,3 +1,4 @@
+// Covers outbound result envelope flattening and payload/meta wrapping.
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
@@ -10,7 +11,7 @@ describe("buildOutboundResultEnvelope", () => {
     to: "123",
     messageId: "m1",
     mediaUrl: null,
-    chatId: "c1",
+    target: { kind: "chat", id: "c1" },
   };
   const payloads = [{ text: "hi", mediaUrl: null, mediaUrls: undefined }];
 
@@ -29,6 +30,25 @@ describe("buildOutboundResultEnvelope", () => {
         meta: { ok: true },
       },
     },
+    {
+      input: {
+        payloads: [],
+        delivery,
+        meta: { delivered: true },
+      },
+      expected: {
+        payloads: [],
+        meta: { delivered: true },
+        delivery,
+      },
+    },
+    {
+      input: {
+        delivery,
+        flattenDelivery: false,
+      },
+      expected: { delivery },
+    },
   ])("formats outbound envelope for %j", ({ input, expected }) => {
     const envelope = buildOutboundResultEnvelope(input);
     expect(envelope).toEqual(expected);
@@ -38,11 +58,11 @@ describe("buildOutboundResultEnvelope", () => {
   });
 
   it("normalizes reply payloads and keeps wrapped delivery when flattening is disabled", () => {
-    const payloads: ReplyPayload[] = [{ text: "hello" }];
+    const payloadsLocal: ReplyPayload[] = [{ text: "hello" }];
 
     expect(
       buildOutboundResultEnvelope({
-        payloads,
+        payloads: payloadsLocal,
         delivery,
         flattenDelivery: false,
       }),

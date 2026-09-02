@@ -1,34 +1,32 @@
+// Attachment selection guard tests cover malformed attachment containers and
+// invalid entry shapes.
 import { describe, expect, it } from "vitest";
 import { selectAttachments } from "./attachments.js";
 import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
-  it("does not throw when attachments is undefined", () => {
-    const run = () =>
+  it("returns no selections when attachments is undefined", () => {
+    expect(
       selectAttachments({
         capability: "image",
         attachments: undefined as unknown as MediaAttachment[],
         policy: { prefer: "path" },
-      });
-
-    expect(run).not.toThrow();
-    expect(run()).toEqual([]);
+      }),
+    ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
   });
 
-  it("does not throw when attachments is not an array", () => {
-    const run = () =>
+  it("returns no selections when attachments is not an array", () => {
+    expect(
       selectAttachments({
         capability: "audio",
         attachments: { malformed: true } as unknown as MediaAttachment[],
         policy: { prefer: "url" },
-      });
-
-    expect(run).not.toThrow();
-    expect(run()).toEqual([]);
+      }),
+    ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
   });
 
-  it("ignores malformed attachment entries inside an array", () => {
-    const run = () =>
+  it("returns no selections for malformed attachment entries", () => {
+    expect(
       selectAttachments({
         capability: "audio",
         attachments: [
@@ -38,9 +36,24 @@ describe("media-understanding selectAttachments guards", () => {
           { index: 3, mime: { nope: true } },
         ] as unknown as MediaAttachment[],
         policy: { prefer: "path" },
-      });
+      }),
+    ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
+  });
 
-    expect(run).not.toThrow();
-    expect(run()).toEqual([]);
+  it("reports only same-capability attachments dropped by truncation", () => {
+    expect(
+      selectAttachments({
+        capability: "image",
+        attachments: [
+          { index: 0, path: "/tmp/first.jpg", mime: "image/jpeg" },
+          { index: 1, path: "/tmp/note.ogg", mime: "audio/ogg" },
+          { index: 2, path: "/tmp/second.jpg", mime: "image/jpeg" },
+          { index: 3, path: "/tmp/third.jpg", mime: "image/jpeg" },
+        ],
+      }),
+    ).toStrictEqual({
+      selected: [{ index: 0, path: "/tmp/first.jpg", mime: "image/jpeg" }],
+      droppedAttachmentIndexes: [2, 3],
+    });
   });
 });

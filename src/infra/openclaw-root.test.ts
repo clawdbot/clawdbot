@@ -1,8 +1,9 @@
+// Covers OpenClaw package root resolution.
 import actualFs from "node:fs";
 import actualFsPromises from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
 
@@ -114,12 +115,6 @@ describe("resolveOpenClawPackageRoot", () => {
       await import("./openclaw-root.js"));
   });
 
-  beforeEach(() => {
-    state.entries.clear();
-    state.realpaths.clear();
-    state.realpathErrors.clear();
-  });
-
   it.each([
     {
       name: "resolves package root from .bin argv1",
@@ -140,6 +135,25 @@ describe("resolveOpenClawPackageRoot", () => {
         state.realpaths.set(abs(bin), abs(path.join(realPkg, "openclaw.mjs")));
         setPackageRoot(realPkg);
         return { opts: { argv1: bin }, expected: realPkg };
+      },
+    },
+    {
+      name: "prefers a symlink target nested under another openclaw package",
+      setup: () => {
+        const sourceRoot = fx("nested-symlink-scenario");
+        const bin = path.join(sourceRoot, ".artifacts", "prefix", "bin", "openclaw");
+        const installedRoot = path.join(
+          sourceRoot,
+          ".artifacts",
+          "prefix",
+          "lib",
+          "node_modules",
+          "openclaw",
+        );
+        state.realpaths.set(abs(bin), abs(path.join(installedRoot, "openclaw.mjs")));
+        setPackageRoot(sourceRoot);
+        setPackageRoot(installedRoot);
+        return { opts: { argv1: bin }, expected: installedRoot };
       },
     },
     {
@@ -211,6 +225,35 @@ describe("resolveOpenClawPackageRoot", () => {
         const pkgRoot = path.join(project, "node_modules", "openclaw");
         setPackageRoot(pkgRoot);
         return { opts: { argv1 }, expected: pkgRoot };
+      },
+    },
+    {
+      name: "does not cross a node_modules boundary into an enclosing checkout",
+      setup: () => {
+        // Nested git worktrees resolve tooling (vitest, tinypool) from the
+        // enclosing checkout's node_modules; its root must never win.
+        const outerCheckout = fx("nested-worktree-outer");
+        setPackageRoot(outerCheckout);
+        setPackageRoot(path.join(outerCheckout, "node_modules", "vitest"), "vitest");
+        const argv1 = path.join(
+          outerCheckout,
+          "node_modules",
+          "vitest",
+          "dist",
+          "workers",
+          "threads.js",
+        );
+        return { opts: { argv1 }, expected: null };
+      },
+    },
+    {
+      name: "still resolves the openclaw package below a node_modules boundary",
+      setup: () => {
+        const project = fx("installed-below-boundary");
+        setPackageRoot(project);
+        const pkgRoot = path.join(project, "node_modules", "openclaw");
+        setPackageRoot(pkgRoot);
+        return { opts: { argv1: path.join(pkgRoot, "dist", "entry.js") }, expected: pkgRoot };
       },
     },
     {

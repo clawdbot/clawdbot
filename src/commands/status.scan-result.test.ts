@@ -1,3 +1,4 @@
+// Status scan result tests cover cold-start summaries and gateway probe snapshot aggregation.
 import { describe, expect, it } from "vitest";
 import { buildStatusScanResult } from "./status.scan-result.ts";
 import { buildColdStartStatusSummary } from "./status.scan.bootstrap-shared.ts";
@@ -65,6 +66,8 @@ describe("buildStatusScanResult", () => {
     ];
     const agentStatus = {
       defaultId: "main",
+      ownership: "sole" as const,
+      selectionRequired: false,
       totalSessions: 0,
       bootstrapPendingCount: 0,
       agents: [
@@ -86,8 +89,9 @@ describe("buildStatusScanResult", () => {
     const pluginCompatibility = [
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start" as const,
-        severity: "warn" as const,
+        code: "hook-only" as const,
+        compatCode: "hook-only-plugin-shape" as const,
+        severity: "info" as const,
         message: "warn",
       },
     ];
@@ -96,6 +100,7 @@ describe("buildStatusScanResult", () => {
       buildStatusScanResult({
         cfg: { gateway: {} },
         sourceConfig: { gateway: {} },
+        configDiagnostics: null,
         secretDiagnostics: ["diag"],
         osSummary,
         tailscaleMode: "serve",
@@ -114,6 +119,7 @@ describe("buildStatusScanResult", () => {
     ).toEqual({
       cfg: { gateway: {} },
       sourceConfig: { gateway: {} },
+      configDiagnostics: null,
       secretDiagnostics: ["diag"],
       osSummary,
       tailscaleMode: "serve",

@@ -1,3 +1,4 @@
+// Anthropic Vertex tests cover region plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveAnthropicVertexRegion, resolveAnthropicVertexRegionFromBaseUrl } from "./api.js";
 
@@ -22,6 +23,12 @@ describe("anthropic vertex region helpers", () => {
     expect(
       resolveAnthropicVertexRegionFromBaseUrl("https://europe-west4-aiplatform.googleapis.com"),
     ).toBe("europe-west4");
+  });
+
+  it.each(["us", "eu"])("parses the %s multi-region Vertex endpoint", (region) => {
+    expect(
+      resolveAnthropicVertexRegionFromBaseUrl(`https://aiplatform.${region}.rep.googleapis.com`),
+    ).toBe(region);
   });
 
   it("treats the global Vertex endpoint as global", () => {

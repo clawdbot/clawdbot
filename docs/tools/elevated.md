@@ -3,30 +3,25 @@ summary: "Elevated exec mode: run commands outside the sandbox from a sandboxed 
 read_when:
   - Adjusting elevated mode defaults, allowlists, or slash command behavior
   - Understanding how sandboxed agents can access the host
-title: "Elevated Mode"
+title: "Elevated mode"
 ---
 
-# Elevated Mode
-
-When an agent runs inside a sandbox, its `exec` commands are confined to the
-sandbox environment. **Elevated mode** lets the agent break out and run commands
-outside the sandbox instead, with configurable approval gates.
+When an agent runs inside a sandbox, its `exec` commands are confined to the sandbox environment. **Elevated mode** lets the agent break out of ordinary agent-configured sandboxing and run commands outside the sandbox instead, with configurable approval gates. Sessions whose creator role requires sandboxing cannot use elevated mode to escape.
 
 <Info>
-  Elevated mode only changes behavior when the agent is **sandboxed**. For
-  unsandboxed agents, exec already runs on the host.
+  Elevated mode only changes behavior when the agent is **sandboxed**. For unsandboxed agents, exec already runs on the host.
 </Info>
 
 ## Directives
 
 Control elevated mode per-session with slash commands:
 
-| Directive        | What it does                                                           |
-| ---------------- | ---------------------------------------------------------------------- |
-| `/elevated on`   | Run outside the sandbox on the configured host path, keep approvals    |
-| `/elevated ask`  | Same as `on` (alias)                                                   |
-| `/elevated full` | Run outside the sandbox on the configured host path and skip approvals |
-| `/elevated off`  | Return to sandbox-confined execution                                   |
+| Directive        | What it does                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `/elevated on`   | Run outside the sandbox on the configured host path, keep approvals                                                             |
+| `/elevated ask`  | Same as `on` (alias)                                                                                                            |
+| `/elevated full` | Run outside the sandbox on the configured host path and skip approvals when the mode/host approval policy is already permissive |
+| `/elevated off`  | Return to sandbox-confined execution                                                                                            |
 
 Also available as `/elev on|off|ask|full`.
 
@@ -72,8 +67,10 @@ Send `/elevated` with no argument to see the current level.
   <Step title="Commands run outside the sandbox">
     With elevated active, `exec` calls leave the sandbox. The effective host is
     `gateway` by default, or `node` when the configured/session exec target is
-    `node`. In `full` mode, exec approvals are skipped. In `on`/`ask` mode,
-    configured approval rules still apply.
+    `node`. In `full` mode, exec approvals are skipped when the resolved exec
+    mode/host approval policy is already fully permissive (security `full`,
+    ask `off`); otherwise the normal approval policy still applies. In
+    `on`/`ask` mode, configured approval rules always apply.
   </Step>
 </Steps>
 
@@ -87,9 +84,9 @@ Send `/elevated` with no argument to see the current level.
 
 - **Global gate**: `tools.elevated.enabled` (must be `true`)
 - **Sender allowlist**: `tools.elevated.allowFrom` with per-channel lists
-- **Per-agent gate**: `agents.list[].tools.elevated.enabled` (can only further restrict)
-- **Per-agent allowlist**: `agents.list[].tools.elevated.allowFrom` (sender must match both global + per-agent)
-- **Discord fallback**: if `tools.elevated.allowFrom.discord` is omitted, `channels.discord.allowFrom` is used as fallback
+- **Per-agent gate**: `agents.entries.*.tools.elevated.enabled` (can only further restrict; both the global and per-agent gate must be `true`)
+- **Per-agent allowlist**: `agents.entries.*.tools.elevated.allowFrom` (sender must match both global + per-agent)
+- **Channel-provided fallback allowlist**: channel plugins can optionally supply a fallback allowlist through an SDK adapter hook, used when `tools.elevated.allowFrom.<provider>` is not configured. No bundled channel currently implements this hook, so in practice every provider needs an explicit `tools.elevated.allowFrom.<provider>` entry today.
 - **All gates must pass**; otherwise elevated is treated as unavailable
 
 Allowlist entry formats:
@@ -104,13 +101,28 @@ Allowlist entry formats:
 
 ## What elevated does not control
 
-- **Tool policy**: if `exec` is denied by tool policy, elevated cannot override it
+- **Tool policy**: if `exec` is denied by tool policy, elevated cannot override it.
+- **Required role sandboxing**: if the authenticated session creator's operator role required a sandbox, elevated mode cannot run commands on the Gateway or a node.
 - **Host selection policy**: elevated does not turn `auto` into a free cross-host override. It uses the configured/session exec target rules, choosing `node` only when the target is already `node`.
-- **Separate from `/exec`**: the `/exec` directive adjusts per-session exec defaults for authorized senders and does not require elevated mode
+- **Separate from `/exec`**: the `/exec` directive adjusts per-session exec defaults (host, security, ask, node) for authorized senders and does not require elevated mode.
+
+<Note>
+  The bash chat command (`!` prefix; `/bash` alias) is a separate gate that requires `tools.elevated` to be enabled in addition to its own `tools.bash.enabled` flag. Disabling elevated locks `!` shell commands out as well.
+</Note>
 
 ## Related
 
-- [Exec tool](/tools/exec) — shell command execution
-- [Exec approvals](/tools/exec-approvals) — approval and allowlist system
-- [Sandboxing](/gateway/sandboxing) — sandbox configuration
-- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
+<CardGroup cols={2}>
+  <Card title="Exec tool" href="/tools/exec" icon="terminal">
+    Shell command execution from the agent.
+  </Card>
+  <Card title="Exec approvals" href="/tools/exec-approvals" icon="shield">
+    Approval and allowlist system for `exec`.
+  </Card>
+  <Card title="Sandboxing" href="/gateway/sandboxing" icon="box">
+    Gateway-level sandbox configuration.
+  </Card>
+  <Card title="Sandbox vs Tool Policy vs Elevated" href="/gateway/sandbox-vs-tool-policy-vs-elevated" icon="scale-balanced">
+    How the three gates compose during a tool call.
+  </Card>
+</CardGroup>

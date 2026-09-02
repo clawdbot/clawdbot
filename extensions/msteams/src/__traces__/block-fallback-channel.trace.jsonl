@@ -1,0 +1,9 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"in","kind":"partial","data":{"text":"Deploy status:"}}
+{"seq":3,"at":300,"dir":"in","kind":"partial","data":{"text":"Deploy status: build is green."}}
+{"seq":4,"at":600,"dir":"in","kind":"block-final","data":{"text":"Deploy status: build is green."}}
+{"seq":5,"at":600,"dir":"in","kind":"partial","data":{"text":"Rolling out to production now."}}
+{"seq":6,"at":900,"dir":"in","kind":"final","data":{"text":"Deploy status: build is green.\n\nRolling out to production now."}}
+{"seq":7,"at":900,"dir":"in","kind":"idle"}
+{"seq":8,"at":900,"dir":"out","kind":"context.sendActivity","data":{"payload":{"channelData":{"feedbackLoopEnabled":true},"entities":[{"@id":"","@type":"Message","additionalType":["AIGeneratedContent"],"type":"https://schema.org/Message"}],"text":"Deploy status: build is green.","type":"message"},"result":{"id":"activity-1"},"target":"19:channel-trace@thread.tacv2;messageid=1000"}}
+{"seq":9,"at":900,"dir":"out","kind":"context.sendActivity","data":{"payload":{"channelData":{"feedbackLoopEnabled":true},"entities":[{"@id":"","@type":"Message","additionalType":["AIGeneratedContent"],"type":"https://schema.org/Message"}],"text":"Deploy status: build is green.\n\nRolling out to production now.","type":"message"},"result":{"id":"activity-2"},"target":"19:channel-trace@thread.tacv2;messageid=1000"}}

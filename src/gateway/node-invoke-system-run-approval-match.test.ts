@@ -1,3 +1,6 @@
+/**
+ * Node invoke system-run approval matching tests.
+ */
 import { describe, expect, test } from "vitest";
 import { buildSystemRunApprovalBinding } from "../infra/system-run-approval-binding.js";
 import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
@@ -19,6 +22,26 @@ function expectMismatch(
   expect(result.code).toBe(code);
 }
 
+function createBoundSystemRunRequest(params: {
+  argv: string[];
+  command?: string;
+  commandArgv?: string[];
+  env?: Record<string, string>;
+}) {
+  return {
+    host: "node",
+    command: params.command ?? params.argv.join(" "),
+    ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
+    systemRunBinding: buildSystemRunApprovalBinding({
+      argv: params.argv,
+      cwd: null,
+      agentId: null,
+      sessionKey: null,
+      ...(params.env ? { env: params.env } : {}),
+    }).binding,
+  };
+}
+
 function expectV1BindingMatch(params: {
   argv: string[];
   requestCommand: string;
@@ -26,17 +49,11 @@ function expectV1BindingMatch(params: {
 }) {
   const result = evaluateSystemRunApprovalMatch({
     argv: params.argv,
-    request: {
-      host: "node",
+    request: createBoundSystemRunRequest({
+      argv: params.argv,
       command: params.requestCommand,
       commandArgv: params.commandArgv,
-      systemRunBinding: buildSystemRunApprovalBinding({
-        argv: params.argv,
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
-      }).binding,
-    },
+    }),
     binding: defaultBinding,
   });
   expect(result).toEqual({ ok: true });
@@ -65,16 +82,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
   test("rejects argv mismatch in v1 object", () => {
     const result = evaluateSystemRunApprovalMatch({
       argv: ["echo", "SAFE"],
-      request: {
-        host: "node",
-        command: "echo SAFE",
-        systemRunBinding: buildSystemRunApprovalBinding({
-          argv: ["echo SAFE"],
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
-      },
+      request: createBoundSystemRunRequest({ argv: ["echo SAFE"] }),
       binding: defaultBinding,
     });
     expectMismatch(result, "APPROVAL_REQUEST_MISMATCH");
@@ -83,16 +91,7 @@ describe("evaluateSystemRunApprovalMatch", () => {
   test("rejects env overrides when v1 binding has no env hash", () => {
     const result = evaluateSystemRunApprovalMatch({
       argv: ["git", "diff"],
-      request: {
-        host: "node",
-        command: "git diff",
-        systemRunBinding: buildSystemRunApprovalBinding({
-          argv: ["git", "diff"],
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
-      },
+      request: createBoundSystemRunRequest({ argv: ["git", "diff"] }),
       binding: {
         ...defaultBinding,
         env: { GIT_EXTERNAL_DIFF: "/tmp/pwn.sh" },
@@ -104,17 +103,10 @@ describe("evaluateSystemRunApprovalMatch", () => {
   test("accepts matching env hash with reordered keys", () => {
     const result = evaluateSystemRunApprovalMatch({
       argv: ["git", "diff"],
-      request: {
-        host: "node",
-        command: "git diff",
-        systemRunBinding: buildSystemRunApprovalBinding({
-          argv: ["git", "diff"],
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-          env: { SAFE_A: "1", SAFE_B: "2" },
-        }).binding,
-      },
+      request: createBoundSystemRunRequest({
+        argv: ["git", "diff"],
+        env: { SAFE_A: "1", SAFE_B: "2" },
+      }),
       binding: {
         ...defaultBinding,
         env: { SAFE_B: "2", SAFE_A: "1" },

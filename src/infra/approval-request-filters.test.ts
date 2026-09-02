@@ -1,3 +1,4 @@
+// Covers approval request agent and session filters.
 import { describe, expect, it } from "vitest";
 import {
   matchesApprovalRequestFilters,

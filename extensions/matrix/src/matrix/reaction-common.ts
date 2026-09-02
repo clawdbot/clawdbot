@@ -1,9 +1,10 @@
+// Matrix plugin module implements reaction common behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const MATRIX_ANNOTATION_RELATION_TYPE = "m.annotation";
 export const MATRIX_REACTION_EVENT_TYPE = "m.reaction";
 
-export type MatrixReactionEventContent = {
+type MatrixReactionEventContent = {
   "m.relates_to": {
     rel_type: typeof MATRIX_ANNOTATION_RELATION_TYPE;
     event_id: string;
@@ -17,7 +18,7 @@ export type MatrixReactionSummary = {
   users: string[];
 };
 
-export type MatrixReactionAnnotation = {
+type MatrixReactionAnnotation = {
   key: string;
   eventId?: string;
 };
@@ -28,7 +29,7 @@ type MatrixReactionEventLike = {
   event_id?: string | null;
 };
 
-export function normalizeMatrixReactionMessageId(messageId: string): string {
+function normalizeMatrixReactionMessageId(messageId: string): string {
   const normalized = messageId.trim();
   if (!normalized) {
     throw new Error("Matrix reaction requires a messageId");
@@ -36,7 +37,7 @@ export function normalizeMatrixReactionMessageId(messageId: string): string {
   return normalized;
 }
 
-export function normalizeMatrixReactionEmoji(emoji: string): string {
+function normalizeMatrixReactionEmoji(emoji: string): string {
   const normalized = emoji.trim();
   if (!normalized) {
     throw new Error("Matrix reaction requires an emoji");
@@ -96,7 +97,7 @@ export function extractMatrixReactionAnnotation(
   };
 }
 
-export function extractMatrixReactionKey(content: unknown): string | undefined {
+function extractMatrixReactionKey(content: unknown): string | undefined {
   return extractMatrixReactionAnnotation(content)?.key;
 }
 

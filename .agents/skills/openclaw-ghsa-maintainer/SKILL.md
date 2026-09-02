@@ -1,11 +1,11 @@
 ---
 name: openclaw-ghsa-maintainer
-description: Maintainer workflow for OpenClaw GitHub Security Advisories (GHSA). Use when Codex needs to inspect, patch, validate, or publish a repo advisory, verify private-fork state, prepare advisory Markdown or JSON payloads safely, handle GHSA API-specific publish constraints, or confirm advisory publish success.
+description: "Inspect, patch, validate, publish, or confirm OpenClaw GHSA security advisories and private-fork state."
 ---
 
 # OpenClaw GHSA Maintainer
 
-Use this skill for repo security advisory workflow only. Keep general release work in `openclaw-release-maintainer`.
+Use this skill for repo security advisory workflow only. Keep general release work in `release-openclaw-maintainer`.
 
 ## Respect advisory guardrails
 
@@ -85,3 +85,4 @@ jq -r .description < /tmp/ghsa.refetch.json | rg '\\\\n'
 - Publishing fails with HTTP 422 if required fields are missing or the private fork still has open PRs.
 - A payload that looks correct in shell can still be wrong if Markdown was assembled with escaped newline strings.
 - Advisory PATCH sequencing matters; separate field updates when GHSA API constraints require it.
+- Public hardening/no-publish comments and draft text should avoid raw commit hashes, PR titles/numbers, and fix-mechanism summaries. Prefer patched-version fields or release-only wording; keep SHAs, PRs, and implementation notes in internal evidence.

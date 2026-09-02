@@ -1,19 +1,22 @@
+// Doctor emit-note tests cover terminal note output and doctor issue formatting.
 import { describe, expect, it, vi } from "vitest";
 import { emitDoctorNotes } from "./emit-notes.js";
 
 describe("doctor note emission", () => {
-  it("emits grouped change and warning notes with the correct titles", () => {
+  it("emits grouped change, info, and warning notes with the correct titles", () => {
     const note = vi.fn();
 
     emitDoctorNotes({
       note,
       changeNotes: ["change one", "change two"],
+      infoNotes: ["info one"],
       warningNotes: ["warning one"],
     });
 
     expect(note.mock.calls).toEqual([
       ["change one", "Doctor changes"],
       ["change two", "Doctor changes"],
+      ["info one", "Doctor info"],
       ["warning one", "Doctor warnings"],
     ]);
   });

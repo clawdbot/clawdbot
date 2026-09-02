@@ -1,19 +1,37 @@
-import fs from "node:fs/promises";
-import os from "node:os";
+// Gateway agent integration tests cover channel routing, session context,
+// WebSocket requests, agent event delivery, and provider/runtime error handling.
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import {
+  listSessionPendingInputs,
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { ensureSessionPendingInputsSchema } from "../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
+} from "../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
-  agentCommand,
+  agentCommandMock,
   connectOk,
   connectWebchatClient,
   installGatewayTestHooks,
   onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   rpcReq,
   startConnectedServerWithClient,
   startServerWithClient,
@@ -70,11 +88,7 @@ const createStubChannelPlugin = (params: {
       resolveAccount: () => ({}),
     },
   }),
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
-  },
+  outbound: createDirectOutboundTestAdapter({ channel: params.id }),
 });
 
 const createConfiguredChannelPlugin = (params: {
@@ -90,11 +104,7 @@ const createConfiguredChannelPlugin = (params: {
       isConfigured: async () => true,
     },
   }),
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
-    sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
-  },
+  outbound: createDirectOutboundTestAdapter({ channel: params.id }),
 });
 
 const emptyRegistry = createRegistry([]);
@@ -111,18 +121,14 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.messageChannel).toBe(channel);
 }
 
-function readAgentCommandCall(fromEnd = 1) {
-  const calls = vi.mocked(agentCommand).mock.calls;
-  return (calls.at(-fromEnd)?.[0] ?? {}) as Record<string, unknown>;
-}
-
-function expectAgentRoutingCall(params: {
+async function expectAgentRoutingCall(params: {
   channel: string;
   deliver: boolean;
   to?: string;
   fromEnd?: number;
+  runId?: string;
 }) {
-  const call = readAgentCommandCall(params.fromEnd);
+  const call = await readAgentCommandCall({ runId: params.runId, fromEnd: params.fromEnd });
   expectChannels(call, params.channel);
   if ("to" in params) {
     expect(call.to).toBe(params.to);
@@ -145,23 +151,29 @@ async function writeMainSessionEntry(params: {
       main: {
         sessionId: params.sessionId,
         updatedAt: Date.now(),
-        lastChannel: params.lastChannel,
-        lastTo: params.lastTo,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: params.lastChannel, to: params.lastTo },
+        }),
       },
     },
   });
 }
 
-function sendAgentWsRequest(
+async function sendAgentWsRequest(
   socket: WebSocket,
-  params: { reqId: string; message: string; idempotencyKey: string },
+  params: { reqId: string; message: string; idempotencyKey: string; sessionKey?: string },
 ) {
+  await prepareGatewayReplyRuntimeForTest();
   socket.send(
     JSON.stringify({
       type: "req",
       id: params.reqId,
       method: "agent",
-      params: { message: params.message, idempotencyKey: params.idempotencyKey },
+      params: {
+        message: params.message,
+        idempotencyKey: params.idempotencyKey,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      },
     }),
   );
 }
@@ -175,52 +187,131 @@ async function sendAgentWsRequestAndWaitFinal(
     (o) => o.type === "res" && o.id === params.reqId && o.payload?.status !== "accepted",
     params.timeoutMs,
   );
-  sendAgentWsRequest(socket, params);
+  await sendAgentWsRequest(socket, params);
   return await finalP;
 }
 
+const gwSessionTempDirs: string[] = [];
+
 async function useTempSessionStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+  const dir = makeTempDir(gwSessionTempDirs, "openclaw-gw-");
   testState.sessionStorePath = path.join(dir, "sessions.json");
 }
 
+afterAll(() => {
+  cleanupTempDirs(gwSessionTempDirs);
+});
+
 describe("gateway server agent", () => {
   beforeEach(() => {
+    vi.mocked(agentCommandMock).mockClear();
+    testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
   });
 
   afterEach(() => {
+    testState.allowFrom = undefined;
     setRegistry(emptyRegistry);
   });
 
-  test("agent reuses the last plugin delivery route when channel=last", async () => {
-    const registry = createRegistry([
-      {
-        pluginId: "msteams",
-        source: "test",
-        plugin: createMSTeamsPlugin(),
+  test(
+    "agent reuses the last plugin delivery route when channel=last",
+    { timeout: 20_000 },
+    async () => {
+      const registry = createRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createMSTeamsPlugin(),
+        },
+      ]);
+      setRegistry(registry);
+      await writeMainSessionEntry({
+        sessionId: "sess-teams",
+        lastChannel: "msteams",
+        lastTo: "conversation:teams-123",
+      });
+      const res = await rpcReq(
+        ws,
+        "agent",
+        {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-last-msteams",
+        },
+        20_000,
+      );
+      expect(res.ok).toBe(true);
+      await expectAgentRoutingCall({
+        channel: "msteams",
+        deliver: true,
+        to: "conversation:teams-123",
+        runId: "idem-agent-last-msteams",
+      });
+    },
+  );
+
+  test("agent preserves CLI session binding metadata when refreshing session state", async () => {
+    await useTempSessionStorePath();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-cli",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-6",
+          cliSessionIds: {
+            "claude-cli": "cli-session-123",
+          },
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "cli-session-123",
+              authProfileId: "anthropic:work",
+              mcpConfigHash: "mcp-config-hash",
+              mcpResumeHash: "mcp-resume-hash",
+            },
+          },
+          claudeCliSessionId: "cli-session-123",
+        },
       },
-    ]);
-    setRegistry(registry);
-    await writeMainSessionEntry({
-      sessionId: "sess-teams",
-      lastChannel: "msteams",
-      lastTo: "conversation:teams-123",
     });
+
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      idempotencyKey: "idem-agent-last-msteams",
+      idempotencyKey: "idem-agent-cli-binding",
     });
     expect(res.ok).toBe(true);
-    expectAgentRoutingCall({
-      channel: "msteams",
-      deliver: true,
-      to: "conversation:teams-123",
-      fromEnd: 1,
+    await readAgentCommandCall({ runId: "idem-agent-cli-binding" });
+
+    const sessionStorePath = testState.sessionStorePath;
+    if (!sessionStorePath) {
+      throw new Error("expected session store path");
+    }
+    const stored = loadSessionEntry({
+      sessionKey: "agent:main:main",
+      storePath: sessionStorePath,
+    }) as
+      | {
+          cliSessionBindings?: Record<string, unknown>;
+          cliSessionIds?: Record<string, string>;
+          claudeCliSessionId?: string;
+        }
+      | undefined;
+    expect(stored?.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "cli-session-123",
+        authProfileId: "anthropic:work",
+        mcpConfigHash: "mcp-config-hash",
+        mcpResumeHash: "mcp-resume-hash",
+      },
     });
+    expect(stored?.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(stored?.claudeCliSessionId).toBe("cli-session-123");
   });
 
   test("agent accepts built-in channel alias (imsg)", async () => {
@@ -250,10 +341,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-imsg",
     });
     expect(resIMessage.ok).toBe(true);
-    await vi.waitFor(() => {
-      expect(vi.mocked(agentCommand)).toHaveBeenCalled();
+    await expectAgentRoutingCall({
+      channel: "imessage",
+      deliver: true,
+      runId: "idem-agent-imsg",
     });
-    expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 1 });
   });
 
   test("agent accepts plugin channel alias (teams)", async () => {
@@ -275,11 +367,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-teams",
     });
     expect(resTeams.ok).toBe(true);
-    expectAgentRoutingCall({
+    await expectAgentRoutingCall({
       channel: "msteams",
       deliver: false,
       to: "conversation:teams-abc",
-      fromEnd: 1,
+      runId: "idem-agent-teams",
     });
   });
 
@@ -287,54 +379,14 @@ describe("gateway server agent", () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "main",
-      channel: "sms",
+      channel: "missing-channel",
       idempotencyKey: "idem-agent-bad-channel",
     });
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("INVALID_REQUEST");
   });
 
-  test("agent errors when deliver=true and last channel is webchat", async () => {
-    testState.allowFrom = ["+1555"];
-    await writeMainSessionEntry({
-      sessionId: "sess-main-webchat",
-      lastChannel: "webchat",
-      lastTo: "+1555",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      bestEffortDeliver: false,
-      idempotencyKey: "idem-agent-webchat",
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.code).toBe("INVALID_REQUEST");
-    expect(res.error?.message).toMatch(/Channel is required|runtime not initialized/);
-    expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
-  });
-
-  test("agent downgrades to session-only delivery when best-effort is enabled and last channel is webchat", async () => {
-    testState.allowFrom = ["+1555"];
-    await writeMainSessionEntry({
-      sessionId: "sess-main-webchat-best-effort",
-      lastChannel: "webchat",
-      lastTo: "+1555",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      bestEffortDeliver: true,
-      idempotencyKey: "idem-agent-webchat-best-effort",
-    });
-    expect(res.ok).toBe(true);
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
-  });
-
-  test("agent downgrades to session-only when multiple channels are configured but no external target resolves", async () => {
+  test("agent preserves requested delivery when no external target resolves", async () => {
     const registry = createRegistry([
       {
         pluginId: "discord",
@@ -359,29 +411,15 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-multi-configured-best-effort",
     });
     expect(res.ok).toBe(true);
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
-  });
-
-  test("agent uses webchat for internal runs when last provider is webchat", async () => {
-    await writeMainSessionEntry({
-      sessionId: "sess-main-webchat-internal",
-      lastChannel: "webchat",
-      lastTo: "+1555",
+    await expectAgentRoutingCall({
+      channel: "webchat",
+      deliver: true,
+      runId: "idem-agent-multi-configured-best-effort",
     });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: false,
-      idempotencyKey: "idem-agent-webchat-internal",
-    });
-    expect(res.ok).toBe(true);
-
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portValue }) => {
       await useTempSessionStorePath();
       const storePath = testState.sessionStorePath;
       if (!storePath) {
@@ -397,31 +435,37 @@ describe("gateway server agent", () => {
         },
       });
 
-      const writeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+      const writeWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
       trackConnectChallengeNonce(writeWs);
-      await new Promise<void>((resolve) => writeWs.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        writeWs.once("open", resolve);
+      });
       await connectOk(writeWs, { scopes: ["operator.write"] });
 
       const directReset = await rpcReq(writeWs, "sessions.reset", { key: "main" });
       expect(directReset.ok).toBe(false);
       expect(directReset.error?.message).toContain("missing scope: operator.admin");
 
-      vi.mocked(agentCommand).mockClear();
+      vi.mocked(agentCommandMock).mockClear();
       const viaAgent = await rpcReq(writeWs, "agent", {
         message: "/reset",
         sessionKey: "main",
         idempotencyKey: "idem-agent-write-reset",
       });
       expect(viaAgent.ok).toBe(false);
-      expect(viaAgent.error?.message).toContain("missing scope: operator.admin");
+      expect(viaAgent.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
 
-      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { sessionId?: string }
-      >;
-      expect(store["agent:main:main"]?.sessionId).toBeDefined();
-      expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
-      expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+      const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(stored?.sessionId).toBe("sess-main-before-write-reset");
+      expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
 
       writeWs.close();
     });
@@ -436,7 +480,7 @@ describe("gateway server agent", () => {
       ws,
       (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
     );
-    sendAgentWsRequest(ws, {
+    await sendAgentWsRequest(ws, {
       reqId: "ag1",
       message: "hi",
       idempotencyKey: "idem-ag",
@@ -449,9 +493,185 @@ describe("gateway server agent", () => {
     if (!ackPayload || !finalPayload) {
       throw new Error("missing websocket payload");
     }
-    expect(ackPayload.runId).toBeDefined();
+    expect(ackPayload.runId).toBeTypeOf("string");
+    expect(ackPayload.runId).not.toBe("");
     expect(finalPayload.runId).toBe(ackPayload.runId);
     expect(finalPayload.status).toBe("ok");
+  });
+
+  test("agent durably admits the user turn before acknowledging a hanging dispatch", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-durable-agent-ack" });
+    const dispatch = createDeferred<unknown>();
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => await dispatch.promise);
+    const runId = "idem-agent-durable-ack";
+    const ackP = onceMessage(
+      ws,
+      (message) =>
+        message.type === "res" && message.id === runId && message.payload?.status === "accepted",
+    );
+    const finalP = onceMessage(
+      ws,
+      (message) =>
+        message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
+    );
+
+    try {
+      await sendAgentWsRequest(ws, {
+        reqId: runId,
+        message: "persist this agent turn before ACK",
+        sessionKey: "main",
+        idempotencyKey: runId,
+      });
+      await ackP;
+
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("expected session store path");
+      }
+      const scope = {
+        agentId: "main",
+        sessionId: "sess-durable-agent-ack",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      expect(loadTranscriptEventsSync(scope)).toEqual([]);
+      expect(listSessionPendingInputs(scope)).toMatchObject({
+        total: 1,
+        items: [
+          {
+            runId,
+            state: "queued",
+            message: {
+              role: "user",
+              content: "persist this agent turn before ACK",
+              idempotencyKey: `${runId}:user`,
+            },
+          },
+        ],
+      });
+    } finally {
+      dispatch.resolve({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+      await finalP;
+    }
+  });
+
+  test("an aborted hanging agent dispatch leaves its acknowledged turn queryable", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-durable-agent-abort" });
+    const runId = "idem-agent-durable-abort";
+    vi.mocked(agentCommandMock).mockImplementationOnce(
+      async (...args: unknown[]) =>
+        await new Promise<void>((_resolve, reject) => {
+          const options = args[0] as { abortSignal?: AbortSignal };
+          const finish = () => {
+            const reason = options.abortSignal?.reason;
+            reject(reason instanceof Error ? reason : new Error("agent run aborted"));
+          };
+          options.abortSignal?.addEventListener("abort", finish, { once: true });
+        }),
+    );
+    const ackP = onceMessage(
+      ws,
+      (message) =>
+        message.type === "res" && message.id === runId && message.payload?.status === "accepted",
+    );
+    const finalP = onceMessage(
+      ws,
+      (message) =>
+        message.type === "res" && message.id === runId && message.payload?.status !== "accepted",
+    );
+
+    await sendAgentWsRequest(ws, {
+      reqId: runId,
+      message: "keep this aborted agent turn queryable",
+      sessionKey: "main",
+      idempotencyKey: runId,
+    });
+    await ackP;
+    await readAgentCommandCall({ runId });
+    await rpcReq(ws, "chat.abort", { runId, sessionKey: "main" });
+    const final = await finalP;
+    expect(final.payload).toMatchObject({ runId, status: "timeout", stopReason: "rpc" });
+
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("expected session store path");
+    }
+    const scope = {
+      agentId: "main",
+      sessionId: "sess-durable-agent-abort",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    expect(loadTranscriptEventsSync(scope)).toEqual([]);
+    expect(listSessionPendingInputs(scope)).toMatchObject({
+      total: 1,
+      items: [
+        {
+          runId,
+          state: "cancelled",
+          message: {
+            role: "user",
+            content: "keep this aborted agent turn queryable",
+          },
+        },
+      ],
+    });
+  });
+
+  test("agent returns a wire error when durable user-turn admission fails", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-durable-agent-failure" });
+    const storePath = testState.sessionStorePath;
+    if (!storePath) {
+      throw new Error("expected session store path");
+    }
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path }).db;
+    ensureSessionPendingInputsSchema(database);
+    database.exec(`
+      CREATE TEMP TRIGGER fail_agent_turn_admission
+      BEFORE INSERT ON session_pending_inputs
+      BEGIN
+        SELECT RAISE(ABORT, 'injected agent transcript admission failure');
+      END;
+    `);
+    try {
+      const response = await rpcReq(ws, "agent", {
+        message: "this turn must not be acknowledged",
+        sessionKey: "main",
+        idempotencyKey: "idem-agent-durable-failure",
+      });
+
+      expect(response.ok).toBe(false);
+      expect(response.error).toMatchObject({ code: "UNAVAILABLE" });
+      expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
+    } finally {
+      database.exec("DROP TRIGGER IF EXISTS fail_agent_turn_admission");
+    }
+  });
+
+  test("agent final response surfaces redacted ACP runtime cause details", async () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    vi.mocked(agentCommandMock).mockRejectedValueOnce(
+      new AcpRuntimeError("ACP_TURN_FAILED", "Internal error", {
+        cause: new Error(`upstream rejected token=${token}`),
+      }),
+    );
+
+    const final = await sendAgentWsRequestAndWaitFinal(ws, {
+      reqId: "ag-acp-error-detail",
+      message: "hi",
+      idempotencyKey: "idem-agent-acp-error-detail",
+    });
+
+    const finalError = final.error as { message?: string } | undefined;
+    const errorMessage = finalError?.message ?? "";
+    expect(final.ok).toBe(false);
+    expect(final.payload?.status).toBe("error");
+    expect(errorMessage).toMatch(/ACP_TURN_FAILED/);
+    expect(errorMessage).toMatch(/Internal error/);
+    expect(errorMessage).toMatch(/upstream rejected/);
+    expect(errorMessage).not.toContain("AcpRuntimeError");
+    expect(JSON.stringify(final)).not.toContain(token);
   });
 
   test("agent dedupes by idempotencyKey after completion", async () => {
@@ -462,7 +682,7 @@ describe("gateway server agent", () => {
     });
 
     const secondP = onceMessage(ws, (o) => o.type === "res" && o.id === "ag2");
-    sendAgentWsRequest(ws, {
+    await sendAgentWsRequest(ws, {
       reqId: "ag2",
       message: "hi again",
       idempotencyKey: "same-agent",
@@ -472,13 +692,15 @@ describe("gateway server agent", () => {
   });
 
   test("agent dedupe survives reconnect", { timeout: 20_000 }, async () => {
-    await withGatewayServer(async ({ port }) => {
+    await withGatewayServer(async ({ port: portLocal }) => {
       const dial = async () => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-        trackConnectChallengeNonce(ws);
-        await new Promise<void>((resolve) => ws.once("open", resolve));
-        await connectOk(ws);
-        return ws;
+        const wsLocal = new WebSocket(`ws://127.0.0.1:${portLocal}`);
+        trackConnectChallengeNonce(wsLocal);
+        await new Promise<void>((resolve) => {
+          wsLocal.once("open", resolve);
+        });
+        await connectOk(wsLocal);
+        return wsLocal;
       };
 
       const idem = "reconnect-agent";

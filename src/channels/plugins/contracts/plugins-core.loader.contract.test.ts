@@ -1,7 +1,7 @@
+// Plugins core loader contract tests cover channel plugin loader setup and teardown behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearPluginDiscoveryCache } from "../../../plugins/discovery.js";
-import { clearPluginManifestRegistryCache } from "../../../plugins/manifest-registry.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
   createOutboundTestPlugin,
@@ -9,7 +9,7 @@ import {
 } from "../../../test-utils/channel-plugins.js";
 import { loadChannelOutboundAdapter } from "../outbound/load.js";
 import { createChannelRegistryLoader } from "../registry-loader.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "../types.public.js";
 
 const loadChannelPlugin = createChannelRegistryLoader<ChannelPlugin>((entry) => entry.plugin);
 
@@ -102,8 +102,36 @@ describe("channel plugin loader", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
-    clearPluginDiscoveryCache();
-    clearPluginManifestRegistryCache();
+  });
+
+  it("prefers the registry scoped to a bootstrapped channel handler", async () => {
+    setActivePluginRegistry(emptyRegistry);
+
+    const loaded = await withPluginRuntimeRegistryScope(registryWithDemoLoader, () =>
+      loadChannelOutboundAdapter("demo-loader"),
+    );
+
+    expect(loaded).toBe(demoOutbound);
+  });
+
+  it("does not escape the scoped registry when the channel is omitted", async () => {
+    setActivePluginRegistry(registryWithDemoLoader);
+
+    const loaded = await withPluginRuntimeRegistryScope(emptyRegistry, () =>
+      loadChannelOutboundAdapter("demo-loader"),
+    );
+
+    expect(loaded).toBeUndefined();
+  });
+
+  it("preserves a missing adapter from the scoped channel registration", async () => {
+    setActivePluginRegistry(registryWithDemoLoader);
+
+    const loaded = await withPluginRuntimeRegistryScope(registryWithDemoLoaderNoOutbound, () =>
+      loadChannelOutboundAdapter("demo-loader"),
+    );
+
+    expect(loaded).toBeUndefined();
   });
 
   it.each([
@@ -120,7 +148,7 @@ describe("channel plugin loader", () => {
       expectedOutbound: demoOutbound,
     },
     {
-      name: "refreshes cached plugin values when registry changes",
+      name: "reads updated plugin values when registry changes",
       kind: "reload-plugin" as const,
       firstRegistry: registryWithDemoLoader,
       secondRegistry: registryWithDemoLoaderV2,
@@ -128,7 +156,7 @@ describe("channel plugin loader", () => {
       secondExpected: demoLoaderPluginV2,
     },
     {
-      name: "refreshes cached outbound values when registry changes",
+      name: "reads updated outbound values when registry changes",
       kind: "reload-outbound" as const,
       firstRegistry: registryWithDemoLoader,
       secondRegistry: registryWithDemoLoaderV2,
@@ -174,7 +202,6 @@ describe("channel plugin loader", () => {
         return;
       case "missing-outbound":
         await expectOutboundAdapterMissingCase(testCase.registry);
-        return;
     }
   });
 });

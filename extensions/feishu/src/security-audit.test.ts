@@ -1,3 +1,4 @@
+// Feishu tests cover security audit plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
@@ -47,15 +48,13 @@ describe("Feishu security audit findings", () => {
     },
   ])("$name", ({ cfg, expectedFinding, expectedNoFinding }) => {
     const findings = collectFeishuSecurityAuditFindings({ cfg });
+    const findingKeys = findings.map((finding) => `${finding.checkId}:${finding.severity}`);
+    const checkIds = findings.map((finding) => finding.checkId);
     if (expectedFinding) {
-      expect(
-        findings.some(
-          (finding) => finding.checkId === expectedFinding && finding.severity === "warn",
-        ),
-      ).toBe(true);
+      expect(findingKeys).toContain(`${expectedFinding}:warn`);
     }
     if (expectedNoFinding) {
-      expect(findings.some((finding) => finding.checkId === expectedNoFinding)).toBe(false);
+      expect(checkIds).not.toContain(expectedNoFinding);
     }
   });
 });

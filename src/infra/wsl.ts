@@ -1,23 +1,25 @@
+// Detects Windows Subsystem for Linux environments.
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 let wslCached: boolean | null = null;
 
+/** Clears the cached async WSL detection result between isolated tests. */
 export function resetWSLStateForTests(): void {
   wslCached = null;
 }
 
-export function isWSLEnv(): boolean {
-  if (process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME || process.env.WSLENV) {
+/** Detects WSL from environment variables without touching the filesystem. */
+export function isWSLEnv(env: Record<string, string | undefined> = process.env): boolean {
+  if (env.WSL_INTEROP || env.WSL_DISTRO_NAME || env.WSLENV) {
     return true;
   }
   return false;
 }
 
 /**
- * Synchronously check if running in WSL.
- * Checks env vars first, then /proc/version.
+ * Synchronously detects WSL from env vars first, then `/proc/version`.
  */
 export function isWSLSync(): boolean {
   if (process.platform !== "linux") {
@@ -35,7 +37,7 @@ export function isWSLSync(): boolean {
 }
 
 /**
- * Synchronously check if running in WSL2.
+ * Synchronously detects WSL2 from kernel-version markers after WSL detection.
  */
 export function isWSL2Sync(): boolean {
   if (!isWSLSync()) {
@@ -49,25 +51,40 @@ export function isWSL2Sync(): boolean {
   }
 }
 
-export async function isWSL(): Promise<boolean> {
-  if (wslCached !== null) {
+/** Asynchronously detects WSL from env vars and `/proc/sys/kernel/osrelease`, with process cache. */
+export async function isWSL(
+  environment: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform } = {},
+): Promise<boolean> {
+  const cacheProcessEnvironment =
+    environment.env === undefined && environment.platform === undefined;
+  if (cacheProcessEnvironment && wslCached !== null) {
     return wslCached;
   }
-  if (process.platform !== "linux") {
-    wslCached = false;
-    return wslCached;
+  if ((environment.platform ?? process.platform) !== "linux") {
+    if (cacheProcessEnvironment) {
+      wslCached = false;
+    }
+    return false;
   }
-  if (isWSLEnv()) {
-    wslCached = true;
-    return wslCached;
+  if (isWSLEnv(environment.env ?? process.env)) {
+    if (cacheProcessEnvironment) {
+      wslCached = true;
+    }
+    return true;
   }
   try {
     const release = normalizeLowercaseStringOrEmpty(
       await fs.readFile("/proc/sys/kernel/osrelease", "utf8"),
     );
-    wslCached = release.includes("microsoft") || release.includes("wsl");
+    const detected = release.includes("microsoft") || release.includes("wsl");
+    if (cacheProcessEnvironment) {
+      wslCached = detected;
+    }
+    return detected;
   } catch {
-    wslCached = false;
+    if (cacheProcessEnvironment) {
+      wslCached = false;
+    }
+    return false;
   }
-  return wslCached;
 }

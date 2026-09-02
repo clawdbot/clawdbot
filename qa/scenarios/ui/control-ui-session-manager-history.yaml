@@ -1,0 +1,26 @@
+title: Control UI session manager and history
+
+scenario:
+  id: control-ui-session-manager-history
+  surface: control-ui
+  category: control-ui.session-manager-and-history
+  coverage:
+    primary:
+      - control-ui.session-manager-and-history
+  objective: Prove the browser session manager supports roster discovery, filtering, transcript history navigation, and visible archive feedback.
+  successCriteria:
+    - The Sessions page renders the Gateway roster and filters visible rows.
+    - Transcript search sends the bounded roster keys and opens the matching session history.
+    - Archiving a visible session sends the expected patch and shows an undoable confirmation.
+  docsRefs:
+    - docs/web/control-ui.md
+    - docs/help/testing.md
+  codeRefs:
+    - ui/src/e2e/session-manager-history.e2e.test.ts
+    - ui/src/pages/sessions/sessions-page.ts
+    - ui/src/pages/sessions/view.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/session-manager-history.e2e.test.ts
+    testNamePattern: covers session listing, filtering, transcript history, and archive feedback
+    summary: Real Chromium coverage for the operator-facing session roster, transcript search, history navigation, and archive outcome.

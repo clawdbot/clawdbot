@@ -1,7 +1,10 @@
+/** Shared isolation helpers for auth-profile backed secrets runtime integration tests. */
 import { vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { SecretsRuntimeEnvSnapshot } from "./runtime-openai-file-fixture.test-helper.js";
+
+/** Shared integration helpers for auth-profile backed secrets runtime tests. */
 export {
   asConfig,
   createOpenAIFileRuntimeConfig,
@@ -20,15 +23,18 @@ const secretsRuntimePluginMocks = vi.hoisted(() => ({
   resolvePluginWebSearchProvidersMock: vi.fn(() => []),
 }));
 
+// Mock plugin-provided auth/web surfaces so auth integration tests only cover
+// the configured stores and fixtures they explicitly install.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: secretsRuntimePluginMocks.resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-external-auth.js", () => ({
   resolveExternalAuthProfilesWithPlugins:
     secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock,
 }));
 
+/** Start an isolated secrets runtime test with plugin auth/web discovery disabled. */
 export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
   secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReset();
   secretsRuntimePluginMocks.resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
@@ -37,15 +43,14 @@ export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot
   const envSnapshot = captureEnv([
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
     "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-    "OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE",
     "OPENCLAW_VERSION",
   ]);
   delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE = "1";
   delete process.env.OPENCLAW_VERSION;
   return envSnapshot;
 }
 
+/** Restore env, mocks, config caches, and secrets runtime snapshot state. */
 export function endSecretsRuntimeIsolationForTest(envSnapshot: SecretsRuntimeEnvSnapshot) {
   vi.restoreAllMocks();
   envSnapshot.restore();

@@ -1,3 +1,4 @@
+// Daemon runtime hint tests cover platform-specific daemon guidance.
 import { describe, expect, it } from "vitest";
 import { buildPlatformRuntimeLogHints, buildPlatformServiceStartHints } from "./runtime-hints.js";
 
@@ -7,6 +8,7 @@ describe("buildPlatformRuntimeLogHints", () => {
       buildPlatformRuntimeLogHints({
         platform: "darwin",
         env: {
+          HOME: "/Users/test",
           OPENCLAW_STATE_DIR: "/tmp/openclaw-state",
           OPENCLAW_LOG_PREFIX: "gateway",
         },
@@ -14,8 +16,8 @@ describe("buildPlatformRuntimeLogHints", () => {
         windowsTaskName: "OpenClaw Gateway",
       }),
     ).toEqual([
-      "Launchd stdout (if installed): /tmp/openclaw-state/logs/gateway.log",
-      "Launchd stderr (if installed): /tmp/openclaw-state/logs/gateway.err.log",
+      "Launchd stdout (if installed): /Users/test/Library/Logs/openclaw/gateway.log",
+      "Launchd stderr (if installed): suppressed",
       "Restart attempts: /tmp/openclaw-state/logs/gateway-restart.log",
     ]);
   });

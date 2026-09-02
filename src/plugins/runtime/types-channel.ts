@@ -3,32 +3,38 @@
  *
  * This surface exposes generic core helpers only. Plugin-owned behavior stays
  * inside the owning plugin package instead of hanging off core runtime slots
- * like `channel.discord` or `channel.slack`.
+ * keyed by plugin id.
  */
-import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import type {
+  IsControlCommandMessage,
+  ShouldComputeCommandAuthorized,
+} from "../../auto-reply/command-detection.runtime-types.js";
+import type { ShouldHandleTextCommands } from "../../auto-reply/commands-registry.runtime-types.js";
+import type { DispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.types.js";
+import type {
+  BuildMentionRegexes,
+  MatchesMentionPatterns,
+  MatchesMentionWithExplicit,
+} from "../../auto-reply/reply/mentions.types.js";
 import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
+import type { LoadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.types.js";
+import type { ResolveMarkdownTableMode } from "../../config/markdown-tables.types.js";
+import type {
+  ReadSessionUpdatedAt,
+  RecordSessionMetaFromInbound,
+  UpdateLastRoute,
+} from "../../config/sessions/runtime-types.js";
 import type {
   ReadChannelAllowFromStoreForAccount,
+  RemoveChannelAllowFromStoreEntryForAccount,
   UpsertChannelPairingRequestForAccount,
 } from "../../pairing/pairing-store.types.js";
-type ShouldHandleTextCommands =
-  import("../../auto-reply/commands-registry.runtime-types.js").ShouldHandleTextCommands;
-type IsControlCommandMessage =
-  import("../../auto-reply/command-detection.runtime-types.js").IsControlCommandMessage;
-type ShouldComputeCommandAuthorized =
-  import("../../auto-reply/command-detection.runtime-types.js").ShouldComputeCommandAuthorized;
-type BuildMentionRegexes = import("../../auto-reply/reply/mentions.types.js").BuildMentionRegexes;
-type MatchesMentionPatterns =
-  import("../../auto-reply/reply/mentions.types.js").MatchesMentionPatterns;
-type MatchesMentionWithExplicit =
-  import("../../auto-reply/reply/mentions.types.js").MatchesMentionWithExplicit;
-type ReadSessionUpdatedAt = import("../../config/sessions/runtime-types.js").ReadSessionUpdatedAt;
-type RecordSessionMetaFromInbound =
-  import("../../config/sessions/runtime-types.js").RecordSessionMetaFromInbound;
-type UpdateLastRoute = import("../../config/sessions/runtime-types.js").UpdateLastRoute;
+
+type DispatchReplyWithBufferedBlockDispatcher =
+  import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
 
-export type RuntimeThreadBindingLifecycleRecord =
+type RuntimeThreadBindingLifecycleRecord =
   | import("../../infra/outbound/session-binding.types.js").SessionBindingRecord
   | {
       boundAt: number;
@@ -37,13 +43,13 @@ export type RuntimeThreadBindingLifecycleRecord =
       maxAgeMs?: number;
     };
 
-export type PluginRuntimeChannelContextKey = {
+type PluginRuntimeChannelContextKey = {
   channelId: string;
   accountId?: string | null;
   capability: string;
 };
 
-export type PluginRuntimeChannelContextEvent = {
+type PluginRuntimeChannelContextEvent = {
   type: "registered" | "unregistered";
   key: {
     channelId: string;
@@ -53,7 +59,7 @@ export type PluginRuntimeChannelContextEvent = {
   context?: unknown;
 };
 
-export type PluginRuntimeChannelContextRegistry = {
+type PluginRuntimeChannelContextRegistry = {
   register: (
     params: PluginRuntimeChannelContextKey & {
       context: unknown;
@@ -80,20 +86,39 @@ export type PluginRuntimeChannel = {
     resolveChunkMode: typeof import("../../auto-reply/chunk.js").resolveChunkMode;
     resolveTextChunkLimit: typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
     hasControlCommand: typeof import("../../auto-reply/command-detection.js").hasControlCommand;
-    resolveMarkdownTableMode: import("../../config/markdown-tables.types.js").ResolveMarkdownTableMode;
-    convertMarkdownTables: typeof import("../../markdown/tables.js").convertMarkdownTables;
+    resolveMarkdownTableMode: ResolveMarkdownTableMode;
+    convertMarkdownTables: typeof import("../../../packages/markdown-core/src/tables.js").convertMarkdownTables;
   };
   reply: {
     dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
+    /**
+     * @deprecated Prefer `openclaw/plugin-sdk/channel-outbound` adapters plus
+     * `dispatchReplyWithBufferedBlockDispatcher` or channel turn helpers.
+     * This is a low-level legacy dispatcher escape hatch.
+     */
     createReplyDispatcherWithTyping: CreateReplyDispatcherWithTyping;
     resolveEffectiveMessagesConfig: typeof import("../../agents/identity.js").resolveEffectiveMessagesConfig;
+    /**
+     * @deprecated Prefer the channel-message reply pipeline helpers. This is
+     * tied to the low-level legacy dispatcher path.
+     */
     resolveHumanDelayConfig: typeof import("../../agents/identity.js").resolveHumanDelayConfig;
-    dispatchReplyFromConfig: import("../../auto-reply/reply/dispatch-from-config.types.js").DispatchReplyFromConfig;
+    /**
+     * @deprecated Prefer `dispatchReplyWithBufferedBlockDispatcher` with a
+     * channel-message adapter or the channel turn helpers. Direct use must
+     * manually preserve source reply delivery metadata such as
+     * `sourceReplyDeliveryMode`.
+     */
+    dispatchReplyFromConfig: DispatchReplyFromConfig;
     withReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").withReplyDispatcher;
+    settleReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").settleReplyDispatcher;
+    /**
+     * @deprecated Prefer `buildChannelInboundEventContext` from
+     * `openclaw/plugin-sdk/channel-inbound` so inbound event metadata is
+     * carried into reply dispatch.
+     */
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
-    /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
-    formatInboundEnvelope: typeof import("../../auto-reply/envelope.js").formatInboundEnvelope;
     resolveEnvelopeFormatOptions: typeof import("../../auto-reply/envelope.js").resolveEnvelopeFormatOptions;
   };
   routing: {
@@ -103,10 +128,15 @@ export type PluginRuntimeChannel = {
   pairing: {
     buildPairingReply: typeof import("../../pairing/pairing-messages.js").buildPairingReply;
     readAllowFromStore: ReadChannelAllowFromStoreForAccount;
+    removeAllowFromStoreEntry: RemoveChannelAllowFromStoreEntryForAccount;
     upsertPairingRequest: UpsertChannelPairingRequestForAccount;
   };
   media: {
+    readRemoteMediaBuffer: typeof import("../../media/fetch.js").readRemoteMediaBuffer;
+    /** @deprecated Use `readRemoteMediaBuffer`. */
     fetchRemoteMedia: typeof import("../../media/fetch.js").fetchRemoteMedia;
+    saveRemoteMedia: typeof import("../../media/fetch.js").saveRemoteMedia;
+    saveResponseMedia: typeof import("../../media/fetch.js").saveResponseMedia;
     saveMediaBuffer: typeof import("../../media/store.js").saveMediaBuffer;
   };
   activity: {
@@ -114,9 +144,11 @@ export type PluginRuntimeChannel = {
     get: typeof import("../../infra/channel-activity.js").getChannelActivity;
   };
   session: {
-    resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+    /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
+    resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
     readSessionUpdatedAt: ReadSessionUpdatedAt;
     recordSessionMetaFromInbound: RecordSessionMetaFromInbound;
+    /** @deprecated Prefer channel turn helpers that record inbound sessions as part of dispatch. */
     recordInboundSession: RecordInboundSession;
     updateLastRoute: UpdateLastRoute;
   };
@@ -128,8 +160,10 @@ export type PluginRuntimeChannel = {
     resolveInboundMentionDecision: typeof import("../../channels/mention-gating.js").resolveInboundMentionDecision;
   };
   reactions: {
+    createAckReactionHandle: typeof import("../../channels/ack-reactions.js").createAckReactionHandle;
     shouldAckReaction: typeof import("../../channels/ack-reactions.js").shouldAckReaction;
     removeAckReactionAfterReply: typeof import("../../channels/ack-reactions.js").removeAckReactionAfterReply;
+    removeAckReactionHandleAfterReply: typeof import("../../channels/ack-reactions.js").removeAckReactionHandleAfterReply;
   };
   groups: {
     resolveGroupPolicy: typeof import("../../config/group-policy.js").resolveChannelGroupPolicy;
@@ -146,7 +180,16 @@ export type PluginRuntimeChannel = {
     shouldHandleTextCommands: ShouldHandleTextCommands;
   };
   outbound: {
-    loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
+    loadAdapter: LoadChannelOutboundAdapter;
+  };
+  inbound: {
+    buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
+    run: typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
+    /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
+    runPreparedReply: typeof import("../../channels/turn/execution.js").runPreparedChannelTurn;
+    dispatch: typeof import("../../channels/turn/lifecycle.js").dispatchRoutedChannelTurn;
+    /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
+    dispatchReply: typeof import("../../channels/turn/lifecycle.js").dispatchAssembledChannelTurn;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

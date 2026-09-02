@@ -1,50 +1,27 @@
+// Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { hasConfiguredSecretInput } from "../config/types.secrets.js";
-import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
+import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
+import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 
 type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
 
-export type CollectGatewayConfigFindingsOptions = {
+type CollectGatewayConfigFindingsOptions = {
   collectDangerousConfigFlags?: CollectDangerousConfigFlags;
+  gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function collectCoreInsecureOrDangerousFlags(cfg: OpenClawConfig): string[] {
-  const enabledFlags: string[] = [];
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
-    enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
-  }
-  if (cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
-    enabledFlags.push("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true");
-  }
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
-  }
-  if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
-    enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");
-  }
-  if (Array.isArray(cfg.hooks?.mappings)) {
-    for (const [index, mapping] of cfg.hooks.mappings.entries()) {
-      if (mapping?.allowUnsafeExternalContent === true) {
-        enabledFlags.push(`hooks.mappings[${index}].allowUnsafeExternalContent=true`);
-      }
-    }
-  }
-  if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
-    enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
-  }
-  return enabledFlags;
-}
 
 export function collectGatewayConfigFindings(
   cfg: OpenClawConfig,
@@ -56,44 +33,50 @@ export function collectGatewayConfigFindings(
 
   const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
+  const auth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    authOverride: options.gatewayAuthOverride,
+    tailscaleMode,
+    env,
+  });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
-  const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const controlUiAllowedOrigins = normalizeStringEntries(
+    cfg.gateway?.controlUi?.allowedOrigins ?? [],
+  );
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
     ? cfg.gateway.trustedProxies
     : [];
-  const hasToken = typeof auth.token === "string" && auth.token.trim().length > 0;
-  const hasPassword = typeof auth.password === "string" && auth.password.trim().length > 0;
-  const envTokenConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_TOKEN);
-  const envPasswordConfigured = hasNonEmptyString(env.OPENCLAW_GATEWAY_PASSWORD);
-  const tokenConfiguredFromConfig = hasConfiguredSecretInput(
-    sourceConfig.gateway?.auth?.token,
-    sourceConfig.secrets?.defaults,
+  const hasToken =
+    typeof auth.token === "string" &&
+    auth.token.trim().length > 0 &&
+    !hasUnresolvedConfigPath(sourceConfig, "gateway.auth.token");
+  const hasPassword =
+    typeof auth.password === "string" &&
+    auth.password.trim().length > 0 &&
+    !hasUnresolvedConfigPath(sourceConfig, "gateway.auth.password");
+  const plan = createGatewayCredentialPlan({ config: sourceConfig, env });
+  const explicitAuthMode = options.gatewayAuthOverride?.mode ?? sourceConfig.gateway?.auth?.mode;
+  const tokenConfigured = Boolean(
+    hasToken ||
+    plan.envToken ||
+    plan.localToken.value ||
+    plan.localToken.hasSecretRef ||
+    plan.remoteToken.value ||
+    plan.remoteToken.hasSecretRef,
   );
-  const passwordConfiguredFromConfig = hasConfiguredSecretInput(
-    sourceConfig.gateway?.auth?.password,
-    sourceConfig.secrets?.defaults,
-  );
-  const remoteTokenConfigured = hasConfiguredSecretInput(
-    sourceConfig.gateway?.remote?.token,
-    sourceConfig.secrets?.defaults,
-  );
-  const explicitAuthMode = sourceConfig.gateway?.auth?.mode;
-  const tokenCanWin =
-    hasToken || envTokenConfigured || tokenConfiguredFromConfig || remoteTokenConfigured;
   const passwordCanWin =
     explicitAuthMode === "password" ||
     (explicitAuthMode !== "token" &&
       explicitAuthMode !== "none" &&
       explicitAuthMode !== "trusted-proxy" &&
-      !tokenCanWin);
-  const tokenConfigured = tokenCanWin;
-  const passwordConfigured =
-    hasPassword || (passwordCanWin && (envPasswordConfigured || passwordConfiguredFromConfig));
+      !tokenConfigured);
+  const passwordConfigured = Boolean(
+    hasPassword ||
+    (passwordCanWin &&
+      (plan.envPassword || plan.localPassword.value || plan.localPassword.hasSecretRef)),
+  );
   const hasSharedSecret =
     explicitAuthMode === "token"
       ? tokenConfigured
@@ -102,8 +85,8 @@ export function collectGatewayConfigFindings(
         : explicitAuthMode === "none" || explicitAuthMode === "trusted-proxy"
           ? false
           : tokenConfigured || passwordConfigured;
-  const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
-  const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const hasGatewayAuth = hasSharedSecret || auth.mode === "trusted-proxy";
+  const hasLoopbackAuth = hasGatewayAuth || (auth.allowTailscale && tailscaleMode === "serve");
   const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
   const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
 
@@ -132,13 +115,24 @@ export function collectGatewayConfigFindings(
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
     });
   }
-  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
+  if (bind !== "loopback" && !hasGatewayAuth) {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
       title: "Gateway binds beyond loopback without auth",
       detail: `gateway.bind="${bind}" but no gateway.auth token/password is configured.`,
       remediation: `Set gateway.auth (token recommended) or bind to loopback.`,
+    });
+  }
+
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg: sourceConfig, env });
+  if (tokenConflict) {
+    findings.push({
+      checkId: tokenConflict.checkId,
+      severity: "warn",
+      title: tokenConflict.title,
+      detail: tokenConflict.detail,
+      remediation: tokenConflict.remediation,
     });
   }
 
@@ -156,7 +150,7 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && !hasGatewayAuth) {
+  if (bind === "loopback" && controlUiEnabled && !hasLoopbackAuth) {
     findings.push({
       checkId: "gateway.loopback_no_auth",
       severity: "critical",
@@ -261,39 +255,29 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
+  if (cfg.mcp?.apps?.enabled === true) {
     findings.push({
-      checkId: "gateway.control_ui.insecure_auth",
+      checkId: "mcp.apps.enabled",
       severity: "warn",
-      title: "Control UI insecure auth toggle enabled",
+      title: "MCP Apps UI bridge enabled",
       detail:
-        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
-      remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
-    });
-  }
-
-  if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
-    findings.push({
-      checkId: "gateway.control_ui.device_auth_disabled",
-      severity: "critical",
-      title: "DANGEROUS: Control UI device auth disabled",
-      detail:
-        "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
-      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+        "mcp.apps.enabled=true allows configured MCP servers to provide interactive HTML. Views are CSP-restricted and origin-isolated, but they can call app-visible tools on their owning MCP server while the session runtime remains active.",
+      remediation:
+        "Keep this enabled only for MCP servers you trust. Disable with `openclaw config set mcp.apps.enabled false --strict-json` when it is not needed.",
     });
   }
 
   const enabledDangerousFlags = (
     options.collectDangerousConfigFlags ?? collectCoreInsecureOrDangerousFlags
   )(cfg);
-  if (enabledDangerousFlags.length > 0) {
+  for (const enabledFlag of enabledDangerousFlags) {
     findings.push({
       checkId: "config.insecure_or_dangerous_flags",
       severity: "warn",
-      title: "Insecure or dangerous config flags enabled",
-      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      title: "Insecure or dangerous config flag enabled",
+      detail: `Detected enabled flag: ${enabledFlag}.`,
       remediation:
-        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
+        "Disable this flag when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
     });
   }
 
@@ -309,7 +293,6 @@ export function collectGatewayConfigFindings(
   }
 
   if (auth.mode === "trusted-proxy") {
-    const trustedProxies = cfg.gateway?.trustedProxies ?? [];
     const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
 
     findings.push({
@@ -324,6 +307,7 @@ export function collectGatewayConfigFindings(
         "Verify: (1) Your proxy terminates TLS and authenticates users. " +
         "(2) gateway.trustedProxies is restricted to proxy IPs only. " +
         "(3) Direct access to the Gateway port is blocked by firewall. " +
+        "Same-host proxy requests are rejected unless gateway.auth.trustedProxy.allowLoopback=true and gateway.trustedProxies includes their loopback source; enable only for a deliberate same-host trust boundary. " +
         "See /gateway/trusted-proxy-auth for setup guidance.",
     });
 
@@ -350,6 +334,48 @@ export function collectGatewayConfigFindings(
           "Set gateway.auth.trustedProxy.userHeader to the header name your proxy uses " +
           '(e.g., "x-forwarded-user", "x-pomerium-claim-email").',
       });
+    }
+
+    if (trustedProxyConfig?.allowLoopback === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_allow_loopback",
+        severity: "warn",
+        title: "Trusted-proxy auth allows loopback proxy sources",
+        detail:
+          "gateway.auth.trustedProxy.allowLoopback=true allows loopback-source requests " +
+          "from configured gateway.trustedProxies entries to satisfy trusted-proxy auth.",
+        remediation:
+          "Enable this only when a same-host reverse proxy is the intended trust boundary. " +
+          "Keep direct Gateway access private to the host and require the proxy to strip or overwrite identity headers.",
+      });
+    }
+
+    if (trustedProxyConfig?.deviceAutoApprove?.enabled === true) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_device_auto_approve",
+        severity: "warn",
+        title: "Trusted-proxy browser device auto-approval enabled",
+        detail:
+          "gateway.auth.trustedProxy.deviceAutoApprove.enabled=true delegates new Control UI and WebChat device pairing entirely to the reverse-proxy identity.",
+        remediation:
+          "Enable this only when the proxy is the exclusive Gateway ingress, strongly authenticates users, overwrites identity headers, and restricts access with allowUsers.",
+      });
+
+      if (
+        trustedProxyConfig.deviceAutoApprove.scopes?.some(
+          (scope) => scope.trim() === "operator.admin",
+        )
+      ) {
+        findings.push({
+          checkId: "gateway.trusted_proxy_device_auto_approve_admin",
+          severity: "critical",
+          title: "Trusted-proxy device auto-approval allows full admin",
+          detail:
+            "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+          remediation:
+            "Remove operator.admin and approve admin access manually, or grant admin per identity via gateway.auth.identityScopes.",
+        });
+      }
     }
 
     const allowUsers = trustedProxyConfig?.allowUsers ?? [];
@@ -399,8 +425,8 @@ function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
     return false;
   }
   const ipVersion = isIP(rawIp.trim());
-  const prefix = Number.parseInt(rawPrefix.trim(), 10);
-  if (!Number.isInteger(prefix)) {
+  const prefix = parseStrictNonNegativeInteger(rawPrefix);
+  if (prefix === undefined) {
     return false;
   }
   if (ipVersion === 4) {

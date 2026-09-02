@@ -1,8 +1,12 @@
+// Link detection extracts unique safe bare HTTP(S) URLs from inbound text while filtering SSRF targets.
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { DEFAULT_MAX_LINKS } from "./defaults.js";
 
 // Remove markdown link syntax so only bare URLs are considered.
-const MARKDOWN_LINK_RE = /\[[^\]]*]\((https?:\/\/\S+?)\)/gi;
+// The link-text portion allows "]" that is not the closing "](" boundary so
+// markdown links whose label contains brackets (e.g. "[my notes [v2]](...)")
+// are still stripped instead of leaking their URL to BARE_LINK_RE.
+const MARKDOWN_LINK_RE = /\[(?:[^\]]|](?!\())*]\((https?:\/\/\S+?)\)/gi;
 const BARE_LINK_RE = /https?:\/\/\S+/gi;
 
 function stripMarkdownLinks(message: string): string {
@@ -31,6 +35,10 @@ function isAllowedUrl(raw: string): boolean {
   }
 }
 
+/**
+ * Extracts unique, SSRF-filtered bare HTTP(S) links from inbound text.
+ * Markdown links are ignored so display-only citations do not trigger fetches.
+ */
 export function extractLinksFromMessage(message: string, opts?: { maxLinks?: number }): string[] {
   const source = message?.trim();
   if (!source) {

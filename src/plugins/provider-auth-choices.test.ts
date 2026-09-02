@@ -1,18 +1,59 @@
-import { describe, expect, it, vi } from "vitest";
+// Covers provider auth choice rendering and fallback behavior.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
-
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+const pluginRegistryMocks = vi.hoisted(() => ({
+  loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
+  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  loadPluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
+}));
+const officialCatalogMocks = vi.hoisted(() => ({
+  listOfficialExternalProviderCatalogEntries: vi.fn(),
 }));
 
-import {
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex:
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+}));
+
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: pluginRegistryMocks.resolvePluginMetadataSnapshot,
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: pluginRegistryMocks.resolvePluginMetadataSnapshot,
+}));
+vi.mock("./official-external-plugin-catalog.js", () => ({
+  getOfficialExternalPluginCatalogManifest: (entry: { openclaw?: unknown }) => entry.openclaw,
+  listOfficialExternalProviderCatalogEntries:
+    officialCatalogMocks.listOfficialExternalProviderCatalogEntries,
+}));
+
+vi.resetModules();
+
+const {
   resolveManifestDeprecatedProviderAuthChoice,
-  resolveManifestProviderApiKeyChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
-  resolveManifestProviderOnboardAuthFlags,
-} from "./provider-auth-choices.js";
+  resolveProviderOnboardAuthFlags,
+} = await import("./provider-auth-choices.js");
+const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
 
 function createManifestPlugin(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
   return {
@@ -26,9 +67,20 @@ function createProviderAuthChoice(overrides: Record<string, unknown>) {
 }
 
 function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
-  loadPluginManifestRegistry.mockReturnValue({
+  pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
     plugins,
   });
+  pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+    plugins,
+  });
+  pluginRegistryMocks.loadPluginMetadataSnapshot.mockReturnValue({
+    plugins,
+    manifestRegistry: { plugins },
+  });
+  pluginRegistryMocks.resolvePluginMetadataSnapshot.mockImplementation(
+    (params?: { pluginMetadataSnapshot?: unknown }) =>
+      params?.pluginMetadataSnapshot ?? pluginRegistryMocks.loadPluginMetadataSnapshot(params),
+  );
 }
 
 function expectResolvedProviderAuthChoices(params: {
@@ -53,6 +105,32 @@ function setSingleManifestProviderAuthChoices(
 }
 
 describe("provider auth choice manifest helpers", () => {
+  beforeEach(() => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [],
+    });
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [],
+    });
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockReset();
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      manifestRegistry: { plugins: [] },
+    });
+    pluginRegistryMocks.resolvePluginMetadataSnapshot.mockReset();
+    pluginRegistryMocks.resolvePluginMetadataSnapshot.mockImplementation(
+      (params?: { pluginMetadataSnapshot?: unknown }) =>
+        params?.pluginMetadataSnapshot ?? pluginRegistryMocks.loadPluginMetadataSnapshot(params),
+    );
+    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReset();
+    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
+    clearPluginMetadataLifecycleCaches();
+  });
+
   it("flattens manifest auth choices", () => {
     setSingleManifestProviderAuthChoices("openai", [
       createProviderAuthChoice({
@@ -89,6 +167,70 @@ describe("provider auth choice manifest helpers", () => {
     });
   });
 
+  it("keeps installed manifest flags ahead of official cold-install flags", () => {
+    setSingleManifestProviderAuthChoices("cerebras", [
+      createProviderAuthChoice({
+        provider: "cerebras",
+        method: "api-key",
+        choiceId: "cerebras-api-key",
+        choiceLabel: "Cerebras API key",
+        optionKey: "cerebrasApiKey",
+        cliFlag: "--cerebras-api-key",
+        cliOption: "--cerebras-api-key <key>",
+        cliDescription: "Installed Cerebras key",
+      }),
+    ]);
+    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        openclaw: {
+          plugin: { id: "cerebras" },
+          providers: [
+            {
+              id: "cerebras",
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "cerebras-api-key",
+                  choiceLabel: "Cerebras API key",
+                  optionKey: "cerebrasApiKey",
+                  cliFlag: "--cerebras-api-key",
+                  cliOption: "--cerebras-api-key <key>",
+                  cliDescription: "Catalog Cerebras key",
+                },
+                {
+                  method: "api-key",
+                  choiceId: "groq-api-key",
+                  choiceLabel: "Groq API key",
+                  optionKey: "groqApiKey",
+                  cliFlag: "--groq-api-key",
+                  cliOption: "--groq-api-key <key>",
+                  cliDescription: "Groq API key",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(resolveProviderOnboardAuthFlags()).toEqual([
+      {
+        optionKey: "cerebrasApiKey",
+        authChoice: "cerebras-api-key",
+        cliFlag: "--cerebras-api-key",
+        cliOption: "--cerebras-api-key <key>",
+        description: "Installed Cerebras key",
+      },
+      {
+        optionKey: "groqApiKey",
+        authChoice: "groq-api-key",
+        cliFlag: "--groq-api-key",
+        cliOption: "--groq-api-key <key>",
+        description: "Groq API key",
+      },
+    ]);
+  });
+
   it.each([
     {
       name: "deduplicates flag metadata by option key + flag",
@@ -117,7 +259,7 @@ describe("provider auth choice manifest helpers", () => {
         ]),
       ],
       run: () =>
-        expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+        expect(resolveProviderOnboardAuthFlags()).toEqual([
           {
             optionKey: "moonshotApiKey",
             authChoice: "moonshot-api-key",
@@ -178,6 +320,9 @@ describe("provider auth choice manifest helpers", () => {
             optionKey: "openaiApiKey",
             cliFlag: "--openai-api-key",
             cliOption: "--openai-api-key <key>",
+            appGuidedSecret: true,
+            appGuidedActionLabel: "Connect account",
+            appGuidedDiscovery: true,
           },
         ],
       },
@@ -195,6 +340,15 @@ describe("provider auth choice manifest helpers", () => {
             cliFlag: "--openai-api-key",
             cliOption: "--openai-api-key <key>",
           },
+          {
+            provider: "evil-openai",
+            method: "api-key",
+            choiceId: "evil-openai-api-key",
+            choiceLabel: "Evil OpenAI API key",
+            optionKey: "evilOpenaiApiKey",
+            cliFlag: "--evil-openai-api-key",
+            cliOption: "--evil-openai-api-key <key>",
+          },
         ],
       },
     ]);
@@ -204,19 +358,43 @@ describe("provider auth choice manifest helpers", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "openai",
         providerId: "openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+        appGuidedSecret: true,
+        appGuidedActionLabel: "Connect account",
+        appGuidedDiscovery: true,
+      },
     ]);
     expect(
       resolveManifestProviderAuthChoice("openai-api-key", {
         includeUntrustedWorkspacePlugins: false,
       })?.providerId,
     ).toBe("openai");
+    const enabledWorkspaceConfig = {
+      plugins: { entries: { "evil-openai-hijack": { enabled: true } } },
+    };
     expect(
-      resolveManifestProviderOnboardAuthFlags({
+      resolveManifestProviderAuthChoices({
+        config: enabledWorkspaceConfig,
+        includeUntrustedWorkspacePlugins: false,
+      }).map((choice) => choice.choiceId),
+    ).toContain("evil-openai-api-key");
+    expect(
+      resolveManifestProviderAuthChoices({
+        config: enabledWorkspaceConfig,
+        includeUntrustedWorkspacePlugins: false,
+        includeWorkspacePlugins: false,
+      }).map((choice) => choice.choiceId),
+    ).not.toContain("evil-openai-api-key");
+    expect(
+      resolveProviderOnboardAuthFlags({
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual([
@@ -226,6 +404,177 @@ describe("provider auth choice manifest helpers", () => {
         cliFlag: "--openai-api-key",
         cliOption: "--openai-api-key <key>",
         description: "OpenAI API key",
+      },
+    ]);
+  });
+
+  it("derives generic auth choices from descriptor-safe setup provider auth methods", () => {
+    setManifestPlugins([
+      {
+        id: "demo-provider",
+        name: "Demo Provider",
+        origin: "global",
+        setup: {
+          providers: [
+            {
+              id: "demo-provider",
+              authMethods: ["api-key", "oauth"],
+            },
+          ],
+          requiresRuntime: false,
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      {
+        pluginId: "demo-provider",
+        providerId: "demo-provider",
+        methodId: "api-key",
+        choiceId: "demo-provider-api-key",
+        choiceLabel: "Demo Provider API key",
+        groupId: "demo-provider",
+        groupLabel: "Demo Provider",
+      },
+      {
+        pluginId: "demo-provider",
+        providerId: "demo-provider",
+        methodId: "oauth",
+        choiceId: "demo-provider-oauth",
+        choiceLabel: "Demo Provider OAuth",
+        groupId: "demo-provider",
+        groupLabel: "Demo Provider",
+      },
+    ]);
+  });
+
+  it("sanitizes setup provider auth descriptors before deriving prompt labels", () => {
+    setManifestPlugins([
+      {
+        id: "evil-provider",
+        origin: "workspace",
+        setup: {
+          providers: [
+            {
+              id: "evil\u001b[31m-provider",
+              authMethods: ["jwt\u001b[2K", "oidc"],
+            },
+          ],
+          requiresRuntime: false,
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      {
+        pluginId: "evil-provider",
+        providerId: "evil-provider",
+        methodId: "jwt",
+        choiceId: "evil-provider-jwt",
+        choiceLabel: "Evil Provider JWT",
+        groupId: "evil-provider",
+        groupLabel: "Evil Provider",
+      },
+      {
+        pluginId: "evil-provider",
+        providerId: "evil-provider",
+        methodId: "oidc",
+        choiceId: "evil-provider-oidc",
+        choiceLabel: "Evil Provider OIDC",
+        groupId: "evil-provider",
+        groupLabel: "Evil Provider",
+      },
+    ]);
+  });
+
+  it("uses setup provider auth methods when no setup entry exists", () => {
+    setManifestPlugins([
+      {
+        id: "no-runtime-provider",
+        origin: "global",
+        setup: {
+          providers: [
+            {
+              id: "no-runtime-provider",
+              authMethods: ["api-key"],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoice("no-runtime-provider-api-key")).toEqual({
+      pluginId: "no-runtime-provider",
+      providerId: "no-runtime-provider",
+      methodId: "api-key",
+      choiceId: "no-runtime-provider-api-key",
+      choiceLabel: "No Runtime Provider API key",
+      groupId: "no-runtime-provider",
+      groupLabel: "No Runtime Provider",
+    });
+  });
+
+  it("keeps setup-entry providers on explicit manifest or runtime auth choices", () => {
+    setManifestPlugins([
+      {
+        id: "runtime-provider",
+        origin: "global",
+        setupSource: "/plugins/runtime-provider/setup-entry.cjs",
+        setup: {
+          providers: [
+            {
+              id: "runtime-provider",
+              authMethods: ["api-key"],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toStrictEqual([]);
+  });
+
+  it("does not duplicate explicit provider auth choices with setup auth methods", () => {
+    setManifestPlugins([
+      {
+        id: "explicit-provider",
+        origin: "global",
+        providerAuthChoices: [
+          {
+            provider: "explicit-provider",
+            method: "api-key",
+            choiceId: "explicit-api-key",
+            choiceLabel: "Explicit API key",
+          },
+        ],
+        setup: {
+          providers: [
+            {
+              id: "explicit-provider",
+              authMethods: ["api-key", "oauth"],
+            },
+          ],
+          requiresRuntime: false,
+        },
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      {
+        pluginId: "explicit-provider",
+        providerId: "explicit-provider",
+        methodId: "api-key",
+        choiceId: "explicit-api-key",
+        choiceLabel: "Explicit API key",
+      },
+      {
+        pluginId: "explicit-provider",
+        providerId: "explicit-provider",
+        methodId: "oauth",
+        choiceId: "explicit-provider-oauth",
+        choiceLabel: "Explicit Provider OAuth",
+        groupId: "explicit-provider",
+        groupLabel: "Explicit Provider",
       },
     ]);
   });
@@ -267,14 +616,19 @@ describe("provider auth choice manifest helpers", () => {
     ]);
 
     expect(resolveManifestProviderAuthChoices()).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "openai",
         providerId: "openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+      },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
-    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+    expect(resolveProviderOnboardAuthFlags()).toEqual([
       {
         optionKey: "openaiApiKey",
         authChoice: "openai-api-key",
@@ -322,14 +676,19 @@ describe("provider auth choice manifest helpers", () => {
     ]);
 
     expect(resolveManifestProviderAuthChoices()).toEqual([
-      expect.objectContaining({
+      {
         pluginId: "custom-openai",
         providerId: "custom-openai",
+        methodId: "api-key",
         choiceId: "openai-api-key",
-      }),
+        choiceLabel: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+      },
     ]);
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("custom-openai");
-    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+    expect(resolveProviderOnboardAuthFlags()).toEqual([
       {
         optionKey: "openaiApiKey",
         authChoice: "openai-api-key",
@@ -340,7 +699,7 @@ describe("provider auth choice manifest helpers", () => {
     ]);
   });
 
-  it("resolves api-key choices through manifest-owned provider auth aliases", () => {
+  it("resolves manifest-owned provider auth aliases", () => {
     setManifestPlugins([
       {
         id: "fixture-provider",
@@ -362,10 +721,8 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
 
-    expect(
-      resolveManifestProviderApiKeyChoice({
-        providerId: "fixture-provider-plan",
-      })?.choiceId,
-    ).toBe("fixture-provider-api-key");
+    const resolvedProviderId = resolveProviderIdForAuth("fixture-provider-plan");
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
+    expect(resolvedProviderId).toBe("fixture-provider");
   });
 });

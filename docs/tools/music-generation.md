@@ -1,55 +1,86 @@
 ---
-summary: "Generate music with shared providers, including workflow-backed plugins"
+summary: "Generate music via music_generate across ComfyUI, fal, Google Lyria, MiniMax, and OpenRouter workflows"
 read_when:
   - Generating music or audio via the agent
-  - Configuring music generation providers and models
+  - Configuring music-generation providers and models
   - Understanding the music_generate tool parameters
-title: "Music Generation"
+title: "Music generation"
+sidebarTitle: "Music generation"
 ---
 
-# Music Generation
-
-The `music_generate` tool lets the agent create music or audio through the
-shared music-generation capability with configured providers such as Google,
-MiniMax, and workflow-configured ComfyUI.
-
-For shared provider-backed agent sessions, OpenClaw starts music generation as a
-background task, tracks it in the task ledger, then wakes the agent again when
-the track is ready so the agent can post the finished audio back into the
-original channel.
+The `music_generate` tool creates music or audio through the shared
+music-generation capability, backed by ComfyUI, fal, Google, MiniMax, and
+OpenRouter.
 
 <Note>
-The built-in shared tool only appears when at least one music-generation provider is available. If you don't see `music_generate` in your agent's tools, configure `agents.defaults.musicGenerationModel` or set up a provider API key.
+`music_generate` only appears when at least one music-generation provider is
+available: an explicit `agents.defaults.mediaModels.music` config, or an
+auth-configured provider (a set API key, for example).
 </Note>
+
+For session-backed agent runs, `music_generate` starts as a background task,
+tracks progress in the task ledger, then wakes the agent when the track is
+ready so it can tell the user and attach the finished audio. The completion
+agent follows the session's visible-reply contract: automatic final reply
+when configured, or `message(action="send")` when the session requires the
+message tool. If the requester session is inactive or its wake fails and
+generated audio is still missing from the reply, OpenClaw sends an
+idempotent direct fallback with just the missing audio.
 
 ## Quick start
 
-### Shared provider-backed generation
+<Tabs>
+  <Tab title="Shared provider-backed">
+    <Steps>
+      <Step title="Configure auth">
+        Set an API key for at least one provider — for example
+        `GEMINI_API_KEY` or `MINIMAX_API_KEY`.
+      </Step>
+      <Step title="Pick a default model (optional)">
+        ```json5
+        {
+          agents: {
+            defaults: {
+              mediaModels: {
+                music: {
+                  primary: "google/lyria-3-clip-preview",
+                },
+              },
+            },
+          },
+        }
+        ```
+      </Step>
+      <Step title="Ask the agent">
+        _"Generate an upbeat synthpop track about a night drive through a
+        neon city."_
 
-1. Set an API key for at least one provider, for example `GEMINI_API_KEY` or
-   `MINIMAX_API_KEY`.
-2. Optionally set your preferred model:
+        The agent calls `music_generate` automatically. No tool
+        allow-listing needed.
+      </Step>
+    </Steps>
 
-```json5
-{
-  agents: {
-    defaults: {
-      musicGenerationModel: {
-        primary: "google/lyria-3-clip-preview",
-      },
-    },
-  },
-}
-```
+    Without a session-backed agent run (direct/local contexts), the tool
+    runs inline and returns the final media path in the same tool result.
 
-3. Ask the agent: _"Generate an upbeat synthpop track about a night drive
-   through a neon city."_
-
-The agent calls `music_generate` automatically. No tool allow-listing needed.
-
-For direct synchronous contexts without a session-backed agent run, the built-in
-tool still falls back to inline generation and returns the final media path in
-the tool result.
+  </Tab>
+  <Tab title="ComfyUI workflow">
+    <Steps>
+      <Step title="Configure the workflow">
+        Configure `plugins.entries.comfy.config.music` with a workflow
+        JSON and prompt/output nodes.
+      </Step>
+      <Step title="Cloud auth (optional)">
+        For Comfy Cloud, set `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY`.
+      </Step>
+      <Step title="Call the tool">
+        ```text
+        /tool music_generate prompt="Warm ambient synth loop with soft tape texture"
+        ```
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
 
 Example prompts:
 
@@ -61,51 +92,11 @@ Generate a cinematic piano track with soft strings and no vocals.
 Generate an energetic chiptune loop about launching a rocket at sunrise.
 ```
 
-### Workflow-driven Comfy generation
-
-The bundled `comfy` plugin plugs into the shared `music_generate` tool through
-the music-generation provider registry.
-
-1. Configure `models.providers.comfy.music` with a workflow JSON and
-   prompt/output nodes.
-2. If you use Comfy Cloud, set `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY`.
-3. Ask the agent for music or call the tool directly.
-
-Example:
-
-```text
-/tool music_generate prompt="Warm ambient synth loop with soft tape texture"
-```
-
-## Shared bundled provider support
-
-| Provider | Default model          | Reference inputs | Supported controls                                        | API key                                |
-| -------- | ---------------------- | ---------------- | --------------------------------------------------------- | -------------------------------------- |
-| ComfyUI  | `workflow`             | Up to 1 image    | Workflow-defined music or audio                           | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
-| Google   | `lyria-3-clip-preview` | Up to 10 images  | `lyrics`, `instrumental`, `format`                        | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
-| MiniMax  | `music-2.5+`           | None             | `lyrics`, `instrumental`, `durationSeconds`, `format=mp3` | `MINIMAX_API_KEY`                      |
-
-### Declared capability matrix
-
-This is the explicit mode contract used by `music_generate`, contract tests,
-and the shared live sweep.
-
-| Provider | `generate` | `edit` | Edit limit | Shared live lanes                                                         |
-| -------- | ---------- | ------ | ---------- | ------------------------------------------------------------------------- |
-| ComfyUI  | Yes        | Yes    | 1 image    | Not in the shared sweep; covered by `extensions/comfy/comfy.live.test.ts` |
-| Google   | Yes        | Yes    | 10 images  | `generate`, `edit`                                                        |
-| MiniMax  | Yes        | No     | None       | `generate`                                                                |
-
-Use `action: "list"` to inspect available shared providers and models at
-runtime:
+Use `action: "list"` to inspect available providers/models, and
+`action: "status"` to inspect the active session-backed music task:
 
 ```text
 /tool music_generate action=list
-```
-
-Use `action: "status"` to inspect the active session-backed music task:
-
-```text
 /tool music_generate action=status
 ```
 
@@ -115,47 +106,123 @@ Direct generation example:
 /tool music_generate prompt="Dreamy lo-fi hip hop with vinyl texture and gentle rain" instrumental=true
 ```
 
-## Built-in tool parameters
+## Supported providers
 
-| Parameter         | Type     | Description                                                                                       |
-| ----------------- | -------- | ------------------------------------------------------------------------------------------------- |
-| `prompt`          | string   | Music generation prompt (required for `action: "generate"`)                                       |
-| `action`          | string   | `"generate"` (default), `"status"` for the current session task, or `"list"` to inspect providers |
-| `model`           | string   | Provider/model override, e.g. `google/lyria-3-pro-preview` or `comfy/workflow`                    |
-| `lyrics`          | string   | Optional lyrics when the provider supports explicit lyric input                                   |
-| `instrumental`    | boolean  | Request instrumental-only output when the provider supports it                                    |
-| `image`           | string   | Single reference image path or URL                                                                |
-| `images`          | string[] | Multiple reference images (up to 10)                                                              |
-| `durationSeconds` | number   | Target duration in seconds when the provider supports duration hints                              |
-| `format`          | string   | Output format hint (`mp3` or `wav`) when the provider supports it                                 |
-| `filename`        | string   | Output filename hint                                                                              |
+| Provider   | Default model                | Reference inputs | Supported controls                                    | Auth                                   |
+| ---------- | ---------------------------- | ---------------- | ----------------------------------------------------- | -------------------------------------- |
+| ComfyUI    | `workflow`                   | Up to 1 image    | Workflow-defined music or audio                       | `COMFY_API_KEY`, `COMFY_CLOUD_API_KEY` |
+| fal        | `fal-ai/minimax-music/v2.6`  | None             | `lyrics`, `instrumental`, `durationSeconds`, `format` | `FAL_KEY` or `FAL_API_KEY`             |
+| Google     | `lyria-3-clip-preview`       | Up to 10 images  | `lyrics`, `instrumental`, `format`                    | `GEMINI_API_KEY`, `GOOGLE_API_KEY`     |
+| MiniMax    | `music-2.6`                  | None             | `lyrics`, `instrumental`, `format` (mp3 only)         | `MINIMAX_API_KEY` or MiniMax OAuth     |
+| OpenRouter | `google/lyria-3-pro-preview` | Up to 1 image    | `lyrics`, `instrumental`, `durationSeconds`, `format` | `OPENROUTER_API_KEY`                   |
 
-Not all providers support all parameters. OpenClaw still validates hard limits
-such as input counts before submission. When a provider supports duration but
-uses a shorter maximum than the requested value, OpenClaw automatically clamps
-to the closest supported duration. Truly unsupported optional hints are ignored
-with a warning when the selected provider or model cannot honor them.
+MiniMax registers two provider ids sharing the same models: `minimax` for
+API-key auth and `minimax-portal` for OAuth. Model refs follow the auth path
+(`minimax/music-2.6` vs `minimax-portal/music-2.6`); see
+[MiniMax](/providers/minimax#music-generation).
 
-Tool results report the applied settings. When OpenClaw clamps duration during provider fallback, the returned `durationSeconds` reflects the submitted value and `details.normalization.durationSeconds` shows the requested-to-applied mapping.
+fal also exposes `fal-ai/ace-step/prompt-to-audio` (wav, no lyrics, no
+instrumental toggle) and `fal-ai/stable-audio-25/text-to-audio` (wav,
+prompt-only) alongside its default MiniMax-backed model. Google's default
+`lyria-3-clip-preview` outputs mp3 only; `lyria-3-pro-preview` also supports
+wav. MiniMax also exposes `music-2.6-free`, `music-cover`, and
+`music-cover-free`. OpenRouter also exposes `google/lyria-3-clip-preview`.
 
-## Async behavior for the shared provider-backed path
+### Capability matrix
 
-- Session-backed agent runs: `music_generate` creates a background task, returns a started/task response immediately, and posts the finished track later in a follow-up agent message.
-- Duplicate prevention: while that background task is still `queued` or `running`, later `music_generate` calls in the same session return task status instead of starting another generation.
-- Status lookup: use `action: "status"` to inspect the active session-backed music task without starting a new one.
-- Task tracking: use `openclaw tasks list` or `openclaw tasks show <taskId>` to inspect queued, running, and terminal status for the generation.
-- Completion wake: OpenClaw injects an internal completion event back into the same session so the model can write the user-facing follow-up itself.
-- Prompt hint: later user/manual turns in the same session get a small runtime hint when a music task is already in flight so the model does not blindly call `music_generate` again.
-- No-session fallback: direct/local contexts without a real agent session still run inline and return the final audio result in the same turn.
+The explicit mode contract used by `music_generate`, contract tests, and the
+shared live sweep:
+
+| Provider   | `generate` | `edit` | Edit limit | Shared live lanes                                                         |
+| ---------- | :--------: | :----: | ---------- | ------------------------------------------------------------------------- |
+| ComfyUI    |     ✓      |   ✓    | 1 image    | Not in the shared sweep; covered by `extensions/comfy/comfy.live.test.ts` |
+| fal        |     ✓      |   —    | None       | `generate`                                                                |
+| Google     |     ✓      |   ✓    | 10 images  | `generate`, `edit`                                                        |
+| MiniMax    |     ✓      |   —    | None       | `generate`                                                                |
+| OpenRouter |     ✓      |   ✓    | 1 image    | `generate`, `edit`                                                        |
+
+## Tool parameters
+
+<ParamField path="prompt" type="string" required>
+  Music generation prompt. Required for `action: "generate"`.
+</ParamField>
+<ParamField path="action" type='"generate" | "status" | "list"' default="generate">
+  `"status"` returns the current session task; `"list"` inspects providers.
+</ParamField>
+<ParamField path="model" type="string">
+  Provider/model override (e.g. `google/lyria-3-pro-preview`,
+  `comfy/workflow`).
+</ParamField>
+<ParamField path="lyrics" type="string">
+  Optional lyrics when the provider supports explicit lyric input.
+</ParamField>
+<ParamField path="instrumental" type="boolean">
+  Request instrumental-only output when the provider supports it.
+</ParamField>
+<ParamField path="image" type="string">
+  Single reference image path or URL.
+</ParamField>
+<ParamField path="images" type="string[]">
+  Multiple reference images (up to 10 on supporting providers).
+</ParamField>
+<ParamField path="durationSeconds" type="number">
+  Target duration in seconds when the provider supports duration hints.
+</ParamField>
+<ParamField path="format" type='"mp3" | "wav"'>
+  Output format hint when the provider supports it.
+</ParamField>
+<ParamField path="filename" type="string">Output filename hint.</ParamField>
+
+<Note>
+Not all providers support all parameters. OpenClaw still validates hard
+limits such as input counts before submission. When a provider supports
+duration but uses a shorter maximum than the requested value, OpenClaw
+clamps to the closest supported duration. Truly unsupported optional hints
+are ignored with a warning when the selected provider or model cannot honor
+them. Tool results report applied settings; `details.normalization`
+captures any requested-to-applied mapping.
+</Note>
+
+Provider request timeouts are operator configuration only. OpenClaw uses
+`agents.defaults.mediaModels.music.timeoutMs` when configured, raises
+values below 120000ms to 120000ms, and otherwise defaults provider requests
+to 300000ms.
+
+## Async behavior
+
+Session-backed music generation runs as a background task:
+
+- **Background task:** `music_generate` creates a background task, returns a
+  started/task response immediately, and posts the finished track later in
+  a follow-up agent message.
+- **Duplicate prevention:** while a task is `queued` or `running`, later
+  `music_generate` calls in the same session return task status instead of
+  starting another generation. Use `action: "status"` to check explicitly.
+  A recently completed matching request is also deduplicated for 2 minutes.
+- **Status lookup:** `openclaw tasks list` or `openclaw tasks show <taskId>`
+  inspects queued, running, and terminal status.
+- **Completion wake:** OpenClaw injects an internal completion event back
+  into the same session so the model can write the user-facing follow-up
+  itself.
+- **Prompt hint:** later user/manual turns in the same session get a small
+  runtime hint when a music task is already in flight, so the model does
+  not blindly call `music_generate` again.
+- **No-session fallback:** direct/local contexts without a real agent
+  session run inline and return the final audio result in the same turn.
 
 ### Task lifecycle
 
-Each `music_generate` request moves through four states:
+The music task surfaces the same states as the general task registry (see
+[Background tasks](/automation/tasks#task-lifecycle) for the full state
+machine, including `timed_out`, `cancelled`, and `lost`). Most music runs
+move through:
 
-1. **queued** -- task created, waiting for the provider to accept it.
-2. **running** -- provider is processing (typically 30 seconds to 3 minutes depending on provider and duration).
-3. **succeeded** -- track ready; the agent wakes and posts it to the conversation.
-4. **failed** -- provider error or timeout; the agent wakes with error details.
+| State       | Meaning                                                                                        |
+| ----------- | ---------------------------------------------------------------------------------------------- |
+| `queued`    | Task created, waiting for the provider to accept it.                                           |
+| `running`   | Provider is processing (typically 30 seconds to 3 minutes depending on provider and duration). |
+| `succeeded` | Track ready; the agent wakes and posts it to the conversation.                                 |
+| `failed`    | Provider error or timeout; the agent wakes with error details.                                 |
 
 Check status from the CLI:
 
@@ -165,8 +232,6 @@ openclaw tasks show <taskId>
 openclaw tasks cancel <taskId>
 ```
 
-Duplicate prevention: if a music task is already `queued` or `running` for the current session, `music_generate` returns the existing task status instead of starting a new one. Use `action: "status"` to check explicitly without triggering a new generation.
-
 ## Configuration
 
 ### Model selection
@@ -175,9 +240,11 @@ Duplicate prevention: if a music task is already `queued` or `running` for the c
 {
   agents: {
     defaults: {
-      musicGenerationModel: {
-        primary: "google/lyria-3-clip-preview",
-        fallbacks: ["minimax/music-2.5+"],
+      mediaModels: {
+        music: {
+          primary: "google/lyria-3-clip-preview",
+          fallbacks: ["fal/fal-ai/minimax-music/v2.6", "minimax/music-2.6"],
+        },
       },
     },
   },
@@ -186,38 +253,77 @@ Duplicate prevention: if a music task is already `queued` or `running` for the c
 
 ### Provider selection order
 
-When generating music, OpenClaw tries providers in this order:
+For `music_generate`, OpenClaw tries providers in this order:
 
-1. `model` parameter from the tool call, if the agent specifies one
-2. `musicGenerationModel.primary` from config
-3. `musicGenerationModel.fallbacks` in order
-4. Auto-detection using auth-backed provider defaults only:
-   - current default provider first
-   - remaining registered music-generation providers in provider-id order
+1. `model` parameter from the tool call. When set, only this model is tried.
+2. `agents.defaults.mediaModels.music.primary` from config.
+3. `agents.defaults.mediaModels.music.fallbacks` in order.
+4. When neither a primary nor fallback model is configured, auto-detection using
+   configured provider defaults:
+   - current default text-model provider first, if it also offers music
+     generation;
+   - remaining registered music-generation providers, alphabetically by
+     provider id.
 
-If a provider fails, the next candidate is tried automatically. If all fail, the
-error includes details from each attempt.
+If a provider fails, the next candidate is tried automatically. If all
+fail, the error includes details from each attempt.
 
-Set `agents.defaults.mediaGenerationAutoProviderFallback: false` if you want
-music generation to use only the explicit `model`, `primary`, and `fallbacks`
-entries.
+Explicit music model configuration limits fallback to the configured list;
+OpenClaw does not append auto-detected providers.
 
 ## Provider notes
 
-- Google uses Lyria 3 batch generation. The current bundled flow supports
-  prompt, optional lyrics text, and optional reference images.
-- MiniMax uses the batch `music_generation` endpoint. The current bundled flow
-  supports prompt, optional lyrics, instrumental mode, duration steering, and
-  mp3 output.
-- ComfyUI support is workflow-driven and depends on the configured graph plus
-  node mapping for prompt/output fields.
+<AccordionGroup>
+  <Accordion title="ComfyUI">
+    Workflow-driven and depends on the configured graph plus node mapping
+    for prompt/output fields. The `comfy` plugin plugs into the shared
+    `music_generate` tool through the music-generation provider registry.
+  </Accordion>
+  <Accordion title="fal">
+    Uses fal model endpoints through the shared provider auth path. The
+    bundled provider defaults to `fal-ai/minimax-music/v2.6` and also exposes
+    `fal-ai/ace-step/prompt-to-audio` and
+    `fal-ai/stable-audio-25/text-to-audio` for prompt-to-audio requests.
+    Lyrics and instrumental mode are MiniMax-model-only; the other two
+    models are prompt-only.
+  </Accordion>
+  <Accordion title="Google (Lyria 3)">
+    Uses Lyria 3 batch generation. The current bundled flow supports
+    prompt, optional lyrics text, and optional reference images. The
+    default `lyria-3-clip-preview` model outputs mp3 only; the
+    `lyria-3-pro-preview` model also supports wav.
+  </Accordion>
+  <Accordion title="MiniMax">
+    Uses the batch `music_generation` endpoint. Supports prompt, optional
+    lyrics, instrumental mode, and mp3 output through either `minimax`
+    API-key auth or `minimax-portal` OAuth. Also exposes `music-2.6-free`,
+    `music-cover`, and `music-cover-free` models.
+  </Accordion>
+  <Accordion title="OpenRouter">
+    Uses OpenRouter chat completions audio output with streaming enabled. The
+    bundled provider defaults to `google/lyria-3-pro-preview` and also exposes
+    `openrouter/google/lyria-3-clip-preview`.
+  </Accordion>
+</AccordionGroup>
+
+## Choosing the right path
+
+- **Shared provider-backed** when you want model selection, provider
+  failover, and the built-in async task/status flow.
+- **Plugin path (ComfyUI)** when you need a custom workflow graph or a
+  provider that is not part of the shared bundled music capability.
+
+If you are debugging ComfyUI-specific behavior, see
+[ComfyUI](/providers/comfy). If you are debugging shared provider
+behavior, start with [fal](/providers/fal), [Google (Gemini)](/providers/google),
+[MiniMax](/providers/minimax), or [OpenRouter](/providers/openrouter).
 
 ## Provider capability modes
 
-The shared music-generation contract now supports explicit mode declarations:
+The shared music-generation contract supports explicit mode declarations:
 
-- `generate` for prompt-only generation
-- `edit` when the request includes one or more reference images
+- `generate` for prompt-only generation.
+- `edit` when the request includes one or more reference images.
 
 New provider implementations should prefer explicit mode blocks:
 
@@ -238,38 +344,34 @@ capabilities: {
 ```
 
 Legacy flat fields such as `maxInputImages`, `supportsLyrics`, and
-`supportsFormat` are not enough to advertise edit support. Providers should
-declare `generate` and `edit` explicitly so live tests, contract tests, and
-the shared `music_generate` tool can validate mode support deterministically.
-
-## Choosing the right path
-
-- Use the shared provider-backed path when you want model selection, provider failover, and the built-in async task/status flow.
-- Use a plugin path such as ComfyUI when you need a custom workflow graph or a provider that is not part of the shared bundled music capability.
-- If you are debugging ComfyUI-specific behavior, see [ComfyUI](/providers/comfy). If you are debugging shared provider behavior, start with [Google (Gemini)](/providers/google) or [MiniMax](/providers/minimax).
+`supportsFormat` are **not** enough to advertise edit support. Providers
+should declare `generate` and `edit` explicitly so live tests, contract
+tests, and the shared `music_generate` tool can validate mode support
+deterministically.
 
 ## Live tests
 
-Opt-in live coverage for the shared bundled providers:
+Opt-in live coverage for the shared bundled providers (fal, Google, MiniMax,
+OpenRouter):
 
 ```bash
 OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/music-generation-providers.live.test.ts
 ```
 
-Repo wrapper:
+Equivalent repo wrapper, which drives the same test file:
 
 ```bash
-pnpm test:live:media music
+pnpm test:live:media:music
 ```
 
-This live file loads missing provider env vars from `~/.profile`, prefers
-live/env API keys ahead of stored auth profiles by default, and runs both
-`generate` and declared `edit` coverage when the provider enables edit mode.
-
-Today that means:
+This live file uses already-exported provider env vars ahead of stored auth
+profiles by default, and runs both `generate` and declared `edit` coverage when
+the provider enables edit mode. Coverage today:
 
 - `google`: `generate` plus `edit`
+- `fal`: `generate` only
 - `minimax`: `generate` only
+- `openrouter`: `generate` plus `edit`
 - `comfy`: separate Comfy live coverage, not the shared provider sweep
 
 Opt-in live coverage for the bundled ComfyUI music path:
@@ -283,10 +385,10 @@ sections are configured.
 
 ## Related
 
-- [Background Tasks](/automation/tasks) - task tracking for detached `music_generate` runs
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) - `musicGenerationModel` config
+- [Background tasks](/automation/tasks) — task tracking for detached `music_generate` runs
 - [ComfyUI](/providers/comfy)
+- [Configuration reference](/gateway/config-agents#agent-defaults) — `agents.defaults.mediaModels.music` config
 - [Google (Gemini)](/providers/google)
 - [MiniMax](/providers/minimax)
-- [Models](/concepts/models) - model configuration and failover
-- [Tools Overview](/tools)
+- [Models](/concepts/models) — model configuration and failover
+- [Tools overview](/tools)

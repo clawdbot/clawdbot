@@ -1,9 +1,13 @@
 {
   "id": "mattermost",
-  "channels": ["mattermost"],
-  "channelEnvVars": {
-    "mattermost": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]
+  "doctorContract": {
+    "configRepair": true
   },
+  "icon": "https://cdn.simpleicons.org/mattermost",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["mattermost"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

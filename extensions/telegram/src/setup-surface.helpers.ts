@@ -1,19 +1,19 @@
+// Telegram helper module supports setup surface.helpers behavior.
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
-  addWildcardAllowFrom,
   applySetupAccountConfigPatch,
-  type ChannelSetupDmPolicy,
   DEFAULT_ACCOUNT_ID,
   type OpenClawConfig,
   patchChannelConfigForAccount,
 } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
-import { promptTelegramAllowFromForAccount } from "./setup-core.js";
+import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
 
 const channel = "telegram" as const;
 
@@ -39,6 +39,7 @@ export function ensureTelegramDefaultGroupMentionGate(
         },
       },
     },
+    setupSurface: telegramSetupAdapter,
   });
 }
 
@@ -66,44 +67,30 @@ export function buildTelegramDmAccessWarningLines(accountId: string): string[] {
   ];
 }
 
-export const telegramSetupDmPolicy: ChannelSetupDmPolicy = {
+export const telegramSetupDmPolicy = createChannelDmPolicy({
   label: "Telegram",
   channel,
-  policyKey: "channels.telegram.dmPolicy",
-  allowFromKey: "channels.telegram.allowFrom",
-  resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultTelegramAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
-      ? {
-          policyKey: `channels.telegram.accounts.${accountId ?? resolveDefaultTelegramAccountId(cfg)}.dmPolicy`,
-          allowFromKey: `channels.telegram.accounts.${accountId ?? resolveDefaultTelegramAccountId(cfg)}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.telegram.dmPolicy",
-          allowFromKey: "channels.telegram.allowFrom",
-        },
-  getCurrent: (cfg, accountId) =>
-    mergeTelegramAccountConfig(cfg, accountId ?? resolveDefaultTelegramAccountId(cfg)).dmPolicy ??
-    "pairing",
-  setPolicy: (cfg, policy, accountId) => {
+  resolveAccount: (cfg, accountId) => {
     const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
-    const merged = mergeTelegramAccountConfig(cfg, resolvedAccountId);
-    const patch = {
-      dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(merged.allowFrom) } : {}),
+    return {
+      accountId: resolvedAccountId,
+      config: mergeTelegramAccountConfig(cfg, resolvedAccountId),
     };
-    return accountId == null && resolvedAccountId !== DEFAULT_ACCOUNT_ID
+  },
+  applyPatch: ({ cfg, requestedAccountId, account, patch }) =>
+    requestedAccountId == null && account.accountId !== DEFAULT_ACCOUNT_ID
       ? applySetupAccountConfigPatch({
           cfg,
           channelKey: channel,
-          accountId: resolvedAccountId,
+          accountId: account.accountId,
           patch,
         })
       : patchChannelConfigForAccount({
           cfg,
           channel,
-          accountId: resolvedAccountId,
+          accountId: account.accountId,
           patch,
-        });
-  },
+          setupSurface: telegramSetupAdapter,
+        }),
   promptAllowFrom: promptTelegramAllowFromForAccount,
-};
+});

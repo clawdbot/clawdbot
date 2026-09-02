@@ -1,3 +1,4 @@
+// Lmstudio provider module implements model/runtime integration.
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   hasConfiguredSecretInput,

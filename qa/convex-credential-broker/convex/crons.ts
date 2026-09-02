@@ -1,3 +1,4 @@
+// Crons module supports OpenClaw QA credential workflows.
 import { cronJobs } from "convex/server";
 import { internal } from "./_generated/api";
 

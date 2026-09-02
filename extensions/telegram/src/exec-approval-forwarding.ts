@@ -1,10 +1,11 @@
+// Telegram plugin module implements exec approval forwarding behavior.
 import {
-  buildExecApprovalPendingReplyPayload,
+  buildTypedExecApprovalPendingReplyPayload,
   resolveExecApprovalRequestAllowedDecisions,
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ExecApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
+import type { ExecApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { isTelegramExecApprovalClientEnabled } from "./exec-approvals.js";
 
@@ -30,14 +31,16 @@ export function buildTelegramExecApprovalPendingPayload(params: {
   request: ExecApprovalRequest;
   nowMs: number;
 }) {
-  return buildExecApprovalPendingReplyPayload({
+  return buildTypedExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id,
+    warningText: params.request.request.warningText ?? undefined,
     command: resolveExecApprovalCommandDisplay(params.request.request).commandText,
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
+    scope: params.request.request.scope ?? undefined,
     allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,

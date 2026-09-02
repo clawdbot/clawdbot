@@ -1,44 +1,57 @@
+// Qa Lab plugin module implements live transport cli behavior.
 import type { Command } from "commander";
-import { collectString } from "../../cli-options.js";
+import type {
+  LiveTransportQaCommandOptions as QaRunnerCommandOptions,
+  QaRunnerCliRegistration,
+} from "openclaw/plugin-sdk/qa-runner-runtime";
+import { parseQaCliPositiveIntegerOption } from "../../cli-options.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../providers/index.js";
-import type { QaProviderModeInput } from "../../run-config.js";
+import type { QaTransportAdapterFactory } from "../../qa-transport-registry.js";
 
-export type LiveTransportQaCommandOptions = {
-  repoRoot?: string;
-  outputDir?: string;
-  providerMode?: QaProviderModeInput;
-  primaryModel?: string;
-  alternateModel?: string;
-  fastMode?: boolean;
-  allowFailures?: boolean;
-  scenarioIds?: string[];
-  sutAccountId?: string;
-  credentialSource?: string;
-  credentialRole?: string;
+export type LiveTransportQaCommandOptions = QaRunnerCommandOptions & {
+  concurrency?: number;
 };
 
 type LiveTransportQaCommanderOptions = {
+  concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
-  providerMode?: QaProviderModeInput;
+  providerMode?: string;
   model?: string;
   altModel?: string;
   scenario?: string[];
+  listScenarios?: boolean;
   fast?: boolean;
   allowFailures?: boolean;
+  failFast?: boolean;
+  profile?: string;
   sutAccount?: string;
   credentialSource?: string;
   credentialRole?: string;
 };
 
-export type LiveTransportQaCliRegistration = {
-  commandName: string;
-  register(qa: Command): void;
+export type LiveTransportQaCliRegistration = Omit<QaRunnerCliRegistration, "adapterFactory"> & {
+  adapterFactory?: QaTransportAdapterFactory;
 };
 
-export type LiveTransportQaCredentialCliOptions = {
-  sourceDescription?: string;
-  roleDescription?: string;
+type LiveTransportQaCliRegistrationOptions = {
+  commandName: string;
+  credentialOptions?: {
+    sourceDescription?: string;
+    roleDescription?: string;
+  };
+  defaultProviderMode: string;
+  description: string;
+  providerModeHelp: string;
+  listScenariosHelp?: string;
+  outputDirHelp: string;
+  profileHelp?: string;
+  failFastHelp?: string;
+  allowFailuresHelp?: string;
+  scenarioHelp: string;
+  sutAccountHelp: string;
+  adapterFactory?: QaTransportAdapterFactory;
+  run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
 };
 
 export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
@@ -49,10 +62,14 @@ export function createLazyCliRuntimeLoader<T>(load: () => Promise<T>) {
   };
 }
 
-export function mapLiveTransportQaCommanderOptions(
-  opts: LiveTransportQaCommanderOptions,
-): LiveTransportQaCommandOptions {
+function collectStringOption(value: string, previous: string[]) {
+  const trimmed = value.trim();
+  return trimmed ? [...previous, trimmed] : previous;
+}
+
+function mapCommanderOptions(opts: LiveTransportQaCommanderOptions): LiveTransportQaCommandOptions {
   return {
+    ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
     repoRoot: opts.repoRoot,
     outputDir: opts.outputDir,
     providerMode: opts.providerMode,
@@ -60,78 +77,142 @@ export function mapLiveTransportQaCommanderOptions(
     alternateModel: opts.altModel,
     fastMode: opts.fast,
     allowFailures: opts.allowFailures,
+    failFast: opts.failFast,
+    profile: opts.profile,
     scenarioIds: opts.scenario,
+    listScenarios: opts.listScenarios,
     sutAccountId: opts.sutAccount,
     credentialSource: opts.credentialSource,
     credentialRole: opts.credentialRole,
   };
 }
 
-export function registerLiveTransportQaCli(params: {
-  qa: Command;
-  commandName: string;
-  credentialOptions?: LiveTransportQaCredentialCliOptions;
-  description: string;
-  outputDirHelp: string;
-  scenarioHelp: string;
-  sutAccountHelp: string;
-  run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-}) {
-  const command = params.qa
-    .command(params.commandName)
-    .description(params.description)
-    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
-    .option("--output-dir <path>", params.outputDirHelp)
-    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
-    .option("--model <ref>", "Primary provider/model ref")
-    .option("--alt-model <ref>", "Alternate provider/model ref")
-    .option("--scenario <id>", params.scenarioHelp, collectString, [])
-    .option("--fast", "Enable provider fast mode where supported", false)
-    .option(
-      "--allow-failures",
-      "Write artifacts without setting a failing exit code when scenarios fail",
-      false,
-    )
-    .option("--sut-account <id>", params.sutAccountHelp, "sut");
-
-  if (params.credentialOptions) {
-    command.option(
-      "--credential-source <source>",
-      params.credentialOptions.sourceDescription ??
-        "Credential source for live lanes: env or convex (default: env)",
-    );
-    if (params.credentialOptions.roleDescription) {
-      command.option("--credential-role <role>", params.credentialOptions.roleDescription);
-    }
-  }
-
-  command.action(async (opts: LiveTransportQaCommanderOptions) => {
-    await params.run(mapLiveTransportQaCommanderOptions(opts));
-  });
-}
-
-export function createLiveTransportQaCliRegistration(params: {
-  commandName: string;
-  credentialOptions?: LiveTransportQaCredentialCliOptions;
-  description: string;
-  outputDirHelp: string;
-  scenarioHelp: string;
-  sutAccountHelp: string;
-  run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-}): LiveTransportQaCliRegistration {
+function createSharedLiveTransportQaCliRegistration(
+  params: LiveTransportQaCliRegistrationOptions,
+): LiveTransportQaCliRegistration {
   return {
     commandName: params.commandName,
+    adapterFactory: params.adapterFactory,
     register(qa: Command) {
-      registerLiveTransportQaCli({
-        qa,
-        commandName: params.commandName,
-        credentialOptions: params.credentialOptions,
-        description: params.description,
-        outputDirHelp: params.outputDirHelp,
-        scenarioHelp: params.scenarioHelp,
-        sutAccountHelp: params.sutAccountHelp,
-        run: params.run,
+      const command = qa
+        .command(params.commandName)
+        .description(params.description)
+        .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+        .option("--output-dir <path>", params.outputDirHelp)
+        .option("--provider-mode <mode>", params.providerModeHelp, params.defaultProviderMode)
+        .option("--model <ref>", "Primary provider/model ref")
+        .option("--alt-model <ref>", "Alternate provider/model ref")
+        .option("--scenario <id>", params.scenarioHelp, collectStringOption, [])
+        .option("--fast", "Enable provider fast mode where supported");
+
+      if (params.adapterFactory?.isolatesInstances === true) {
+        command.option(
+          "--concurrency <count>",
+          "Scenario worker concurrency (bounded by the transport limit)",
+          (value: string) => parseQaCliPositiveIntegerOption(value, "--concurrency"),
+        );
+      }
+      if (params.allowFailuresHelp) {
+        command.option("--allow-failures", params.allowFailuresHelp, false);
+      }
+      command.option("--sut-account <id>", params.sutAccountHelp, "sut");
+      if (params.listScenariosHelp) {
+        command.option("--list-scenarios", params.listScenariosHelp, false);
+      }
+      if (params.profileHelp) {
+        command.option("--profile <profile>", params.profileHelp);
+      }
+      if (params.failFastHelp) {
+        command.option("--fail-fast", params.failFastHelp, false);
+      }
+      if (params.credentialOptions) {
+        command.option(
+          "--credential-source <source>",
+          params.credentialOptions.sourceDescription ??
+            "Credential source for live lanes: env or convex (default: env)",
+        );
+        if (params.credentialOptions.roleDescription) {
+          command.option("--credential-role <role>", params.credentialOptions.roleDescription);
+        }
+      }
+      command.action(async (opts: LiveTransportQaCommanderOptions) => {
+        await params.run(mapCommanderOptions(opts));
       });
     },
   };
+}
+
+// All dedicated commands share one memoized import of the consolidated suite host.
+export const loadLiveTransportQaSuiteRuntime = createLazyCliRuntimeLoader<
+  typeof import("./live-transport-suite.runtime.js")
+>(() => import("./live-transport-suite.runtime.js"));
+
+type QaLabLiveTransportQaCliRegistrationOptions = Omit<
+  LiveTransportQaCliRegistrationOptions,
+  "allowFailuresHelp" | "defaultProviderMode" | "providerModeHelp"
+> & {
+  defaultProviderMode?: LiveTransportQaCliRegistrationOptions["defaultProviderMode"];
+};
+
+export function createLiveTransportQaCliRegistration(
+  params: QaLabLiveTransportQaCliRegistrationOptions,
+) {
+  return createSharedLiveTransportQaCliRegistration({
+    ...params,
+    allowFailuresHelp: "Write artifacts without setting a failing exit code when scenarios fail",
+    defaultProviderMode: params.defaultProviderMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
+    providerModeHelp: formatQaProviderModeHelp(),
+  });
+}
+
+export function createLiveTransportQaAdapterFactory(params: {
+  create: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
+  id: string;
+  isolatesInstances?: boolean;
+  supportsModuleFlows?: true;
+  prepareSelectedScenarios?: QaTransportAdapterFactory["prepareSelectedScenarios"];
+}): NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]> {
+  return {
+    id: params.id,
+    isolatesInstances: params.isolatesInstances,
+    supportsModuleFlows: params.supportsModuleFlows,
+    ...(params.prepareSelectedScenarios
+      ? { prepareSelectedScenarios: params.prepareSelectedScenarios }
+      : {}),
+    matches: ({ channelId, driver }) => driver === "live" && channelId === params.id,
+    create: params.create,
+  };
+}
+
+export function createStandardLiveTransportQaCliRegistration(params: {
+  channelId: string;
+  channelLabel: string;
+  createAdapter: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
+  description: string;
+}): LiveTransportQaCliRegistration {
+  const adapterFactory = createLiveTransportQaAdapterFactory({
+    id: params.channelId,
+    supportsModuleFlows: true,
+    create: params.createAdapter,
+  });
+  return createLiveTransportQaCliRegistration({
+    commandName: params.channelId,
+    adapterFactory,
+    credentialOptions: {
+      sourceDescription: `Credential source for ${params.channelLabel} QA: env or convex (default: env)`,
+      roleDescription:
+        "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
+    },
+    description: params.description,
+    outputDirHelp: `${params.channelLabel} QA artifact directory`,
+    scenarioHelp: `Run only the named ${params.channelLabel} QA scenario (repeatable)`,
+    sutAccountHelp: `Temporary ${params.channelLabel} account id inside the QA gateway config`,
+    async run(options) {
+      const runtime = await loadLiveTransportQaSuiteRuntime();
+      await runtime.runStandardLiveTransportQaSuiteCommand({
+        channelId: params.channelId,
+        options,
+      });
+    },
+  });
 }

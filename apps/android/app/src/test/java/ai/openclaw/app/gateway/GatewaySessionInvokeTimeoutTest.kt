@@ -22,6 +22,37 @@ class GatewaySessionInvokeTimeoutTest {
   }
 
   @Test
+  fun buildGatewayWebSocketUrl_preservesAndEncodesContextPath() {
+    assertEquals(
+      "wss://gateway.example:443/openclaw%20gateway",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "/openclaw%20gateway",
+      ),
+    )
+    assertEquals(
+      "wss://gateway.example:443/openclaw%2Fgateway",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "/openclaw%2Fgateway",
+      ),
+    )
+    assertEquals(
+      "wss://gateway.example:443//openclaw",
+      buildGatewayWebSocketUrl(
+        host = "gateway.example",
+        port = 443,
+        useTls = true,
+        contextPath = "//openclaw",
+      ),
+    )
+  }
+
+  @Test
   fun resolveInvokeResultAckTimeoutMs_usesFloorWhenMissingOrTooSmall() {
     assertEquals(15_000L, resolveInvokeResultAckTimeoutMs(null))
     assertEquals(15_000L, resolveInvokeResultAckTimeoutMs(0L))
@@ -41,24 +72,14 @@ class GatewaySessionInvokeTimeoutTest {
   }
 
   @Test
-  fun replaceCanvasCapabilityInScopedHostUrl_rewritesTerminalCapabilitySegment() {
-    assertEquals(
-      "http://127.0.0.1:18789/__openclaw__/cap/new-token",
-      replaceCanvasCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token",
-        "new-token",
-      ),
-    )
+  fun resolveInvokeExecutionTimeoutMs_defaultsAndAllowsExplicitDisable() {
+    assertEquals(30_000L, resolveInvokeExecutionTimeoutMs(null))
+    assertEquals(null, resolveInvokeExecutionTimeoutMs(0L))
+    assertEquals(null, resolveInvokeExecutionTimeoutMs(-1L))
   }
 
   @Test
-  fun replaceCanvasCapabilityInScopedHostUrl_rewritesWhenQueryAndFragmentPresent() {
-    assertEquals(
-      "http://127.0.0.1:18789/__openclaw__/cap/new-token?a=1#frag",
-      replaceCanvasCapabilityInScopedHostUrl(
-        "http://127.0.0.1:18789/__openclaw__/cap/old-token?a=1#frag",
-        "new-token",
-      ),
-    )
+  fun resolveInvokeExecutionTimeoutMs_capsAtCoroutineTimerBound() {
+    assertEquals(Int.MAX_VALUE.toLong(), resolveInvokeExecutionTimeoutMs(Long.MAX_VALUE))
   }
 }

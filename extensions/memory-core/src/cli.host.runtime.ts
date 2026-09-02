@@ -1,8 +1,8 @@
+// Memory Core plugin module implements cli.host behavior.
 export {
-  colorize,
   defaultRuntime,
   formatErrorMessage,
-  isRich,
+  getMemoryEmbeddingCommandSecretTargetIds,
   resolveCommandSecretRefsViaGateway,
   setVerbose,
   shortenHomeInString,
@@ -13,14 +13,8 @@ export {
   withProgressTotals,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
 export {
-  loadConfig,
+  getRuntimeConfig,
   resolveDefaultAgentId,
-  resolveSessionTranscriptsDirForAgent,
-  resolveStateDir,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-export {
-  listMemoryFiles,
-  normalizeExtraMemoryPaths,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 export { getMemorySearchManager } from "./memory/index.js";

@@ -1,3 +1,5 @@
+// Capability registry tests cover plugin-owned capability precedence and
+// config-derived image-provider fallback registration.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "./provider-capability-registry.js";

@@ -1,4 +1,5 @@
-import { Type, type Static } from "@sinclair/typebox";
+// Feishu helper module supports perm schema behavior.
+import { Type, type Static } from "typebox";
 
 const TokenType = Type.Union([
   Type.Literal("doc"),

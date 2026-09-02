@@ -1,5 +1,7 @@
+// Covers gateway security audit aggregation.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
 
@@ -16,6 +18,24 @@ function hasFindingWithSeverity(
 }
 
 describe("security audit gateway config findings", () => {
+  it.each([
+    { bind: "loopback", allowTailscale: true, missingAuth: false },
+    { bind: "loopback", allowTailscale: false, missingAuth: true },
+    { bind: "lan", allowTailscale: true, missingAuth: true },
+  ] as const)("limits Tailscale auth to its enabled loopback path: %j", (testCase) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: testCase.bind,
+        auth: { allowTailscale: testCase.allowTailscale },
+        tailscale: { mode: "serve" },
+      },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {});
+    const checkId =
+      testCase.bind === "loopback" ? "gateway.loopback_no_auth" : "gateway.bind_no_auth";
+    expect(hasFindingWithSeverity(checkId, "critical", findings)).toBe(testCase.missingAuth);
+  });
+
   it("evaluates gateway auth presence and rate-limit guardrails", async () => {
     await Promise.all([
       withEnvAsync(
@@ -110,5 +130,92 @@ describe("security audit gateway config findings", () => {
         expect(hasFinding("gateway.auth_no_rate_limit", findings)).toBe(false);
       })(),
     ]);
+  });
+
+  it("honors runtime password auth override for bind auth checks", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: {},
+      },
+    };
+
+    const findings = collectGatewayConfigFindings(
+      cfg,
+      cfg,
+      {},
+      {
+        gatewayAuthOverride: {
+          mode: "password",
+          password: "runtime-gateway-password-1234567890", // pragma: allowlist secret
+        },
+      },
+    );
+
+    expect(hasFinding("gateway.bind_no_auth", findings)).toBe(false);
+  });
+
+  it("warns when OPENCLAW_GATEWAY_TOKEN shadows a different configured token source", () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { token: "config-token" } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(true);
+  });
+
+  it("does not warn inside the managed gateway service credential context", () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { token: "config-token" } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+      OPENCLAW_SERVICE_KIND: "gateway",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
+  });
+
+  it("does not count an unresolved token as configured auth", () => {
+    const config: OpenClawConfig = {
+      gateway: { bind: "lan", auth: { mode: "token", token: "${MISSING_TOKEN}" } },
+    };
+    setConfigResolutionFacts(config, new Set(["gateway.auth.token"]));
+
+    const unresolved = collectGatewayConfigFindings(config, config, {});
+    expect(hasFindingWithSeverity("gateway.bind_no_auth", "critical", unresolved)).toBe(true);
+
+    setConfigResolutionFacts(config, new Set());
+    const literal = collectGatewayConfigFindings(config, config, {});
+    expect(hasFinding("gateway.bind_no_auth", literal)).toBe(false);
+  });
+
+  it("does not warn when gateway.auth.token resolves from OPENCLAW_GATEWAY_TOKEN", () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+      secrets: { providers: { default: { source: "env" } } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
+  });
+
+  it("does not warn about local gateway auth token precedence in remote mode", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: { token: "remote-token" },
+        auth: { token: "local-token" },
+      },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
   });
 });

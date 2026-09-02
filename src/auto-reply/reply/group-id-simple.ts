@@ -1,5 +1,7 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+// Derives stable group ids from simple channel and conversation facts.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Extracts a simple group/channel id from stable group-like source ids. */
 export function extractSimpleExplicitGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
@@ -13,15 +15,6 @@ export function extractSimpleExplicitGroupId(raw: string | undefined | null): st
   if (parts.length >= 2 && (parts[0] === "group" || parts[0] === "channel")) {
     const joined = parts.slice(1).join(":");
     return joined.replace(/:topic:.*$/, "") || undefined;
-  }
-  if (parts.length >= 2 && parts[0] === "whatsapp") {
-    const joined = parts
-      .slice(1)
-      .join(":")
-      .replace(/:topic:.*$/, "");
-    if (/@g\.us$/i.test(joined)) {
-      return joined || undefined;
-    }
   }
   return undefined;
 }

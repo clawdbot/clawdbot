@@ -1,0 +1,129 @@
+title: Native command active session target evidence
+
+scenario:
+  id: native-command-session-target
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.native-command-session-target
+    secondary:
+      - channels.channel-native-commands
+  objective: Verify a channel-native `/stop` command aborts the active routed conversation session instead of its separate slash-command session.
+  successCriteria:
+    - A real delayed agent turn is active on the routed channel conversation session.
+    - The selected transport sends a provider-native command that targets the routed conversation session.
+    - Native `/stop` aborts the active turn, returns the abort acknowledgement, and unblocks the next turn.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/channels/telegram.md
+    - docs/help/testing.md
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/crabline-transport.ts
+    - extensions/telegram/src/bot-native-commands.ts
+    - src/channels/native-command-session-targets.ts
+    - src/auto-reply/reply/abort.ts
+  execution:
+    kind: flow
+    channel: telegram
+    suiteIsolation: isolated
+    isolationReason: Waits for the one active routed session before interrupting it with a provider-native command.
+    summary: Start a real delayed channel turn, abort it through native `/stop`, then prove the conversation is unblocked.
+    config:
+      requiredProviderMode: mock-openai
+      requiredChannelDriver: crabline
+      conversationId: native-stop-target
+      senderId: qa-native-operator
+      delayedPrompt: "Subagent recovery worker native command target proof. Wait until stopped."
+      abortReplyNeedle: Agent was aborted
+      recoveryMarker: QA-NATIVE-STOP-RECOVERY-OK
+
+flow:
+  steps:
+    - name: native stop targets the active conversation session
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this deterministic active-run proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForTransportReady
+          args:
+            - ref: env
+            - 60000
+        - resetTransport: true
+        # Telegram maps the logical QA conversation onto the leased physical group.
+        # The adapter delivery target is therefore the canonical routing peer.
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.conversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo } })"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.senderId
+            senderName: QA Native Operator
+            text:
+              expr: config.delayedPrompt
+        - call: waitForCondition
+          saveAs: activeSession
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === true))"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - 100
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendNativeCommand:
+            command: stop
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.senderId
+            senderName: QA Native Operator
+        - waitForOutbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            sinceIndex:
+              ref: startIndex
+            textIncludes:
+              expr: config.abortReplyNeedle
+            timeoutMs: 15000
+          saveAs: abortReply
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.senderId
+            senderName: QA Native Operator
+            text:
+              expr: "`Reply exactly: ${config.recoveryMarker}`"
+        - waitForOutbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            sinceIndex:
+              ref: startIndex
+            textIncludes:
+              expr: config.recoveryMarker
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 90000)
+          saveAs: recoveryReply
+      detailsExpr: "`native command reply=${abortReply.text}; recovery reply=${recoveryReply.text}`"

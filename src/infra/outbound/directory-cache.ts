@@ -1,98 +1,116 @@
+// Directory cache stores short-lived projections partitioned by config identity.
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../map-size.js";
 
 type CacheEntry<T> = {
   value: T;
   fetchedAt: number;
 };
 
-export type DirectoryCacheKey = {
+/**
+ * Stable dimensions that partition channel-directory cache entries.
+ */
+type DirectoryCacheKey = {
   channel: ChannelId;
   accountId?: string | null;
   kind: ChannelDirectoryEntryKind;
   source: "cache" | "live";
   signature?: string | null;
+  query?: string | null;
 };
 
+/**
+ * Serializes channel-directory lookup dimensions into a cache key.
+ */
 export function buildDirectoryCacheKey(key: DirectoryCacheKey): string {
   const signature = key.signature ?? "default";
-  return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${key.source}:${signature}`;
+  return `${key.channel}:${key.accountId ?? "default"}:${key.kind}:${key.source}:${signature}:query:${key.query ?? ""}`;
 }
 
+/**
+ * Small TTL cache for channel directory lookups tied to a config object reference.
+ */
 export class DirectoryCache<T> {
-  private readonly cache = new Map<string, CacheEntry<T>>();
-  private lastConfigRef: OpenClawConfig | null = null;
+  private cachesByConfig = new WeakMap<OpenClawConfig, Map<string, CacheEntry<T>>>();
+  private readonly ttlMs: number;
   private readonly maxSize: number;
 
-  constructor(
-    private readonly ttlMs: number,
-    maxSize = 2000,
-  ) {
-    this.maxSize = Math.max(1, Math.floor(maxSize));
+  constructor(ttlMs: number, maxSize = 2000) {
+    this.ttlMs = resolveNonNegativeIntegerOption(ttlMs, 0);
+    this.maxSize = Math.max(1, resolveNonNegativeIntegerOption(maxSize, 2000));
   }
 
+  /**
+   * Returns a cached value after applying config scoping, TTL, and capacity invalidation.
+   */
   get(key: string, cfg: OpenClawConfig): T | undefined {
-    this.resetIfConfigChanged(cfg);
-    this.pruneExpired(Date.now());
-    const entry = this.cache.get(key);
+    const cache = this.cacheForConfig(cfg);
+    this.pruneExpired(cache, Date.now());
+    const entry = cache.get(key);
     if (!entry) {
       return undefined;
     }
     return entry.value;
   }
 
+  /**
+   * Stores a value and refreshes its recency for bounded-size eviction.
+   */
   set(key: string, value: T, cfg: OpenClawConfig): void {
-    this.resetIfConfigChanged(cfg);
+    const cache = this.cacheForConfig(cfg);
     const now = Date.now();
-    this.pruneExpired(now);
+    this.pruneExpired(cache, now);
     // Refresh insertion order so active keys are less likely to be evicted.
-    if (this.cache.has(key)) {
-      this.cache.delete(key);
-    }
-    this.cache.set(key, { value, fetchedAt: now });
-    this.evictToMaxSize();
+    cache.delete(key);
+    cache.set(key, { value, fetchedAt: now });
+    pruneMapToMaxSize(cache, this.maxSize);
   }
 
-  clearMatching(match: (key: string) => boolean): void {
-    for (const key of this.cache.keys()) {
+  /**
+   * Clears matching entries without disturbing unrelated cached lookups.
+   */
+  clearMatching(match: (key: string) => boolean, cfg: OpenClawConfig): void {
+    const cache = this.cachesByConfig.get(cfg);
+    if (!cache) {
+      return;
+    }
+    for (const key of cache.keys()) {
       if (match(key)) {
-        this.cache.delete(key);
+        cache.delete(key);
       }
     }
   }
 
+  /**
+   * Drops one config scope or all cached entries.
+   */
   clear(cfg?: OpenClawConfig): void {
-    this.cache.clear();
     if (cfg) {
-      this.lastConfigRef = cfg;
+      this.cachesByConfig.delete(cfg);
+    } else {
+      this.cachesByConfig = new WeakMap();
     }
   }
 
-  private resetIfConfigChanged(cfg: OpenClawConfig): void {
-    if (this.lastConfigRef && this.lastConfigRef !== cfg) {
-      this.cache.clear();
+  private cacheForConfig(cfg: OpenClawConfig): Map<string, CacheEntry<T>> {
+    let cache = this.cachesByConfig.get(cfg);
+    if (!cache) {
+      cache = new Map();
+      this.cachesByConfig.set(cfg, cache);
     }
-    this.lastConfigRef = cfg;
+    return cache;
   }
 
-  private pruneExpired(now: number): void {
+  private pruneExpired(cache: Map<string, CacheEntry<T>>, now: number): void {
     if (this.ttlMs <= 0) {
       return;
     }
-    for (const [cacheKey, entry] of this.cache.entries()) {
-      if (now - entry.fetchedAt > this.ttlMs) {
-        this.cache.delete(cacheKey);
+    for (const [cacheKey, entry] of cache) {
+      if (now - entry.fetchedAt >= this.ttlMs) {
+        cache.delete(cacheKey);
       }
-    }
-  }
-
-  private evictToMaxSize(): void {
-    while (this.cache.size > this.maxSize) {
-      const oldestKey = this.cache.keys().next().value;
-      if (typeof oldestKey !== "string") {
-        break;
-      }
-      this.cache.delete(oldestKey);
     }
   }
 }

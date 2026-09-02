@@ -1,11 +1,14 @@
+// Diffs tests cover tool render output plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import type { DiffScreenshotter } from "./browser.js";
-import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
+import type { DiffScreenshotter } from "./browser.runtime.js";
+import { resolveDiffsPluginDefaults } from "./config.js";
 import { createDiffStoreHarness } from "./test-helpers.js";
+
+const DEFAULT_DIFFS_TOOL_DEFAULTS = resolveDiffsPluginDefaults(undefined);
 
 const { renderDiffDocumentMock } = vi.hoisted(() => ({
   renderDiffDocumentMock: vi.fn(),
@@ -14,6 +17,11 @@ const { renderDiffDocumentMock } = vi.hoisted(() => ({
 vi.mock("./render.js", () => ({
   renderDiffDocument: renderDiffDocumentMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("./render.js");
+  vi.resetModules();
+});
 
 describe("diffs tool rendered output guards", () => {
   let createDiffsTool: typeof import("./tool.js").createDiffsTool;
@@ -62,8 +70,8 @@ describe("diffs tool rendered output guards", () => {
       mode: "file",
     });
 
-    expect(screenshotter.screenshotHtml).toHaveBeenCalledTimes(1);
-    expect((result?.details as Record<string, unknown>).filePath).toEqual(expect.any(String));
+    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+    expect((result.details as Record<string, unknown>).filePath).toMatch(/preview\.png$/);
   });
 });
 

@@ -1,5 +1,7 @@
+// Resolves npm integrity metadata and detects package drift.
 import type { NpmIntegrityDrift, NpmSpecResolution } from "./install-source-utils.js";
 
+/** Payload passed to npm integrity drift handlers during archive installs. */
 export type NpmIntegrityDriftPayload = {
   spec: string;
   expectedIntegrity: string;
@@ -21,25 +23,36 @@ type ResolveNpmIntegrityDriftParams<TPayload> = {
   warn?: (payload: TPayload) => void;
 };
 
-export type ResolveNpmIntegrityDriftResult<TPayload> = {
+type ResolveNpmIntegrityDriftResult<TPayload> = {
   integrityDrift?: NpmIntegrityDrift;
   proceed: boolean;
   payload?: TPayload;
 };
 
-export async function resolveNpmIntegrityDrift<TPayload>(
+function normalizeIntegrity(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+/**
+ * Compares expected and resolved npm integrity values and asks the caller
+ * whether a drifted archive may still be installed.
+ */
+async function resolveNpmIntegrityDrift<TPayload>(
   params: ResolveNpmIntegrityDriftParams<TPayload>,
 ): Promise<ResolveNpmIntegrityDriftResult<TPayload>> {
-  if (!params.expectedIntegrity || !params.resolution.integrity) {
+  const expectedIntegrity = normalizeIntegrity(params.expectedIntegrity);
+  const actualIntegrity = normalizeIntegrity(params.resolution.integrity);
+  if (!expectedIntegrity || !actualIntegrity) {
     return { proceed: true };
   }
-  if (params.expectedIntegrity === params.resolution.integrity) {
+  if (expectedIntegrity === actualIntegrity) {
     return { proceed: true };
   }
 
   const integrityDrift: NpmIntegrityDrift = {
-    expectedIntegrity: params.expectedIntegrity,
-    actualIntegrity: params.resolution.integrity,
+    expectedIntegrity,
+    actualIntegrity,
   };
   const payload = params.createPayload({
     spec: params.spec,
@@ -48,7 +61,7 @@ export async function resolveNpmIntegrityDrift<TPayload>(
     resolution: params.resolution,
   });
 
-  let proceed = true;
+  let proceed = false;
   if (params.onIntegrityDrift) {
     proceed = await params.onIntegrityDrift(payload);
   } else {
@@ -66,6 +79,10 @@ type ResolveNpmIntegrityDriftWithDefaultMessageParams = {
   warn?: (message: string) => void;
 };
 
+/**
+ * Resolves integrity drift with OpenClaw's default warning and abort messages.
+ * Used by npm archive installers that do not need a custom payload shape.
+ */
 export async function resolveNpmIntegrityDriftWithDefaultMessage(
   params: ResolveNpmIntegrityDriftWithDefaultMessageParams,
 ): Promise<{ integrityDrift?: NpmIntegrityDrift; error?: string }> {

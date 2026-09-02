@@ -1,17 +1,26 @@
+// Tlon plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createHybridChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
-import { createTlonSetupWizardBase, tlonSetupAdapter } from "./setup-core.js";
+import { createTlonSetupWizardBase, tlonSetupContract } from "./setup-core.js";
 import {
   formatTargetHint,
   normalizeShip,
@@ -58,6 +67,34 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
     allowFrom.map((entry) => normalizeShip(String(entry))).filter(Boolean),
 });
 
+const tlonChannelOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
+  textChunkLimit: 10000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+  resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
+  },
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadTlonChannelRuntime,
+    sendText: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendText },
+    sendMedia: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendMedia },
+  }),
+};
+
+const tlonMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: TLON_CHANNEL_ID,
+  outbound: tlonChannelOutbound,
+});
+
 export const tlonPlugin = createChatChannelPlugin({
   base: {
     id: TLON_CHANNEL_ID,
@@ -77,7 +114,7 @@ export const tlonPlugin = createChatChannelPlugin({
       reply: true,
       threads: true,
     },
-    setup: tlonSetupAdapter,
+    setupContract: tlonSetupContract,
     setupWizard: tlonSetupWizardProxy,
     reload: { configPrefixes: ["channels.tlon"] },
     configSchema: tlonChannelConfigSchema,
@@ -96,6 +133,7 @@ export const tlonPlugin = createChatChannelPlugin({
     },
     doctor: tlonDoctor,
     messaging: {
+      targetPrefixes: ["tlon"],
       normalizeTarget: (target) => {
         const parsed = parseTlonTarget(target);
         if (!parsed) {
@@ -106,12 +144,17 @@ export const tlonPlugin = createChatChannelPlugin({
         }
         return parsed.nest;
       },
+      inferTargetChatType: ({ to }) => {
+        const target = parseTlonTarget(to);
+        return target ? (target.kind === "dm" ? "direct" : "group") : undefined;
+      },
       targetResolver: {
         looksLikeId: (target) => Boolean(parseTlonTarget(target)),
         hint: formatTargetHint(),
       },
       resolveOutboundSessionRoute: (params) => resolveTlonOutboundSessionRoute(params),
     },
+    message: tlonMessageAdapter,
     status: createComputedAccountStatusAdapter<ReturnType<typeof resolveTlonAccount>>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       collectStatusIssues: (accounts) => {
@@ -137,11 +180,11 @@ export const tlonPlugin = createChatChannelPlugin({
           url: s.url ?? null,
         };
       },
-      probeAccount: async ({ account }) => {
+      probeAccount: async ({ account, timeoutMs }) => {
         if (!account.configured || !account.ship || !account.url || !account.code) {
           return { ok: false, error: "Not configured" };
         }
-        return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never);
+        return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never, timeoutMs);
       },
       resolveAccountSnapshot: ({ account }) => ({
         accountId: account.accountId,
@@ -159,14 +202,5 @@ export const tlonPlugin = createChatChannelPlugin({
         await (await loadTlonChannelRuntime()).startTlonGatewayAccount(ctx),
     },
   },
-  outbound: {
-    deliveryMode: "direct",
-    textChunkLimit: 10000,
-    resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
-    ...createRuntimeOutboundDelegates({
-      getRuntime: loadTlonChannelRuntime,
-      sendText: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendText },
-      sendMedia: { resolve: (runtime) => runtime.tlonRuntimeOutbound.sendMedia },
-    }),
-  },
+  outbound: tlonChannelOutbound,
 });

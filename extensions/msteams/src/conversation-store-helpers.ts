@@ -1,4 +1,6 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Msteams helper module supports conversation store helpers behavior.
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   MSTeamsConversationStoreEntry,
   StoredConversationReference,
@@ -9,14 +11,7 @@ export function normalizeStoredConversationId(raw: string): string {
 }
 
 export function parseStoredConversationTimestamp(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return parsed;
+  return parseDateStringTimestampMs(value) ?? null;
 }
 
 export function toConversationStoreEntries(
@@ -37,12 +32,8 @@ export function mergeStoredConversationReference(
     // Preserve fields from the previous entry that may not be present on every
     // inbound activity. Without this, sparse activities (e.g. conversationUpdate,
     // reactions) would clear previously captured values. Some fields are only
-    // populated opportunistically, such as timezone from clientInfo entities and
-    // graphChatId from Graph lookups used for DM media downloads.
+    // populated opportunistically, such as timezone from clientInfo entities.
     ...(existing?.timezone && !incoming.timezone ? { timezone: existing.timezone } : {}),
-    ...(existing?.graphChatId && !incoming.graphChatId
-      ? { graphChatId: existing.graphChatId }
-      : {}),
     ...(existing?.tenantId && !incoming.tenantId ? { tenantId: existing.tenantId } : {}),
     ...(existing?.aadObjectId && !incoming.aadObjectId
       ? { aadObjectId: existing.aadObjectId }

@@ -1,6 +1,6 @@
+// Qa Lab plugin module implements suite runtime transport behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import {
-  createFailureAwareTransportWaitForCondition,
   findFailureOutboundMessage as findTransportFailureOutboundMessage,
   waitForQaTransportCondition,
   type QaTransportState,
@@ -8,39 +8,42 @@ import {
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type { QaBusMessage } from "./runtime-api.js";
 
+type WaitForNoOutboundOptions = {
+  sinceIndex?: number;
+};
+
 function findFailureOutboundMessage(
   state: QaTransportState,
-  options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
+  options?: { accountId?: string; sinceIndex?: number; cursorSpace?: "all" | "outbound" },
 ) {
   return findTransportFailureOutboundMessage(state, options);
 }
-
-function createScenarioWaitForCondition(state: QaTransportState) {
-  return createFailureAwareTransportWaitForCondition(state);
-}
-
-const waitForCondition = createScenarioWaitForCondition;
 
 async function waitForOutboundMessage(
   state: QaTransportState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
-  options?: { sinceIndex?: number },
+  options?: { accountId?: string; sinceIndex?: number },
 ) {
   return await waitForQaTransportCondition(() => {
     const failureMessage = findFailureOutboundMessage(state, options);
     if (failureMessage) {
-      throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+      throw new Error(extractQaFailureReplyText(failureMessage) ?? failureMessage.text);
     }
     const match = state
       .getSnapshot()
       .messages.filter((message: QaBusMessage) => message.direction === "outbound")
       .slice(options?.sinceIndex ?? 0)
-      .find(predicate);
+      .find(
+        (message) =>
+          !message.deleted &&
+          (!options?.accountId || message.accountId === options.accountId) &&
+          predicate(message),
+      );
     if (!match) {
       return undefined;
     }
-    const failureReply = extractQaFailureReplyText(match.text);
+    const failureReply = extractQaFailureReplyText(match);
     if (failureReply) {
       throw new Error(failureReply);
     }
@@ -48,13 +51,25 @@ async function waitForOutboundMessage(
   }, timeoutMs);
 }
 
-async function waitForNoOutbound(state: QaTransportState, timeoutMs = 1_200) {
+async function waitForNoOutbound(
+  state: QaTransportState,
+  timeoutMs = 1_200,
+  options?: WaitForNoOutboundOptions,
+) {
   await sleep(timeoutMs);
   const outbound = state
     .getSnapshot()
-    .messages.filter((message: QaBusMessage) => message.direction === "outbound");
+    .messages.filter((message: QaBusMessage) => message.direction === "outbound")
+    .slice(options?.sinceIndex ?? 0);
   if (outbound.length > 0) {
-    throw new Error(`expected no outbound messages, saw ${outbound.length}`);
+    const summary = outbound
+      .slice(0, 5)
+      .map(
+        (message: QaBusMessage) =>
+          `${message.conversation.kind}:${message.conversation.id}:${message.senderId}:${message.text}`,
+      )
+      .join(" | ");
+    throw new Error(`expected no outbound messages, saw ${outbound.length}: ${summary}`);
   }
 }
 
@@ -63,7 +78,7 @@ function recentOutboundSummary(state: QaTransportState, limit = 5) {
     .getSnapshot()
     .messages.filter((message: QaBusMessage) => message.direction === "outbound")
     .slice(-limit)
-    .map((message: QaBusMessage) => `${message.conversation.id}:${message.text}`)
+    .map(({ accountId, conversation: { kind, id }, text }) => `${accountId}:${kind}:${id}:${text}`)
     .join(" | ");
 }
 
@@ -126,37 +141,20 @@ function formatConversationTranscript(
   return formatTransportTranscript(state, params);
 }
 
-async function waitForTransportOutboundMessage(
+async function waitForNoTransportOutbound(
   state: QaTransportState,
-  predicate: (message: QaBusMessage) => boolean,
-  timeoutMs?: number,
+  timeoutMs = 1_200,
+  options?: WaitForNoOutboundOptions,
 ) {
-  return await waitForOutboundMessage(state, predicate, timeoutMs);
-}
-
-async function waitForChannelOutboundMessage(
-  state: QaTransportState,
-  predicate: (message: QaBusMessage) => boolean,
-  timeoutMs?: number,
-) {
-  return await waitForTransportOutboundMessage(state, predicate, timeoutMs);
-}
-
-async function waitForNoTransportOutbound(state: QaTransportState, timeoutMs = 1_200) {
-  await waitForNoOutbound(state, timeoutMs);
+  await waitForNoOutbound(state, timeoutMs, options);
 }
 
 export {
-  createScenarioWaitForCondition,
-  findFailureOutboundMessage,
   formatConversationTranscript,
   formatTransportTranscript,
   readTransportTranscript,
   recentOutboundSummary,
-  waitForChannelOutboundMessage,
-  waitForCondition,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
 };

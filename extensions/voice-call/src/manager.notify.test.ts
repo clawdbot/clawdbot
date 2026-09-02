@@ -1,3 +1,5 @@
+// Voice Call tests cover manager.notify plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 
@@ -37,6 +39,22 @@ class DelayedPlayTtsProvider extends FakeProvider {
   }
 }
 
+class FailStartListeningProvider extends FakeProvider {
+  override async startListening(
+    input: Parameters<FakeProvider["startListening"]>[0],
+  ): Promise<void> {
+    this.startListeningCalls.push(input);
+    throw new Error("synthetic start listening failure");
+  }
+}
+
+class FailHangupProvider extends FakeProvider {
+  override async hangupCall(input: Parameters<FakeProvider["hangupCall"]>[0]): Promise<void> {
+    this.hangupCalls.push(input);
+    throw new Error("synthetic hangup failure");
+  }
+}
+
 function requireCall(
   manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
   callId: string,
@@ -60,9 +78,24 @@ function requireMappedCall(
 }
 
 function requireFirstPlayTtsCall(provider: FakeProvider) {
-  const call = provider.playTtsCalls[0];
+  const call = provider.playTtsCalls.at(0);
   if (!call) {
     throw new Error("expected provider.playTts to be called once");
+  }
+  return call;
+}
+
+const requireRecord = createRequireRecord("record", "expected-label-record");
+
+function requireSingleStartListeningCall(provider: FakeProvider) {
+  expect(provider.startListeningCalls).toHaveLength(1);
+  return requireRecord(provider.startListeningCalls.at(0), "start listening call");
+}
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
   }
   return call;
 }
@@ -70,7 +103,9 @@ function requireFirstPlayTtsCall(provider: FakeProvider) {
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
 
 async function waitForPlaybackDispatch() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function initiateCallWithMessage(
@@ -105,7 +140,52 @@ function expectFirstPlayTtsText(provider: FakeProvider, text: string) {
   expect(requireFirstPlayTtsCall(provider).text).toBe(text);
 }
 
+async function expectNotifyHangup(manager: HarnessManager, provider: FakeProvider, callId: string) {
+  // Playback schedules a real auto-hangup. Finish it before the shared worker
+  // clears the state runtime, or its persistence/logging leaks into another file.
+  await expect.poll(() => manager.getCall(callId), { timeout: 5_000 }).toBeUndefined();
+  expect(provider.hangupCalls).toEqual([
+    { callId, providerCallId: "call-uuid", reason: "hangup-bot" },
+  ]);
+  expect(await manager.getCallFromMemoryOrStore(callId)).toMatchObject({
+    state: "hangup-bot",
+    endReason: "hangup-bot",
+  });
+}
+
 describe("CallManager notify and mapping", () => {
+  it("logs a failed notify auto-hangup and leaves the call active for retry", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const provider = new FailHangupProvider("plivo");
+      const { manager } = await createManagerHarness(
+        { outbound: { notifyHangupDelaySec: 1 } },
+        provider,
+      );
+      const callId = await initiateCallWithMessage(manager, "+15550000014", "Notify", "notify");
+
+      manager.processEvent({
+        id: "evt-notify-failed-hangup",
+        type: "call.answered",
+        callId,
+        providerCallId: "call-uuid",
+        timestamp: Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(provider.hangupCalls).toHaveLength(1);
+      expect(manager.getCall(callId)).toBeDefined();
+      expect(warn).toHaveBeenCalledWith(
+        `[voice-call] Notify mode failed to hang up call ${callId}: synthetic hangup failure`,
+      );
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("upgrades providerCallId mapping when provider ID changes", async () => {
     const { manager } = await createManagerHarness();
 
@@ -143,6 +223,7 @@ describe("CallManager notify and mapping", () => {
       await answerCall(manager, callId, `evt-2-${providerName}`);
 
       expectFirstPlayTtsText(provider, "Hello there");
+      await expectNotifyHangup(manager, provider, callId);
     },
   );
 
@@ -175,6 +256,38 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-twilio-no-stream");
 
     expectFirstPlayTtsText(provider, "Twilio non-stream");
+  });
+
+  it("lets realtime conversations own the initial greeting instead of posting legacy TwiML", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { realtime: { enabled: true, provider: "openai" } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000010",
+      "Tell Nana dinner is at 6pm.",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-twilio-realtime");
+
+    expect(provider.playTtsCalls).toHaveLength(0);
+    const metadata = requireRecord(requireCall(manager, callId).metadata, "call metadata");
+    expect(metadata.initialMessage).toBe("Tell Nana dinner is at 6pm.");
+  });
+
+  it("still speaks initial message in notify mode when realtime is enabled", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { realtime: { enabled: true, provider: "openai" } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(manager, "+15550000011", "Notify text", "notify");
+    await answerCall(manager, callId, "evt-notify-twilio-realtime");
+
+    expectFirstPlayTtsText(provider, "Notify text");
+    await expectNotifyHangup(manager, provider, callId);
   });
 
   it("waits for stream connect in conversation mode when Twilio streaming is enabled", async () => {
@@ -213,6 +326,51 @@ describe("CallManager notify and mapping", () => {
     expectFirstPlayTtsText(provider, "Twilio stream unavailable");
   });
 
+  it("starts listening after the initial greeting for Telnyx conversation calls", async () => {
+    const { manager, provider } = await createManagerHarness({}, new FakeProvider("telnyx"));
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000012",
+      "Telnyx hello",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-telnyx");
+
+    expectFirstPlayTtsText(provider, "Telnyx hello");
+    const startListeningCall = requireSingleStartListeningCall(provider);
+    expect(startListeningCall.callId).toBe(callId);
+    expect(startListeningCall.providerCallId).toBe("call-uuid");
+    expect(requireCall(manager, callId).state).toBe("listening");
+  });
+
+  it("logs fire-and-forget initial-message failures instead of leaking unhandled rejections", async () => {
+    const provider = new FailStartListeningProvider("twilio");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { manager } = await createManagerHarness({ streaming: { enabled: false } }, provider);
+
+      const callId = await initiateCallWithMessage(
+        manager,
+        "+15550000013",
+        "Twilio hello",
+        "conversation",
+      );
+      await answerCall(manager, callId, "evt-initial-message-start-listening-fails");
+
+      expectFirstPlayTtsText(provider, "Twilio hello");
+      const startListeningCall = requireSingleStartListeningCall(provider);
+      expect(startListeningCall.callId).toBe(callId);
+      expect(startListeningCall.providerCallId).toBe("call-uuid");
+      expect(warn).toHaveBeenCalledOnce();
+      expect(String(requireFirstMockCall(warn.mock.calls, "console warn")[0])).toContain(
+        `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {
     const provider = new FailFirstPlayTtsProvider("plivo");
     const { manager } = await createManagerHarness({}, provider);
@@ -222,7 +380,8 @@ describe("CallManager notify and mapping", () => {
 
     const afterFailure = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(1);
-    expect(afterFailure.metadata).toEqual(expect.objectContaining({ initialMessage: "Retry me" }));
+    const metadata = requireRecord(afterFailure.metadata, "call metadata after failed playback");
+    expect(metadata.initialMessage).toBe("Retry me");
     expect(afterFailure.state).toBe("listening");
 
     await answerCall(manager, callId, "evt-retry-2");
@@ -230,6 +389,7 @@ describe("CallManager notify and mapping", () => {
     const afterSuccess = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(2);
     expect(afterSuccess.metadata).not.toHaveProperty("initialMessage");
+    await expectNotifyHangup(manager, provider, callId);
   });
 
   it("speaks initial message only once on repeated stream-connect triggers", async () => {
@@ -267,15 +427,18 @@ describe("CallManager notify and mapping", () => {
     expect(provider.playTtsCalls).toHaveLength(0);
 
     const first = manager.speakInitialMessage("call-uuid");
-    await provider.playTtsStartedPromise;
-    expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
+    const playbacks = [first];
+    try {
+      await provider.playTtsStartedPromise;
+      expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
 
-    const second = manager.speakInitialMessage("call-uuid");
-    await waitForPlaybackDispatch();
-    expect(provider.playTtsCalls).toHaveLength(1);
-
-    provider.releaseCurrentPlayback();
-    await Promise.all([first, second]);
+      playbacks.push(manager.speakInitialMessage("call-uuid"));
+      await waitForPlaybackDispatch();
+      expect(provider.playTtsCalls).toHaveLength(1);
+    } finally {
+      provider.releaseCurrentPlayback();
+      await Promise.all(playbacks);
+    }
 
     const call = requireCall(manager, callId);
     expect(call.metadata).not.toHaveProperty("initialMessage");

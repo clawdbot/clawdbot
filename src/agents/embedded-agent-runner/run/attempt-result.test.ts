@@ -1,0 +1,423 @@
+import { describe, expect, it, vi } from "vitest";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
+import { completeEmbeddedAttemptResult, createAttemptCarryover } from "./attempt-result.js";
+import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
+import type { EmbeddedRunAttemptResult, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
+
+const TEST_OPERATIONAL_RUN_INSTANCE = { runId: "run-1" };
+
+function completeResult(params?: {
+  terminal?: EmbeddedRunAttemptResult["terminal"];
+  currentAttemptCompletedAssistant?: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
+  replyOptional?: boolean;
+  trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder;
+  messagesSnapshot?: EmbeddedRunAttemptResult["messagesSnapshot"];
+  successfulNestedToolNames?: string[];
+  latestMcpAppChannelView?: { viewId: string };
+  clientToolCallSlots?: Array<{
+    toolCallId: string;
+    name: string;
+    params?: Record<string, unknown>;
+    completed: boolean;
+  }>;
+  pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
+  toolAutoDeliveryMediaUrls?: string[];
+  messagingToolSentMediaUrls?: string[];
+  yieldDetected?: boolean;
+  yieldAcknowledgment?: string;
+  toolMetas?: Array<{
+    toolName: string;
+    toolCallId?: string;
+    meta?: string;
+    replaySafe?: boolean;
+    isError?: boolean;
+    terminate?: boolean;
+    asyncStarted?: boolean;
+    asyncTaskRunId?: string;
+    asyncTaskId?: string;
+  }>;
+}) {
+  return completeEmbeddedAttemptResult({
+    attempt: {
+      runId: "run-1",
+      admittedRunContext: { operationalRunInstance: TEST_OPERATIONAL_RUN_INSTANCE },
+      sessionId: "session-1",
+      provider: "test",
+      modelId: "model",
+      model: { api: "openai-responses" },
+      trigger: "user",
+      allowEmptyAssistantReplyAsSilent: params?.replyOptional,
+      terminalReplyExpectation: params?.replyOptional ? "optional" : undefined,
+    } as never,
+    subscription: {
+      assistantTexts: [],
+      didSendDeterministicApprovalPrompt: () => false,
+      didSendViaMessagingTool: () => false,
+      getAcceptedSessionSpawns: () => [],
+      getAssistantTurnCount: () => 0,
+      getCompactionCount: () => 0,
+      getHeartbeatToolResponse: () => undefined,
+      getItemLifecycle: () => undefined,
+      getLastAssistantTextMessageIndex: () => undefined,
+      getLastCompactionTokensAfter: () => undefined,
+      getLastToolError: () => undefined,
+      getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
+      getLatestMcpConnectAction: () => undefined,
+      getMessagingToolSentMediaUrls: () => params?.messagingToolSentMediaUrls ?? [],
+      getMessagingToolSentTargets: () => [],
+      getMessagingToolSentTexts: () => [],
+      getMessagingToolSourceReplyPayloads: () => [],
+      getPendingToolMediaReply: () => params?.pendingToolMediaReply,
+      getToolAutoDeliveryMediaUrls: () => params?.toolAutoDeliveryMediaUrls ?? [],
+      getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: false }),
+      getSuccessfulCronAdds: () => [],
+      getVisibleBlockReplyCount: () => 0,
+      hasToolMediaBlockReply: () => false,
+      setTerminalLifecycleMeta: () => {},
+      toolMetas: params?.toolMetas ?? [],
+    } as never,
+    state: {
+      terminal: params?.terminal ?? { kind: "ok" },
+      currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: params?.currentAttemptCompletedAssistant,
+      sessionIdUsed: "session-1",
+      messagesSnapshot: params?.messagesSnapshot ?? [],
+      successfulNestedToolNames: params?.successfulNestedToolNames,
+      yieldDetected: params?.yieldDetected ?? false,
+      yieldAcknowledgment: params?.yieldAcknowledgment,
+      didDeliverSourceReplyViaMessageTool: false,
+      diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
+    } as never,
+    clientToolCallSlots: params?.clientToolCallSlots ?? [],
+    hookRunner: null,
+    hookAgentId: "main",
+    trajectoryRecorder: params?.trajectoryRecorder,
+    bootstrapPromptWarning: {},
+    cache: {
+      observabilityEnabled: false,
+      trace: null,
+      break: null,
+      changesForTurn: null,
+      streamStrategy: "default",
+    },
+  });
+}
+
+function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
+  return [
+    {
+      role: "toolResult",
+      toolCallId: "call-read",
+      toolName: "read",
+      isError: false,
+      timestamp: 1,
+      content: [{ type: "text", text: "file contents" }],
+    },
+  ];
+}
+
+describe("attempt result projection", () => {
+  it.each([
+    {
+      label: "a completed refusal",
+      assistant: makeAssistantMessageFixture({
+        content: [],
+        diagnostics: [{ type: "provider_refusal", timestamp: 1, details: { category: "cyber" } }],
+      }),
+      expectedStatus: "error",
+      terminalError: undefined,
+    },
+    {
+      label: "a completed empty length stop",
+      assistant: makeAssistantMessageFixture({
+        content: [],
+        stopReason: "length",
+        errorMessage: undefined,
+      }),
+      expectedStatus: "error",
+      terminalError: "non_deliverable_terminal_turn",
+    },
+    {
+      label: "an actually empty optional turn",
+      assistant: undefined,
+      expectedStatus: "success",
+      terminalError: undefined,
+    },
+  ])(
+    "records $label after transcript projection",
+    ({ assistant, expectedStatus, terminalError }) => {
+      const recordEvent = vi.fn<EmbeddedRunAttemptTrajectoryRecorder["recordEvent"]>();
+      const result = completeResult({
+        currentAttemptCompletedAssistant: assistant,
+        replyOptional: true,
+        trajectoryRecorder: { recordEvent, flush: async () => {} },
+      });
+
+      expect(result.currentAttemptAssistant).toBeUndefined();
+      expect(result.currentAttemptCompletedAssistant).toEqual(assistant);
+      expect(recordEvent).toHaveBeenCalledWith(
+        "session.ended",
+        expect.objectContaining({ status: expectedStatus, terminalError }),
+      );
+    },
+  );
+
+  it.each([
+    {
+      label: "provider socket reset",
+      source: "prompt" as const,
+      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      expected: true,
+    },
+    {
+      label: "nested provider socket failure",
+      source: "prompt" as const,
+      error: new Error("provider request failed", {
+        cause: Object.assign(new Error("socket closed"), { code: "UND_ERR_SOCKET" }),
+      }),
+      expected: true,
+    },
+    {
+      label: "authentication failure",
+      source: "prompt" as const,
+      error: Object.assign(new Error("401 Unauthorized"), { status: 401 }),
+      expected: false,
+    },
+    {
+      label: "quota exhaustion",
+      source: "prompt" as const,
+      error: Object.assign(new Error("429 insufficient_quota"), { status: 429 }),
+      expected: false,
+    },
+    {
+      label: "policy denial",
+      source: "prompt" as const,
+      error: new Error("content policy violation"),
+      expected: false,
+    },
+    {
+      label: "security denial",
+      source: "prompt" as const,
+      error: Object.assign(new Error("403 Forbidden: security policy denied"), { status: 403 }),
+      expected: false,
+    },
+    {
+      label: "malformed provider response",
+      source: "prompt" as const,
+      error: new SyntaxError("Unexpected token in JSON response"),
+      expected: false,
+    },
+    {
+      label: "precheck socket failure",
+      source: "precheck" as const,
+      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      expected: false,
+    },
+    {
+      label: "compaction socket failure",
+      source: "compaction" as const,
+      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      expected: false,
+    },
+    {
+      label: "agent hook socket failure",
+      source: "hook:before_agent_run" as const,
+      error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+      expected: false,
+    },
+  ])("limits settled-turn recovery after $label to $expected", ({ source, error, expected }) => {
+    const result = completeResult({
+      terminal: { kind: "failed", source, error },
+      messagesSnapshot: settledToolMessages(),
+    });
+
+    expect(Boolean(result.settledTurnFinalizationContext)).toBe(expected);
+  });
+
+  it.each(["compaction", "tool_execution"] as const)(
+    "does not authorize settled-turn finalization after a %s timeout observation",
+    (timeoutObservation) => {
+      const result = completeResult({
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }),
+          timeoutObservation,
+        },
+        messagesSnapshot: settledToolMessages(),
+      });
+
+      expect(result.settledTurnFinalizationContext).toBeUndefined();
+    },
+  );
+
+  it("carries the explicit yield acknowledgment separately from continuation context", () => {
+    expect(
+      completeResult({
+        yieldDetected: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      }),
+    ).toMatchObject({
+      yieldDetected: true,
+      yieldAcknowledgment: "Research started; results will follow.",
+    });
+  });
+
+  it("counts each failed tool call in the trace summary", () => {
+    expect(
+      buildTraceToolSummary({
+        toolMetas: [
+          { toolName: "bash", meta: "exit=1", isError: true },
+          { toolName: "bash", meta: "exit=2", isError: true },
+          { toolName: "bash", meta: "exit=0" },
+        ],
+        fallbackHadFailure: false,
+      }),
+    ).toEqual({ calls: 3, tools: ["bash"], failures: 2 });
+  });
+
+  it("defaults missing replay metadata to replay-unsafe", () => {
+    const attempt = completeResult();
+    delete (attempt as Partial<typeof attempt>).replayMetadata;
+
+    expect(normalizeEmbeddedRunAttemptResult(attempt as never).replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("carries the newest MCP presentation state across retry attempts", () => {
+    const carryover = createAttemptCarryover();
+    const first = {
+      latestMcpAppChannelView: { viewId: "view-first" },
+      latestMcpConnectAction: {
+        serverName: "calendar",
+        authorizationUrl: "https://auth.example/first",
+      },
+    };
+    const retry: Parameters<typeof carryover.apply>[0] = {};
+    const latest = {
+      latestMcpAppChannelView: { viewId: "view-latest" },
+      latestMcpConnectAction: {
+        serverName: "calendar",
+        authorizationUrl: "https://auth.example/latest",
+      },
+    };
+
+    carryover.apply(first);
+    carryover.apply(retry);
+    carryover.apply(latest);
+
+    expect(retry).toEqual(first);
+    expect(latest.latestMcpAppChannelView.viewId).toBe("view-latest");
+    expect(latest.latestMcpConnectAction.authorizationUrl).toBe("https://auth.example/latest");
+  });
+
+  it("keeps completed client tool calls in reserved source order", () => {
+    expect(
+      completeResult({
+        clientToolCallSlots: [
+          { toolCallId: "first", name: "search", params: { query: "one" }, completed: true },
+          { toolCallId: "second", name: "search", completed: false },
+          { toolCallId: "third", name: "fetch", params: { id: 3 }, completed: true },
+        ],
+      }).clientToolCalls,
+    ).toEqual([
+      { name: "search", params: { query: "one" } },
+      { name: "fetch", params: { id: 3 } },
+    ]);
+  });
+
+  it("filters invalid tool metadata and preserves terminal flags", () => {
+    expect(
+      completeResult({
+        toolMetas: [
+          { toolName: "", replaySafe: true },
+          { toolName: "read", isError: false },
+          {
+            toolName: "exec",
+            toolCallId: "tool-current",
+            meta: "done",
+            replaySafe: true,
+            isError: true,
+            terminate: true,
+            asyncStarted: true,
+            asyncTaskRunId: "run-1",
+            asyncTaskId: "task-1",
+          },
+        ],
+      }).toolMetas,
+    ).toEqual([
+      {
+        toolName: "read",
+        meta: undefined,
+        replaySafe: false,
+        isError: false,
+      },
+      {
+        toolName: "exec",
+        toolCallId: "tool-current",
+        meta: "done",
+        replaySafe: true,
+        isError: true,
+        terminate: true,
+        asyncStarted: true,
+        asyncTaskRunId: "run-1",
+        asyncTaskId: "task-1",
+      },
+    ]);
+  });
+
+  it("projects successful nested tool names from settled attempt state", () => {
+    expect(
+      completeResult({ successfulNestedToolNames: ["read", "memory_search"] })
+        .successfulNestedToolNames,
+    ).toEqual(["read", "memory_search"]);
+  });
+
+  it("projects pending media and voice fields", () => {
+    expect(completeResult().toolMediaUrls).toBeUndefined();
+    expect(completeResult({ pendingToolMediaReply: { mediaUrls: [" "] } }).toolMediaUrls).toEqual([
+      " ",
+    ]);
+    expect(
+      completeResult({ pendingToolMediaReply: { mediaUrls: ["file:///tmp/result.png"] } })
+        .toolMediaUrls,
+    ).toEqual(["file:///tmp/result.png"]);
+    expect(completeResult({ pendingToolMediaReply: { audioAsVoice: true } }).toolAudioAsVoice).toBe(
+      true,
+    );
+    const autoDeliveryResult = completeResult({
+      pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+    });
+    expect(
+      getCoreTtsAttemptResultMediaUrls(
+        autoDeliveryResult,
+        autoDeliveryResult.toolMediaUrls,
+        TEST_OPERATIONAL_RUN_INSTANCE,
+      ),
+    ).toEqual(["/tmp/reply.opus"]);
+    const alreadySentResult = completeResult({
+      pendingToolMediaReply: { mediaUrls: ["/tmp/reply.opus"] },
+      toolAutoDeliveryMediaUrls: ["/tmp/reply.opus"],
+      messagingToolSentMediaUrls: ["/tmp/reply.opus"],
+    });
+    expect(
+      getCoreTtsAttemptResultMediaUrls(
+        alreadySentResult,
+        alreadySentResult.toolMediaUrls,
+        TEST_OPERATIONAL_RUN_INSTANCE,
+      ),
+    ).toEqual([]);
+  });
+
+  it("projects the latest MCP App channel view without result data", () => {
+    expect(
+      completeResult({
+        latestMcpAppChannelView: { viewId: "view-latest" },
+      }).latestMcpAppChannelView,
+    ).toEqual({ viewId: "view-latest" });
+  });
+});

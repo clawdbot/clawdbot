@@ -1,7 +1,21 @@
 {
   "id": "webhooks",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Webhooks",
   "description": "Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.",
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "routes.*.secret",
+          "expected": "string",
+          "ownerKind": "route"
+        }
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -12,7 +26,7 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["env", "file", "exec"]
+            "enum": ["env", "file", "exec", "store"]
           },
           "provider": { "type": "string" },
           "id": { "type": "string" }

@@ -1,9 +1,12 @@
+/** Cleanup helpers for failed ACP spawn flows. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { getAcpSessionManager } from "./manager.js";
+import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 
+/** Minimal runtime handle needed to close a just-created session during failed spawn cleanup. */
 export type AcpSpawnRuntimeCloseHandle = {
   runtime: {
     close: (params: {
@@ -14,9 +17,11 @@ export type AcpSpawnRuntimeCloseHandle = {
   handle: { sessionKey: string; backend: string; runtimeSessionName: string };
 };
 
+/** Best-effort cleanup for partially created ACP sessions, bindings, and transcripts. */
 export async function cleanupFailedAcpSpawn(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
   shouldDeleteSession: boolean;
   deleteTranscript: boolean;
   runtimeCloseHandle?: AcpSpawnRuntimeCloseHandle;
@@ -27,7 +32,10 @@ export async function cleanupFailedAcpSpawn(params: {
         handle: params.runtimeCloseHandle.handle,
         reason: "spawn-failed",
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
+        if (isAcpOwnerRepairRequired(err)) {
+          throw err;
+        }
         logVerbose(
           `acp-spawn: runtime cleanup close failed for ${params.sessionKey}: ${String(err)}`,
         );
@@ -39,11 +47,15 @@ export async function cleanupFailedAcpSpawn(params: {
     .closeSession({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       reason: "spawn-failed",
       allowBackendUnavailable: true,
       requireAcpSession: false,
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
+      if (isAcpOwnerRepairRequired(err)) {
+        throw err;
+      }
       logVerbose(
         `acp-spawn: manager cleanup close failed for ${params.sessionKey}: ${String(err)}`,
       );
@@ -54,7 +66,7 @@ export async function cleanupFailedAcpSpawn(params: {
       targetSessionKey: params.sessionKey,
       reason: "spawn-failed",
     })
-    .catch((err) => {
+    .catch((err: unknown) => {
       logVerbose(
         `acp-spawn: binding cleanup unbind failed for ${params.sessionKey}: ${String(err)}`,
       );
@@ -67,6 +79,7 @@ export async function cleanupFailedAcpSpawn(params: {
     method: "sessions.delete",
     params: {
       key: params.sessionKey,
+      agentId: params.agentId,
       deleteTranscript: params.deleteTranscript,
       emitLifecycleHooks: false,
     },

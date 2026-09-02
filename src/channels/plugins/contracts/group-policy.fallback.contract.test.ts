@@ -1,10 +1,11 @@
+// Group policy fallback contract tests cover default group policy behavior for channel plugins.
 import { describe, expect, it } from "vitest";
-import { installChannelRuntimeGroupPolicyFallbackSuite } from "../../../../test/helpers/channels/group-policy-contract-suites.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
+import { installChannelRuntimeGroupPolicyFallbackSuite } from "./test-helpers/group-policy-contract-suites.js";
 import {
   resolveZaloRuntimeGroupPolicy,
   resolveWhatsAppRuntimeGroupPolicy,
-} from "../../../../test/helpers/channels/group-policy-contract.js";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../../../config/runtime-group-policy.js";
+} from "./test-helpers/group-policy-contract.js";
 
 describe("channel runtime group policy fallback contract", () => {
   describe("slack", () => {

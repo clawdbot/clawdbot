@@ -1,25 +1,24 @@
+// Tencent provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  buildTokenHubModelDefinition,
-  buildTokenPlanModelDefinition,
   TOKENHUB_BASE_URL,
   TOKENHUB_MODEL_CATALOG,
-  TOKEN_PLAN_BASE_URL,
-  TOKEN_PLAN_MODEL_CATALOG,
+  TOKENPLAN_BASE_URL,
+  TOKENPLAN_MODEL_CATALOG,
 } from "./models.js";
 
 export function buildTokenHubProvider(): ModelProviderConfig {
   return {
     baseUrl: TOKENHUB_BASE_URL,
     api: "openai-completions",
-    models: TOKENHUB_MODEL_CATALOG.map(buildTokenHubModelDefinition),
+    models: structuredClone(TOKENHUB_MODEL_CATALOG),
   };
 }
 
 export function buildTokenPlanProvider(): ModelProviderConfig {
   return {
-    baseUrl: TOKEN_PLAN_BASE_URL,
+    baseUrl: TOKENPLAN_BASE_URL,
     api: "openai-completions",
-    models: TOKEN_PLAN_MODEL_CATALOG.map(buildTokenPlanModelDefinition),
+    models: structuredClone(TOKENPLAN_MODEL_CATALOG),
   };
 }

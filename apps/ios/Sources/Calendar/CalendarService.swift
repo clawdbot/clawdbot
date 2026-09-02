@@ -3,16 +3,25 @@ import Foundation
 import OpenClawKit
 
 final class CalendarService: CalendarServicing {
+    private let eventAuthorizationStatus: @Sendable () -> EKAuthorizationStatus
+
+    init(
+        eventAuthorizationStatus: @escaping @Sendable () -> EKAuthorizationStatus = {
+            EKEventStore.authorizationStatus(for: .event)
+        })
+    {
+        self.eventAuthorizationStatus = eventAuthorizationStatus
+    }
+
     func events(params: OpenClawCalendarEventsParams) async throws -> OpenClawCalendarEventsPayload {
-        let store = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized = EventKitAuthorization.allowsRead(status: status)
-        guard authorized else {
+        let status = self.eventAuthorizationStatus()
+        guard EventKitAuthorization.allowsRead(status: status) else {
             throw NSError(domain: "Calendar", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
             ])
         }
 
+        let store = EKEventStore()
         let (start, end) = Self.resolveRange(
             startISO: params.startISO,
             endISO: params.endISO)
@@ -37,15 +46,14 @@ final class CalendarService: CalendarServicing {
     }
 
     func add(params: OpenClawCalendarAddParams) async throws -> OpenClawCalendarAddPayload {
-        let store = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .event)
-        let authorized = EventKitAuthorization.allowsWrite(status: status)
-        guard authorized else {
+        let status = self.eventAuthorizationStatus()
+        guard EventKitAuthorization.allowsWrite(status: status) else {
             throw NSError(domain: "Calendar", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "CALENDAR_PERMISSION_REQUIRED: grant Calendar permission",
             ])
         }
 
+        let store = EKEventStore()
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
             throw NSError(domain: "Calendar", code: 3, userInfo: [

@@ -1,3 +1,4 @@
+// Thread binding lifecycle tests cover binding states across channel threads.
 import { describe, expect, it } from "vitest";
 import { resolveThreadBindingLifecycle } from "./thread-binding-lifecycle.js";
 

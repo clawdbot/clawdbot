@@ -1,3 +1,4 @@
+// Test routing map for lightweight plugin SDK tests and source triggers.
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
 const pluginSdkLightEntries = [
@@ -9,8 +10,12 @@ const pluginSdkLightEntries = [
   },
   { source: "src/plugin-sdk/lazy-value.ts", test: "src/plugin-sdk/lazy-value.test.ts" },
   {
+    source: "src/plugin-sdk/memory-host-events.ts",
+    test: "src/plugin-sdk/memory-host-events.test.ts",
+  },
+  {
     source: "src/plugin-sdk/persistent-dedupe.ts",
-    test: "src/plugin-sdk/persistent-dedupe.test.ts",
+    test: "src/plugin-sdk/memory-host-events.test.ts",
   },
   { source: "src/plugin-sdk/provider-entry.ts", test: "src/plugin-sdk/provider-entry.test.ts" },
   {
@@ -40,15 +45,10 @@ const pluginSdkLightIncludePatternByFile = new Map(
   ]),
 );
 
-export const pluginSdkLightSourceFiles = pluginSdkLightEntries.map(({ source }) => source);
 export const pluginSdkLightTestFiles = pluginSdkLightEntries.map(({ test }) => test);
 
 export function isPluginSdkLightTarget(file) {
   return pluginSdkLightIncludePatternByFile.has(normalizeRepoPath(file));
-}
-
-export function isPluginSdkLightTestFile(file) {
-  return pluginSdkLightTestFiles.includes(normalizeRepoPath(file));
 }
 
 export function resolvePluginSdkLightIncludePattern(file) {

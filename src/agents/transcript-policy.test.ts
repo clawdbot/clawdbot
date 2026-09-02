@@ -1,4 +1,10 @@
+/**
+ * Regression coverage for transcript replay policy resolution.
+ * Exercises provider-family fallbacks, plugin replay hooks, and policy caching.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => {
   const replayHelpers = await vi.importActual<
@@ -13,6 +19,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
           "anthropic",
           "google",
           "github-copilot",
+          "env-sensitive",
           "kilocode",
           "kimi",
           "kimi-code",
@@ -21,7 +28,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
           "mistral",
           "moonshot",
           "openai",
-          "openai-codex",
+          "openai",
           "opencode",
           "opencode-go",
           "ollama",
@@ -38,9 +45,20 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
         return {};
       }
       return {
-        buildReplayPolicy: (context?: { modelId?: string; modelApi?: string }) => {
+        buildReplayPolicy: (context?: {
+          modelId?: string;
+          modelApi?: string;
+          env?: NodeJS.ProcessEnv;
+        }) => {
           const modelId = context?.modelId?.toLowerCase() ?? "";
           switch (provider) {
+            case "env-sensitive":
+              return {
+                sanitizeToolCallIds: context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict",
+                ...(context?.env?.OPENCLAW_TEST_TRANSCRIPT_POLICY === "strict"
+                  ? { toolCallIdMode: "strict" as const }
+                  : {}),
+              };
             case "amazon-bedrock":
             case "anthropic":
               return {
@@ -51,8 +69,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 repairToolUseResultPairing: true,
                 validateAnthropicTurns: true,
                 allowSyntheticToolResults: true,
-                ...(modelId.includes("claude") &&
-                !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
                   ? { dropThinkingBlocks: true }
                   : {}),
               };
@@ -74,8 +91,7 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                     repairToolUseResultPairing: true,
                     validateAnthropicTurns: true,
                     allowSyntheticToolResults: true,
-                    ...(modelId.includes("claude") &&
-                    !replayHelpers.shouldPreserveThinkingBlocks(modelId)
+                    ...(replayHelpers.shouldDropClaudeThinkingBlocks(modelId)
                       ? { dropThinkingBlocks: true }
                       : {}),
                   };
@@ -107,18 +123,22 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 allowSyntheticToolResults: true,
               };
             case "github-copilot":
-              return modelId.includes("claude")
+              return context?.modelApi === "anthropic-messages"
                 ? {
+                    sanitizeMode: "full",
+                    preserveSignatures: true,
+                    repairToolUseResultPairing: true,
+                    validateAnthropicTurns: true,
+                    allowSyntheticToolResults: true,
                     dropThinkingBlocks: true,
                   }
-                : {};
+                : undefined;
             case "mistral":
               return {
                 sanitizeToolCallIds: true,
                 toolCallIdMode: "strict9",
               };
             case "openai":
-            case "openai-codex":
               return {
                 sanitizeMode: "images-only",
                 sanitizeToolCallIds: context?.modelApi === "openai-completions",
@@ -190,7 +210,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 
 let resolveTranscriptPolicy: typeof import("./transcript-policy.js").resolveTranscriptPolicy;
 let shouldAllowProviderOwnedThinkingReplay: typeof import("./transcript-policy.js").shouldAllowProviderOwnedThinkingReplay;
-
 describe("resolveTranscriptPolicy", () => {
   beforeAll(async () => {
     ({ resolveTranscriptPolicy, shouldAllowProviderOwnedThinkingReplay } =
@@ -215,6 +234,24 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   }
 
+  function makeOpenAiCompatibleReasoningModel(
+    overrides: Partial<ProviderRuntimeModel> = {},
+  ): ProviderRuntimeModel {
+    return {
+      id: "qwen3.6-27b",
+      name: "Qwen3.6 27B",
+      provider: "custom-openai-proxy",
+      api: "openai-completions",
+      baseUrl: "https://example.invalid",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+      ...overrides,
+    };
+  }
+
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
@@ -223,6 +260,55 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
     expect(policy.toolCallIdMode).toBe("strict");
+  });
+
+  it("memoizes replay policy resolution for the same config and process env", () => {
+    const config = {} as OpenClawConfig;
+
+    const firstPolicy = resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      config,
+      env: process.env,
+    });
+    const secondPolicy = resolveTranscriptPolicy({
+      provider: "mistral",
+      modelId: "mistral-large-latest",
+      config,
+      env: process.env,
+    });
+
+    expect(secondPolicy).toBe(firstPolicy);
+  });
+
+  it("does not reuse cached replay policies across custom env objects", () => {
+    const config = {} as OpenClawConfig;
+    const strictEnv = {
+      ...process.env,
+      OPENCLAW_TEST_TRANSCRIPT_POLICY: "strict",
+    };
+    const looseEnv = {
+      ...process.env,
+      OPENCLAW_TEST_TRANSCRIPT_POLICY: "loose",
+    };
+
+    const strictPolicy = resolveTranscriptPolicy({
+      provider: "env-sensitive",
+      modelId: "env-demo",
+      config,
+      env: strictEnv,
+    });
+    const loosePolicy = resolveTranscriptPolicy({
+      provider: "env-sensitive",
+      modelId: "env-demo",
+      config,
+      env: looseEnv,
+    });
+
+    expect(strictPolicy.sanitizeToolCallIds).toBe(true);
+    expect(strictPolicy.toolCallIdMode).toBe("strict");
+    expect(loosePolicy.sanitizeToolCallIds).toBe(false);
+    expect(loosePolicy.toolCallIdMode).toBeUndefined();
   });
 
   it("enables sanitizeToolCallIds for Google provider", () => {
@@ -281,12 +367,80 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
+  it("strips historical reasoning for strict OpenAI-compatible providers by default", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-completions",
+    });
+    expect(policy.dropReasoningFromHistory).toBe(true);
+
+    const responsesPolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-responses",
+    });
+    expect(responsesPolicy.dropReasoningFromHistory).toBe(false);
+  });
+
+  it("preserves historical reasoning for strict OpenAI-compatible models with reasoning metadata", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-completions",
+      model: makeOpenAiCompatibleReasoningModel({ reasoning: true }),
+    });
+
+    expect(policy.dropReasoningFromHistory).toBe(false);
+  });
+
+  it.each([
+    "kimi-for-coding",
+    "moonshotai/kimi-k2.6",
+    "moonshot/kimi-k2.7-code",
+    "moonshot/kimi-k2.7-code-highspeed",
+    "moonshot/kimi-k3",
+    "kimi-k2-thinking",
+    "hf:moonshotai/kimi-k2-thinking",
+    "xiaomi/mimo-v2.6-pro",
+    "xiaomi/mimo-v2.6-pro:cloud",
+  ])(
+    "preserves historical reasoning for %s replay-required OpenAI-compatible models",
+    (modelId) => {
+      const policy = resolveTranscriptPolicy({
+        provider: "custom-openai-proxy",
+        modelId,
+        modelApi: "openai-completions",
+      });
+
+      expect(policy.dropReasoningFromHistory).toBe(false);
+    },
+  );
+
   it("falls back to unowned transport defaults when no owning plugin exists", () => {
     expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
+  it("enables assistant prefill stripping for unowned Claude OpenAI Responses routes (#79688)", () => {
+    const claudePolicy = resolveTranscriptPolicy({
+      provider: "anthropic-foundry",
+      modelId: "anthropic-foundry/claude-opus-4-7",
+      modelApi: "openai-responses",
+    });
+    expect(claudePolicy.sanitizeToolCallIds).toBe(true);
+    expect(claudePolicy.toolCallIdMode).toBe("strict");
+    expect(claudePolicy.validateAnthropicTurns).toBe(true);
+    expect(claudePolicy.validateGeminiTurns).toBe(false);
+
+    const gptPolicy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+    });
+    expect(gptPolicy.validateAnthropicTurns).toBe(false);
+  });
+
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
-    // Opus 4.6 via custom proxy: should NOT drop thinking blocks
     const opus46 = resolveTranscriptPolicy({
       provider: "custom-anthropic-proxy",
       modelId: "claude-opus-4-6",
@@ -294,21 +448,157 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(opus46.dropThinkingBlocks).toBe(false);
 
-    // Sonnet 4.5 via custom proxy: should NOT drop
+    const opus5 = resolveTranscriptPolicy({
+      provider: "custom-anthropic-proxy",
+      modelId: "claude-opus-5",
+      modelApi: "anthropic-messages",
+    });
+    expect(opus5.dropThinkingBlocks).toBe(false);
+
     const sonnet45 = resolveTranscriptPolicy({
       provider: "custom-anthropic-proxy",
       modelId: "claude-sonnet-4-5-20250929",
       modelApi: "anthropic-messages",
     });
-    expect(sonnet45.dropThinkingBlocks).toBe(false);
+    expect(sonnet45.dropThinkingBlocks).toBe(true);
 
-    // Legacy Sonnet 3.7 via custom proxy: SHOULD drop
     const sonnet37 = resolveTranscriptPolicy({
       provider: "custom-anthropic-proxy",
       modelId: "claude-3-7-sonnet-20250219",
       modelApi: "anthropic-messages",
     });
     expect(sonnet37.dropThinkingBlocks).toBe(true);
+  });
+
+  it("uses canonical deployment metadata in unowned Anthropic transport fallback", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "custom-anthropic-proxy",
+      modelId: "prod-opus",
+      modelApi: "anthropic-messages",
+      model: makeOpenAiCompatibleReasoningModel({
+        id: "prod-opus",
+        name: "Production Opus",
+        provider: "custom-anthropic-proxy",
+        api: "anthropic-messages",
+        params: { canonicalModelId: "claude-opus-5" },
+      }),
+    });
+
+    expect(policy.dropThinkingBlocks).toBe(false);
+  });
+
+  it("does not reuse cached Anthropic policies across canonical model identities", () => {
+    const config = {} as OpenClawConfig;
+    const model = makeOpenAiCompatibleReasoningModel({
+      id: "production-claude",
+      name: "Production Claude",
+      provider: "custom-anthropic-proxy",
+      api: "anthropic-messages",
+    });
+
+    const sonnet45 = resolveTranscriptPolicy({
+      config,
+      provider: "custom-anthropic-proxy",
+      modelId: model.id,
+      modelApi: model.api,
+      model: {
+        ...model,
+        params: { canonicalModelId: "claude-sonnet-4-5-20250929" },
+      },
+    });
+    const opus5 = resolveTranscriptPolicy({
+      config,
+      provider: "custom-anthropic-proxy",
+      modelId: model.id,
+      modelApi: model.api,
+      model: {
+        ...model,
+        params: { canonicalModelId: "claude-opus-5" },
+      },
+    });
+
+    expect(sonnet45.dropThinkingBlocks).toBe(true);
+    expect(opus5.dropThinkingBlocks).toBe(false);
+  });
+
+  it("strips thinking blocks for unowned Anthropic-compatible models that opt out of reasoning", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model: {
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5",
+        provider: "qiniu",
+        api: "anthropic-messages",
+        baseUrl: "https://api.qnaigc.com",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256_000,
+        maxTokens: 16_384,
+        compat: { supportsReasoningEffort: false },
+      },
+    });
+
+    expect(policy.dropThinkingBlocks).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("does not reuse cached unowned Anthropic policies across reasoning compat changes", () => {
+    const config = {} as OpenClawConfig;
+    const model = {
+      id: "moonshotai/kimi-k2.5",
+      name: "Kimi K2.5",
+      provider: "qiniu",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://api.qnaigc.com",
+      reasoning: false,
+      input: ["text" as const, "image" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256_000,
+      maxTokens: 16_384,
+    };
+
+    const defaultPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model,
+    });
+    const noReasoningPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model: { ...model, compat: { supportsReasoningEffort: false } },
+    });
+
+    expect(defaultPolicy.dropThinkingBlocks).toBe(false);
+    expect(noReasoningPolicy.dropThinkingBlocks).toBe(true);
+  });
+
+  it("does not reuse cached OpenAI-compatible policies across reasoning metadata changes", () => {
+    const config = {} as OpenClawConfig;
+
+    const defaultPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-completions",
+      model: makeOpenAiCompatibleReasoningModel(),
+    });
+    const reasoningPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "custom-openai-proxy",
+      modelId: "qwen3.6-27b",
+      modelApi: "openai-completions",
+      model: makeOpenAiCompatibleReasoningModel({ reasoning: true }),
+    });
+
+    expect(defaultPolicy.dropReasoningFromHistory).toBe(true);
+    expect(reasoningPolicy.dropReasoningFromHistory).toBe(false);
   });
 
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
@@ -438,6 +728,24 @@ describe("resolveTranscriptPolicy", () => {
       }),
     ).toBe(true);
   });
+
+  it.each(["anthropic", "amazon-bedrock"] as const)(
+    "allows provider-owned thinking replay for signed-thinking %s recovery policies",
+    (provider) => {
+      expect(
+        shouldAllowProviderOwnedThinkingReplay({
+          provider,
+          modelApi:
+            provider === "amazon-bedrock" ? "bedrock-converse-stream" : "anthropic-messages",
+          policy: {
+            validateAnthropicTurns: true,
+            preserveSignatures: false,
+            dropThinkingBlocks: false,
+          },
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("does not allow immutable provider-owned thinking replay for github-copilot claude models", () => {
     const policy = resolveTranscriptPolicy({

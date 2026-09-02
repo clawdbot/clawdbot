@@ -1,22 +1,10 @@
+// Vydra provider module implements model/runtime integration.
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import {
-  assertOkOrThrowHttpError,
-  createProviderOperationDeadline,
-  postJsonRequest,
-  resolveProviderOperationTimeoutMs,
-} from "openclaw/plugin-sdk/provider-http";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
-import {
-  DEFAULT_VYDRA_VIDEO_MODEL,
-  downloadVydraAsset,
-  extractVydraResultUrls,
-  resolveCompletedVydraPayload,
-  resolveVydraResponseJobId,
-  resolveVydraResponseStatus,
-  resolveVydraRequestContext,
-} from "./shared.js";
+import { DEFAULT_VYDRA_VIDEO_MODEL, runVydraGeneration } from "./shared.js";
 
 const VYDRA_KLING_MODEL = "kling";
+const DEFAULT_VYDRA_VIDEO_TIMEOUT_MS = 120_000;
 
 function resolveVydraVideoRequestBody(
   req: Parameters<VideoGenerationProvider["generateVideo"]>[0],
@@ -39,9 +27,7 @@ function resolveVydraVideoRequestBody(
     };
   }
   if ((req.inputImages?.length ?? 0) > 0) {
-    throw new Error(
-      `Vydra ${model} does not support image reference inputs in the bundled plugin.`,
-    );
+    throw new Error(`Vydra ${model} does not support image reference inputs in the Vydra plugin.`);
   }
   return {
     model,
@@ -57,11 +43,7 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
     label: "Vydra",
     defaultModel: DEFAULT_VYDRA_VIDEO_MODEL,
     models: [DEFAULT_VYDRA_VIDEO_MODEL, VYDRA_KLING_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "vydra",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "vydra", ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,
@@ -80,78 +62,25 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
         throw new Error("Vydra video generation does not support video reference inputs.");
       }
 
-      const { fetchFn, baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveVydraRequestContext({
-          cfg: req.cfg,
-          agentDir: req.agentDir,
-          authStore: req.authStore,
-          capability: "video",
-        });
-      const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
-        label: "Vydra video generation",
-      });
       const { model, body } = resolveVydraVideoRequestBody(req);
-      const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/models/${model}`,
-        headers,
+      const generated = await runVydraGeneration({
+        cfg: req.cfg,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
+        kind: "video",
+        model,
         body,
-        timeoutMs: resolveProviderOperationTimeoutMs({
-          deadline,
-          defaultTimeoutMs: 120_000,
-        }),
-        fetchFn,
-        allowPrivateNetwork,
-        dispatcherPolicy,
+        deadlineTimeoutMs: req.timeoutMs ?? DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
       });
-
-      try {
-        await assertOkOrThrowHttpError(response, "Vydra video generation failed");
-        const submitted = await response.json();
-        const completedPayload = await resolveCompletedVydraPayload({
-          submitted,
-          baseUrl,
-          headers,
-          timeoutMs: resolveProviderOperationTimeoutMs({
-            deadline,
-            defaultTimeoutMs: 120_000,
-          }),
-          fetchFn,
-          kind: "video",
-          missingJobIdMessage: "Vydra video generation response missing job id",
-        });
-        const videoUrl = extractVydraResultUrls(completedPayload, "video")[0];
-        if (!videoUrl) {
-          throw new Error("Vydra video generation completed without a video URL");
-        }
-        const video = await downloadVydraAsset({
-          url: videoUrl,
-          kind: "video",
-          timeoutMs: resolveProviderOperationTimeoutMs({
-            deadline,
-            defaultTimeoutMs: 120_000,
-          }),
-          fetchFn,
-        });
-        return {
-          videos: [
-            {
-              buffer: video.buffer,
-              mimeType: video.mimeType,
-              fileName: video.fileName,
-            },
-          ],
-          model,
-          metadata: {
-            jobId:
-              resolveVydraResponseJobId(completedPayload) ?? resolveVydraResponseJobId(submitted),
-            videoUrl,
-            status: resolveVydraResponseStatus(completedPayload) ?? "completed",
-          },
-        };
-      } finally {
-        await release();
-      }
+      return {
+        videos: [generated.asset],
+        model,
+        metadata: {
+          jobId: generated.jobId,
+          videoUrl: generated.resultUrl,
+          status: generated.status,
+        },
+      };
     },
   };
 }

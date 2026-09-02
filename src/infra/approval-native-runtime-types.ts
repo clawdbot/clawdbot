@@ -1,11 +1,14 @@
+// Defines native approval runtime delivery transport contracts.
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 
+/** Prepared delivery target plus the stable key used to avoid duplicate native messages. */
 export type PreparedChannelNativeApprovalTarget<TPreparedTarget> = {
   dedupeKey: string;
   target: TPreparedTarget;
 };
 
+/** Channel hooks that prepare adapter targets and deliver pending approval content. */
 export type ChannelNativeApprovalTransportSpec<
   TPendingEntry,
   TPreparedTarget,
@@ -30,6 +33,7 @@ export type ChannelNativeApprovalTransportSpec<
   }) => TPendingEntry | null | Promise<TPendingEntry | null>;
 };
 
+/** Optional observer hooks for per-target native approval delivery outcomes. */
 export type ChannelNativeApprovalDeliveryCallbacks<
   TPendingEntry,
   TPreparedTarget,

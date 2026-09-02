@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+// Covers channel account summary rendering.
+import { describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { buildChannelSummary } from "./channel-summary.js";
 
 const isFixtureAccountConfigured = (account: unknown) =>
@@ -86,9 +87,9 @@ function makeTelegramSummaryPlugin(params: {
   });
 
   return {
-    id: "telegram",
+    id: "linked-summary-fixture",
     meta: {
-      id: "telegram",
+      id: "linked-summary-fixture",
       label: "Telegram",
       selectionLabel: "Telegram",
       docsPath: "/channels/telegram",
@@ -98,11 +99,10 @@ function makeTelegramSummaryPlugin(params: {
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
-      inspectAccount: getAccount,
       resolveAccount: getAccount,
       isConfigured: isFixtureAccountConfigured,
       isEnabled: isFixtureAccountEnabled,
-      formatAllowFrom: () => ["alice", "bob", "carol"],
+      formatAllowFrom: ({ allowFrom }) => allowFrom.map(String),
     },
     status: {
       buildChannelSummary: async () => ({
@@ -187,6 +187,33 @@ function makeFallbackSummaryPlugin(params: {
 }
 
 describe("buildChannelSummary", () => {
+  it("reports omitted inspector configuration as unknown", async () => {
+    const plugin = makeFallbackSummaryPlugin({ enabled: true, configured: true });
+    plugin.config.inspectAccount = () => ({ accountId: "default", enabled: true });
+
+    await expect(buildChannelSummary({}, { plugins: [plugin] })).resolves.toEqual([
+      "Fallback: configuration status unavailable",
+    ]);
+  });
+
+  it("renders summary-only inspectors without passing them to runtime hooks", async () => {
+    const runtimeOnly = vi.fn(() => {
+      throw new Error("runtime hook received an inspection summary");
+    });
+    const plugin = makeFallbackSummaryPlugin({ enabled: true, configured: true });
+    plugin.config.describeAccount = runtimeOnly;
+    plugin.config.isConfigured = runtimeOnly;
+    plugin.config.isEnabled = runtimeOnly;
+    plugin.config.resolveAccount = runtimeOnly;
+    plugin.status = { buildChannelSummary: runtimeOnly };
+
+    await expect(buildChannelSummary({}, { plugins: [plugin] })).resolves.toEqual([
+      "Fallback: configured",
+      "  - default",
+    ]);
+    expect(runtimeOnly).not.toHaveBeenCalled();
+  });
+
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
     const lines = await buildChannelSummary({ marker: "resolved", channels: {} } as never, {
       colorize: false,
@@ -221,13 +248,15 @@ describe("buildChannelSummary", () => {
           configured: true,
           linked: true,
           authAgeMs: 300_000,
-          allowFrom: ["alice", "bob", "carol"],
+          allowFrom: ["+12133734253", "bot-token", "ignored"],
         }),
       ],
     });
 
     expect(lines).toContain("Telegram: linked +15551234567 auth 5m ago");
-    expect(lines).toContain("  - primary (Main Bot) (dm:mutuals, token:env, allow:alice,bob)");
+    expect(lines).toContain(
+      "  - primary (Main Bot) (dm:mutuals, token:env, allow:+12133734253,bot-token)",
+    );
   });
 
   it("shows not-linked status when linked metadata is explicitly false", async () => {

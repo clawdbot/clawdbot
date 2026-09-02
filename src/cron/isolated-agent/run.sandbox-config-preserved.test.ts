@@ -1,6 +1,7 @@
+// Sandbox config preservation tests cover cron runs keeping sandbox settings intact.
 import { describe, expect, it } from "vitest";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
-import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 
 function makeCfg() {
   return {
@@ -29,15 +30,14 @@ function makeCfg() {
 
 function buildRunCfg(agentId: string, agentConfigOverride?: Record<string, unknown>) {
   const cfg = makeCfg();
-  const agentDefaults = buildCronAgentDefaultsConfig({
-    defaults: cfg.agents.defaults,
+  const { cfgWithAgentDefaults } = resolveCronAgentConfig({
+    config: cfg,
     agentConfigOverride: agentConfigOverride as never,
   });
   return {
-    ...cfg,
+    ...cfgWithAgentDefaults,
     agents: {
-      ...cfg.agents,
-      defaults: agentDefaults,
+      ...cfgWithAgentDefaults.agents,
       list: [{ id: agentId, ...agentConfigOverride }],
     },
   };
@@ -69,7 +69,7 @@ function expectDefaultSandboxPreserved(
 }
 
 describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
-  it("preserves default sandbox config when agent entry omits sandbox", async () => {
+  it("preserves default sandbox config when agent entry omits sandbox", () => {
     const runCfg = buildRunCfg("worker", {
       name: "worker",
       workspace: "/tmp/custom-workspace",
@@ -78,13 +78,12 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
       tools: undefined,
     });
     expectDefaultSandboxPreserved(runCfg);
-    expect(resolveSandboxConfigForAgent(runCfg, "worker")).toMatchObject({
-      mode: "all",
-      workspaceAccess: "rw",
-    });
+    const resolvedSandbox = resolveSandboxConfigForAgent(runCfg, "worker");
+    expect(resolvedSandbox.mode).toBe("all");
+    expect(resolvedSandbox.workspaceAccess).toBe("rw");
   });
 
-  it("keeps global sandbox defaults when agent override is partial", async () => {
+  it("keeps global sandbox defaults when agent override is partial", () => {
     const runCfg = buildRunCfg("specialist", {
       sandbox: {
         docker: {
@@ -103,20 +102,14 @@ describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
     expectDefaultSandboxPreserved(runCfg);
     expect(resolvedSandbox.mode).toBe("all");
     expect(resolvedSandbox.workspaceAccess).toBe("rw");
-    expect(resolvedSandbox.docker).toMatchObject({
-      image: "ghcr.io/openclaw/sandbox:custom",
-      network: "none",
-      dangerouslyAllowContainerNamespaceJoin: true,
-      dangerouslyAllowExternalBindSources: true,
-    });
-    expect(resolvedSandbox.browser).toMatchObject({
-      enabled: true,
-      image: "ghcr.io/openclaw/browser:custom",
-      autoStart: false,
-    });
-    expect(resolvedSandbox.prune).toMatchObject({
-      idleHours: 1,
-      maxAgeDays: 7,
-    });
+    expect(resolvedSandbox.docker.image).toBe("ghcr.io/openclaw/sandbox:custom");
+    expect(resolvedSandbox.docker.network).toBe("none");
+    expect(resolvedSandbox.docker.dangerouslyAllowContainerNamespaceJoin).toBe(true);
+    expect(resolvedSandbox.docker.dangerouslyAllowExternalBindSources).toBe(true);
+    expect(resolvedSandbox.browser.enabled).toBe(true);
+    expect(resolvedSandbox.browser.image).toBe("ghcr.io/openclaw/browser:custom");
+    expect(resolvedSandbox.browser.autoStart).toBe(false);
+    expect(resolvedSandbox.prune.idleHours).toBe(1);
+    expect(resolvedSandbox.prune.maxAgeDays).toBe(7);
   });
 });

@@ -1,3 +1,4 @@
+/** Shared Windows schtasks fixtures and temp-env helpers for daemon tests. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,9 +11,13 @@ import { resolveTaskScriptPath } from "../schtasks.js";
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
 export const schtasksCalls: string[][] = [];
 
-export const inspectPortUsage: MockFn<(port: number) => Promise<PortUsage>> = vi.fn();
-export const killProcessTree: MockFn<typeof killProcessTreeImpl> = vi.fn();
+export const inspectPortUsageMock: MockFn<
+  (port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>
+> = vi.fn();
+export const gatewayServiceProbeHostsMock: MockFn<() => Promise<readonly string[]>> = vi.fn();
+export const killProcessTreeMock: MockFn<typeof killProcessTreeImpl> = vi.fn();
 
+/** Runs a test with Windows-like daemon environment paths and cleans the temp dir. */
 export async function withWindowsEnv(
   prefix: string,
   run: (params: { tmpDir: string; env: Record<string, string> }) => Promise<void>,
@@ -34,8 +39,10 @@ export async function withWindowsEnv(
 export function resetSchtasksBaseMocks() {
   schtasksResponses.length = 0;
   schtasksCalls.length = 0;
-  inspectPortUsage.mockReset();
-  killProcessTree.mockReset();
+  inspectPortUsageMock.mockReset();
+  gatewayServiceProbeHostsMock.mockReset();
+  gatewayServiceProbeHostsMock.mockResolvedValue(["127.0.0.1"]);
+  killProcessTreeMock.mockReset();
 }
 
 export async function writeGatewayScript(

@@ -1,11 +1,8 @@
+// Silent reply policy tests cover reply suppression decision rules.
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_SILENT_REPLY_POLICY,
-  DEFAULT_SILENT_REPLY_REWRITE,
   classifySilentReplyConversationType,
   resolveSilentReplyPolicyFromPolicies,
-  resolveSilentReplyRewriteFromPolicies,
-  resolveSilentReplyRewriteText,
 } from "./silent-reply-policy.js";
 
 describe("classifySilentReplyConversationType", () => {
@@ -37,54 +34,31 @@ describe("classifySilentReplyConversationType", () => {
   });
 });
 
-describe("resolveSilentReplyPolicyFromPolicies", () => {
+describe("silent reply default policy resolution", () => {
   it("uses defaults when no overrides exist", () => {
-    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "direct" })).toBe(
-      DEFAULT_SILENT_REPLY_POLICY.direct,
-    );
-    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "group" })).toBe(
-      DEFAULT_SILENT_REPLY_POLICY.group,
-    );
+    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "direct" })).toBe("disallow");
+    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "group" })).toBe("allow");
   });
+});
 
+describe("resolveSilentReplyPolicyFromPolicies", () => {
   it("prefers surface policy over defaults", () => {
     expect(
       resolveSilentReplyPolicyFromPolicies({
-        conversationType: "direct",
-        defaultPolicy: { direct: "disallow" },
-        surfacePolicy: { direct: "allow" },
+        conversationType: "group",
+        defaultPolicy: { group: "allow" },
+        surfacePolicy: { group: "disallow" },
       }),
-    ).toBe("allow");
-  });
-});
-
-describe("resolveSilentReplyRewriteFromPolicies", () => {
-  it("uses default rewrite flags when no overrides exist", () => {
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "direct" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.direct,
-    );
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "group" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.group,
-    );
+    ).toBe("disallow");
   });
 
-  it("prefers surface rewrite flags over defaults", () => {
+  it("always disallows direct silent replies", () => {
     expect(
-      resolveSilentReplyRewriteFromPolicies({
+      resolveSilentReplyPolicyFromPolicies({
         conversationType: "direct",
-        defaultRewrite: { direct: true },
-        surfaceRewrite: { direct: false },
+        defaultPolicy: { group: "allow" },
+        surfacePolicy: { group: "allow" },
       }),
-    ).toBe(false);
-  });
-});
-
-describe("resolveSilentReplyRewriteText", () => {
-  it("picks a deterministic rewrite for a given seed", () => {
-    const first = resolveSilentReplyRewriteText({ seed: "main:NO_REPLY" });
-    const second = resolveSilentReplyRewriteText({ seed: "main:NO_REPLY" });
-    expect(first).toBe(second);
-    expect(first).not.toBe("NO_REPLY");
-    expect(first.length).toBeGreaterThan(0);
+    ).toBe("disallow");
   });
 });

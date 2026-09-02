@@ -1,14 +1,15 @@
+// Provides config test helpers for temporary homes and fixture writes.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-env.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "./config.js";
 
 function resetConfigTestRuntimeState(): void {
   resetConfigRuntimeState();
   resetPluginLoaderTestStateForTest();
-  clearPluginSetupRegistryCache();
+  clearPluginMetadataLifecycleCaches();
 }
 
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -20,12 +21,8 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
         OPENCLAW_CONFIG_PATH: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: undefined,
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: undefined,
         OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
         OPENCLAW_MPM_CATALOG_PATHS: undefined,
-        OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: undefined,
-        OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: undefined,
         OPENCLAW_LOAD_SHELL_ENV: undefined,
         OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
         OPENCLAW_SHELL_ENV_TIMEOUT_MS: undefined,
@@ -36,6 +33,10 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
   } finally {
     resetConfigTestRuntimeState();
   }
+}
+
+export function createProcessEnvFixture(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return { ...overrides };
 }
 
 export async function writeOpenClawConfig(home: string, config: unknown): Promise<string> {

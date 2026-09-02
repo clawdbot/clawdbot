@@ -1,14 +1,15 @@
+// Telegram helper module supports network config behavior.
+import * as dns from "node:dns";
 import process from "node:process";
-import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isTruthyEnvValue, isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV =
-  "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";
-export const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY";
+const TELEGRAM_DISABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY";
+const TELEGRAM_ENABLE_AUTO_SELECT_FAMILY_ENV = "OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY";
 export const TELEGRAM_DNS_RESULT_ORDER_ENV = "OPENCLAW_TELEGRAM_DNS_RESULT_ORDER";
 
-export type TelegramAutoSelectFamilyDecision = {
+type TelegramAutoSelectFamilyDecision = {
   value: boolean | null;
   source?: string;
 };
@@ -23,7 +24,7 @@ function isWSL2SyncCached(): boolean {
   return wsl2SyncCache;
 }
 
-export type TelegramDnsResultOrderDecision = {
+type TelegramDnsResultOrderDecision = {
   value: string | null;
   source?: string;
 };
@@ -66,12 +67,14 @@ export function resolveTelegramAutoSelectFamilyDecision(params?: {
  * Priority:
  * 1. Environment variable OPENCLAW_TELEGRAM_DNS_RESULT_ORDER
  * 2. Config: channels.telegram.network.dnsResultOrder
- * 3. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
+ * 3. Process default: dns.getDefaultResultOrder()
+ * 4. Default: "ipv4first" on Node 22+ (to work around common IPv6 issues)
  */
 export function resolveTelegramDnsResultOrderDecision(params?: {
   network?: TelegramNetworkConfig;
   env?: NodeJS.ProcessEnv;
   nodeMajor?: number;
+  defaultResultOrder?: string | null;
 }): TelegramDnsResultOrderDecision {
   const env = params?.env ?? process.env;
   const nodeMajor =
@@ -93,14 +96,19 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
     return { value: configValue, source: "config" };
   }
 
+  const processDefaultValue = normalizeOptionalLowercaseString(
+    params && "defaultResultOrder" in params
+      ? params.defaultResultOrder
+      : dns.getDefaultResultOrder?.(),
+  );
+  if (processDefaultValue === "ipv4first" || processDefaultValue === "verbatim") {
+    return { value: processDefaultValue, source: "process-default" };
+  }
+
   // Default to ipv4first on Node 22+ to avoid IPv6 issues
   if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
     return { value: "ipv4first", source: "default-node22" };
   }
 
   return { value: null };
-}
-
-export function resetTelegramNetworkConfigStateForTests(): void {
-  wsl2SyncCache = undefined;
 }

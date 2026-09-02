@@ -12,11 +12,16 @@ export type {
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
   SpeechProviderConfiguredContext,
+  SpeechProviderPreparedSynthesis,
+  SpeechProviderPrepareSynthesisContext,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechProviderOverrides,
   SpeechSynthesisRequest,
+  SpeechSynthesisStreamRequest,
+  SpeechSynthesisStreamResult,
+  SpeechSynthesisTarget,
   SpeechTelephonySynthesisRequest,
   SpeechVoiceOption,
   TtsDirectiveOverrides,
@@ -31,14 +36,21 @@ export {
   normalizeSpeechProviderId,
 } from "../tts/provider-registry.js";
 export { normalizeTtsAutoMode, TTS_AUTO_MODES } from "../tts/tts-auto-mode.js";
+// Public compatibility: preserve the established `asObject` export name.
+export { asOptionalRecord as asObject } from "@openclaw/normalization-core/record-coerce";
 export {
   asBoolean,
   asFiniteNumber,
-  asObject,
+  assertOkOrThrowProviderError,
+  createProviderHttpError,
+  extractProviderErrorDetail,
+  extractProviderRequestId,
+  formatProviderHttpErrorMessage,
+  formatProviderErrorPayload,
   readResponseTextLimited,
   trimToUndefined,
   truncateErrorDetail,
-} from "../tts/provider-error-utils.js";
+} from "../agents/provider-http-errors.js";
 export {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
@@ -46,3 +58,10 @@ export {
   requireInRange,
   scheduleCleanup,
 } from "../tts/tts-provider-helpers.js";
+export {
+  createOpenAiCompatibleSpeechProvider,
+  type OpenAiCompatibleSpeechProviderBaseUrlPolicy,
+  type OpenAiCompatibleSpeechProviderConfig,
+  type OpenAiCompatibleSpeechProviderExtraJsonBodyField,
+  type OpenAiCompatibleSpeechProviderOptions,
+} from "../tts/openai-compatible-speech-provider.js";

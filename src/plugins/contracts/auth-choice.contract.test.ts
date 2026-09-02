@@ -1,5 +1,6 @@
+// Auth choice contract tests cover provider auth choice metadata and setup behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/store.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
 import { resolvePreferredProviderForAuthChoice } from "../../plugins/provider-auth-choice-preference.js";
 import { buildProviderPluginMethodChoice } from "../provider-wizard.js";
 import type { ProviderPlugin } from "../types.js";
@@ -11,6 +12,7 @@ type ResolveProviderPluginChoice =
 type RunProviderModelSelectedHook =
   typeof import("../../plugins/provider-auth-choice.runtime.js").runProviderModelSelectedHook;
 const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
+const resolvePluginSetupProviderMock = vi.hoisted(() => vi.fn(() => undefined));
 const resolveProviderPluginChoiceMock = vi.hoisted(() => vi.fn<ResolveProviderPluginChoice>());
 const runProviderModelSelectedHookMock = vi.hoisted(() =>
   vi.fn<RunProviderModelSelectedHook>(async () => {}),
@@ -19,6 +21,7 @@ const runAuthMethodMock = vi.hoisted(() => vi.fn(async () => ({ profiles: [] }))
 
 vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: resolvePluginProvidersMock,
+  resolvePluginSetupProvider: resolvePluginSetupProviderMock,
   resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
   runProviderModelSelectedHook: runProviderModelSelectedHookMock,
 }));

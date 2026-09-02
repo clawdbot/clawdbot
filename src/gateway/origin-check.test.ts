@@ -1,5 +1,12 @@
+// Browser origin tests document same-origin, private-network, loopback, forwarded
+// host, and explicit allowlist decisions for gateway browser surfaces.
+import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
-import { checkBrowserOrigin } from "./origin-check.js";
+import {
+  checkBrowserOrigin,
+  normalizeChromeExtensionOrigin,
+  resolveAcceptedBrowserOrigin,
+} from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
   it.each([
@@ -17,6 +24,56 @@ describe("checkBrowserOrigin", () => {
       input: {
         requestHost: "gateway.example.com:18789",
         origin: "https://gateway.example.com:18789",
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "accepts same-origin private LAN host without dangerous fallback",
+      input: {
+        requestHost: "192.168.0.202:18789",
+        origin: "http://192.168.0.202:18789",
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
+    },
+    {
+      name: "accepts same-origin tailnet host without dangerous fallback",
+      input: {
+        requestHost: "peters-mac-studio-1.example.ts.net:18789",
+        origin: "http://peters-mac-studio-1.example.ts.net:18789",
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
+    },
+    {
+      name: "accepts same-origin loopback host for local clients",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        origin: "http://127.0.0.1:18789",
+        isLocalClient: true,
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
+    },
+    {
+      name: "rejects same-origin loopback host for non-local clients",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        origin: "http://127.0.0.1:18789",
+        isLocalClient: false,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "rejects same-origin public host without dangerous fallback",
+      input: {
+        requestHost: "attacker.example.com:18789",
+        origin: "http://attacker.example.com:18789",
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "rejects same-origin local-use NAT64 host without dangerous fallback",
+      input: {
+        requestHost: "[64:ff9b:1::8.8.8.8]:18789",
+        origin: "http://[64:ff9b:1::8.8.8.8]:18789",
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
@@ -90,5 +147,66 @@ describe("checkBrowserOrigin", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
+  });
+
+  it.each([
+    "chrome-extension://abcdefghijklmnop",
+    "tauri://localhost",
+    "electron://localhost",
+    "app://desktop",
+  ])("accepts an exactly allowlisted hosted app origin: %s", (origin) => {
+    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
+      ok: true,
+      matchedBy: "allowlist",
+    });
+  });
+
+  it.each([
+    "tauri://localhost/path",
+    "tauri://localhost/admin/..",
+    "tauri://localhost/%2e",
+    "https://control.example.com\\admin",
+    "tauri://localhost?mode=admin",
+    "tauri://localhost#admin",
+    "tauri://user@localhost",
+    "file:///tmp/openclaw.html",
+    "data:text/plain,hello",
+  ])("rejects a non-origin URL value: %s", (origin) => {
+    expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual({
+      ok: false,
+      reason: "origin missing or invalid",
+    });
+  });
+
+  it("recognizes only canonical Chrome extension origins", () => {
+    expect(
+      normalizeChromeExtensionOrigin("chrome-extension://abcdefghijklmnopabcdefghijklmnop"),
+    ).toBe("chrome-extension://abcdefghijklmnopabcdefghijklmnop");
+    expect(normalizeChromeExtensionOrigin("chrome-extension://abc")).toBeUndefined();
+    expect(
+      normalizeChromeExtensionOrigin("https://abcdefghijklmnopabcdefghijklmnop"),
+    ).toBeUndefined();
+  });
+});
+
+describe("resolveAcceptedBrowserOrigin", () => {
+  it("applies the configured Host-header fallback through the canonical request resolver", () => {
+    const origin = "https://gateway.example.com:18789";
+    const req = {
+      headers: { host: "gateway.example.com:18789", origin },
+      socket: { remoteAddress: "203.0.113.10" },
+    } as IncomingMessage;
+
+    expect(
+      resolveAcceptedBrowserOrigin({
+        req,
+        cfg: {
+          gateway: {
+            controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
+          },
+        },
+      }),
+    ).toBe(origin);
+    expect(resolveAcceptedBrowserOrigin({ req, cfg: {} })).toBeUndefined();
   });
 });

@@ -1,0 +1,200 @@
+name: Release validation skill runner
+run-name: Release validation campaign ${{ inputs.tag }} ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published beta or stable tag whose campaign should be updated.
+        required: true
+        type: string
+      request_id:
+        description: Optional caller identifier used to find this run.
+        required: false
+        default: manual
+        type: string
+      campaign_issue:
+        description: Optional existing campaign issue number for a one-time legacy migration.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: release-validation-skill-runner-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  analyze:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    outputs:
+      release-commit: ${{ steps.release.outputs.commit }}
+      guidance-main-sha: ${{ steps.release.outputs.guidance-main-sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve published release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VALIDATION_CAMPAIGN_ISSUE: ${{ inputs.campaign_issue }}
+          RELEASE_VALIDATION_REQUEST_ID: ${{ inputs.request_id }}
+          RELEASE_VALIDATION_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_VALIDATION_TAG"
+          request_id="$RELEASE_VALIDATION_REQUEST_ID"
+          if [[ ! "$tag" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-beta\.[1-9][0-9]*)?$ ]]; then
+            echo "Unsupported release-validation tag: $tag" >&2
+            exit 1
+          fi
+          if [[ ! "$request_id" =~ ^[A-Za-z0-9._-]{1,80}$ ]]; then
+            echo "Invalid request_id" >&2
+            exit 1
+          fi
+          if [[ ! "$RELEASE_VALIDATION_CAMPAIGN_ISSUE" =~ ^([1-9][0-9]*)?$ ]]; then
+            echo "Invalid campaign_issue" >&2
+            exit 1
+          fi
+          draft="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" --jq '.draft')"
+          if [[ "$draft" != "false" ]]; then
+            echo "Release $tag is not published" >&2
+            exit 1
+          fi
+          release_commit="$(git ls-remote origin "refs/tags/${tag}^{}" | awk 'NR == 1 { print $1 }')"
+          if [[ -z "$release_commit" ]]; then
+            release_commit="$(git ls-remote origin "refs/tags/${tag}" | awk 'NR == 1 { print $1 }')"
+          fi
+          if [[ ! "$release_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve $tag to a commit" >&2
+            exit 1
+          fi
+          echo "commit=$release_commit" >> "$GITHUB_OUTPUT"
+          echo "guidance-main-sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Run release-validation campaign skill
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VALIDATION_ARTIFACT_PATH: .artifacts/release-validation-campaign.json
+          RELEASE_VALIDATION_GUIDANCE_MAIN_SHA: ${{ steps.release.outputs.guidance-main-sha }}
+          RELEASE_VALIDATION_RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          RELEASE_VALIDATION_TAG: ${{ inputs.tag }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/release-validation-campaign.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      - name: Validate campaign artifact
+        env:
+          RELEASE_VALIDATION_GUIDANCE_MAIN_SHA: ${{ steps.release.outputs.guidance-main-sha }}
+          RELEASE_VALIDATION_RELEASE_COMMIT: ${{ steps.release.outputs.commit }}
+          RELEASE_VALIDATION_TAG: ${{ inputs.tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { validateReleaseValidationCampaignArtifact } from "./scripts/github/release-validation-campaign.mjs";
+
+          const artifact = JSON.parse(
+            fs.readFileSync(".artifacts/release-validation-campaign.json", "utf8"),
+          );
+          validateReleaseValidationCampaignArtifact(artifact, {
+            expectedTag: process.env.RELEASE_VALIDATION_TAG,
+            expectedReleaseCommit: process.env.RELEASE_VALIDATION_RELEASE_COMMIT,
+            expectedGuidanceMainSha: process.env.RELEASE_VALIDATION_GUIDANCE_MAIN_SHA,
+          });
+          NODE
+
+      - name: Upload campaign artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-validation-campaign
+          path: .artifacts/release-validation-campaign.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+
+  publish:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: analyze
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download campaign artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-validation-campaign
+          path: .artifacts
+
+      - name: Create Barnacle app token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        id: app-token
+        continue-on-error: true
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Create fallback Barnacle app token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        id: app-token-fallback
+        if: steps.app-token.outcome == 'failure'
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+
+      - name: Publish campaign issue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RELEASE_VALIDATION_GUIDANCE_MAIN_SHA: ${{ needs.analyze.outputs.guidance-main-sha }}
+          RELEASE_VALIDATION_RELEASE_COMMIT: ${{ needs.analyze.outputs.release-commit }}
+          RELEASE_VALIDATION_CAMPAIGN_ISSUE: ${{ inputs.campaign_issue }}
+          RELEASE_VALIDATION_TAG: ${{ inputs.tag }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const fs = require("node:fs");
+            const { pathToFileURL } = require("node:url");
+            const moduleUrl = pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/scripts/github/release-validation-campaign.mjs`,
+            );
+            const { runReleaseValidationCampaignPublish } = await import(moduleUrl.href);
+            const artifact = JSON.parse(
+              fs.readFileSync(".artifacts/release-validation-campaign.json", "utf8"),
+            );
+
+            await runReleaseValidationCampaignPublish({
+              github,
+              context,
+              core,
+              artifact,
+              expectedTag: process.env.RELEASE_VALIDATION_TAG,
+              expectedReleaseCommit: process.env.RELEASE_VALIDATION_RELEASE_COMMIT,
+              expectedGuidanceMainSha: process.env.RELEASE_VALIDATION_GUIDANCE_MAIN_SHA,
+              campaignIssueNumber: process.env.RELEASE_VALIDATION_CAMPAIGN_ISSUE
+                ? Number(process.env.RELEASE_VALIDATION_CAMPAIGN_ISSUE)
+                : undefined,
+            });

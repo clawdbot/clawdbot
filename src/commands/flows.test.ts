@@ -1,54 +1,102 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Flows command tests cover task creation, task execution, and runtime command output.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createRunningTaskRun } from "../tasks/task-executor.js";
+import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import {
-  createManagedTaskFlow,
-  resetTaskFlowRegistryForTests,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
+  getTaskFlowById,
 } from "../tasks/task-flow-registry.js";
+import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import * as taskFlowRuntime from "../tasks/task-flow-runtime-internal.js";
+import { markTaskLostById, markTaskTerminalById } from "../tasks/task-registry.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
+  resetTaskFlowRegistryForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "../tasks/task-registry.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+} from "../tasks/task-runtime.test-helpers.js";
+import { captureEnv } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
   loadConfig: vi.fn(() => ({})),
+  resetConfigRuntimeState: () => undefined,
 }));
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
 
-function createRuntime(): RuntimeEnv {
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createRunningTaskRunCore(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
+
+type TestRuntime = RuntimeEnv & {
+  writeStdout: ReturnType<typeof vi.fn>;
+  writeJson: ReturnType<typeof vi.fn>;
+};
+
+function createRuntime(): TestRuntime {
   return {
     log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
-  } as unknown as RuntimeEnv;
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+  };
 }
 
 async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>): Promise<void> {
-  await withTempDir({ prefix: "openclaw-flows-command-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    try {
-      await run(root);
-    } finally {
+  await withOpenClawTestState(
+    {
+      layout: "state-only",
+      prefix: "openclaw-flows-command-",
+    },
+    async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
       resetTaskRegistryForTests({ persist: false });
       resetTaskFlowRegistryForTests({ persist: false });
-    }
-  });
+      try {
+        await run(state.stateDir);
+      } finally {
+        resetTaskRegistryDeliveryRuntimeForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
+    },
+  );
 }
 
 describe("flows commands", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  });
+
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
@@ -66,7 +114,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      createRunningTaskRun({
+      const childTask = createRunningTaskRunCore({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -82,35 +130,324 @@ describe("flows commands", () => {
       const runtime = createRuntime();
       await flowsListCommand({ json: true, status: "blocked" }, runtime);
 
-      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
-        count: number;
-        status: string | null;
-        flows: Array<{
-          flowId: string;
-          tasks: Array<{ runId?: string; label?: string }>;
-          taskSummary: { total: number; active: number };
-        }>;
-      };
+      expect(runtime.log).not.toHaveBeenCalled();
+      const payload = jsonRoundTrip(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]);
 
-      expect(payload).toMatchObject({
+      expect(payload).toStrictEqual({
         count: 1,
         status: "blocked",
         flows: [
           {
-            flowId: flow.flowId,
+            ...jsonRoundTrip(flow),
+            tasks: [jsonRoundTrip(childTask)],
             taskSummary: {
               total: 1,
               active: 1,
-            },
-            tasks: [
-              {
-                runId: "run-child-1",
-                label: "Inspect PR 123",
+              terminal: 0,
+              failures: 0,
+              byStatus: {
+                queued: 0,
+                running: 1,
+                succeeded: 0,
+                failed: 0,
+                timed_out: 0,
+                cancelled: 0,
+                lost: 0,
               },
-            ],
+              byRuntime: {
+                subagent: 0,
+                acp: 1,
+                cli: 0,
+                cron: 0,
+              },
+            },
           },
         ],
       });
+
+      const emptyRuntime = createRuntime();
+      await flowsListCommand({ json: true, status: "waiting" }, emptyRuntime);
+      expect(jsonRoundTrip(emptyRuntime.writeJson.mock.calls[0]?.[0])).toStrictEqual({
+        count: 0,
+        status: "waiting",
+        flows: [],
+      });
+    });
+  });
+
+  it("reports blank status filters as absent in JSON output", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Inspect a PR cluster",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsListCommand({ json: true, status: "   " }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(jsonRoundTrip(vi.mocked(runtime.writeJson).mock.calls[0]?.[0])).toMatchObject({
+        count: 1,
+        status: null,
+        flows: [expect.objectContaining(jsonRoundTrip(flow))],
+      });
+    });
+  });
+
+  it("rejects invalid TaskFlow status filters before querying", async () => {
+    const query = vi.spyOn(taskFlowRuntime, "listTaskFlowRecords").mockImplementation(() => {
+      throw new Error("TaskFlow query performed");
+    });
+    const runtime = createRuntime();
+
+    try {
+      await runCommandWithRuntime(runtime, () => flowsListCommand({ status: "bogus" }, runtime));
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "--status must be queued, running, waiting, blocked, succeeded, failed, cancelled, or lost.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(query).not.toHaveBeenCalled();
+    } finally {
+      query.mockRestore();
+    }
+  });
+
+  it("counts pending cancellation intent in TaskFlow pressure", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Cancel pending work",
+        status: "running",
+        cancelRequestedAt: 200,
+        createdAt: 100,
+        updatedAt: 200,
+      });
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command-ended-blocked",
+        goal: "Completed blocked work",
+        status: "blocked",
+        cancelRequestedAt: 150,
+        createdAt: 100,
+        updatedAt: 150,
+        endedAt: 150,
+      });
+
+      const runtime = createRuntime();
+      await flowsListCommand({}, runtime);
+
+      expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
+        "TaskFlow pressure: 1 active · 1 blocked · 1 cancel-requested · 2 total",
+      );
+    });
+  });
+
+  it.each([
+    {
+      status: "waiting",
+      pressure: "0 active · 1 waiting · 0 blocked · 0 cancel-requested · 1 total",
+    },
+    {
+      status: "failed",
+      pressure: "0 active · 0 blocked · 1 issues · 0 cancel-requested · 1 total",
+    },
+    {
+      status: "lost",
+      pressure: "0 active · 0 blocked · 1 issues · 0 cancel-requested · 1 total",
+    },
+    {
+      status: "succeeded",
+      pressure: "0 active · 0 blocked · 0 cancel-requested · 1 total",
+    },
+    {
+      status: "cancelled",
+      pressure: "0 active · 0 blocked · 0 cancel-requested · 1 total",
+    },
+  ] as const)(
+    "accounts for filtered $status flows in TaskFlow pressure",
+    async ({ status, pressure }) => {
+      await withTaskFlowCommandStateDir(async () => {
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: `tests/flows-command-${status}`,
+          goal: `Inspect ${status} work`,
+          status,
+        });
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/flows-command-unrelated",
+          goal: "Unrelated running work",
+          status: "running",
+        });
+
+        const runtime = createRuntime();
+        await flowsListCommand({ status }, runtime);
+
+        expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toContain(
+          `TaskFlow pressure: ${pressure}`,
+        );
+
+        const jsonRuntime = createRuntime();
+        await flowsListCommand({ json: true, status }, jsonRuntime);
+        expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+          count: 1,
+          status,
+          flows: [expect.objectContaining({ status })],
+        });
+      });
+    },
+  );
+
+  it("keeps truncated text rows UTF-16 well-formed", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: `${"x".repeat(18)}🚀tail`,
+        goal: "Inspect a PR cluster",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const runtime = createRuntime();
+
+      await flowsListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(`${"x".repeat(18)}…`);
+      expect(output).not.toContain("\uD83D");
+    });
+  });
+
+  it("keeps TaskFlow columns aligned for wide controller ids", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const controllers = [
+        { controllerId: "plain-controller", goal: "Plain controller" },
+        { controllerId: "控制器🚀", goal: "Wide controller" },
+        { controllerId: "控制器".repeat(8), goal: "Long wide controller" },
+      ];
+      for (const [index, entry] of controllers.entries()) {
+        createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: entry.controllerId,
+          goal: entry.goal,
+          status: "running",
+          createdAt: 100 + index,
+          updatedAt: 100 + index,
+        });
+      }
+      const runtime = createRuntime();
+
+      await flowsListCommand({}, runtime);
+
+      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      const countColumnWidths = controllers.map((entry) => {
+        const line = lines.find((candidate) => candidate.endsWith(entry.goal));
+        expect(line).toBeDefined();
+        return visibleWidth((line ?? "").slice(0, (line ?? "").indexOf("0 active/0 total")));
+      });
+      expect(new Set(countColumnWidths).size).toBe(1);
+      expect(lines.find((line) => line.endsWith("Long wide controller"))).toContain("…");
+    });
+  });
+
+  it("shows one TaskFlow as JSON through the runtime JSON writer", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Inspect a single flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: true }, runtime);
+
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        ...jsonRoundTrip(flow),
+        tasks: [],
+        taskSummary: {
+          total: 0,
+          active: 0,
+          terminal: 0,
+          failures: 0,
+        },
+      });
+    });
+  });
+
+  it("shows and cancels live work before newer terminal history", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const ownerKey = "agent:main:main";
+      const olderRunning = createManagedTaskFlow({
+        ownerKey,
+        controllerId: "tests/flows-command-owner-lookup",
+        goal: "Older live flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const newerTerminal = createManagedTaskFlow({
+        ownerKey,
+        controllerId: "tests/flows-command-owner-lookup",
+        goal: "Newer terminal flow",
+        status: "succeeded",
+        createdAt: 200,
+        updatedAt: 200,
+        endedAt: 200,
+      });
+
+      const showRuntime = createRuntime();
+      await flowsShowCommand({ lookup: ownerKey, json: true }, showRuntime);
+      expect(vi.mocked(showRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        flowId: olderRunning.flowId,
+        status: "running",
+      });
+
+      const cancelRuntime = createRuntime();
+      await flowsCancelCommand({ lookup: ownerKey }, cancelRuntime);
+      expect(vi.mocked(cancelRuntime.log)).toHaveBeenCalledWith(
+        `Cancelled ${olderRunning.flowId} (managed) with status cancelled.`,
+      );
+      expect(getTaskFlowById(olderRunning.flowId)).toMatchObject({
+        status: "cancelled",
+        cancelRequestedAt: expect.any(Number),
+      });
+      expect(getTaskFlowById(newerTerminal.flowId)).toMatchObject({ status: "succeeded" });
+      expect(getTaskFlowById(newerTerminal.flowId)?.cancelRequestedAt).toBeUndefined();
+    });
+  });
+
+  it("keeps terminal reset bytes off stdout for JSON lookup failures", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const runtime = createRuntime();
+
+      await flowsShowCommand({ lookup: "missing-flow", json: true }, runtime);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        {
+          ok: false,
+          error: {
+            type: "cli_error",
+            message:
+              "TaskFlow not found: missing-flow. Run openclaw tasks flow list to see recent flow ids.",
+          },
+        },
+        2,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
     });
   });
 
@@ -127,7 +464,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      createRunningTaskRun({
+      const task = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -143,26 +480,311 @@ describe("flows commands", () => {
       const runtime = createRuntime();
       await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
 
-      const output = vi
-        .mocked(runtime.log)
-        .mock.calls.map(([line]) => String(line))
-        .join("\n");
-      expect(output).toContain("TaskFlow:");
-      expect(output).toContain(`flowId: ${flow.flowId}`);
-      expect(output).toContain("status: blocked");
-      expect(output).toContain("goal: Investigate a flaky queue");
-      expect(output).toContain("currentStep: spawn_child");
-      expect(output).toContain("owner: agent:main:main");
-      expect(output).toContain("state: Waiting on child task output");
-      expect(output).toContain("Linked tasks:");
-      expect(output).toContain("run-child-2");
-      expect(output).toContain("Collect logs");
-      expect(output).not.toContain("syncMode:");
-      expect(output).not.toContain("controllerId:");
-      expect(output).not.toContain("revision:");
-      expect(output).not.toContain("blockedTaskId:");
-      expect(output).not.toContain("blockedSummary:");
-      expect(output).not.toContain("wait:");
+      expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toEqual([
+        "TaskFlow:",
+        `flowId: ${flow.flowId}`,
+        "status: blocked",
+        "goal: Investigate a flaky queue",
+        "currentStep: spawn_child",
+        "owner: agent:main:main",
+        "notify: done_only",
+        "state: Waiting on child task output",
+        "createdAt: 1970-01-01T00:00:00.100Z",
+        "updatedAt: 1970-01-01T00:00:00.100Z",
+        "endedAt: n/a",
+        "tasks: 1 total · 1 active · 0 issues",
+        "Linked tasks:",
+        `- ${task.taskId} running run-child-2 Collect logs`,
+      ]);
+    });
+  });
+
+  it.each(["failed", "timed_out", "lost"] as const)(
+    "shows the persisted failure reason for linked %s tasks",
+    async (status) => {
+      await withTaskFlowCommandStateDir(async () => {
+        const flow = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/flows-command-failure-detail",
+          goal: "Inspect child task failures",
+          status: "running",
+        });
+        const task = createRunningTaskRunCore({
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          parentFlowId: flow.flowId,
+          childSessionKey: `agent:main:flow-child-${status}`,
+          runId: `run-flow-child-${status}`,
+          label: "Inspect linked child",
+          task: "Inspect linked child",
+          notifyPolicy: "silent",
+          startedAt: Date.now(),
+          progressSummary: "Outdated child progress",
+        });
+        const error = `${status}: linked provider credentials need attention`;
+        const endedAt = Date.now();
+
+        if (status === "lost") {
+          markTaskLostById({ taskId: task.taskId, endedAt, error });
+        } else {
+          markTaskTerminalById({
+            taskId: task.taskId,
+            status,
+            endedAt,
+            error,
+            terminalSummary: "Generic child completion summary",
+          });
+        }
+
+        const runtime = createRuntime();
+        await flowsShowCommand({ lookup: flow.flowId }, runtime);
+
+        const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+        const linkedTaskLine = lines.find((line) => line.startsWith(`- ${task.taskId} `));
+        expect(linkedTaskLine).toContain("Inspect linked child");
+        expect(linkedTaskLine).toContain(error);
+        expect(linkedTaskLine).not.toContain("Outdated child progress");
+        expect(linkedTaskLine).not.toContain("Generic child completion summary");
+
+        const jsonRuntime = createRuntime();
+        await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
+        expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+          tasks: [expect.objectContaining({ status, error })],
+        });
+      });
+    },
+  );
+
+  it("includes running progress and terminal completion summaries for linked tasks", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command-task-progress",
+        goal: "Inspect child task updates",
+        status: "running",
+      });
+      const running = createRunningTaskRunCore({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:flow-child-running",
+        runId: "run-flow-child-running",
+        label: "Inspect running child",
+        task: "Inspect running child",
+        notifyPolicy: "silent",
+        startedAt: Date.now(),
+        progressSummary: "Downloading provider metadata",
+      });
+      const completed = createRunningTaskRunCore({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:flow-child-completed",
+        runId: "run-flow-child-completed",
+        label: "Inspect completed child",
+        task: "Inspect completed child",
+        notifyPolicy: "silent",
+        startedAt: Date.now(),
+      });
+      markTaskTerminalById({
+        taskId: completed.taskId,
+        status: "succeeded",
+        endedAt: Date.now(),
+        terminalSummary: "Provider metadata refreshed",
+      });
+      const blocked = createRunningTaskRunCore({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:flow-child-blocked",
+        runId: "run-flow-child-blocked",
+        label: "Inspect blocked child",
+        task: "Inspect blocked child",
+        notifyPolicy: "silent",
+        startedAt: Date.now(),
+      });
+      markTaskTerminalById({
+        taskId: blocked.taskId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        endedAt: Date.now(),
+        terminalSummary: "Required completion did not produce a final deliverable.",
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId }, runtime);
+
+      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      expect(lines).toContain("tasks: 3 total · 1 active · 1 issues");
+      expect(lines.find((line) => line.startsWith(`- ${running.taskId} `))).toContain(
+        "Downloading provider metadata",
+      );
+      expect(lines.find((line) => line.startsWith(`- ${completed.taskId} `))).toContain(
+        "Provider metadata refreshed",
+      );
+      expect(lines.find((line) => line.startsWith(`- ${blocked.taskId} `))).toContain(" blocked ");
+
+      const jsonRuntime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
+      expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        tasks: expect.arrayContaining([
+          expect.objectContaining({
+            taskId: blocked.taskId,
+            status: "succeeded",
+            terminalOutcome: "blocked",
+          }),
+        ]),
+        taskSummary: expect.objectContaining({ failures: 0 }),
+      });
+    });
+  });
+
+  it("sanitizes linked task failure reasons before terminal display", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command-task-safety",
+        goal: "Inspect unsafe child error",
+        status: "running",
+      });
+      const task = createRunningTaskRunCore({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:flow-child-safety",
+        runId: "run-flow-child-safety",
+        label: "Inspect child safely",
+        task: "Inspect child safely",
+        notifyPolicy: "silent",
+        startedAt: Date.now(),
+      });
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "failed",
+        endedAt: Date.now(),
+        error: "Provider \u001b[31mrejected\nforged: yes",
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId }, runtime);
+
+      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      const linkedTaskLine = lines.find((line) => line.startsWith(`- ${task.taskId} `));
+      expect(linkedTaskLine).toContain("Provider rejected forged: yes");
+      expect(linkedTaskLine).not.toContain("\u001b");
+      expect(linkedTaskLine).not.toContain("\n");
+    });
+  });
+
+  it("sanitizes persisted linked task identifiers while preserving raw flow JSON", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const unsafe = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes";
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: `controller${unsafe}`,
+        goal: `goal${unsafe}`,
+        currentStep: `step${unsafe}`,
+        status: "running",
+      });
+      const task = createRunningTaskRunCore({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: `agent:main:child${unsafe}`,
+        runId: `run${unsafe}`,
+        label: `label${unsafe}`,
+        task: `prompt${unsafe}`,
+        notifyPolicy: "silent",
+        startedAt: Date.now(),
+      });
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "failed",
+        endedAt: Date.now(),
+        error: `error${unsafe}`,
+      });
+
+      const humanRuntime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId }, humanRuntime);
+
+      const lines = vi.mocked(humanRuntime.log).mock.calls.map(([line]) => String(line));
+      const linkedTaskLine = lines.find((line) => line.startsWith(`- ${task.taskId} `));
+      expect(linkedTaskLine).toContain("label");
+      expect(linkedTaskLine).toContain("error");
+      for (const line of lines) {
+        expect(line).not.toContain("\u001b");
+        expect(line).not.toContain("\u0007");
+        expect(line).not.toContain("\n");
+      }
+
+      const jsonRuntime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: true }, jsonRuntime);
+      expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        goal: `goal${unsafe}`,
+        currentStep: `step${unsafe}`,
+        tasks: [
+          expect.objectContaining({
+            childSessionKey: `agent:main:child${unsafe}`,
+            runId: `run${unsafe}`,
+            label: `label${unsafe}`,
+            task: `prompt${unsafe}`,
+            error: `error${unsafe}`,
+          }),
+        ],
+      });
+    });
+  });
+
+  it("sanitizes untrusted TaskFlow filters and lookup errors", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const unsafe = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes";
+      const filterRuntime = createRuntime();
+      await runCommandWithRuntime(filterRuntime, () =>
+        flowsListCommand({ status: `running${unsafe}` }, filterRuntime),
+      );
+
+      const lookupRuntime = createRuntime();
+      await flowsShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
+
+      const lines = [
+        ...vi.mocked(filterRuntime.log).mock.calls.map(([line]) => String(line)),
+        ...vi.mocked(filterRuntime.error).mock.calls.map(([line]) => String(line)),
+        ...vi.mocked(lookupRuntime.error).mock.calls.map(([line]) => String(line)),
+      ];
+      expect(lines.some((line) => line.includes("--status must be queued"))).toBe(true);
+      expect(lines.some((line) => line.includes("TaskFlow not found: missing"))).toBe(true);
+      for (const line of lines) {
+        expect(line).not.toContain("\u001b");
+        expect(line).not.toContain("\u0007");
+        expect(line).not.toContain("\n");
+      }
+    });
+  });
+
+  it("shows TaskFlows with Date-invalid timestamps without crashing", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-command",
+        goal: "Inspect malformed flow timestamp",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 8_700_000_000_000_000,
+      });
+
+      const runtime = createRuntime();
+      await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
+
+      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
+      expect(lines).toContain(`flowId: ${flow.flowId}`);
+      expect(lines).toContain("createdAt: 1970-01-01T00:00:00.100Z");
+      expect(lines).toContain("updatedAt: n/a");
     });
   });
 
@@ -180,7 +802,7 @@ describe("flows commands", () => {
         updatedAt: 100,
       });
 
-      createRunningTaskRun({
+      const task = createRunningTaskRunCore({
         runtime: "subagent",
         ownerKey: unsafeOwnerKey,
         scopeKind: "session",
@@ -197,13 +819,22 @@ describe("flows commands", () => {
       await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
 
       const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
-      expect(lines).toContain("goal: Investigate\\nqueue\\tstate");
-      expect(lines).toContain("currentStep: spawn_child");
-      expect(lines).toContain("owner: agent:main:owner");
-      expect(lines).toContain("state: Waiting on child\\nforged: yes");
-      expect(
-        lines.some((line) => line.includes("run-child-3") && line.includes("Collect\\nlogs")),
-      ).toBe(true);
+      expect(lines).toEqual([
+        "TaskFlow:",
+        `flowId: ${flow.flowId}`,
+        "status: blocked",
+        "goal: Investigate\\nqueue\\tstate",
+        "currentStep: spawn_child",
+        "owner: agent:main:owner",
+        "notify: done_only",
+        "state: Waiting on child\\nforged: yes",
+        "createdAt: 1970-01-01T00:00:00.100Z",
+        "updatedAt: 1970-01-01T00:00:00.100Z",
+        "endedAt: n/a",
+        "tasks: 1 total · 1 active · 0 issues",
+        "Linked tasks:",
+        `- ${task.taskId} running run-child-3 Collect\\nlogs`,
+      ]);
       expect(lines.join("\n")).not.toContain("\u001b[");
     });
   });
@@ -224,9 +855,27 @@ describe("flows commands", () => {
 
       expect(vi.mocked(runtime.error)).not.toHaveBeenCalled();
       expect(vi.mocked(runtime.exit)).not.toHaveBeenCalled();
-      expect(String(vi.mocked(runtime.log).mock.calls[0]?.[0])).toContain("Cancelled");
-      expect(String(vi.mocked(runtime.log).mock.calls[0]?.[0])).toContain(flow.flowId);
-      expect(String(vi.mocked(runtime.log).mock.calls[0]?.[0])).toContain("cancelled");
+      expect(vi.mocked(runtime.log).mock.calls.map(([line]) => String(line))).toEqual([
+        `Cancelled ${flow.flowId} (managed) with status cancelled.`,
+      ]);
+
+      const listRuntime = createRuntime();
+      await flowsListCommand({}, listRuntime);
+      expect(vi.mocked(listRuntime.log).mock.calls.map(([line]) => String(line))).toContain(
+        "TaskFlow pressure: 0 active · 0 blocked · 0 cancel-requested · 1 total",
+      );
+
+      const jsonRuntime = createRuntime();
+      await flowsListCommand({ json: true }, jsonRuntime);
+      expect(vi.mocked(jsonRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        flows: [
+          expect.objectContaining({
+            flowId: flow.flowId,
+            status: "cancelled",
+            cancelRequestedAt: expect.any(Number),
+          }),
+        ],
+      });
     });
   });
 });

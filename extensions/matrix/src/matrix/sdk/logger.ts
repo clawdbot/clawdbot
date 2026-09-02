@@ -1,9 +1,12 @@
+// Matrix plugin module implements logger behavior.
 import { format } from "node:util";
-import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+// security-runtime exports the same redaction helper without logging-core's
+// diagnostic/config graph, which doctor enumeration must not cold-load.
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 
-export type Logger = {
+type Logger = {
   trace: (module: string, ...messageOrObject: unknown[]) => void;
   debug: (module: string, ...messageOrObject: unknown[]) => void;
   info: (module: string, ...messageOrObject: unknown[]) => void;

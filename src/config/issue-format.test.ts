@@ -1,18 +1,26 @@
+// Covers config validation issue formatting for user-facing output.
 import { describe, expect, it } from "vitest";
 import {
   formatConfigIssueLine,
   formatConfigIssueLines,
-  normalizeConfigIssue,
-  normalizeConfigIssuePath,
+  formatConfigIssueSummary,
   normalizeConfigIssues,
 } from "./issue-format.js";
 
 describe("config issue format", () => {
-  it("normalizes empty paths to <root>", () => {
-    expect(normalizeConfigIssuePath("")).toBe("<root>");
-    expect(normalizeConfigIssuePath("   ")).toBe("<root>");
-    expect(normalizeConfigIssuePath(null)).toBe("<root>");
-    expect(normalizeConfigIssuePath(undefined)).toBe("<root>");
+  it("formats issue lines with source locations", () => {
+    expect(
+      formatConfigIssueLine(
+        {
+          path: "agents.list[3].tools.profile",
+          message: 'Invalid input, got: "none"',
+          line: 247,
+          sourceFile: "openclaw.json",
+        },
+        "×",
+        { normalizeRoot: true },
+      ),
+    ).toBe('× openclaw.json:247 — agents.list[3].tools.profile: Invalid input, got: "none"');
   });
 
   it("formats issue lines with and without markers", () => {
@@ -47,48 +55,33 @@ describe("config issue format", () => {
     ).toBe("- gateway.\\nbind: bad\\r\\n\\tvalue");
   });
 
-  it("normalizes issue metadata for machine output", () => {
+  it("formats concise issue summaries", () => {
+    expect(formatConfigIssueSummary([])).toBeNull();
     expect(
-      normalizeConfigIssue({
-        path: "",
-        message: "invalid",
-        allowedValues: ["stable", "beta"],
-        allowedValuesHiddenCount: 0,
-      }),
-    ).toEqual({
-      path: "<root>",
-      message: "invalid",
-      allowedValues: ["stable", "beta"],
-    });
+      formatConfigIssueSummary(
+        [
+          { path: "", message: "root broken" },
+          { path: "gateway.auth.password.source", message: "Required" },
+          { path: "agents.defaults.execution", message: "Unrecognized key" },
+        ],
+        { maxIssues: 2 },
+      ),
+    ).toBe("<root>: root broken; gateway.auth.password.source: Required; and 1 more");
+  });
 
-    expect(
-      normalizeConfigIssues([
-        {
-          path: "update.channel",
-          message: "invalid",
-          allowedValues: [],
-          allowedValuesHiddenCount: 2,
-        },
-      ]),
-    ).toEqual([
+  it("normalizes issue collections for machine output", () => {
+    const issues = normalizeConfigIssues([
       {
         path: "update.channel",
+        pathSegments: ["update", "channel"],
         message: "invalid",
+        allowedValues: [],
+        allowedValuesHiddenCount: 2,
       },
     ]);
 
-    expect(
-      normalizeConfigIssue({
-        path: "update.channel",
-        message: "invalid",
-        allowedValues: ["stable"],
-        allowedValuesHiddenCount: 2,
-      }),
-    ).toEqual({
-      path: "update.channel",
-      message: "invalid",
-      allowedValues: ["stable"],
-      allowedValuesHiddenCount: 2,
-    });
+    expect(issues).toEqual([{ path: "update.channel", message: "invalid" }]);
+    expect(issues[0]?.pathSegments).toEqual(["update", "channel"]);
+    expect(JSON.stringify(issues)).not.toContain("pathSegments");
   });
 });

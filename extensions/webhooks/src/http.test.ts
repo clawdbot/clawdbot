@@ -1,48 +1,25 @@
+// Webhooks tests cover http plugin behavior.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
+import { createRuntimeTaskFlow } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
-import { createRuntimeTaskFlow } from "../../../test/helpers/plugins/runtime-taskflow.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createTaskFlowWebhookRequestHandler, type TaskFlowWebhookTarget } from "./http.js";
 
-const hoisted = vi.hoisted(() => {
-  const sendMessageMock = vi.fn();
-  const cancelSessionMock = vi.fn();
-  const killSubagentRunAdminMock = vi.fn();
-  const resolveConfiguredSecretInputStringMock = vi.fn();
-  return {
-    sendMessageMock,
-    cancelSessionMock,
-    killSubagentRunAdminMock,
-    resolveConfiguredSecretInputStringMock,
-  };
-});
+type BoundTaskFlow = TaskFlowWebhookTarget["taskFlow"];
+type ManagedFlow = NonNullable<ReturnType<BoundTaskFlow["createManaged"]>>;
 
-vi.mock("../../../src/tasks/task-registry-delivery-runtime.js", () => ({
-  sendMessage: hoisted.sendMessageMock,
-}));
-
-vi.mock("../../../src/acp/control-plane/manager.js", () => ({
-  getAcpSessionManager: () => ({
-    cancelSession: hoisted.cancelSessionMock,
-  }),
-}));
-
-vi.mock("../../../src/agents/subagent-control.js", () => ({
-  killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
-}));
-
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime-api.js")>();
-  hoisted.resolveConfiguredSecretInputStringMock.mockImplementation(
-    actual.resolveConfiguredSecretInputString,
-  );
-  return {
-    ...actual,
-    resolveConfiguredSecretInputString: hoisted.resolveConfiguredSecretInputStringMock,
-  };
-});
+function createManagedFlow(
+  target: TaskFlowWebhookTarget,
+  params: Parameters<BoundTaskFlow["createManaged"]>[0],
+): ManagedFlow {
+  const flow = target.taskFlow.createManaged(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
 
 type MockIncomingMessage = IncomingMessage & {
   destroyed?: boolean;
@@ -79,19 +56,17 @@ function createJsonRequest(params: {
   return req;
 }
 
-function createHandler(): {
+function createHandler(secret = "shared-secret"): {
   handler: ReturnType<typeof createTaskFlowWebhookRequestHandler>;
   target: TaskFlowWebhookTarget;
   secret: string;
 } {
   const runtime = createRuntimeTaskFlow();
   nextSessionId += 1;
-  const secret = "shared-secret";
   const target: TaskFlowWebhookTarget = {
     routeId: "zapier",
     path: "/plugins/webhooks/zapier",
     secretInput: secret,
-    secretConfigPath: "plugins.entries.webhooks.routes.zapier.secret",
     defaultControllerId: "webhooks/zapier",
     taskFlow: runtime.bindSession({
       sessionKey: `agent:main:webhook-test-${String(nextSessionId)}`,
@@ -157,10 +132,10 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
     expect(res.statusCode).toBe(401);
     expect(res.body).toBe("unauthorized");
-    expect(target.taskFlow.list()).toEqual([]);
+    expect(target.taskFlow.list()).toStrictEqual([]);
   });
 
-  it("caches SecretRef resolution across requests for the same route", async () => {
+  it("keeps an unresolved SecretRef-backed route cold", async () => {
     const runtime = createRuntimeTaskFlow();
     const target: TaskFlowWebhookTarget = {
       routeId: "cached",
@@ -170,13 +145,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         provider: "default",
         id: "OPENCLAW_WEBHOOK_SECRET",
       },
-      secretConfigPath: "plugins.entries.webhooks.routes.cached.secret",
       defaultControllerId: "webhooks/cached",
       taskFlow: runtime.bindSession({
         sessionKey: "agent:main:webhook-cached",
       }),
     };
-    hoisted.resolveConfiguredSecretInputStringMock.mockResolvedValue({ value: "shared-secret" });
     const handler = createHandlerWithTarget(target);
 
     const first = await dispatchJsonRequest({
@@ -195,10 +168,34 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "list_flows",
       },
     });
+    const third = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret: "rotated-secret",
+      body: {
+        action: "list_flows",
+      },
+    });
 
-    expect(first.statusCode).toBe(200);
-    expect(second.statusCode).toBe(200);
-    expect(hoisted.resolveConfiguredSecretInputStringMock).toHaveBeenCalledTimes(1);
+    expect([first, second, third].map((response) => response.statusCode)).toEqual([401, 401, 401]);
+    expect([first, second, third].map((response) => response.body)).toEqual([
+      "unauthorized",
+      "unauthorized",
+      "unauthorized",
+    ]);
+  });
+
+  it("accepts a resolved secret that has env-template syntax", async () => {
+    const { handler, target } = createHandler("${MATERIALIZED_SECRET}");
+
+    const response = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret: "${MATERIALIZED_SECRET}",
+      body: { action: "list_flows" },
+    });
+
+    expect(response.statusCode).toBe(200);
   });
 
   it("creates flows through the bound session and scrubs owner metadata from responses", async () => {
@@ -216,11 +213,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(res.statusCode).toBe(200);
     const parsed = parseJsonBody(res);
     expect(parsed.ok).toBe(true);
-    expect(parsed.result.flow).toMatchObject({
-      syncMode: "managed",
-      controllerId: "webhooks/zapier",
-      goal: "Review inbound queue",
-    });
+    expect(parsed.result.flow.syncMode).toBe("managed");
+    expect(parsed.result.flow.controllerId).toBe("webhooks/zapier");
+    expect(parsed.result.flow.goal).toBe("Review inbound queue");
     expect(parsed.result.flow.ownerKey).toBeUndefined();
     expect(parsed.result.flow.requesterOrigin).toBeUndefined();
     expect(target.taskFlow.get(parsed.result.flow.flowId)?.flowId).toBe(parsed.result.flow.flowId);
@@ -228,7 +223,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
   it("runs child tasks and scrubs task ownership fields from responses", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",
     });
@@ -240,7 +235,6 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "run_task",
         flowId: flow.flowId,
         runtime: "acp",
-        childSessionKey: "agent:main:subagent:child",
         task: "Inspect the next message batch",
         status: "running",
         startedAt: 10,
@@ -252,11 +246,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     const parsed = parseJsonBody(res);
     expect(parsed.ok).toBe(true);
     expect(parsed.result.created).toBe(true);
-    expect(parsed.result.task).toMatchObject({
-      parentFlowId: flow.flowId,
-      childSessionKey: "agent:main:subagent:child",
-      runtime: "acp",
-    });
+    expect(parsed.result.task.parentFlowId).toBe(flow.flowId);
+    expect(parsed.result.task.childSessionKey).toBeUndefined();
+    expect(parsed.result.task.runtime).toBe("acp");
     expect(parsed.result.task.ownerKey).toBeUndefined();
     expect(parsed.result.task.requesterSessionKey).toBeUndefined();
   });
@@ -276,20 +268,16 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
     expect(res.statusCode).toBe(404);
     const parsed = parseJsonBody(res);
-    expect(parsed).toMatchObject({
-      ok: false,
-      code: "not_found",
-      error: "TaskFlow not found.",
-      result: {
-        applied: false,
-        code: "not_found",
-      },
-    });
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("not_found");
+    expect(parsed.error).toBe("TaskFlow not found.");
+    expect(parsed.result.applied).toBe(false);
+    expect(parsed.result.code).toBe("not_found");
   });
 
   it("returns 409 for revision conflicts", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
     });
@@ -306,23 +294,17 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
     expect(res.statusCode).toBe(409);
     const parsed = parseJsonBody(res);
-    expect(parsed).toMatchObject({
-      ok: false,
-      code: "revision_conflict",
-      result: {
-        applied: false,
-        code: "revision_conflict",
-        current: {
-          flowId: flow.flowId,
-          revision: flow.revision,
-        },
-      },
-    });
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("revision_conflict");
+    expect(parsed.result.applied).toBe(false);
+    expect(parsed.result.code).toBe("revision_conflict");
+    expect(parsed.result.current.flowId).toBe(flow.flowId);
+    expect(parsed.result.current.revision).toBe(flow.revision);
   });
 
   it("rejects internal runtimes and running-only metadata from external callers", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
     });
@@ -339,10 +321,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
       },
     });
     expect(runtimeRes.statusCode).toBe(400);
-    expect(parseJsonBody(runtimeRes)).toMatchObject({
-      ok: false,
-      code: "invalid_request",
-    });
+    const runtimeParsed = parseJsonBody(runtimeRes);
+    expect(runtimeParsed.ok).toBe(false);
+    expect(runtimeParsed.code).toBe("invalid_request");
 
     const queuedMetadataRes = await dispatchJsonRequest({
       handler,
@@ -357,17 +338,17 @@ describe("createTaskFlowWebhookRequestHandler", () => {
       },
     });
     expect(queuedMetadataRes.statusCode).toBe(400);
-    expect(parseJsonBody(queuedMetadataRes)).toMatchObject({
-      ok: false,
-      code: "invalid_request",
-      error:
-        "status: status must be running when startedAt, lastEventAt, or progressSummary is provided",
-    });
+    const queuedMetadataParsed = parseJsonBody(queuedMetadataRes);
+    expect(queuedMetadataParsed.ok).toBe(false);
+    expect(queuedMetadataParsed.code).toBe("invalid_request");
+    expect(queuedMetadataParsed.error).toBe(
+      "status: status must be running when startedAt, lastEventAt, or progressSummary is provided",
+    );
   });
 
   it("reuses the same task record when retried with the same runId", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Triage inbox",
     });
@@ -380,7 +361,6 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "run_task",
         flowId: flow.flowId,
         runtime: "acp",
-        childSessionKey: "agent:main:subagent:child",
         runId: "retry-me",
         task: "Inspect the next message batch",
       },
@@ -393,7 +373,6 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "run_task",
         flowId: flow.flowId,
         runtime: "acp",
-        childSessionKey: "agent:main:subagent:child",
         runId: "retry-me",
         task: "Inspect the next message batch",
       },
@@ -409,7 +388,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
 
   it("returns 409 when cancellation targets a terminal flow", async () => {
     const { handler, target, secret } = createHandler();
-    const flow = target.taskFlow.createManaged({
+    const flow = createManagedFlow(target, {
       controllerId: "webhooks/zapier",
       goal: "Review inbox",
     });
@@ -430,15 +409,12 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     });
 
     expect(res.statusCode).toBe(409);
-    expect(parseJsonBody(res)).toMatchObject({
-      ok: false,
-      code: "terminal",
-      error: "Flow is already succeeded.",
-      result: {
-        found: true,
-        cancelled: false,
-        reason: "Flow is already succeeded.",
-      },
-    });
+    const parsed = parseJsonBody(res);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.code).toBe("terminal");
+    expect(parsed.error).toBe("Flow is already succeeded.");
+    expect(parsed.result.found).toBe(true);
+    expect(parsed.result.cancelled).toBe(false);
+    expect(parsed.result.reason).toBe("Flow is already succeeded.");
   });
 });

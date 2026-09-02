@@ -1,3 +1,4 @@
+// Tlon tests cover settings helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { TlonResolvedAccount } from "../types.js";
 import {
@@ -74,8 +75,8 @@ describe("applyTlonSettingsOverrides", () => {
       },
     });
 
-    expect(result.effectiveDmAllowlist).toEqual([]);
-    expect(result.effectiveGroupInviteAllowlist).toEqual([]);
+    expect(result.effectiveDmAllowlist).toStrictEqual([]);
+    expect(result.effectiveGroupInviteAllowlist).toStrictEqual([]);
   });
 
   it("falls back to file config when settings fields are removed", () => {
@@ -108,6 +109,6 @@ describe("applyTlonSettingsOverrides", () => {
     expect(result.effectiveAutoAcceptGroupInvites).toBe(false);
     expect(result.effectiveShowModelSig).toBe(true);
     expect(result.effectiveOwnerShip).toBe("~nec");
-    expect(result.pendingApprovals).toEqual([]);
+    expect(result.pendingApprovals).toStrictEqual([]);
   });
 });

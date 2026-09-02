@@ -1,16 +1,21 @@
+// Config-only channel status formatter used when the gateway is unreachable.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../../channels/account-snapshot-fields.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
-  buildChannelAccountSnapshot,
+  resolveChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
 } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -18,15 +23,24 @@ import {
   appendTokenSourceBits,
   buildChannelAccountLine,
   type ChatChannel,
+  NO_CONFIGURED_CHAT_CHANNELS_LINE,
 } from "./shared.js";
 
+type ChannelStatusPluginLabel = {
+  id: ChatChannel;
+  meta: { label?: string };
+};
+
+/** Render channel status lines from config snapshots without calling the gateway. */
 export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },
-  opts?: { sourceConfig?: OpenClawConfig },
+  opts?: { sourceConfig?: OpenClawConfig; channel?: string; fallbackReason?: string },
 ): Promise<string[]> {
   const lines: string[] = [];
-  lines.push(theme.warn("Gateway not reachable; showing config-only status."));
+  lines.push(
+    theme.warn(opts?.fallbackReason ?? "Gateway not reachable; showing config-only status."),
+  );
   if (meta.path) {
     lines.push(`Config: ${meta.path}`);
   }
@@ -37,21 +51,33 @@ export async function formatConfigChannelsStatusLines(
     lines.push("");
   }
 
-  const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
+  const accountLines = (
+    plugin: ChannelStatusPluginLabel,
+    accounts: Array<Record<string, unknown>>,
+  ) =>
     accounts.map((account) => {
       const bits: string[] = [];
       appendEnabledConfiguredLinkedBits(bits, account);
       appendModeBit(bits, account);
       appendTokenSourceBits(bits, account);
       appendBaseUrlBit(bits, account);
-      return buildChannelAccountLine(provider, account, bits);
+      return buildChannelAccountLine(plugin.id, account, bits, {
+        channelLabel: plugin.meta.label ?? plugin.id,
+      });
     });
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
+  const requestedChannel = opts?.channel
+    ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))
+    : null;
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
-  });
+    includeSetupFallbackPlugins: true,
+  }).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
+  const visibleChannelIds = new Set<string>();
+  const statusLinesStart = lines.length;
   for (const plugin of plugins) {
+    visibleChannelIds.add(plugin.id);
     const accountIds = plugin.config.listAccountIds(cfg);
     if (!accountIds.length) {
       continue;
@@ -63,7 +89,7 @@ export async function formatConfigChannelsStatusLines(
         cfg: sourceConfig,
         accountId,
       });
-      const resolvedSnapshot = await buildChannelAccountSnapshot({
+      const resolvedSnapshot = await resolveChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,
@@ -78,8 +104,33 @@ export async function formatConfigChannelsStatusLines(
       );
     }
     if (snapshots.length > 0) {
-      lines.push(...accountLines(plugin.id, snapshots));
+      lines.push(...accountLines(plugin, snapshots));
     }
+  }
+
+  const missingChannelIds = [
+    ...new Set([
+      ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
+      ...listExplicitConfiguredChannelIdsForConfig(cfg),
+    ]),
+  ].filter(
+    (channelId) =>
+      (!requestedChannel || channelId === requestedChannel) && !visibleChannelIds.has(channelId),
+  );
+  const missingHints = resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    activationSourceConfig: sourceConfig,
+    channelIds: missingChannelIds,
+  });
+  if (missingHints.length > 0) {
+    lines.push("");
+    lines.push(theme.warn("Missing official external plugins:"));
+    for (const hint of missingHints) {
+      lines.push(`- ${hint.label}: ${hint.repairHint}`);
+    }
+  }
+  if (lines.length === statusLinesStart) {
+    lines.push(theme.muted(NO_CONFIGURED_CHAT_CHANNELS_LINE));
   }
 
   lines.push("");
