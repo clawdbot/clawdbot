@@ -625,7 +625,7 @@ They are generated separately from the agent's work, so a title is not a complet
 status or a report of tool access. Existing titles and manual names are left
 unchanged; click a title to rename it.
 
-Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** to copy the complete diagnostic received by the UI. **Error details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Expanding or copying an error does not retry the failed operation. Retry and other recovery actions remain separate from the disclosure.
+Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
