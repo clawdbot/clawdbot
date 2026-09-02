@@ -21,6 +21,10 @@ const log = createSubsystemLogger("memory");
 
 export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
 
+export function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
+  return purpose !== "default";
+}
+
 export function normalizeMemoryIndexManagerPurpose(
   purpose: MemoryIndexManagerPurpose | undefined,
 ): MemoryIndexManagerPurpose {
@@ -35,7 +39,6 @@ type ClosableMemoryManager = {
 
 type PreparedMemoryManager<T extends ClosableMemoryManager> = {
   key: string;
-  transient: boolean;
   create: () => Promise<T> | T;
   reuse: (manager: T) => boolean;
 };
@@ -108,15 +111,16 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       if (!prepared) {
         return null;
       }
+      const transient = isTransientMemoryIndexManagerPurpose(params.purpose);
       const getOrCreate = async () =>
         await getOrCreateManagedCacheEntry({
           cache: this.cache,
           pending: this.pending,
           key: prepared.key,
-          bypassCache: prepared.transient,
+          bypassCache: transient,
           create: prepared.create,
         });
-      if (prepared.transient) {
+      if (transient) {
         return await getOrCreate();
       }
       const cachedManager = this.cache.get(prepared.key);

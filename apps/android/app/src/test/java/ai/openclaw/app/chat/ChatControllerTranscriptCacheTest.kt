@@ -148,28 +148,31 @@ class ChatControllerTranscriptCacheTest {
   @Test
   fun offlineColdOpenShowsCachedTranscriptAndSessionsAndKeepsSendBlocked() =
     runTest {
-      val cache = FakeTranscriptCache()
-      cache.transcripts[TranscriptKey("gateway-a", "main", "main")] =
-        listOf(cachedMessage("cached hello"), cachedMessage("cached reply"))
-      cache.sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = 5, displayName = "Main"))
-      val controller =
-        createCachedController(cache) { _, _ -> throw IllegalStateException("offline") }
+      for (mainSessionKey in listOf("main", "agent:main:node-offline")) {
+        val cache = FakeTranscriptCache()
+        cache.transcripts[TranscriptKey("gateway-a", "main", mainSessionKey)] =
+          listOf(cachedMessage("cached hello"), cachedMessage("cached reply"))
+        cache.sessions = listOf(ChatSessionEntry(key = mainSessionKey, updatedAtMs = 5, displayName = "Main"))
+        val controller =
+          createCachedController(cache) { _, _ -> throw IllegalStateException("offline") }
 
-      controller.load("main")
-      advanceUntilIdle()
+        controller.loadCurrent(mainSessionKey)
+        advanceUntilIdle()
 
-      assertEquals(
-        listOf("cached hello", "cached reply"),
-        controller.messages.value.map { it.content.single().text },
-      )
-      assertTrue(controller.messagesFromCache.value)
-      assertEquals(listOf("main"), controller.sessions.value.map { it.key })
-      assertFalse(controller.healthOk.value)
+        assertEquals(mainSessionKey, controller.sessionKey.value)
+        assertEquals(
+          listOf("cached hello", "cached reply"),
+          controller.messages.value.map { it.content.single().text },
+        )
+        assertTrue(controller.messagesFromCache.value)
+        assertEquals(listOf(mainSessionKey), controller.sessions.value.map { it.key })
+        assertFalse(controller.healthOk.value)
 
-      val accepted =
-        controller.sendMessageAwaitAcceptance(message = "hi", thinkingLevel = "off", attachments = emptyList())
-      assertFalse(accepted)
-      assertEquals("Gateway health not OK; cannot send", controller.errorText.value)
+        val accepted =
+          controller.sendMessageAwaitAcceptance(message = "hi", thinkingLevel = "off", attachments = emptyList())
+        assertFalse(accepted)
+        assertEquals("Gateway health not OK; cannot send", controller.errorText.value)
+      }
     }
 
   @Test

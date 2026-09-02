@@ -704,7 +704,7 @@ describe("memory index", () => {
       "Content published after transient CLI maintenance.",
     );
 
-    const manager = await getFreshManager(cfg, "cli");
+    const manager = await getFreshManager(cfg, "cli", true);
     const servingFields = manager as unknown as {
       syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
     };
