@@ -144,8 +144,11 @@ describe("subagent completion rejection ownership", () => {
     async (change) => {
       const h = createHarness();
       h.runtime.scheduleSubagentCompletionRetryAfterRestart(h.request, "restart", h.entry);
-      if (change === "replacement") h.runs.set(h.entry.runId, { ...h.entry });
-      else h.entry.generation = 2;
+      if (change === "replacement") {
+        h.runs.set(h.entry.runId, { ...h.entry });
+      } else {
+        h.entry.generation = 2;
+      }
       await vi.advanceTimersByTimeAsync(1_000);
       expect(h.completeSubagentRun).not.toHaveBeenCalled();
       expect(h.retryTimers.size).toBe(0);
@@ -157,7 +160,9 @@ describe("subagent completion rejection ownership", () => {
     async (attempt) => {
       const h = createHarness();
       h.completeSubagentRun.mockReset();
-      if (attempt === 2) h.completeSubagentRun.mockRejectedValueOnce(new Error("retry once"));
+      if (attempt === 2) {
+        h.completeSubagentRun.mockRejectedValueOnce(new Error("retry once"));
+      }
       h.completeSubagentRun.mockResolvedValue(undefined);
       await h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait");
       expect(h.completeSubagentRun).toHaveBeenCalledTimes(attempt);
@@ -182,17 +187,25 @@ describe("subagent completion rejection ownership", () => {
     "preserves %s recovery after both attempts fail",
     async (state) => {
       const h = createHarness();
-      if (state === "running") h.entry.execution = { status: "running", startedAt: 0 };
-      if (state === "cleaned") h.entry.cleanupCompletedAt = 2;
-      if (state === "yielded") h.entry.pauseReason = "sessions_yield";
+      if (state === "running") {
+        h.entry.execution = { status: "running", startedAt: 0 };
+      }
+      if (state === "cleaned") {
+        h.entry.cleanupCompletedAt = 2;
+      }
+      if (state === "yielded") {
+        h.entry.pauseReason = "sessions_yield";
+      }
       await h.runtime.completeSubagentRunWithRecovery(h.request, "subagent-wait");
       expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
       expect(h.resumeRun).not.toHaveBeenCalled();
       expect(h.entry.cleanupHandled).toBe(true);
       expect(h.resumed.has(h.entry.runId)).toBe(true);
-      if (state === "running")
+      if (state === "running") {
         expect(h.scheduleSweep).toHaveBeenCalledExactlyOnceWith({ delayMs: 1_000 });
-      else expect(h.scheduleSweep).not.toHaveBeenCalled();
+      } else {
+        expect(h.scheduleSweep).not.toHaveBeenCalled();
+      }
     },
   );
 });
