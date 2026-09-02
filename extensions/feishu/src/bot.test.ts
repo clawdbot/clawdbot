@@ -7,7 +7,7 @@ import type {
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -1274,6 +1274,95 @@ describe("handleFeishuMessage command authorization", () => {
     expect(dynamicAgentRequest.accountId).toBe("default");
     expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: refreshedCfg }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: refreshedCfg }),
+    );
+  });
+
+  it("routes a gateway-received group message with bindings reloaded after handler startup", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg = createFeishuTestConfig(
+      { groupPolicy: "open", requireMention: false },
+      { agents: { list: [{ id: "main" }, { id: "sales" }] } },
+    );
+    const refreshedCfg = createFeishuTestConfig(
+      { groupPolicy: "open", requireMention: false },
+      {
+        agents: { list: [{ id: "main" }, { id: "sales" }] },
+        bindings: [
+          {
+            agentId: "sales",
+            match: {
+              channel: "feishu",
+              accountId: "default",
+              peer: { kind: "group", id: "oc-refreshed-binding" },
+            },
+          },
+        ],
+      },
+    );
+    currentRuntimeConfig = cfg;
+    const pluginRuntime = createFeishuBotRuntime();
+    const channelRuntime = {
+      ...pluginRuntime.channel,
+      routing: {
+        ...pluginRuntime.channel.routing,
+        resolveAgentRoute,
+      },
+      commands: {
+        ...pluginRuntime.channel.commands,
+        isControlCommandMessage: vi.fn(() => false),
+      },
+      debounce: {
+        resolveInboundDebounceMs: vi.fn(() => 0),
+        createInboundDebouncer: vi.fn(
+          (options: {
+            onFlush: (
+              entries: Array<{ event: FeishuMessageEvent }>,
+              createFlush: typeof createTestInboundDebounceFlush,
+            ) => { completion: Promise<void> };
+          }) => ({
+            enqueue: async (entry: { event: FeishuMessageEvent }) => {
+              await options.onFlush([entry], createTestInboundDebounceFlush).completion;
+            },
+            flushKey: async () => {},
+            cancelKey: () => false,
+            drain: async () => {},
+          }),
+        ),
+      },
+    } as unknown as PluginRuntime["channel"];
+    setFeishuRuntime(pluginRuntime);
+    const receive = createFeishuMessageReceiveHandler({
+      cfg,
+      channelRuntime,
+      accountId: "default",
+      runtime: createRuntimeEnv(),
+      chatHistories: new Map(),
+      handleMessage: handleFeishuMessage,
+      resolveDebounceText: ({ event }) =>
+        (JSON.parse(event.message.content) as { text: string }).text,
+      hasProcessedMessage: vi.fn(async () => false),
+    });
+
+    // Simulate the gateway config reload after this long-lived receive handler
+    // has already captured its startup config.
+    currentRuntimeConfig = refreshedCfg;
+    await receive(
+      createFeishuTestEvent({
+        messageId: "msg-refreshed-group-binding",
+        senderOpenId: "ou-sender",
+        chatId: "oc-refreshed-binding",
+        chatType: "group",
+      }),
+    );
+
+    expect(pluginRuntime.config.current).toHaveBeenCalled();
+    expect(mockResolveAgentRoute).not.toHaveBeenCalled();
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: refreshedCfg, agentId: "sales" }),
     );
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledWith(
       expect.objectContaining({ cfg: refreshedCfg }),

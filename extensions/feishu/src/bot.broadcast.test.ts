@@ -143,7 +143,11 @@ describe("broadcast dispatch", () => {
     path: "/tmp/inbound-clip.mp4",
     contentType: "video/mp4",
   });
+  let currentRuntimeConfig = {} as ClawdbotConfig;
   const runtimeStub = {
+    config: {
+      current: vi.fn(() => currentRuntimeConfig),
+    },
     system: {
       enqueueSystemEvent: vi.fn(),
     },
@@ -245,6 +249,11 @@ describe("broadcast dispatch", () => {
     };
   }
 
+  async function dispatchMessage(params: Parameters<typeof handleFeishuMessage>[0]) {
+    currentRuntimeConfig = params.cfg;
+    await handleFeishuMessage(params);
+  }
+
   function createBroadcastEvent(options: {
     messageId: string;
     text: string;
@@ -331,7 +340,7 @@ describe("broadcast dispatch", () => {
       botMentioned: true,
     });
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       botOpenId: "bot-open-id",
@@ -416,7 +425,7 @@ describe("broadcast dispatch", () => {
       ensureNoVisibleReplyFallback: vi.fn(),
     });
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg: createBroadcastConfig(),
       event: createBroadcastEvent({
         messageId: "msg-broadcast-observer-isolation",
@@ -460,7 +469,7 @@ describe("broadcast dispatch", () => {
       botMentioned: true,
     });
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       botOpenId: "bot-open-id",
@@ -494,7 +503,7 @@ describe("broadcast dispatch", () => {
       botMentioned: true,
     });
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       botOpenId: "bot-open-id",
@@ -529,7 +538,7 @@ describe("broadcast dispatch", () => {
       botMentioned: true,
     });
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       botOpenId: "bot-open-id",
@@ -546,7 +555,7 @@ describe("broadcast dispatch", () => {
       text: "hello everyone",
     });
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       botOpenId: "ou_known_bot",
@@ -565,7 +574,7 @@ describe("broadcast dispatch", () => {
       text: "hello everyone",
     });
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       runtime: createRuntimeEnv(),
@@ -602,7 +611,7 @@ describe("broadcast dispatch", () => {
       },
     };
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       runtime: createRuntimeEnv(),
@@ -647,7 +656,7 @@ describe("broadcast dispatch", () => {
       },
     };
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       runtime: createRuntimeEnv(),
@@ -659,7 +668,7 @@ describe("broadcast dispatch", () => {
     mockGetChatInfo.mockClear();
     builtInboundContextCalls.length = 0;
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       runtime: createRuntimeEnv(),
@@ -712,7 +721,7 @@ describe("broadcast dispatch", () => {
     (cfg.broadcast as Record<string, unknown>).strategy = "sequential";
 
     await expect(
-      handleFeishuMessage({
+      dispatchMessage({
         cfg,
         event,
         botOpenId: "bot-open-id",
@@ -733,7 +742,7 @@ describe("broadcast dispatch", () => {
 
     mockDispatchReply.mockClear();
     const retryTransport = createIngressLifecycle();
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       botOpenId: "bot-open-id",
@@ -784,7 +793,7 @@ describe("broadcast dispatch", () => {
     const transport = createIngressLifecycle();
 
     await expect(
-      handleFeishuMessage({
+      dispatchMessage({
         cfg: createBroadcastConfig(),
         event: createBroadcastEvent({
           messageId: "msg-broadcast-fallback-failure",
@@ -829,7 +838,7 @@ describe("broadcast dispatch", () => {
     const transport = createIngressLifecycle();
 
     await expect(
-      handleFeishuMessage({
+      dispatchMessage({
         cfg,
         event: createBroadcastEvent({
           messageId: "msg-broadcast-setup-failure",
@@ -869,7 +878,7 @@ describe("broadcast dispatch", () => {
     );
     const transport = createIngressLifecycle();
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg: createBroadcastConfig(),
       event: createBroadcastEvent({
         messageId: "msg-broadcast-undispatched",
@@ -910,7 +919,7 @@ describe("broadcast dispatch", () => {
     });
     transport.calls.adopted.mockImplementationOnce(async () => await adoptionGate);
 
-    const handling = handleFeishuMessage({
+    const handling = dispatchMessage({
       cfg: createBroadcastConfig(),
       event: createBroadcastEvent({
         messageId: "msg-broadcast-adoption-order",
@@ -967,7 +976,7 @@ describe("broadcast dispatch", () => {
     });
     const transport = createIngressLifecycle();
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg: createBroadcastConfig(),
       event: createBroadcastEvent({
         messageId: "msg-broadcast-deferred",
@@ -1022,7 +1031,7 @@ describe("broadcast dispatch", () => {
       },
     };
 
-    await handleFeishuMessage({
+    await dispatchMessage({
       cfg,
       event,
       runtime: createRuntimeEnv(),

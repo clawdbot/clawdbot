@@ -784,16 +784,16 @@ export async function handleFeishuMessage(params: {
     let effectiveDmIngress = dmIngress;
     let effectiveShouldComputeCommandAuthorized =
       directAuthorization?.shouldComputeCommandAuthorized ?? shouldComputeCommandAuthorized;
-    let effectiveCfg = cfg;
+    // Route every inbound turn against the latest bindings. Direct chats also
+    // reauthorize when that runtime snapshot changed after initial admission.
+    let effectiveCfg = getFeishuRuntime().config.current() as ClawdbotConfig;
     if (isDirect) {
-      const currentCfg = getFeishuRuntime().config.current() as ClawdbotConfig;
-      if (currentCfg !== effectiveCfg) {
-        const currentAuthorization = await resolveDirectAuthorization(currentCfg, true);
+      if (effectiveCfg !== cfg) {
+        const currentAuthorization = await resolveDirectAuthorization(effectiveCfg, true);
         if (currentAuthorization.ingress.ingress.admission !== "dispatch") {
           await rejectDirectAuthorization(currentAuthorization);
           return;
         }
-        effectiveCfg = currentCfg;
         effectiveDmPolicy = currentAuthorization.dmPolicy;
         effectiveConfigAllowFrom = currentAuthorization.configAllowFrom;
         effectiveDmIngress = currentAuthorization.ingress;
