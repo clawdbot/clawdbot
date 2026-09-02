@@ -47,11 +47,7 @@ import {
   resolveNewSessionSubmitBlock,
   type NewSessionSubmitBlock,
 } from "./submit-gates.ts";
-import {
-  canShowNewSessionTerminalStart,
-  readNewSessionTerminalStartAccess,
-  startNewSessionInTerminal,
-} from "./terminal-start.ts";
+import { startNewSessionInTerminal } from "./terminal-start.ts";
 
 export class DraftSubmissionFlow {
   private visibilityValue: NewSessionVisibility = "normal";
@@ -194,8 +190,8 @@ export class DraftSubmissionFlow {
   }
 
   /** A submit was attempted (Enter or Start click) while a gate blocked it. */
-  noteBlockedSubmitAttempt(kind: "session" | "terminal" = "session") {
-    this.blockedSubmitGate = this.submitBlock(kind)?.gate ?? null;
+  noteBlockedSubmitAttempt() {
+    this.blockedSubmitGate = this.submitBlock()?.gate ?? null;
     this.callbacks.requestUpdate();
   }
 
@@ -205,10 +201,6 @@ export class DraftSubmissionFlow {
     return block?.gate === this.blockedSubmitGate && !PAGE_RENDERED_GATES.has(block.gate)
       ? block.reason
       : undefined;
-  }
-
-  showStartInTerminal(): boolean {
-    return canShowNewSessionTerminalStart(this.read(), Boolean(this.placement().target));
   }
 
   private buildDraftSessionCreateParams(options: DraftSessionCreateOverrides = {}) {
@@ -252,47 +244,39 @@ export class DraftSubmissionFlow {
     return access.allowed ? undefined : access.reason;
   }
 
-  canSubmit(kind: "session" | "terminal" = "session"): boolean {
-    return this.submitBlock(kind) === undefined;
+  canSubmit(): boolean {
+    return this.submitBlock() === undefined;
   }
 
   /** Single owner for submit state, tooltips, and blocked-Enter notices. */
-  submitBlock(kind: "session" | "terminal" = "session"): NewSessionSubmitBlock | undefined {
+  submitBlock(): NewSessionSubmitBlock | undefined {
     if (
-      kind === "session" &&
+      !catalog.isTarget(this.read().data) &&
       this.attachmentDraft.pendingReads === 0 &&
       this.startedSession.isCurrent(this.read().context, this.place.agentId)
     ) {
       return this.activeSubmission ? { gate: "submitting" } : undefined;
     }
-    return resolveNewSessionSubmitBlock(
-      {
-        gatewayState: this.gateway,
-        placeState: this.place,
-        pendingPlacement: this.pendingPlacement,
-        submitting: this.activeSubmission !== null,
-        message: this.messageValue,
-        submissionOutcomeUnknown: this.submissionOutcomeUnknown,
-        pendingAttachmentReads: this.attachmentDraft.pendingReads,
-        hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
-        hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
-        submissionSnapshot: () => this.read(),
-        requiresModelSetup: () => this.requiresModelSetup(),
-        submissionAccess: () => this.submissionAccess(),
-        terminalStartAccess: () =>
-          readNewSessionTerminalStartAccess(
-            this.read().context?.gateway.snapshot,
-            this.place.worktree,
-          ),
-        placementTargetForSubmission: () => this.placement().target,
-        cloudDisabledReason: () => this.cloudDisabledReason(),
-        cloudRuntimeUnsupportedReason: () =>
-          this.place.modelControl.cloudRuntimeUnsupportedReason(
-            this.gateway.cloudProfiles.find((profile) => profile.id === this.place.cloudProfileId),
-          ),
-      },
-      kind,
-    );
+    return resolveNewSessionSubmitBlock({
+      gatewayState: this.gateway,
+      placeState: this.place,
+      pendingPlacement: this.pendingPlacement,
+      submitting: this.activeSubmission !== null,
+      message: this.messageValue,
+      submissionOutcomeUnknown: this.submissionOutcomeUnknown,
+      pendingAttachmentReads: this.attachmentDraft.pendingReads,
+      hasDraftAttachments: this.attachmentDraft.attachments.length > 0,
+      hasCapabilityOverrides: this.capabilities.toolOverrides !== null,
+      submissionSnapshot: () => this.read(),
+      requiresModelSetup: () => this.requiresModelSetup(),
+      submissionAccess: () => this.submissionAccess(),
+      placementTargetForSubmission: () => this.placement().target,
+      cloudDisabledReason: () => this.cloudDisabledReason(),
+      cloudRuntimeUnsupportedReason: () =>
+        this.place.modelControl.cloudRuntimeUnsupportedReason(
+          this.gateway.cloudProfiles.find((profile) => profile.id === this.place.cloudProfileId),
+        ),
+    });
   }
 
   requiresModelSetup(): boolean {
@@ -380,6 +364,9 @@ export class DraftSubmissionFlow {
   }
 
   async submit(startup?: DraftStartupResumption, backgroundRequested = false) {
+    if (!startup && catalog.isTarget(this.read().data)) {
+      return this.startInTerminal();
+    }
     const background = backgroundRequested && !startup && this.visibilityValue !== "draft";
     const context = this.read().context;
     if (!context || (!startup && !this.canSubmit())) {
@@ -657,13 +644,13 @@ export class DraftSubmissionFlow {
     }
   }
 
-  async startInTerminal() {
+  private async startInTerminal() {
     const { context, data } = this.read();
     const client = context?.gateway.snapshot.client;
     const catalogId = data?.catalogId.trim() ?? "";
     const agentId = normalizeAgentId(this.place.agentId);
-    if (!context || !client || !catalogId || !agentId || !this.canSubmit("terminal")) {
-      this.noteBlockedSubmitAttempt("terminal");
+    if (!context || !client || !catalogId || !agentId || !this.canSubmit()) {
+      this.noteBlockedSubmitAttempt();
       return;
     }
     this.blockedSubmitGate = null;
@@ -680,7 +667,10 @@ export class DraftSubmissionFlow {
         {
           catalogId,
           agentId,
-          cwd: this.place.folder.trim() || this.place.workspacePath(),
+          hostId: this.place.terminalHostId,
+          cwd:
+            this.place.folder.trim() ||
+            (this.place.terminalOnNode ? "" : this.place.workspacePath()),
           initialMessage,
           worktree: this.place.worktree,
           worktreeName: this.place.worktreeName,

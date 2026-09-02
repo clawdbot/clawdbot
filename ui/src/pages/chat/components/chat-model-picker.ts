@@ -106,7 +106,7 @@ function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined
 
 // Numbers follow the filtered order because digit selection reads that same row list.
 // A focused search input owns the digits instead (handleModelPickerKeydown bails on input
-// targets), and the :focus-within rule in styles/chat/layout.css withdraws these keycaps there.
+// targets), and the :focus-within rule in styles/chat/composer.css withdraws these keycaps there.
 function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
     shortcut.hidden = true;

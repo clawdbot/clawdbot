@@ -1,6 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
@@ -44,7 +43,8 @@ export function renderNewSessionDraftView(options: {
   } = options;
   const worktreeNameInvalid = place.worktree && !isWorktreeNameValid(place.worktreeName);
   const capabilities = submission.capabilities;
-  const voiceControl = dictation.render(draftOwnerKey);
+  const preferences = context?.theme.settings;
+  const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
   const dictationLocked = dictation.active;
   const preparedTitle = titlePreparation.preparedTitle();
   return html`
@@ -65,6 +65,12 @@ export function renderNewSessionDraftView(options: {
     >
       ${renderTargetBar()}
       ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+      ${isCatalogTarget && capabilities.toolOverrides
+        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
+            label: t("common.reset"),
+            onClick: () => capabilities.setToolOverrides(null),
+          })
+        : nothing}
       ${submission.submissionOutcomeUnknown
         ? renderDraftError(
             t(
@@ -108,20 +114,15 @@ export function renderNewSessionDraftView(options: {
               mode: submission.permission.value,
               onSelect: (permissionMode) => submission.permission.set(permissionMode ?? undefined),
             }),
-        requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
+        requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
         requestUpdate,
         submitting: submission.submitting,
         textareaController: submission.composerTextarea,
         voiceControl,
         messageLocked: Boolean(submission.pendingPlacement.sessionKey),
-        terminalAction: submission.showStartInTerminal()
-          ? {
-              canStart:
-                !submission.submitting && !dictationLocked && submission.canSubmit("terminal"),
-              disabledReason: submission.submitBlock("terminal")?.reason,
-              onStart: () => void submission.startInTerminal(),
-            }
-          : undefined,
+        nativeTerminal: isCatalogTarget,
+        onUnsupportedAttachment: () =>
+          submission.setError(t("newSession.terminalAttachmentsUnsupported")),
         onInput: onMessage,
         onOpenImage,
         onVisibilityChange: (visibility) => {
@@ -131,7 +132,7 @@ export function renderNewSessionDraftView(options: {
         },
         onSubmit: () => void submission.submit(),
         onBackgroundSubmit:
-          submission.visibility === "draft"
+          submission.visibility === "draft" || isCatalogTarget
             ? undefined
             : () => void submission.submit(undefined, true),
       })}
@@ -145,7 +146,9 @@ export function renderNewSessionDraftView(options: {
               : nothing}
           </div>`
         : nothing}
-      ${renderNewSessionIncognitoNotice(submission.visibility === "incognito")}
+      ${!isCatalogTarget
+        ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
+        : nothing}
     </div>
   `;
 }

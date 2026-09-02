@@ -976,8 +976,6 @@ describe("normalizeInitialApplicationLocation", () => {
       expect(runtime.context.theme.settings.accent).toBe("#48d6c2");
 
       saveSettings({ ...loadSettings(), accent: "#f4b740" });
-      runtime.context.theme.refresh();
-
       expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#f4b740");
       expect(runtime.context.theme.settings.accent).toBe("#f4b740");
     } finally {

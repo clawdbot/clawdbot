@@ -151,7 +151,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       manifestRegistry,
       metadataSnapshot,
       installRecords: {},
-      preferBuiltPluginArtifacts: false,
+      preferBuiltPluginArtifacts: undefined,
     });
     expect(resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({

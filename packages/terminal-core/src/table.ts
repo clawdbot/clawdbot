@@ -76,6 +76,7 @@ const C1_CSI = "\u009b";
 const C1_OSC = "\u009d";
 const C1_ST = "\u009c";
 const BEL = "\u0007";
+const SGR_CONTROL_CHARS_REGEX = new RegExp(String.raw`[\u0000-\u001f\u007f]`, "g");
 
 type AnsiToken = { kind: "ansi" | "char"; value: string; width: number };
 
@@ -135,16 +136,9 @@ function parseSgrSequence(value: string): { introducer: string; parameters: stri
   } else {
     return undefined;
   }
-  const parameters = Array.from(value.slice(introducer.length, -1))
-    .filter((character) => {
-      const code = character.charCodeAt(0);
-      return code > 0x1f && code !== 0x7f;
-    })
-    .join("");
-  const hasOnlySgrParameters = Array.from(parameters).every(
-    (character) => (character >= "0" && character <= "9") || character === ";" || character === ":",
-  );
-  if (!hasOnlySgrParameters) {
+  // C0 and DEL execute separately inside CSI; exclude them only from stored SGR parameters.
+  const parameters = value.slice(introducer.length, -1).replace(SGR_CONTROL_CHARS_REGEX, "");
+  if (/[^0-9;:]/u.test(parameters)) {
     return undefined;
   }
   return { introducer, parameters };

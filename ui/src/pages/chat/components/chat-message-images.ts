@@ -17,6 +17,7 @@ import {
   isManagedOutgoingMediaSource,
   resolveAssistantAttachmentAvailability,
   resolveManagedOutgoingMediaSessionKey,
+  retryAssistantAttachmentAvailability,
 } from "./chat-message-attachment-availability.ts";
 import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -66,13 +67,17 @@ class MessageImageResourceDirective extends AsyncDirective {
   private onRequestUpdate: (() => void) | undefined;
   private readonly requestUpdate = () => this.onRequestUpdate?.();
   private readonly onSettled = (event: Event, source: string) => {
-    if (!this.isConnected || this.image?.url !== source) {
+    // A removed IMG may finish after denial; it no longer owns displayed pixels.
+    const element = event.currentTarget;
+    if (
+      !this.isConnected ||
+      this.image?.url !== source ||
+      !(element instanceof HTMLImageElement) ||
+      !element.isConnected
+    ) {
       return;
     }
-    this.element =
-      event.type === "load" && event.currentTarget instanceof HTMLImageElement
-        ? event.currentTarget
-        : undefined;
+    this.element = event.type === "load" ? element : undefined;
     if (
       this.retained?.status === "retaining" &&
       this.element?.getAttribute("src") !== this.retained.previewUrl
@@ -119,15 +124,14 @@ class MessageImageResourceDirective extends AsyncDirective {
       releaseChatMediaResourceSubscriber(this.requestUpdate);
       return noChange;
     }
-    if (this.onRequestUpdate !== options?.onRequestUpdate) {
-      releaseChatMediaResourceSubscriber(this.requestUpdate);
-    }
     this.onRequestUpdate = options?.onRequestUpdate;
 
-    // A transcript shares one pane callback across many guarded rows. Lit owns
-    // each image part, so only disconnecting that part may release its resource.
+    // Lit owns each image part. Reparent its stable subscription when the pane
+    // callback changes without discarding its loaded resource.
     if (this.onRequestUpdate) {
       observeChatMediaResourceSubscriber(this.onRequestUpdate, this.requestUpdate);
+    } else {
+      releaseChatMediaResourceSubscriber(this.requestUpdate);
     }
     const subscriptionOptions = this.onRequestUpdate
       ? { ...options, onRequestUpdate: this.requestUpdate }
@@ -140,13 +144,23 @@ class MessageImageResourceDirective extends AsyncDirective {
       subscriptionOptions?.onRequestUpdate,
     );
     const decodeFailed = this.retained?.status === "unavailable";
-    if (availability.status !== "available" || decodeFailed) {
-      if (availability.status === "checking" && this.retained?.status === "retaining") {
-        const previewUrl = this.retained.previewUrl;
-        return this.present(
-          this.renderImageElement({ ...image, displayUrl: previewUrl }, previewUrl, options),
-        );
-      }
+    // Tickets authorize new reads, not already decoded pixels. Only this
+    // mounted image can survive an unconfirmed renewal; denial still clears it.
+    const unconfirmed =
+      availability.status === "checking" ||
+      (availability.status === "unavailable" && availability.unconfirmed);
+    const displayUrl =
+      availability.status === "available"
+        ? buildAssistantAttachmentUrl(
+            image.url,
+            options?.resourceBasePath,
+            availability.mediaTicket,
+          )
+        : unconfirmed
+          ? this.element?.getAttribute("src")
+          : undefined;
+    if (!displayUrl || decodeFailed) {
+      this.element = undefined;
       if (!decodeFailed) {
         this.releaseRetainedImage();
       }
@@ -160,17 +174,26 @@ class MessageImageResourceDirective extends AsyncDirective {
         label: image.fileName ?? image.alt ?? t("chat.imageLightbox.untitled"),
         badge: reason === undefined ? "" : t("chat.attachments.unavailable"),
         reason,
+        onRetry:
+          !decodeFailed && availability.status === "unavailable" && availability.recoverable
+            ? () =>
+                retryAssistantAttachmentAvailability(
+                  image.url,
+                  options?.resourceBasePath,
+                  options?.authToken,
+                  subscriptionOptions?.onRequestUpdate,
+                )
+            : undefined,
       });
     }
-    const displayUrl = buildAssistantAttachmentUrl(
-      image.url,
-      options?.resourceBasePath,
-      availability.mediaTicket,
-    );
     const renderable = { ...image, displayUrl };
     if (!isManagedOutgoingMediaSource(displayUrl)) {
       const retained = this.retained;
-      if (retained?.status === "retaining" && retained.timeout === undefined) {
+      if (
+        availability.status === "available" &&
+        retained?.status === "retaining" &&
+        retained.timeout === undefined
+      ) {
         // IMG keeps its current decoded request while the new src loads. One
         // native load/error boundary replaces the detached decode preloader.
         retained.timeout = setTimeout(
@@ -233,9 +256,6 @@ class MessageImageResourceDirective extends AsyncDirective {
   private releaseRetainedImage() {
     const retained = this.retained;
     this.retained = undefined;
-    if (retained) {
-      this.element = undefined;
-    }
     if (retained?.status === "retaining") {
       clearTimeout(retained.timeout);
     }

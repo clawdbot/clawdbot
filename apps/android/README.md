@@ -9,6 +9,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
+- Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
 - Enable camera, location, and other phone capabilities through onboarding or Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
 - Manage installed skills and Gateway-verified ClawHub releases, review Skill Workshop proposals, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
@@ -77,13 +78,13 @@ build timestamp shared by every debug variant in that invocation. Release
 tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
-Android release archives use the pinned version in `apps/android/version.json`. Update it with:
+Prepare and finalize Android release metadata through the shared mobile cutter:
 
 ```bash
-pnpm android:version
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 pnpm android:version:check
-pnpm android:version:pin -- --from-gateway
-pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
 ```
 
 Release-owner signing sync:

@@ -107,6 +107,7 @@ export async function maybeSpawnVisibleSession(params: {
   requestedAgentId?: string;
   runTimeoutSeconds?: number;
   sandbox: "inherit" | "require";
+  expectsCompletionMessage: boolean;
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
@@ -420,7 +421,7 @@ export async function maybeSpawnVisibleSession(params: {
         cleanup: "keep",
         label: params.label || undefined,
         runTimeoutSeconds,
-        expectsCompletionMessage: params.raw.expectsCompletionMessage !== false,
+        expectsCompletionMessage: params.expectsCompletionMessage,
         spawnMode: "run",
       });
     } catch (error) {

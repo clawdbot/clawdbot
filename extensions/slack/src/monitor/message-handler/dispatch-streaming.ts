@@ -390,6 +390,9 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
 
     const text = params.streamText ?? reply.trimmedText;
     const hookContent = reply.trimmedText;
+    // Even empty chunks force the SDK to flush short text. Final delivery must
+    // await Slack's receipt, not the later best-effort progress finalization.
+    const chunks = params.kind === "final" ? [] : undefined;
     let plannedThreadTs: string | undefined;
     try {
       if (!state.streamSession && state.nativeProgressStreamStartPromise) {
@@ -434,6 +437,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
           channel: message.channel,
           threadTs: streamThreadTs,
           text,
+          chunks,
           ...(params.taskDisplayMode ? { taskDisplayMode: params.taskDisplayMode } : {}),
           ...(slackIdentity ? { identity: slackIdentity } : {}),
           teamId: await resolveSlackStreamRecipientTeamId({
@@ -491,6 +495,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       await appendSlackStream({
         session: state.streamSession,
         text: `${params.appendSeparator === false ? "" : "\n"}${text}`,
+        chunks,
       });
       refreshStreamedAcknowledgements(state.streamSession);
       // appendSlackStream also buffers locally below the SDK threshold; avoid

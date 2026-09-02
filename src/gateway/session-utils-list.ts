@@ -50,7 +50,6 @@ import type {
 import {
   deriveSessionTitle,
   buildStoreChildSessionIndex,
-  getSingleRowChildSessionCandidates,
   isFinitePositiveTimestamp,
   isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
@@ -488,16 +487,11 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const sharedRowContext =
     usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
   const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
-  const childCandidates =
-    !usePreparedChildReads && selection.entries.length > 0
-      ? getSingleRowChildSessionCandidates({ storePath, store })
-      : undefined;
   const storeChildSessionsByKey = buildStoreChildSessionIndex({
     store,
     keys: selection.entries.map(([key]) => key),
     now,
     subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
-    candidates: childCandidates,
     excludedChildKeys: filteredSessionKeys,
     requireCurrentController: !usePreparedChildReads,
   });

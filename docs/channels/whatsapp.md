@@ -445,6 +445,8 @@ A liveness probe sent to your own number can therefore become agent input with `
 | `"all"`           | Quote every outbound reply chunk                               |
 | `"batched"`       | Quote queued batched replies; leave immediate replies unquoted |
 
+If the original message text and media details are no longer cached, OpenClaw sends the reply as a plain message. The reply body is preserved, but its visual link to the original message is lost.
+
 Per-account override: `channels.whatsapp.accounts.<id>.replyToMode`.
 
 ```json5

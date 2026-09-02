@@ -124,13 +124,14 @@ final class HealthStore {
     }
 
     func refresh(onDemand: Bool = false) async {
-        guard !self.isRefreshing else { return }
+        guard !self.isRefreshing, !Task.isCancelled else { return }
         self.isRefreshing = true
         defer { self.isRefreshing = false }
         let previousError = self.lastError
 
         do {
             let data = try await ControlChannel.shared.health(timeout: 15)
+            guard !Task.isCancelled else { return }
             if let decoded = decodeHealthSnapshot(from: data) {
                 self.snapshot = decoded
                 self.lastSuccess = Date()
@@ -146,6 +147,7 @@ final class HealthStore {
                 }
             }
         } catch {
+            guard !Task.isCancelled else { return }
             let desc = error.localizedDescription
             self.lastError = desc
             if onDemand { self.snapshot = nil }
