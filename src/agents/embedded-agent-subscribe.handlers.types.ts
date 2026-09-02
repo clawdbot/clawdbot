@@ -68,6 +68,7 @@ type AssistantStreamData = {
 type AssistantStreamDelivery = {
   data: AssistantStreamData;
   emitPartialReply: boolean;
+  finalMessage?: boolean;
 };
 
 /** Mutable subscription state shared by embedded-agent event handlers. */
@@ -306,7 +307,7 @@ export type EmbeddedAgentSubscribeContext = {
   getLastCompactionTokensAfter: () => number | undefined;
   emitAssistantStreamData: (
     data: AssistantStreamData,
-    options?: { emitPartialReply?: boolean },
+    options?: { emitPartialReply?: boolean; finalMessage?: boolean },
   ) => void;
   emitBlockReply: (
     payload: BlockReplyPayload,

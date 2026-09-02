@@ -256,7 +256,7 @@ export function handleMessageUpdate(
       ? ctx.state.deltaBuffer
       : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
     const commentaryData =
-      commentaryText && (chunk || !hadResponsesCommentaryText)
+      commentaryText && (chunk || !hadResponsesCommentaryText || evtType === "text_end")
         ? buildAssistantStreamData({
             text: commentaryText,
             replace: true,
@@ -265,7 +265,7 @@ export function handleMessageUpdate(
           })
         : undefined;
     if (commentaryData) {
-      ctx.emitAssistantStreamData(commentaryData);
+      ctx.emitAssistantStreamData(commentaryData, { finalMessage: evtType === "text_end" });
     }
     return;
   }

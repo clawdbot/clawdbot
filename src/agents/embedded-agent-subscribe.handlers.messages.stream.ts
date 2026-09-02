@@ -185,6 +185,7 @@ export function scopeAssistantMessageToStreamBlock(
 export function emitAssistantCommentaryStreamData(
   ctx: EmbeddedAgentSubscribeContext,
   message: AssistantMessage,
+  finalMessage = false,
 ) {
   const isResponsesCommentary = isResponsesApiAssistantMessage(message);
   const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
@@ -193,7 +194,7 @@ export function emitAssistantCommentaryStreamData(
     ? scopeAssistantMessageToStreamBlock(message, index, itemId)
     : message;
   const text = extractAssistantCommentaryText(commentaryMessage);
-  if (text && (!isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
+  if (text && (finalMessage || !isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
     ctx.emitAssistantStreamData(
       buildAssistantStreamData({
         text,
@@ -201,6 +202,7 @@ export function emitAssistantCommentaryStreamData(
         phase: "commentary",
         itemId: isResponsesCommentary ? itemId : undefined,
       }),
+      { finalMessage },
     );
   }
 }

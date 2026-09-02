@@ -37,13 +37,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       data.phase === "commentary" && typeof data.text === "string"
         ? data.text.replace(/\s+/g, " ").trim()
         : "";
+    const preamblePhase = delivery.finalMessage ? "end" : "update";
+    // Completion must survive an identical last delta: first-notification
+    // consumers wait for this boundary, not a timer or a repeated text snapshot.
+    const commentarySignature = `${preamblePhase}\0${progressText}`;
     const event = progressText
       ? {
           stream: "item" as const,
           data: {
             kind: "preamble",
             title: "Preamble",
-            phase: "update",
+            phase: preamblePhase,
             progressText,
             ...(itemId ? { itemId } : {}),
           },
@@ -53,10 +57,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         : { stream: "assistant" as const, data };
     if (
       event &&
-      (event.stream !== "item" || lastEmittedCommentaryByItem.get(itemId) !== progressText)
+      (event.stream !== "item" || lastEmittedCommentaryByItem.get(itemId) !== commentarySignature)
     ) {
       if (event.stream === "item") {
-        lastEmittedCommentaryByItem.set(itemId, progressText);
+        lastEmittedCommentaryByItem.set(itemId, commentarySignature);
       }
       emitAgentEvent({ runId: params.runId, ...event });
       if (params.onAgentEvent) {
@@ -88,9 +92,13 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   };
   const emitAssistantStreamData = (
     data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
-    options?: { emitPartialReply?: boolean },
+    options?: { emitPartialReply?: boolean; finalMessage?: boolean },
   ) => {
-    const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
+    const delivery = {
+      data,
+      emitPartialReply: options?.emitPartialReply === true,
+      finalMessage: options?.finalMessage === true,
+    };
     if (state.deferBlockReplyDelivery) {
       state.deferredAssistantEvents.push(delivery);
       return;
