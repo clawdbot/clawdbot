@@ -167,7 +167,7 @@ describe("plugin tools MCP server", () => {
     expect(connectToolsMcpServerToStdioMock).toHaveBeenCalledOnce();
   });
 
-  it("threads global plugin tool policy into plugin resolution", async () => {
+  it("threads agentless global plugin tool policy into plugin resolution", async () => {
     getRuntimeConfigMock.mockReturnValueOnce({
       plugins: { enabled: true },
       tools: {
@@ -185,6 +185,76 @@ describe("plugin tools MCP server", () => {
     const resolvePolicy = requireToolPolicyParams(resolvePluginToolsMock);
     expect(resolvePolicy.toolAllowlist).toContain("memory_search");
     expect(resolvePolicy.toolDenylist).toEqual(["memory_forget"]);
+  });
+
+  it("enforces global and managed-agent plugin tool policy", async () => {
+    const deniedExecute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "denied executor ran" }],
+    });
+    const allowedExecute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "allowed executor ran" }],
+    });
+    resolvePluginToolsMock.mockReturnValue([
+      {
+        name: "plugin_allowed",
+        label: "Allowed control tool",
+        description: "Allowed control tool",
+        parameters: { type: "object", properties: {} },
+        execute: allowedExecute,
+      },
+      {
+        name: "plugin_denied",
+        label: "Denied tool",
+        description: "Denied tool",
+        parameters: { type: "object", properties: {} },
+        execute: deniedExecute,
+      },
+    ] as unknown as AnyAgentTool[]);
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    const tools = resolvePluginToolsForMcp({
+      config: {
+        plugins: { enabled: true },
+        tools: {
+          allow: ["plugin_allowed", "plugin_denied"],
+          deny: ["plugin_globally_denied"],
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              tools: { allow: ["plugin_allowed"], deny: ["plugin_denied"] },
+            },
+          ],
+        },
+      } as never,
+      agentSessionKey: "agent:research:acp:session-1",
+    });
+    const handlers = createPluginToolsMcpHandlers(tools);
+
+    await expect(handlers.listTools()).resolves.toMatchObject({
+      tools: [{ name: "plugin_allowed" }],
+    });
+    await expect(handlers.callTool({ name: "plugin_denied" })).resolves.toMatchObject({
+      isError: true,
+      content: [{ text: "Unknown tool: plugin_denied" }],
+    });
+    expect(deniedExecute).not.toHaveBeenCalled();
+
+    await expect(handlers.callTool({ name: "plugin_allowed" })).resolves.toMatchObject({
+      content: [{ text: "allowed executor ran" }],
+    });
+    expect(allowedExecute).toHaveBeenCalledOnce();
+
+    for (const policyMock of [
+      ensureStandalonePluginToolRegistryLoadedMock,
+      resolvePluginToolsMock,
+    ]) {
+      expect(requireToolPolicyParams(policyMock)).toMatchObject({
+        toolAllowlist: ["plugin_allowed", "plugin_denied"],
+        toolDenylist: ["plugin_globally_denied", "plugin_denied"],
+      });
+    }
   });
 
   it("lists registered plugin tools and serializes non-array tool content", async () => {
