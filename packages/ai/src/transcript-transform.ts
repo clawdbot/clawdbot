@@ -102,6 +102,13 @@ function transformAssistant<TApi extends Api>(
     if (block.type === "text") {
       return sameModel ? block : { type: "text" as const, text: block.text };
     }
+    if (block.type !== "toolCall" || typeof block.id !== "string") {
+      // Persisted assistant content can carry blocks outside the declared union
+      // (managed-media `attachment` / `attachment_error` display blocks written
+      // by the gateway). They are not tool calls: pass them through untouched
+      // instead of crashing the whole history transform on `block.id.trim()`.
+      return block;
+    }
     const { thoughtSignature: _, ...unsigned } = block;
     // Pairing uses these IDs as shared keys, before model-specific normalization runs.
     const trimmedId = block.id.trim();
