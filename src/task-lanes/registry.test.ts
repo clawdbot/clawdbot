@@ -80,6 +80,32 @@ describe("task-lane registry", () => {
     ]);
   });
 
+  it("scopes lane identity per provider when two providers share a lane id", async () => {
+    const registry = createTaskLaneRegistry();
+    registerTaskLaneProvider(
+      registry,
+      provider("alpha", async () => ({
+        lanes: [lane("work", [{ id: "a1", title: "alpha task", state: "running" }])],
+      })),
+    );
+    registerTaskLaneProvider(
+      registry,
+      provider("beta", async () => ({
+        lanes: [lane("work", [{ id: "b1", title: "beta task", state: "succeeded" }])],
+      })),
+    );
+    const snapshot = await loadTaskLaneSnapshot(registry);
+    expect(snapshot.lanes).toHaveLength(2);
+    for (const entry of snapshot.lanes) {
+      expect(entry.id).toBe("work");
+      expect(entry.items.map((item) => item.id)).toHaveLength(1);
+    }
+    expect(snapshot.lanes.flatMap((entry) => entry.items.map((item) => item.id)).sort()).toEqual([
+      "a1",
+      "b1",
+    ]);
+  });
+
   it("pages the newest-first flat item list and normalizes states", async () => {
     const registry = createTaskLaneRegistry();
     registerTaskLaneProvider(

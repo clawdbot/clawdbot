@@ -63,9 +63,9 @@ export async function loadTaskLaneSnapshot(
   const providerIds = options?.providerId
     ? [options.providerId]
     : listTaskLaneProviderIds(registry);
-  const lanes: TaskLane[] = [];
+  const lanes: Array<TaskLane & { providerId: string }> = [];
   const diagnostics: TaskLaneProviderDiagnostic[] = [];
-  const flat: TaskLaneItem[] = [];
+  const flat: Array<TaskLaneItem & { laneId: string; laneProviderId: string }> = [];
   for (const providerId of providerIds) {
     const provider = registry.providers.get(providerId);
     if (!provider) {
@@ -76,9 +76,18 @@ export async function loadTaskLaneSnapshot(
       const { lanes: providerLanes } = await provider.load();
       let itemCount = 0;
       for (const lane of providerLanes) {
-        lanes.push(lane);
+        // Lane ids are only unique within a provider; item-to-lane assignment
+        // must therefore match on both, or duplicate lane ids across providers
+        // would cross-assign items.
+        lanes.push({ ...lane, providerId });
         itemCount += lane.items.length;
-        flat.push(...lane.items.map((item) => ({ ...item, laneId: lane.id })));
+        flat.push(
+          ...lane.items.map((item) => ({
+            ...item,
+            laneId: lane.id,
+            laneProviderId: providerId,
+          })),
+        );
       }
       diagnostics.push({
         providerId,
@@ -101,9 +110,11 @@ export async function loadTaskLaneSnapshot(
     state: normalizeTaskLaneItemState(item.state),
   }));
   return {
-    lanes: lanes.map((lane) => ({
+    lanes: lanes.map(({ providerId, ...lane }) => ({
       ...lane,
-      items: paged.filter((item) => item.laneId === lane.id),
+      items: paged
+        .filter((item) => item.laneProviderId === providerId && item.laneId === lane.id)
+        .map(({ laneProviderId, ...item }) => item),
     })),
     diagnostics,
   };
