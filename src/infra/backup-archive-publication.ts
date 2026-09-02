@@ -7,6 +7,7 @@ import {
   type BackupArchiveCleanupReceipt,
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
+import { sweepStaleBackupTempDirectories } from "./backup-temp-sweep.js";
 import {
   getPublishFileExclusiveFailureDetails,
   isHardlinkFallbackError,
@@ -18,6 +19,11 @@ import {
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type BackupArchiveLogger = (message: string) => void;
+
+// Publish staging is `.openclaw-backup-publish-<uuid>-<mkdtemp suffix>`.
+// Matching the whole shape keeps the sweep to directories this module made.
+const STALE_BACKUP_PUBLISH_DIRECTORY_PATTERN =
+  /^\.openclaw-backup-publish-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-[A-Za-z0-9]{6}$/u;
 
 export type BackupArchivePublication = {
   canonicalOutputPath: string;
@@ -79,6 +85,7 @@ async function removeStagingDirectoryIfOwned(plan: BackupArchivePublication): Pr
 
 export async function createBackupArchivePublication(
   outputPath: string,
+  log?: BackupArchiveLogger,
 ): Promise<BackupArchivePublication> {
   const requestedOutputPath = path.resolve(outputPath);
   const requestedParentPath = path.dirname(requestedOutputPath);
@@ -89,6 +96,11 @@ export async function createBackupArchivePublication(
   }
   const canonicalOutputPath = path.join(canonicalParentPath, path.basename(requestedOutputPath));
   await assertTargetAbsent(canonicalOutputPath);
+  await sweepStaleBackupTempDirectories({
+    directoryPath: canonicalParentPath,
+    entryPattern: STALE_BACKUP_PUBLISH_DIRECTORY_PATTERN,
+    log,
+  });
   const stagingDir = await fs.mkdtemp(
     path.join(canonicalParentPath, `.openclaw-backup-publish-${randomUUID()}-`),
   );
