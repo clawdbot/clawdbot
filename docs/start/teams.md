@@ -99,6 +99,40 @@ Named operator roles bind authenticated profiles to a policy: which sessions the
 
 Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture.
 
+### Coding as a guest
+
+A sandbox-required guest can work without an administrator role. With the default
+`workspaceAccess: "none"`, file and shell tools use a writable private workspace,
+not the shared agent workspace. Managed skill instructions stay read-only.
+Child sessions inherit the parent's sandbox requirement, even when the agent's
+default sandbox mode is off.
+
+Local container sandboxes have no network by default. If guests need to clone
+public repositories or install project-local dependencies, explicitly enable
+outbound networking for the coding agent, for example:
+
+```json5
+{
+  agents: {
+    entries: {
+      roboclaw: {
+        sandbox: {
+          workspaceAccess: "none",
+          docker: { network: "bridge" },
+        },
+      },
+    },
+  },
+}
+```
+
+Network access does not grant host execution or inject shared credentials. Use a
+sandbox image with the required runtimes already installed; the read-only root
+filesystem still prevents system package installation. Enabling egress allows
+requests to destinations reachable from the container, so use a restricted
+container network when that access needs tighter controls. See
+[Sandboxing](/gateway/sandboxing#workspace-access) for workspace and network policy.
+
 ## Verify
 
 - Mention the bot in the allowed team channel and confirm it replies there.

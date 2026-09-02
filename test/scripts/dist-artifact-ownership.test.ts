@@ -382,7 +382,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           fs
             .readdirSync(path.join(root, ".artifacts"))
             .filter((name) => name.startsWith("plugin-sdk-staging-")),
-        ).toHaveLength(failStagingCleanup ? 1 : 0);
+        ).toHaveLength(failStagingCleanup ? (groups?.length ?? 0) + 1 : 0);
       }, signal);
     },
   );

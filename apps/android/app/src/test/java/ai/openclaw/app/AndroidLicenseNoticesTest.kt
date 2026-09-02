@@ -42,6 +42,7 @@ class AndroidLicenseNoticesTest {
         "AndroidX Compose",
         "AndroidX Media3",
         "AndroidX Room",
+        "AndroidX SQLite",
         "AndroidX Wear",
         "Bouncy Castle Provider",
         "Coil",

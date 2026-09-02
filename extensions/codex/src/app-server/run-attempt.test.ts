@@ -3249,6 +3249,78 @@ describe("runCodexAppServerAttempt", () => {
     expect(JSON.stringify(llmInputPayload)).not.toContain("previous turn");
   });
 
+  it.each([
+    {
+      channel: "whatsapp",
+      currentChannelId: "whatsapp:chat-wa",
+      expectedChatId: "chat-wa",
+    },
+    {
+      channel: "telegram",
+      currentChannelId: "telegram:-100123",
+      expectedChatId: "-100123",
+    },
+    {
+      channel: "imessage",
+      currentChannelId: "imessage:any;-;chat-imessage",
+      expectedChatId: "any;-;chat-imessage",
+    },
+  ])(
+    "provides authenticated $channel context to before_prompt_build",
+    async ({ channel, currentChannelId, expectedChatId }) => {
+      const beforePromptBuild = vi.fn(() => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+      );
+      const { sessionFile, workspaceDir } = createRunPaths();
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.messageChannel = channel;
+      params.messageProvider = channel;
+      params.currentChannelId = currentChannelId;
+      params.messageTo = currentChannelId;
+      params.agentAccountId = "account-a";
+      params.senderId = `sender-${channel}`;
+      params.channelContext = {
+        sender: { id: "stale-sender", profile: `${channel}-profile` },
+        chat: { id: "stale-chat", thread: `${channel}-thread` },
+      };
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+
+      const [, hookContext] = mockCall(beforePromptBuild, "before_prompt_build") as [
+        unknown,
+        {
+          accountId?: string;
+          channel?: string;
+          channelContext?: {
+            chat?: { id?: string; thread?: string };
+            sender?: { id?: string; profile?: string };
+          };
+          channelId?: string;
+          chatId?: string;
+          messageProvider?: string;
+          senderId?: string;
+        },
+      ];
+      expect(hookContext).toMatchObject({
+        accountId: "account-a",
+        channel,
+        messageProvider: channel,
+        channelId: expectedChatId,
+        chatId: expectedChatId,
+        senderId: `sender-${channel}`,
+        channelContext: {
+          sender: { id: `sender-${channel}`, profile: `${channel}-profile` },
+          chat: { id: expectedChatId, thread: `${channel}-thread` },
+        },
+      });
+    },
+  );
+
   it("fails closed when before_prompt_build restricts Codex tools", async () => {
     const authorizedEnrichment = vi.fn(() => ({ prependContext: "private recalled context" }));
     initializeGlobalHookRunner(

@@ -3,7 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
-import androidx.room.Room
+import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -1401,11 +1401,15 @@ class ChatControllerBranchCoordinationTest {
       runCurrent()
       controller.awaitOutboxRestore()
 
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      val previousJobs = ownerJob.children.toSet()
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"reason":"branch-switch","sessionKey":"$backgroundKey","agentId":"main"}""",
       )
-      runCurrent()
+      // Completing this event's work, not draining the test dispatcher, joins Room's IO.
+      val eventJobs = ownerJob.children.filterNot { it in previousJobs }.toList()
+      eventJobs.forEach { it.join() }
       assertTrue(outbox.branchState("gateway-a", backgroundScope)?.needsReconciliation == true)
     }
 

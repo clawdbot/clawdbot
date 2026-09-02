@@ -1,7 +1,8 @@
-AndroidX Room
+AndroidX SQLite
 Artifacts:
-- androidx.room3:room3-common
-- androidx.room3:room3-runtime
+- androidx.sqlite:sqlite
+- androidx.sqlite:sqlite-async
+- androidx.sqlite:sqlite-framework
 License: Apache License 2.0
 
                                  Apache License
