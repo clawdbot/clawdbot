@@ -5619,45 +5619,60 @@ describe("update-cli", () => {
     expect(packageInstallCommandCall()).toBeUndefined();
   });
 
-  it.each(
-    (
-      [
-        { platform: "linux", env: { INVOCATION_ID: "gateway-invocation" }, supervisor: "systemd" },
-        { platform: "linux", env: { JOURNAL_STREAM: "8:123" }, supervisor: "systemd" },
-        {
-          platform: "linux",
-          env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
-          supervisor: "systemd",
-        },
-        { platform: "linux", env: {}, supervisor: "systemd", ancestor: true },
-        {
-          platform: "linux",
-          env: { INVOCATION_ID: "gateway-invocation" },
-          supervisor: "systemd",
-          options: { tag: "./candidate.tgz" },
-          tag: "./candidate.tgz",
-        },
-        {
-          platform: "linux",
-          env: { INVOCATION_ID: "gateway-invocation" },
-          supervisor: "systemd",
-          options: { channel: "extended-stable" },
-          tag: undefined,
-        },
-        {
-          platform: "darwin",
-          env: { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" },
-          supervisor: "launchd",
-        },
-      ] as const
-    ).map((testCase) => ({ options: {}, tag: "9999.0.0", ancestor: false, ...testCase })),
-  )(
-    "hands agent-initiated updates to $supervisor before stopping the gateway ($env)",
-    async ({ platform, env, supervisor, options, tag, ancestor }) => {
+  it.each<{
+    platform: "linux" | "darwin";
+    env: NodeJS.ProcessEnv;
+    supervisor: "systemd" | "launchd";
+    options?: Parameters<typeof updateCommand>[0];
+    ancestor?: boolean;
+    git?: boolean;
+  }>([
+    { platform: "linux", env: { INVOCATION_ID: "gateway-invocation" }, supervisor: "systemd" },
+    { platform: "linux", env: { JOURNAL_STREAM: "8:123" }, supervisor: "systemd" },
+    {
+      platform: "linux",
+      env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" },
+      supervisor: "systemd",
+    },
+    { platform: "linux", env: {}, supervisor: "systemd", ancestor: true },
+    {
+      platform: "linux",
+      env: { INVOCATION_ID: "gateway-invocation" },
+      supervisor: "systemd",
+      options: { tag: "./candidate.tgz" },
+    },
+    {
+      platform: "linux",
+      env: { INVOCATION_ID: "gateway-invocation" },
+      supervisor: "systemd",
+      options: { channel: "extended-stable" },
+    },
+    {
+      platform: "darwin",
+      env: { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" },
+      supervisor: "launchd",
+    },
+    { platform: "linux", env: {}, supervisor: "systemd", ancestor: true, git: true },
+  ])(
+    "hands agent-initiated updates to $supervisor before stopping the gateway ($env, git=$git)",
+    async ({ platform, env, supervisor, options = {}, ancestor = false, git = false }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      const { pkgRoot: root, entryPath } = await setupInstalledPackageRoot(
-        createCaseDir("openclaw-update-handoff"),
-      );
+      const caseDir = createCaseDir("openclaw-update-handoff");
+      const sha = "a".repeat(40);
+      const { pkgRoot: root, entryPath } = git
+        ? {
+            pkgRoot: caseDir,
+            entryPath: await writeOpenClawPackageFixture(caseDir, "1.0.0", {
+              git: true,
+              builtSha: sha,
+              entrySource: "export {};\n",
+            }),
+          }
+        : await setupInstalledPackageRoot(caseDir);
+      if (git) {
+        vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+        vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
+      }
       mockFileBackedPathExists();
       mockRunningManagedGateway([process.execPath, entryPath, "gateway", "run"]);
       if (ancestor) {
@@ -5675,7 +5690,11 @@ describe("update-cli", () => {
 
       await withEnvAsync(env, () =>
         invokeUpdateCli({ yes: true, json: true, acceptCapabilities: true, ...options }),
-      );
+      ).catch((error) => {
+        throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
+          cause: error,
+        });
+      });
 
       expect(managedUpdateHandoff.start, getErrorOutput() || getLogOutput()).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -5683,7 +5702,8 @@ describe("update-cli", () => {
           supervisor,
           parentPid: gatewayFixturePid,
           invocationCwd: process.cwd(),
-          tag,
+          tag:
+            git || options.channel === "extended-stable" ? undefined : (options.tag ?? "9999.0.0"),
           acceptCapabilities: true,
         }),
       );
@@ -5692,7 +5712,7 @@ describe("update-cli", () => {
         handoffId: "test-handoff",
         installRoot: root,
       });
-      expectNoSideEffects(serviceStop, serviceRestart, runRestartScript);
+      expectNoSideEffects(serviceStop, serviceRestart, runRestartScript, runGatewayUpdate);
       expect(packageInstallCommandCall()).toBeUndefined();
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       expect(lastWriteJsonCall()).toMatchObject({
@@ -5708,51 +5728,53 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["preparation", "final ancestry recheck"])(
-    "reports a Git service refusal during %s without an unsafe recovery verdict",
-    async (phase) => {
-      const root = createCaseDir("openclaw-git-ancestry-refusal");
-      const sha = "a".repeat(40);
-      await writeOpenClawPackageFixture(root, "1.0.0", {
-        git: true,
-        builtSha: sha,
-        entrySource: "export {};\n",
+  it("reports a Git service refusal at the final ancestry recheck without an unsafe recovery verdict", async () => {
+    const root = createCaseDir("openclaw-git-ancestry-refusal");
+    const sha = "a".repeat(40);
+    await writeOpenClawPackageFixture(root, "1.0.0", {
+      git: true,
+      builtSha: sha,
+      entrySource: "export {};\n",
+    });
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
+    mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway"]);
+    const preparations = mockGitUpdateAfterMutation(makeOkUpdateResult({ mode: "git", root }));
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
+    const runningRuntime = { status: "running", pid: gatewayFixturePid, state: "running" };
+    // Inspection and preparation see an external caller; the final runtime
+    // reread discovers the Gateway is now an ancestor before native shutdown.
+    serviceReadRuntime
+      .mockResolvedValueOnce(runningRuntime)
+      .mockResolvedValueOnce(runningRuntime)
+      .mockImplementation(async () => {
+        mockGetSelfAndAncestorPidsSync.mockReturnValue(
+          new Set<number>([process.pid, gatewayFixturePid]),
+        );
+        return runningRuntime;
       });
-      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
-      vi.mocked(runCommandWithTimeout).mockResolvedValue(commandResult({ stdout: sha }));
-      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway"]);
-      const preparations = mockGitUpdateAfterMutation(makeOkUpdateResult({ mode: "git", root }));
-      mockGetSelfAndAncestorPidsSync.mockReturnValue(
-        new Set<number>([process.pid, gatewayFixturePid]),
-      );
-      if (phase === "final ancestry recheck") {
-        mockGetSelfAndAncestorPidsSync.mockReturnValueOnce(new Set<number>([process.pid]));
-      }
 
-      await expect(invokeUpdateCli({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+    await expect(invokeUpdateCli({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
 
-      expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
-      expect(vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0].failure).toMatchObject({
-        result: {
-          status: "error",
-          reason: "managed-service-preflight",
-          recovery: { serviceRestartSafe: true },
-          steps: [
-            expect.objectContaining({
-              stderrTail: expect.stringContaining(
-                `Gateway PID ${gatewayFixturePid} is an ancestor`,
-              ),
-            }),
-          ],
-        },
-      });
-      expect(preparations).toEqual([]);
-      expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
-      expect(freshRestartCalls()).toHaveLength(0);
-      expect(getErrorOutput()).not.toContain("Update recovery is unverified");
-      expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    },
-  );
+    expect(runUpdateFailureTriage).toHaveBeenCalledOnce();
+    expect(vi.mocked(runUpdateFailureTriage).mock.calls[0]?.[0].failure).toMatchObject({
+      result: {
+        status: "error",
+        reason: "managed-service-preflight",
+        recovery: { serviceRestartSafe: true },
+        steps: [
+          expect.objectContaining({
+            stderrTail: expect.stringContaining(`Gateway PID ${gatewayFixturePid} is an ancestor`),
+          }),
+        ],
+      },
+    });
+    expect(preparations).toEqual([]);
+    expectNoSideEffects(serviceStop, serviceStart, serviceRestart);
+    expect(freshRestartCalls()).toHaveLength(0);
+    expect(getErrorOutput()).not.toContain("Update recovery is unverified");
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  });
 
   it("refuses package updates from inherited gateway runtime pid when process ancestry is truncated", async () => {
     await mockPackageInstallAtCaseDir();
