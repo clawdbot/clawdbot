@@ -13,7 +13,7 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "../../ingress-attribution.js"
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
 const SETUP_CODE_REJECTED_MESSAGE =
-  "unauthorized: setup code invalid, expired, revoked, or already used (create a new code; review openclaw devices list)";
+  "unauthorized: setup code invalid, expired, revoked, or already used (create a new code; review `openclaw devices list`)";
 
 /** Formats a client-specific auth failure message without exposing secret values. */
 export function formatGatewayAuthFailureMessage(params: {

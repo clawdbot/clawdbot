@@ -20,7 +20,7 @@ describe("formatGatewayAuthFailureMessage", () => {
       });
 
       expect(message).toBe(
-        "unauthorized: setup code invalid, expired, revoked, or already used (create a new code; review openclaw devices list)",
+        "unauthorized: setup code invalid, expired, revoked, or already used (create a new code; review `openclaw devices list`)",
       );
       expect(truncateCloseReason(message)).toBe(message);
     },
