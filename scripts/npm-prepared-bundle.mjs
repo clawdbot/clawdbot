@@ -258,13 +258,25 @@ function readAttemptJobs(repository, producer, runGh) {
   throw new Error("Incomplete npm producer job inventory.");
 }
 
+/**
+ * @param {{
+ *   producer: Record<string, string>,
+ *   repository: string,
+ *   toolingSha: string,
+ *   qualified?: boolean,
+ *   sourceCheck?: boolean,
+ *   proofKind?: string,
+ *   requireCompletedParent?: boolean,
+ *   runGh?: typeof runReleaseToolingGh,
+ * }} options
+ */
 export function verifyNpmBundleProducer({
   producer,
   repository,
   toolingSha,
   qualified = false,
   sourceCheck = false,
-  proofKind = undefined,
+  proofKind,
   requireCompletedParent = false,
   runGh = runReleaseToolingGh,
 }) {
