@@ -7,7 +7,8 @@ export {
 } from "./src/transport.js";
 export type { WebSocketLike } from "./src/transport.js";
 export { ReefFriendManager } from "./src/friends.js";
-export { ReefMessageFlow, createConfiguredGuard } from "./src/flow.js";
+export { ReefMessageFlow } from "./src/flow.js";
+export { createConfiguredGuard } from "./src/guard.js";
 export type {
   ReefKeys,
   ReefAccount,

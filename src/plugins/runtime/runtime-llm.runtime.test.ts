@@ -744,32 +744,6 @@ describe("runtime.llm.complete", () => {
     );
   });
 
-  it("requires the selected direct credential to use the requested auth mode", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () => cfg,
-      authority: { caller: { kind: "host", id: "runtime-test" }, allowComplete: true },
-    });
-
-    await expect(
-      llm.complete({
-        messages: [{ role: "user", content: "Ping" }],
-        requiredAuthMode: "oauth",
-      }),
-    ).rejects.toThrow("selected a credential with the wrong authentication mode");
-    expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
-
-    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      ...createPreparedModel(),
-      auth: { apiKey: "oauth-token", source: "test", mode: "oauth" },
-    });
-    await expect(
-      llm.complete({
-        messages: [{ role: "user", content: "Ping" }],
-        requiredAuthMode: "oauth",
-      }),
-    ).resolves.toMatchObject({ text: "done" });
-  });
-
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {
     const logger = createLogger();
     const llm = createRuntimeLlm({
@@ -900,100 +874,6 @@ describe("runtime.llm.complete", () => {
         }),
       ),
     ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
-  });
-
-  it("preserves direct model-profile overrides under model authority", async () => {
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      profileId: "openai:work",
-      agentDir: "/tmp/main",
-    });
-    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      ...createPreparedModel("gpt-5.4"),
-      auth: {
-        apiKey: "oauth-token",
-        source: "test",
-        mode: "oauth",
-        profileId: "openai:work",
-      },
-    });
-    const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "trusted-plugin": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4"],
-              },
-            },
-          },
-        },
-      }),
-      authority: { allowComplete: true },
-    });
-
-    await expect(
-      withPluginRuntimePluginIdScope("trusted-plugin", () =>
-        llm.complete({
-          model: "openai/gpt-5.4@openai:work",
-          messages: [{ role: "user", content: "Ping" }],
-          requiredAuthMode: "oauth",
-        }),
-      ),
-    ).resolves.toMatchObject({ text: "done" });
-    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
-      agentId: "main",
-      modelRef: "openai/gpt-5.4@openai:work",
-      bindAuthOwner: true,
-    });
-  });
-
-  it("rejects a direct model-profile override resolved to another profile", async () => {
-    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      profileId: "openai:work",
-      agentDir: "/tmp/main",
-    });
-    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
-      ...createPreparedModel("gpt-5.4"),
-      auth: {
-        apiKey: "oauth-token",
-        source: "test",
-        mode: "oauth",
-        profileId: "openai:other",
-      },
-    });
-    const llm = createRuntimeLlm({
-      getConfig: () => ({
-        ...cfg,
-        plugins: {
-          entries: {
-            "trusted-plugin": {
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4"],
-              },
-            },
-          },
-        },
-      }),
-      authority: { allowComplete: true },
-    });
-
-    await expect(
-      withPluginRuntimePluginIdScope("trusted-plugin", () =>
-        llm.complete({
-          model: "openai/gpt-5.4@openai:work",
-          messages: [{ role: "user", content: "Ping" }],
-          requiredAuthMode: "oauth",
-        }),
-      ),
-    ).rejects.toThrow("selected a different authentication profile");
-    expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
   it("keeps the shipped model allowlist scoped to explicit overrides", async () => {

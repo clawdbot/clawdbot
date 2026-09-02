@@ -68,6 +68,9 @@ The interactive wizard writes both the Reef guard selection and the exact host L
         "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } },
       },
     },
+    entries: {
+      main: {},
+    },
   },
   channels: {
     reef: {
@@ -96,6 +99,16 @@ The interactive wizard writes both the Reef guard selection and the exact host L
         },
       },
     },
+  },
+}
+```
+
+If `plugins.allow` already restricts plugin loading, preserve every existing entry and add both `reef` and `codex`. Do not replace the allowlist with only these two entries. The wizard adds `codex` to an existing allowlist automatically.
+
+```json5
+{
+  plugins: {
+    allow: ["<existing-plugin-id>", "reef", "codex"],
   },
 }
 ```

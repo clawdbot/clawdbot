@@ -21,8 +21,9 @@ import {
   resolveReefConfig,
   type ReefCoreConfig,
 } from "./config-schema.js";
-import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
+import { ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
+import { createConfiguredGuard } from "./guard.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import {

@@ -12,7 +12,7 @@ import {
   type Verdict,
 } from "../protocol/index.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
-import { createConfiguredGuard, ReefMessageFlow } from "./flow.js";
+import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
   config,
@@ -25,6 +25,7 @@ import {
   transport,
   trust,
 } from "./flow.test-helpers.js";
+import { createConfiguredGuard } from "./guard.js";
 import { setReefRuntime } from "./runtime.js";
 import type { ReefTransportClient } from "./transport.js";
 import type { InboxEntry } from "./types.js";

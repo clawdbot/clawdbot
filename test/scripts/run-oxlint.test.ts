@@ -769,6 +769,14 @@ describe("run-oxlint", () => {
       shards.toSorted((left, right) => left.name.localeCompare(right.name)),
     );
     expect(new Set(selected.map((shard) => shard.name))).toHaveProperty("size", shards.length);
+    expect(
+      resolveOxlintShardConcurrency({
+        env,
+        platform: "linux",
+        hostResources,
+        splitExtensions: true,
+      }),
+    ).toBe(1);
     expect(selectExtensionOxlintStripe(shards, { index: 9, total: 9 })).toEqual([]);
     expect(selectExtensionOxlintStripe([], { index: 1, total: 6 })).toEqual([]);
     expect(() =>

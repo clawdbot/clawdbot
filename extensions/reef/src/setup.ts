@@ -37,6 +37,7 @@ type Prompt = {
     options: Array<{ value: T; label: string; hint?: string }>;
     initialValue?: T;
   }): Promise<T>;
+  confirm(params: { message: string; initialValue?: boolean }): Promise<boolean>;
 };
 
 const reefSetupAdapter = {
@@ -232,6 +233,9 @@ export const reefSetupWizard = {
           })
         : ("api-key" as const);
     const pinnedModel = await prompter.text({ message: "Pinned guard model snapshot" });
+    if (authMode === "oauth") {
+      await confirmReefOAuthAgentRuntime({ cfg, pinnedModel, prompter });
+    }
     const authProfileId =
       authMode === "oauth"
         ? await prompter.text({
@@ -287,6 +291,28 @@ export const reefSetupWizard = {
     };
   },
 };
+
+async function confirmReefOAuthAgentRuntime(params: {
+  cfg: OpenClawConfig;
+  pinnedModel: string;
+  prompter: Prompt;
+}): Promise<void> {
+  const modelRef = `openai/${params.pinnedModel}`;
+  const configuredRuntimeId =
+    params.cfg.agents?.defaults?.models?.[modelRef]?.agentRuntime?.id?.trim();
+  if (!configuredRuntimeId || configuredRuntimeId === "codex") {
+    return;
+  }
+  const replaceRuntime = await params.prompter.confirm({
+    message: `${modelRef} currently uses the ${configuredRuntimeId} agent runtime. Reef OAuth requires codex; change this shared model runtime?`,
+    initialValue: false,
+  });
+  if (!replaceRuntime) {
+    throw new Error(
+      `Reef OAuth setup left ${modelRef} on the ${configuredRuntimeId} agent runtime. Choose another guard model or change the shared model runtime explicitly.`,
+    );
+  }
+}
 
 function authorizeReefOAuthGuardModel(cfg: OpenClawConfig, pinnedModel: string): OpenClawConfig {
   const modelRef = `openai/${pinnedModel}`;
