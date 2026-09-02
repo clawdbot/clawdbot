@@ -69,6 +69,9 @@ export default definePluginEntry({
   id: "codex",
   name: "Codex",
   description: "Codex app-server harness and native session supervision.",
+  reload: {
+    noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
+  },
   register(api) {
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.

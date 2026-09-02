@@ -284,6 +284,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitSessionLabel = normalizeOptionalString(p.label);
+    const preparedDisplayName = normalizeOptionalString(p.displayName);
     const titleAgentId = explicitlyRequestedAgent.agentId;
     const existingWorktreeTarget =
       p.worktree === true && explicitlyRequestedKey
@@ -431,6 +432,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           const title =
             !requestedWorktreeName &&
             !explicitSessionLabel &&
+            !preparedDisplayName &&
             lifecycleTarget.entry &&
             lifecycleTarget.titleModelSelection !== null
               ? await generateWorktreeSessionTitle({
@@ -462,6 +464,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             baseRef: requestedWorktreeBaseRef,
             label:
               explicitSessionLabel ??
+              preparedDisplayName ??
               title ??
               resolveExplicitSessionName(lifecycleTarget.entry) ??
               source,
@@ -491,6 +494,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
+      displayName: preparedDisplayName,
       category: p.category,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
       contextWindow: p.contextWindow,

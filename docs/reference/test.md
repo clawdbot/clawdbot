@@ -434,6 +434,8 @@ and intentionally real-home live execution remain outside its protection.
 
 ### Retained mocked Control UI proof
 
+For startup ownership changes, exercise authenticated hello before browser recovery migration finishes. Project and environment discovery can start from hello; migration completion must not refetch those catalogs or invalidate an admitted start. Keep changed-owner, process-restart, and late-result fences covered separately. Count storage reads by key around rerenders, typing, and streaming without recording credential values. Compare route payload bytes and loaded module closures separately from timings; CSS ownership changes also need retained screenshots and computed-style or geometry checks across New session and Chat.
+
 Ordinary mocked browser screenshots, recordings, and reports use fresh directories
 for each test attempt or standalone capture invocation. The Node-only
 `createControlUiE2eArtifactDir(scope, parentDir?)` helper in

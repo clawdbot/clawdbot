@@ -689,13 +689,14 @@ describe("provider-runtime", () => {
   it("uses the prepared run registry without repeating provider discovery", () => {
     const provider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
+      pluginId: "embedded-owner",
       label: "Prepared demo",
       auth: [],
       classifyFailoverReason: () => "overloaded",
     };
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
-      pluginId: DEMO_PROVIDER_ID,
+      pluginId: "registered-owner",
       provider,
       source: "test",
     });
@@ -717,7 +718,10 @@ describe("provider-runtime", () => {
       ),
     ).toBe("overloaded");
     expect(resolved?.id).toBe(DEMO_PROVIDER_ID);
-    expect(resolved?.pluginId).toBe(DEMO_PROVIDER_ID);
+    expect(resolved?.pluginId).toBe("registered-owner");
+    expect(resolved).not.toBe(provider);
+    expect(resolved?.auth).toBe(provider.auth);
+    expect(resolved?.classifyFailoverReason).toBe(provider.classifyFailoverReason);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -1075,15 +1079,30 @@ describe("provider-runtime", () => {
   });
 
   it("serves hook plugin lists from the active loaded registry without a scoped load", () => {
-    const provider: ProviderPlugin = { id: DEMO_PROVIDER_ID, label: "Demo", auth: [] };
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      pluginId: "embedded-owner",
+      aliases: ["demo-alias"],
+      label: "Demo",
+      auth: [],
+    };
     const registry = createEmptyPluginRegistry();
     registry.plugins.push({ id: "demo-plugin", status: "loaded" } as never);
-    registry.providers.push({ pluginId: "demo-plugin", provider, source: "demo-plugin/index.js" });
+    registry.providers.push(
+      { pluginId: "other-plugin", provider, source: "other-plugin/index.js" },
+      { pluginId: "demo-plugin", provider, source: "demo-plugin/index.js" },
+    );
     setActivePluginRegistry(registry, "workspace-one", "default", "/tmp/work");
 
-    const plugins = resolveProviderPluginsForHooks({ onlyPluginIds: ["demo-plugin"] });
+    const plugins = resolveProviderPluginsForHooks({
+      onlyPluginIds: ["demo-plugin"],
+      providerRefs: ["demo-alias"],
+    });
 
     expect(plugins.map((plugin) => plugin.id)).toEqual([DEMO_PROVIDER_ID]);
+    expect(plugins[0]?.pluginId).toBe("demo-plugin");
+    expect(plugins[0]).not.toBe(provider);
+    expect(plugins[0]?.auth).toBe(provider.auth);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 

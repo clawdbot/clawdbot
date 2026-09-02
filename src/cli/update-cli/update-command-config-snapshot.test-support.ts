@@ -130,7 +130,7 @@ export async function runUpdateSnapshotIsolationProof(
   const { CONFIG_PATH } = await import("../../config/paths.js");
   assert.equal(CONFIG_PATH, configA);
   checkTarget(CONFIG_PATH);
-  const { createUpdateConfigSnapshot } = await import("./update-command-config.js");
+  const { createUpdateConfigSnapshot } = await import("./update-command-config-snapshot.js");
   selectHome(homeB);
   if (selection === "home") {
     delete process.env.OPENCLAW_STATE_DIR;

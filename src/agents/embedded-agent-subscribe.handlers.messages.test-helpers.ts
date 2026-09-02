@@ -67,6 +67,7 @@ export function createMessageUpdateContext(
       ),
     emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
+    flushAssistantStream: vi.fn(),
     blockChunker: new EmbeddedBlockChunker(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
     captureModelEvent: vi.fn(),
@@ -137,6 +138,7 @@ export function createMessageEndContext(
   ctx.blockChunker.append(params.bufferedText ?? "");
   const delivery = createReplyDelivery(ctx);
   ctx.emitAssistantStreamData = delivery.emitAssistantStreamData;
+  ctx.flushAssistantStream = delivery.flushAssistantStream;
   ctx.emitBlockReply = vi.fn(delivery.emitBlockReply);
   ctx.finalizeAssistantTexts =
     params.finalizeAssistantTexts ?? vi.fn(delivery.finalizeAssistantTexts);

@@ -287,15 +287,27 @@ function wrapLine(text: string, width: number): string[] {
   // must not leak styling into padding while the next continuation keeps it.
   const tokens: AnsiToken[] = [];
   for (const segment of splitAnsiSegments(text)) {
+    let value = segment.value;
     if (segment.kind === "ansi") {
-      tokens.push({
-        kind: "ansi",
-        value: segment.value,
-        width: visibleWidth(segment.controls.join("")),
-      });
+      if (segment.controls.includes("\t")) {
+        // Reset with the CSI introducer before printable controls can enter pending escape parsing.
+        tokens.push({
+          kind: "ansi",
+          value: value.slice(0, value[0] === ESC ? 2 : 1) + "\x18",
+          width: 0,
+        });
+        const controls = new Set(segment.controls);
+        for (const control of segment.controls) {
+          tokens.push({ kind: control === "\t" ? "char" : "ansi", value: control, width: 0 });
+        }
+        value = Array.from(value)
+          .filter((character) => !controls.has(character))
+          .join("");
+      }
+      tokens.push({ kind: "ansi", value, width: 0 });
       continue;
     }
-    for (const grapheme of splitGraphemes(segment.value)) {
+    for (const grapheme of splitGraphemes(value)) {
       tokens.push({ kind: "char", value: grapheme, width: 0 });
     }
   }
@@ -306,8 +318,7 @@ function wrapLine(text: string, width: number): string[] {
 
   const lines: string[] = [];
   const isBreakChar = (ch: string) =>
-    ch === " " || ch === "\t" || ch === "/" || ch === "-" || ch === "_" || ch === ".";
-  const isSpaceChar = (ch: string) => ch === " " || ch === "\t";
+    ch === " " || ch === "/" || ch === "-" || ch === "_" || ch === ".";
   let skipNextLf = false;
 
   const buf: AnsiToken[] = [];
@@ -315,9 +326,6 @@ function wrapLine(text: string, width: number): string[] {
   let lastBreakIndex: number | null = null;
 
   const bufToString = (slice?: AnsiToken[]) => (slice ?? buf).map((t) => t.value).join("");
-
-  const bufVisibleWidth = (slice: AnsiToken[]) =>
-    slice.reduce((acc, token) => acc + token.width, 0);
 
   const pushLine = (value: string) => {
     const cleaned = value.replace(/\s+$/, "");
@@ -352,7 +360,7 @@ function wrapLine(text: string, width: number): string[] {
       return;
     }
 
-    // breakAt follows the latest break character (including spaces/tabs), or is buf.length.
+    // breakAt follows the latest break character, or is buf.length.
     // The retained suffix therefore has no leading space tokens to trim.
     const rest = buf.slice(breakAt);
     pushLine(`${bufToString(left)}${closeOsc8}${closeSgr}`);
@@ -371,49 +379,41 @@ function wrapLine(text: string, width: number): string[] {
 
     buf.length = 0;
     buf.push(...rest);
-    bufVisible = bufVisibleWidth(buf);
+    bufVisible = buf.reduce((acc, token) => acc + token.width, 0);
     lastBreakIndex = null;
   };
 
-  const makeRoomFor = (tokenWidth: number) => {
-    if (bufVisible + tokenWidth <= width || bufVisible === 0) {
-      return;
-    }
-    flushAt(lastBreakIndex);
-    if (bufVisible + tokenWidth > width && bufVisible > 0) {
-      flushAt(null);
-    }
-  };
-
   for (const token of tokens) {
-    if (token.kind === "ansi") {
-      makeRoomFor(token.width);
-      buf.push(token);
-      bufVisible += token.width;
-      continue;
+    if (token.kind === "char") {
+      // Emit the one-cell space used by layout instead of following terminal tab stops.
+      token.value = token.value.replaceAll("\t", " ");
+      const ch = token.value;
+      if (skipNextLf && ch === "\n") {
+        skipNextLf = false;
+        continue;
+      }
+      // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
+      skipNextLf = ch === "\r";
+      if (ch === "\n" || ch === "\r" || ch === "\r\n") {
+        flushAt(buf.length);
+        continue;
+      }
+      // Soft-wrap remainders reuse the width measured when each token entered the buffer.
+      token.width = visibleWidth(ch);
     }
-
-    const ch = token.value;
-    if (skipNextLf && ch === "\n") {
-      skipNextLf = false;
-      continue;
+    if (bufVisible + token.width > width && bufVisible > 0) {
+      flushAt(lastBreakIndex);
+      if (bufVisible + token.width > width && bufVisible > 0) {
+        flushAt(null);
+      }
     }
-    // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
-    skipNextLf = ch === "\r";
-    if (ch === "\n" || ch === "\r" || ch === "\r\n") {
-      flushAt(buf.length);
-      continue;
-    }
-    // Soft-wrap remainders reuse the width measured when each token entered the buffer.
-    token.width = visibleWidth(ch);
-    makeRoomFor(token.width);
-    if (bufVisible === 0 && isSpaceChar(ch)) {
+    if (token.kind === "char" && bufVisible === 0 && token.value === " ") {
       continue;
     }
 
     buf.push(token);
     bufVisible += token.width;
-    if (isBreakChar(ch)) {
+    if (token.kind === "char" && isBreakChar(token.value)) {
       lastBreakIndex = buf.length;
     }
   }

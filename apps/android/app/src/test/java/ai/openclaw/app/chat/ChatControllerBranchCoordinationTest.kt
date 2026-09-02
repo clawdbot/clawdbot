@@ -1076,6 +1076,8 @@ class ChatControllerBranchCoordinationTest {
 
     suspend fun admit(): ChatOutboxItem {
       assertTrue(controller.sendMessageAwaitAcceptance("retained input", "off", listOf(attachment)))
+      // Admission owns durability; a newer refresh may still own the visible snapshot.
+      awaitBranchProgress { controller.outboxItems.value.isNotEmpty() }
       return controller.outboxItems.value.single().also {
         assertEquals(ChatOutboxStatus.Queued, it.status)
         assertEquals("retained input", it.text)

@@ -84,7 +84,13 @@ export async function settleAgentFallbackCycle(params: {
       lifecycleGeneration: cycle.state.lifecycleGeneration,
       ...(turn.sessionKey ? { sessionKey: turn.sessionKey } : {}),
       stream: "lifecycle",
-      data: { phase: "error", error: error.message, endedAt: Date.now(), ...extraData },
+      data: {
+        phase: "error",
+        error: error.message,
+        endedAt: Date.now(),
+        ...extraData,
+        executionSettled: true,
+      },
     });
   };
   if (embeddedError && isContextOverflowError(embeddedError.message)) {
@@ -159,10 +165,7 @@ export async function settleAgentFallbackCycle(params: {
     if (cycle.modelPatch.captureFallbackFailure(fallbackAttempts) === undefined) {
       cycle.modelPatch.captureFailure(embeddedError ?? exhaustionError);
     }
-    emitSettledLifecycleError(exhaustionError, {
-      ...terminalMetadata,
-      fallbackExhaustedFailure: true,
-    });
+    emitSettledLifecycleError(exhaustionError, terminalMetadata);
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", exhaustionError);
   } else if (deferredLifecycleError || embeddedError || terminalOutcome.status === "timeout") {

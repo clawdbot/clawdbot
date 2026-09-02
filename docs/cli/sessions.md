@@ -194,7 +194,10 @@ so CJK characters, combining accents, and joined emoji keep progress lines align
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
 `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;
-model completion lines show provider/model and terminal status.
+model completion lines show provider/model and terminal status. Provider failures
+and turns without delivery show `error`; cancellation shows `aborted`, timeouts
+show `timeout`, and successful completions (including delivered partial replies)
+show `done`.
 
 ## Export a trajectory bundle
 

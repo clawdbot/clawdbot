@@ -6,6 +6,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
+  expectRequestCountStable,
   installMockGateway,
   requireRecord,
   requireString,
@@ -392,7 +393,10 @@ suite.define(() => {
         ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
         : undefined;
       const context = await suite.newBrowserContext({
+        hasTouch: label === "mobile",
+        isMobile: label === "mobile",
         locale: "en-US",
+        permissions: ["clipboard-read", "clipboard-write"],
         serviceWorkers: "block",
         viewport,
         ...(artifactDir
@@ -448,8 +452,8 @@ suite.define(() => {
         });
 
         const gatewayErrorText =
-          "⚠️ Model login expired on the gateway for openai. Send `/login codex` from a private chat or Web UI session to pair a new Codex login, or re-auth with `openclaw models auth login --provider openai` in a terminal, then try again.";
-        const errorText = gatewayErrorText.replace(/^⚠️\s*/u, "");
+          "Agent failed before reply: Session became active in another runner; wait for it to finish before continuing.\nTo view logs, run `openclaw logs --follow` in a terminal.";
+        const errorText = `Error: ${gatewayErrorText}`;
         await gateway.emitGatewayEvent("chat", {
           errorMessage: gatewayErrorText,
           message: {
@@ -469,13 +473,53 @@ suite.define(() => {
         expect(
           await page.locator(".chat-thread-inner").getByText(partialText, { exact: true }).count(),
         ).toBe(1);
+        const alert = page.locator(".chat-error");
+        await alert.waitFor();
         if (artifactDir) {
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
-        const alert = page.locator(".chat-error");
-        await alert.getByText("Error details", { exact: true }).click();
-        await alert.getByText(errorText, { exact: true }).waitFor({ timeout: 10_000 });
-        await alert.getByText("Error details", { exact: true }).click();
+        const details = alert.locator("details");
+        const summary = alert.locator("summary");
+        const copy = alert.getByRole("button", { name: "Copy error", exact: true });
+        expect(await copy.count()).toBe(1);
+        expect(await copy.isVisible()).toBe(true);
+        expect(await details.getAttribute("open")).toBeNull();
+        if (label === "mobile") {
+          await copy.tap();
+        } else {
+          await copy.click();
+        }
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(errorText);
+        expect(await details.getAttribute("open")).toBeNull();
+        await summary.focus();
+        await page.keyboard.press("Enter");
+        await alert.locator("pre").waitFor({ timeout: 10_000 });
+        const diagnostic = alert.getByLabel("Error details", { exact: true });
+        expect(await diagnostic.count()).toBe(1);
+        expect(await diagnostic.textContent()).toBe(errorText);
+        expect(await summary.getByText("Details", { exact: true }).count()).toBe(1);
+        if (artifactDir) {
+          await page.screenshot({ path: path.join(artifactDir, `terminal-details-${label}.png`) });
+        }
+        const headerCopy = summary.getByRole("button");
+        await page.evaluate(() => navigator.clipboard.writeText("Before expanded copy."));
+        await headerCopy.press("Enter");
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(errorText);
+        expect(await details.getAttribute("open")).not.toBeNull();
+        expect(await alert.getByRole("button").count()).toBe(1);
+        await summary.press("Space");
+        await alert.locator("pre").waitFor({ state: "hidden" });
+        if (label === "mobile") {
+          await summary.getByText("Details", { exact: true }).tap();
+          await alert.locator("pre").waitFor();
+          await summary.getByText("Details", { exact: true }).tap();
+          await alert.locator("pre").waitFor({ state: "hidden" });
+        }
+        await expectRequestCountStable(gateway, "chat.send", 1);
         expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
         expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
@@ -493,6 +537,13 @@ suite.define(() => {
           ),
         ).toBeLessThan(1);
         expect(alertBox?.width ?? 0).toBeLessThanOrEqual(composerBox?.width ?? 0);
+        const copyBox = await headerCopy.boundingBox();
+        expect(copyBox).not.toBeNull();
+        expect(copyBox!.x).toBeGreaterThan(alertBox!.x);
+        expect(copyBox!.x + copyBox!.width).toBeLessThanOrEqual(alertBox!.x + alertBox!.width);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          viewport.width,
+        );
 
         await page.locator(".agent-chat__composer-combobox textarea").fill("retry after error");
         await page.getByRole("button", { name: "Send message" }).click();

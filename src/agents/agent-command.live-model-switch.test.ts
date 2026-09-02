@@ -5115,7 +5115,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "All fallback candidates ended incomplete",
-            fallbackExhaustedFailure: true,
+            executionSettled: true,
           }),
         }),
       ]),
@@ -5178,6 +5178,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "Command may have changed state",
+            executionSettled: true,
             replayInvalid: true,
           }),
         }),
