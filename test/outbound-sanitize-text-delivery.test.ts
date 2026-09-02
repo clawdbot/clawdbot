@@ -25,52 +25,79 @@ const fixtures = [
   },
 ];
 const payloads = fixtures.map(({ text }) => ({ text }));
+const deliveryModes = ["default Telegram", "rich Telegram", "direct text/media"] as const;
+const spacedUrlLikeLabels = [
+  "<https://example.com/a.pdf|User Manual>",
+  "<mailto:support@example.com|Contact Support>",
+  "<mailto:a/b@example.com|Contact Support>",
+];
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
-describe("HTML sanitization through outbound delivery", () => {
-  it.each(["default Telegram", "rich Telegram", "direct text/media"] as const)(
-    "preserves the %s transport contract",
-    async (mode) => {
-      const send = vi.fn(async (_to: string, _text: string) => ({
-        messageId: "fixture-message",
-        chatId: "12345",
-      }));
-      const channel = mode === "direct text/media" ? "imessage" : "telegram";
-      const cfg: OpenClawConfig =
-        mode === "rich Telegram" ? { channels: { telegram: { richMessages: true } } } : {};
-      const outbound =
-        channel === "telegram"
-          ? telegramOutbound
-          : createDirectTextMediaOutbound({
-              channel,
-              resolveSender: () => send,
-              resolveMaxBytes: () => undefined,
-              buildTextOptions: () => ({}),
-              buildMediaOptions: () => ({}),
-            });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: channel,
-            source: "test",
-            plugin: createOutboundTestPlugin({ id: channel, outbound }),
-          },
-        ]),
-      );
-      const params = { cfg, channel, to: "12345", payloads, deps: { telegram: send } };
-      const preparedBatch = await prepareOutboundPayloadBatch(params);
-      const results = await deliverOutboundPayloadsCore({ ...params, preparedBatch });
+async function deliverThroughSharedOutbound(mode: (typeof deliveryModes)[number], texts: string[]) {
+  const send = vi.fn(async (_to: string, _text: string) => ({
+    messageId: "fixture-message",
+    chatId: "12345",
+  }));
+  const channel = mode === "direct text/media" ? "imessage" : "telegram";
+  const cfg: OpenClawConfig =
+    mode === "rich Telegram" ? { channels: { telegram: { richMessages: true } } } : {};
+  const outbound =
+    channel === "telegram"
+      ? telegramOutbound
+      : createDirectTextMediaOutbound({
+          channel,
+          resolveSender: () => send,
+          resolveMaxBytes: () => undefined,
+          buildTextOptions: () => ({}),
+          buildMediaOptions: () => ({}),
+        });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: channel,
+        source: "test",
+        plugin: createOutboundTestPlugin({ id: channel, outbound }),
+      },
+    ]),
+  );
+  const params = {
+    cfg,
+    channel,
+    to: "12345",
+    payloads: texts.map((text) => ({ text })),
+    deps: { telegram: send },
+  };
+  const preparedBatch = await prepareOutboundPayloadBatch(params);
+  const results = await deliverOutboundPayloadsCore({ ...params, preparedBatch });
+  return { send, results };
+}
 
-      expect(results).toHaveLength(payloads.length);
-      expect(send.mock.calls.map(([to, text]) => ({ to, text }))).toEqual(
-        fixtures.map(({ text, plainText }) => ({
-          to: "12345",
-          text: mode === "rich Telegram" ? text : plainText,
-        })),
-      );
+describe("HTML sanitization through outbound delivery", () => {
+  it.each(deliveryModes)("preserves the %s transport contract", async (mode) => {
+    const { send, results } = await deliverThroughSharedOutbound(
+      mode,
+      fixtures.map(({ text }) => text),
+    );
+
+    expect(results).toHaveLength(payloads.length);
+    expect(send.mock.calls.map(([to, text]) => ({ to, text }))).toEqual(
+      fixtures.map(({ text, plainText }) => ({
+        to: "12345",
+        text: mode === "rich Telegram" ? text : plainText,
+      })),
+    );
+  });
+
+  it.each(["default Telegram", "direct text/media"] as const)(
+    "does not drop spaced URL-like labels on the %s delivery boundary",
+    async (mode) => {
+      const { send, results } = await deliverThroughSharedOutbound(mode, spacedUrlLikeLabels);
+
+      expect(results).toHaveLength(spacedUrlLikeLabels.length);
+      expect(send.mock.calls.map(([, text]) => text)).toEqual(spacedUrlLikeLabels);
     },
   );
 });
