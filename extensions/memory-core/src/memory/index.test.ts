@@ -2481,13 +2481,15 @@ describe("memory index", () => {
 
   it("reports persisted vector index state on the unprobed status path", async () => {
     const cfg = createCfg({ provider: "gemini", vectorEnabled: true });
-    const emptyResult = await getMemorySearchManager({
-      cfg,
-      agentId: "main",
-      purpose: "status",
-    });
-    expect(emptyResult.manager).toBeNull();
-    expect(emptyResult.error).toMatch(/does not exist/iu);
+    const emptyManager = await getFreshManager(cfg, "status");
+    try {
+      const emptyStatus = emptyManager.status();
+      expect(emptyStatus.chunks).toBe(0);
+      expect(emptyStatus.vector?.storeAvailable).toBeUndefined();
+      expect(emptyStatus.vector?.index).toEqual({ state: "empty" });
+    } finally {
+      await emptyManager.close?.();
+    }
 
     const indexingManager = await getFreshManager(cfg);
     try {
