@@ -10,9 +10,8 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
-  # Reviewed Crabline bundle fix and its required Zod version; remove after 2026-09-10.
-  - "@openclaw/crabline@0.1.20"
-  - "zod@4.5.2"
+  # Reviewed Crabline compatibility correction; remove after 2026-09-10.
+  - "@openclaw/crabline@0.1.21"
   - "@openai/codex"
   - "@openai/codex-*"
   # fs-safe 0.7.0 validates original ZIP names; remove after 2026-09-07.

@@ -377,8 +377,8 @@ importers:
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
       '@openclaw/crabline':
-        specifier: 0.1.20
-        version: 0.1.20
+        specifier: 0.1.21
+        version: 0.1.21
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -1808,8 +1808,8 @@ importers:
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
       '@openclaw/crabline':
-        specifier: 0.1.20
-        version: 0.1.20
+        specifier: 0.1.21
+        version: 0.1.21
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
@@ -4149,8 +4149,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.20':
-    resolution: {integrity: sha512-2m2Vfmp6qvXKrpbaPKoTYx3s2VVeyVkWBcXnCe4Vpj1PhPXrLfE0rW7KZ9M+/+23tqAYGGzp8wKsqe0CHko+OQ==}
+  '@openclaw/crabline@0.1.21':
+    resolution: {integrity: sha512-jUu2ZNqthh2o7N2ZzIrztzjsAsta9v7WaYo07m9L+LbpWv41K9+ewEaXS/PRtuEGz9I4cB3qa7Jh6r5NpkRkWA==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -9659,9 +9659,6 @@ packages:
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
-  zod@4.5.2:
-    resolution: {integrity: sha512-XkYXCol10+ba/6F/cueWV+TezUeOqXW0hdeJt5CdXjTYeAgAQg5N03RQdJ80mhfFE72+pblvYMW4wy2Qp4Qbrg==}
-
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -11447,7 +11444,7 @@ snapshots:
   '@openai/codex@0.152.1-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.20':
+  '@openclaw/crabline@0.1.21':
     dependencies:
       '@types/node': 22.20.1
       commander: 15.0.0
@@ -11458,7 +11455,7 @@ snapshots:
       re2js: 2.8.6
       ws: 8.21.3
       yaml: 2.9.0
-      zod: 4.5.2
+      zod: 4.4.3
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -17288,7 +17285,5 @@ snapshots:
   zod@3.25.76: {}
 
   zod@4.4.3: {}
-
-  zod@4.5.2: {}
 
   zwitch@2.0.4: {}
