@@ -290,6 +290,7 @@ describe("FeishuStreamingSession", () => {
     accountId: string;
     response?: { code: number; msg: string; data?: { message_id?: string } };
     rejectClose?: boolean;
+    rejectClear?: boolean;
   }) {
     const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
     const deps = createMemoryFetch((url, body) => {
@@ -308,7 +309,9 @@ describe("FeishuStreamingSession", () => {
       return jsonResponse(
         params.rejectClose && url.pathname.endsWith("/settings")
           ? { code: 91400, msg: "close rejected" }
-          : { code: 0, msg: "ok" },
+          : params.rejectClear && url.pathname.endsWith("/elements/content")
+            ? { code: 19002, msg: "clear rejected" }
+            : { code: 0, msg: "ok" },
       );
     });
     const response = params.response ?? { code: 0, msg: "ok", data: {} };
@@ -418,6 +421,31 @@ describe("FeishuStreamingSession", () => {
     ]);
     expect(session.isActive()).toBe(false);
   });
+
+  it.each([undefined, "om_accepted"])(
+    "retains accepted content and receipt %s when preview removal fails",
+    async (messageId) => {
+      const { session, remove } = mockAcceptedStreamingCard({
+        accountId: `failed-discard-${messageId ?? "without-receipt"}`,
+        response: { code: 0, msg: "ok", data: { message_id: messageId } },
+        rejectClear: true,
+      });
+      remove.mockResolvedValue({ code: 230001, msg: "delete rejected" });
+      await session.start("chat_1");
+      await session.update("Already visible answer");
+
+      await expect(session.discard()).rejects.toMatchObject({
+        name: "FeishuStreamingFinalizationError",
+        result: {
+          visibleReplySent: true,
+          content: "Already visible answer",
+          ...(messageId ? { messageId } : {}),
+        },
+      });
+      expect(remove).toHaveBeenCalledTimes(messageId ? 1 : 0);
+      expect(session.isActive()).toBe(false);
+    },
+  );
 
   it("preserves accepted visible card content when receipt-free finalization fails", async () => {
     const { session } = mockAcceptedStreamingCard({
@@ -797,7 +825,7 @@ describe("FeishuStreamingSession", () => {
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(0);
 
-    await session.close();
+    await session.closeWithResult();
 
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
@@ -853,8 +881,10 @@ describe("FeishuStreamingSession", () => {
     });
 
     await session.update(next);
-    // close() reports whether any accepted content remains visible, even when the final rewrite fails.
-    await expect(session.close()).resolves.toBe(true);
+    await expect(session.closeWithResult()).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: { visibleReplySent: true, content: previous },
+    });
 
     expect(replaceBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);
@@ -1047,7 +1077,7 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await session.close("final answer");
+    await session.closeWithResult("final answer");
 
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
@@ -1115,7 +1145,7 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await session.close(finalText);
+    await session.closeWithResult(finalText);
 
     expect(settingsBodies).toHaveLength(1);
     const settingsPayload = JSON.parse(settingsBodies[0] ?? "{}") as { settings?: string };
@@ -1165,7 +1195,10 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await session.close("final answer");
+    await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: { visibleReplySent: true, content: "working\n\nfinal answer" },
+    });
 
     expect(updateBodies).toHaveLength(0);
     expect(replaceBodies).toHaveLength(1);
@@ -1203,7 +1236,10 @@ describe("FeishuStreamingSession", () => {
       lastUpdateTime: 3_000,
     });
 
-    await expect(session.close("final answer")).resolves.toBe(false);
+    await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: { visibleReplySent: false },
+    });
 
     expect(updateBodies).toHaveLength(1);
     expect(replaceBodies).toHaveLength(0);

@@ -269,6 +269,7 @@ describe("prepared model runtime snapshots", () => {
 
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
+      configuredHarnessRuntimes: [],
       env: process.env,
       metadataSnapshot: mocks.pluginMetadataSnapshot,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",

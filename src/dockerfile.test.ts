@@ -383,7 +383,7 @@ describe("Dockerfile", () => {
     const qaLabDistCopyIndex = collapsed.indexOf(
       "cp -R extensions/qa-lab/web/dist dist/extensions/qa-lab/web/dist",
     );
-    const runtimeAssetsIndex = collapsed.indexOf("FROM build AS runtime-assets");
+    const runtimeAssetsIndex = collapsed.indexOf("FROM production-deps AS runtime-assets");
 
     expect(qaLabExtensionCheckIndex).toBeGreaterThan(-1);
     expect(buildDockerIndex).toBeGreaterThan(-1);
@@ -444,9 +444,9 @@ describe("Dockerfile", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")(
-    "replaces build dependencies with a fresh production tree without losing built assets",
-    async () => {
+  it.runIf(process.platform !== "win32").each(["extensions", "bundled-plugins"])(
+    "assembles built assets onto production dependencies with %s",
+    async (bundledPluginDir) => {
       const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
       const stages = new Map(
         [...dockerfile.matchAll(/^FROM (\S+) AS (\S+)\n([\s\S]*?)(?=^FROM |(?![\s\S]))/gm)].map(
@@ -463,58 +463,63 @@ describe("Dockerfile", () => {
       expect(production?.body).not.toMatch(/--ignore-scripts|COPY .*node_modules/);
       expect(dockerfile).not.toContain("pnpm prune");
 
-      const runtime = stages.get("runtime-assets")?.body ?? "";
-      const cleanCommand = runtime.match(/^RUN (rm -rf node_modules[^\n]+)/m)?.[1];
+      const runtimeStage = stages.get("runtime-assets");
+      expect(runtimeStage?.parent).toBe("production-deps");
+      const runtime = runtimeStage?.body ?? "";
+      const buildCopy = runtime.match(/^COPY --from=(\S+) \/app\/ \.\/$/m);
+      const buildOutput = stages.get(buildCopy?.[1]);
+      expect(buildOutput?.parent).toBe("build");
+      const cleanCommand = buildOutput?.body?.match(/^RUN (rm -rf node_modules[^\n]+)/m)?.[1];
       if (!cleanCommand) {
         throw new Error(
-          "Runtime assembly must remove build dependency trees before copying production dependencies",
+          "Runtime assembly must remove development dependencies before copying build output",
         );
       }
-      const productionCopy = "COPY --from=production-deps /app/ ./";
-      expect(runtime.indexOf(productionCopy)).toBeGreaterThan(runtime.indexOf(cleanCommand));
       expect(runtime.indexOf("node scripts/prune-docker-plugin-dist.mjs")).toBeGreaterThan(
-        runtime.indexOf(productionCopy),
+        runtime.indexOf(buildCopy?.[0] ?? ""),
       );
 
       const fixture = await mkdtemp(join(tmpdir(), "openclaw-docker-deps-"));
       try {
         const app = join(fixture, "app");
-        const prod = join(fixture, "production");
+        const build = join(fixture, "build");
         const oldFiles = [
           "node_modules/dev-only/index.js",
           "ui/node_modules/dev-only/index.js",
           "packages/ai/node_modules/dev-only/index.js",
-          "extensions/selected/node_modules/dev-only/index.js",
+          `${bundledPluginDir}/selected/node_modules/dev-only/index.js`,
         ];
         const builtFiles = [
           "packages/ai/dist/index.mjs",
           "dist/index.js",
           "dist/extensions/node_modules/openclaw/package.json",
-          "extensions/selected/index.js",
+          `${bundledPluginDir}/selected/index.js`,
         ];
         const prodFiles = [
           "node_modules/native-addon/addon.node",
           "node_modules/.modules.yaml",
           "packages/ai/node_modules/runtime-dep/index.js",
-          "extensions/selected/node_modules/runtime-dep/index.js",
+          `${bundledPluginDir}/selected/node_modules/runtime-dep/index.js`,
           "pnpm-lock.yaml",
         ];
         for (const [root, files] of [
-          [app, [...oldFiles, ...builtFiles]],
-          [prod, prodFiles],
+          [build, [...oldFiles, ...builtFiles]],
+          [app, prodFiles],
         ] as const) {
           for (const file of files) {
             await mkdir(dirname(join(root, file)), { recursive: true });
             await writeFile(join(root, file), file);
           }
         }
+        await writeFile(join(app, "package.json"), JSON.stringify({ version: "2026.8.1" }));
+        await writeFile(join(build, "package.json"), JSON.stringify({ version: "2026.8.1-1" }));
         execFileSync("/bin/sh", ["-eu", "-c", cleanCommand], {
-          cwd: app,
-          env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_DIR: "extensions" },
+          cwd: build,
+          env: { ...process.env, OPENCLAW_BUNDLED_PLUGIN_DIR: bundledPluginDir },
         });
-        await mkdir(join(prod, "node_modules/@openclaw"), { recursive: true });
-        await symlink("../../packages/ai", join(prod, "node_modules/@openclaw/ai"));
-        await cp(prod, app, { recursive: true, verbatimSymlinks: true });
+        await mkdir(join(app, "node_modules/@openclaw"), { recursive: true });
+        await symlink("../../packages/ai", join(app, "node_modules/@openclaw/ai"));
+        await cp(build, app, { recursive: true, verbatimSymlinks: true });
         for (const file of oldFiles) {
           await expect(access(join(app, file))).rejects.toThrow();
         }
@@ -524,6 +529,9 @@ describe("Dockerfile", () => {
         expect(await readFile(join(app, "node_modules/@openclaw/ai/dist/index.mjs"), "utf8")).toBe(
           "packages/ai/dist/index.mjs",
         );
+        expect(JSON.parse(await readFile(join(app, "package.json"), "utf8"))).toEqual({
+          version: "2026.8.1-1",
+        });
       } finally {
         await rm(fixture, { recursive: true, force: true });
       }
@@ -582,13 +590,8 @@ describe("Dockerfile", () => {
 
     const stampIndex = dockerfile.indexOf('pnpm pkg set "version=$OPENCLAW_DOCKER_BUILD_VERSION"');
     const buildIndex = dockerfile.indexOf("pnpm build:docker");
-    const productionDepsIndex = dockerfile.indexOf("COPY --from=production-deps /app/ ./");
-    const restoreVersionIndex = dockerfile.indexOf(
-      "COPY --from=build /app/package.json ./package.json",
-    );
     expect(stampIndex).toBeGreaterThan(dockerfile.indexOf("COPY . ."));
     expect(stampIndex).toBeLessThan(buildIndex);
-    expect(restoreVersionIndex).toBeGreaterThan(productionDepsIndex);
     expect(dockerfile).toContain(
       'test "$(node -p "require(\\"/app/package.json\\").version")" = "$OPENCLAW_DOCKER_BUILD_VERSION"',
     );

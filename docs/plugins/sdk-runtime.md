@@ -57,9 +57,11 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 Channel plugins that deliver agent replies directly can call
 `renderPresentationForDelivery(handler, payload)` from
-`openclaw/plugin-sdk/interactive-runtime` in their `preparePayload` hook. Supply
+`openclaw/plugin-sdk/interactive-runtime` at delivery, after modifying hooks. Supply
 the channel's `presentationCapabilities` and `renderPresentation` callback; the
-callback receives a payload with a normalized, adapted `presentation`. This
+callback receives a payload with a normalized, adapted `presentation` and the
+normalized original presentation as its second argument. Use the original for
+whole-card text fallbacks that must retain labels clipped by native limits. This
 shares core outbound rendering's fallback-text policy and removes the portable
 presentation fields after rendering. The callback may be synchronous or async.
 
@@ -789,6 +791,13 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       cfg: api.config,
       agentDir: "/tmp/agent",
     });
+
+    // Prepare a capture limit before installing audio receive listeners.
+    const budget = await api.runtime.mediaUnderstanding.resolveAudioInputBudget({
+      cfg: api.config,
+    });
+    // budget.enabled is false when audio understanding is disabled. Otherwise,
+    // budget.maxBytes includes the container header and covers the largest fallback.
 
     // Transcribe audio
     const { text } = await api.runtime.mediaUnderstanding.transcribeAudioFile({

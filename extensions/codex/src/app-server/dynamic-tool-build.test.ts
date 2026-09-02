@@ -14,9 +14,20 @@ import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-ho
 import {
   createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
+  createOutboundTestPlugin,
+  createTestRegistry,
+  getActivePluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
@@ -2772,6 +2783,121 @@ describe("Codex app-server dynamic tool build", () => {
       }),
     ).toBe(false);
   });
+
+  it.each(["text", "initial audio", "accepted audio steering"])(
+    "applies inbound TTS to a final dynamic message for %s",
+    async (input) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
+      const synthesize = vi.fn(async (_request: { text: string }) => ({
+        audioBuffer: Buffer.from("synthetic speech"),
+        fileExtension: ".ogg",
+        outputFormat: "ogg",
+        voiceCompatible: true,
+      }));
+      const sendMedia = vi.fn(async (_context: { mediaUrl?: string }) => ({
+        channel: "whatsapp",
+        messageId: "voice-reply",
+      }));
+      const sendText = vi.fn(async () => ({ channel: "whatsapp", messageId: "text-reply" }));
+      const channel = createOutboundTestPlugin({
+        id: "whatsapp",
+        capabilities: {
+          chatTypes: ["direct"],
+          media: true,
+          tts: { voice: { synthesisTarget: "voice-note" } },
+        },
+        outbound: {
+          deliveryMode: "direct",
+          resolveTarget: ({ to }) => ({ ok: true, to: to ?? "+12025550123" }),
+          sendText,
+          sendMedia,
+        },
+      });
+      channel.config.listAccountIds = () => ["default"];
+      const registry = createTestRegistry([
+        { pluginId: "whatsapp", source: "test", plugin: channel },
+      ]);
+      registry.speechProviders.push({
+        pluginId: "test-speech",
+        source: "test",
+        provider: { id: "test-speech", label: "Test speech", isConfigured: () => true, synthesize },
+      });
+      const previousRegistry = getActivePluginRegistry();
+      const previousRuntimeConfig = getRuntimeConfigSnapshot();
+      const previousSourceConfig = getRuntimeConfigSourceSnapshot();
+      setActivePluginRegistry(registry);
+      try {
+        const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+        params.disableTools = false;
+        params.runtimePlan = createCodexRuntimePlanFixture();
+        params.config = {
+          tts: { auto: "inbound", provider: "test-speech" },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        };
+        // Match Gateway config ownership so earlier tool construction cannot supply TTS policy.
+        setRuntimeConfigSnapshot(params.config, params.config);
+        params.messageChannel = "whatsapp";
+        params.currentInboundAudio = input === "initial audio";
+        const replyOperation = { acceptedSteeredInboundAudio: false };
+        params.replyOperation = replyOperation as EmbeddedRunAttemptParams["replyOperation"];
+        params.sourceReplyDeliveryMode = "message_tool_only";
+        setOpenClawCodingToolsFactoryForTests((options) =>
+          createOpenClawCodingTools(options).filter((tool) => tool.name === "message"),
+        );
+        const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+          sandbox: null as never,
+        });
+        // Accepted steering must reach tools that were already constructed.
+        replyOperation.acceptedSteeredInboundAudio = input === "accepted audio steering";
+        const bridge = createCodexDynamicToolBridge({
+          tools,
+          signal: new AbortController().signal,
+        });
+
+        const result = await bridge.handleToolCall({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "voice-final",
+          namespace: null,
+          tool: "message",
+          arguments: {
+            action: "send",
+            channel: "whatsapp",
+            target: "+12025550123",
+            message: "Here is the requested spoken reply.",
+            final: true,
+          },
+        });
+
+        const expectsVoice = input !== "text";
+        expect(result.success, JSON.stringify(result.contentItems)).toBe(true);
+        expect(synthesize).toHaveBeenCalledTimes(expectsVoice ? 1 : 0);
+        expect(sendMedia).toHaveBeenCalledTimes(expectsVoice ? 1 : 0);
+        if (expectsVoice) {
+          expect(sendMedia).toHaveBeenCalledWith(expect.objectContaining({ audioAsVoice: true }));
+        } else {
+          expect(sendText).toHaveBeenCalledOnce();
+        }
+      } finally {
+        if (previousRuntimeConfig) {
+          setRuntimeConfigSnapshot(previousRuntimeConfig, previousSourceConfig ?? undefined);
+        } else {
+          clearRuntimeConfigSnapshot();
+        }
+        for (const [sent] of sendMedia.mock.calls) {
+          if (sent.mediaUrl) {
+            await fs.rm(sent.mediaUrl, { force: true });
+          }
+        }
+        if (previousRegistry) {
+          setActivePluginRegistry(previousRegistry);
+        } else {
+          resetPluginRuntimeStateForTest();
+        }
+      }
+    },
+  );
 
   it("preserves the core final delivery control only on message-tool-only schemas", async () => {
     const workspaceDir = path.join(tempDir, "workspace");

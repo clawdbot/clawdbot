@@ -20,12 +20,13 @@ export function renderChatPanePlacement(props: {
   onPlacementReclaim?: () => void;
   onPlacementRestart?: () => void;
 }): TemplateResult | typeof nothing {
-  const placement = props.session?.placement;
+  const session = props.session;
+  const placement = session?.placement;
   const placementState = placement?.state;
-  if (!isCloudWorkerPlacementState(placementState)) {
+  if (!session || !isCloudWorkerPlacementState(placementState)) {
     return nothing;
   }
-  const placementMove = props.session?.placementMove;
+  const placementMove = session.placementMove;
   const workerPlacement =
     placement && placement.state !== "local" && placement.state !== "requested"
       ? placement
@@ -37,7 +38,7 @@ export function renderChatPanePlacement(props: {
   const runner = placement?.state === "active" ? placement.runner : undefined;
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
   const restartable = placement?.state === "failed" && placement.recoveryAction === "restart";
-  const worker = resolveChatPaneWorkerPresentation(placement, props.placementStartupStatus);
+  const worker = resolveChatPaneWorkerPresentation(session, props.placementStartupStatus);
   const moveTarget =
     placementMove?.target.kind === "gateway"
       ? t("sessionsView.moveSessionGatewayTarget")
@@ -144,7 +145,7 @@ export function renderChatPanePlacement(props: {
               @click=${() => !reclaimDisabledReason && props.onPlacementReclaim?.()}
             >
               <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.stop}</span>
-              <span class="session-menu__text">${t(worker.stopKey)}</span>
+              <span class="session-menu__text">${worker.stopLabel}</span>
             </wa-dropdown-item>`}
       </wa-dropdown>
       ${deviceOffline
