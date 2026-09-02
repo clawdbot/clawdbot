@@ -424,6 +424,12 @@ class GatewaySession(
   // Network recovery must interrupt the current backoff without creating a parallel loop.
   private val reconnectSignal = Channel<Unit>(Channel.CONFLATED)
 
+  // Counts wakes rather than carrying them. A receive cancelled by its own timeout can take the
+  // element out of the channel without delivering it, which would drop the ladder reset a wake is
+  // for; the count survives that, so the waiter can still see that a wake happened. Written under
+  // the same lock as the send, and never read for anything but that comparison.
+  @Volatile private var reconnectWakeCount = 0L
+
   /** Starts or replaces the desired gateway connection and launches the reconnect loop. */
   fun connect(
     endpoint: GatewayEndpoint,
@@ -441,6 +447,7 @@ class GatewaySession(
         if (job?.isActive != true) {
           job = scope.launch(Dispatchers.IO) { runLoop() }
         } else {
+          reconnectWakeCount += 1
           reconnectSignal.trySend(Unit)
         }
       }
@@ -510,6 +517,7 @@ class GatewaySession(
         return
       }
       currentConnection?.closeQuietly()
+      reconnectWakeCount += 1
       reconnectSignal.trySend(Unit)
     }
   }
@@ -522,7 +530,11 @@ class GatewaySession(
    * long wait they had climbed to. They reset to the first retry step rather than to zero, so an
    * in-progress reconnect keeps reporting "Reconnecting…" and holds the guidance attached to it.
    */
-  private suspend fun awaitReconnectWake(timeoutMs: Long): Boolean = withTimeoutOrNull(timeoutMs) { reconnectSignal.receive() } != null
+  private suspend fun awaitReconnectWake(timeoutMs: Long): Boolean {
+    val wakesBefore = reconnectWakeCount
+    val delivered = withTimeoutOrNull(timeoutMs) { reconnectSignal.receive() } != null
+    return reconnectWakeObserved(delivered, wakesBefore, reconnectWakeCount)
+  }
 
   /** Discards retry requests the attempt about to start already satisfies; true if any was queued. */
   private fun drainReconnectSignals(): Boolean {
@@ -2162,6 +2174,20 @@ class GatewaySession(
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }
+
+/**
+ * Whether a wait ended because a wake arrived, given whether the channel delivered one and the
+ * wake count on either side of the wait.
+ *
+ * Delivery alone is not enough: a wake that is signalled while the wait's own timeout is winning
+ * can be taken out of the channel by the receive that is being cancelled, and is then delivered to
+ * nobody. The count moves in that case too, which is why it is the second term.
+ */
+internal fun reconnectWakeObserved(
+  delivered: Boolean,
+  wakesBefore: Long,
+  wakesAfter: Long,
+): Boolean = delivered || wakesAfter != wakesBefore
 
 /** Retry step a deliberate wake restarts from; not 0, which would report a first connect instead. */
 private const val FIRST_RETRY_ATTEMPT = 1

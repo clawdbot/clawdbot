@@ -2071,6 +2071,50 @@ class GatewaySessionReconnectTest {
 
   private fun legacyReconnectDelayMs(attempt: Int): Long = minOf(8_000L, (350.0 * Math.pow(1.7, attempt.toDouble())).toLong())
 
+  @Test
+  fun aWakeTheChannelNeverDeliveredStillCountsAsAWake() {
+    // The wait is cancelled by its own timeout at the moment a wake is signalled, so the receive
+    // takes the element and hands it to nobody. Delivery alone would call that a plain timeout and
+    // keep the long ladder; the count is what stops the wake being lost.
+    assertTrue(reconnectWakeObserved(delivered = false, wakesBefore = 4L, wakesAfter = 5L))
+    assertTrue(reconnectWakeObserved(delivered = true, wakesBefore = 4L, wakesAfter = 5L))
+    // A wake already queued when the wait began is delivered immediately without moving the count.
+    assertTrue(reconnectWakeObserved(delivered = true, wakesBefore = 4L, wakesAfter = 4L))
+    // Nothing was signalled, so the wait really did time out.
+    assertEquals(false, reconnectWakeObserved(delivered = false, wakesBefore = 4L, wakesAfter = 4L))
+  }
+
+  @Test
+  fun everyWakeProducerAdvancesTheWakeCount() =
+    runBlocking {
+      // The count only closes the delivery hole if each producer moves it, so pin them together
+      // rather than trusting the one call site the boundary test happens to exercise.
+      val harness = createReconnectHarness()
+      val deadPort =
+        MockWebServer().run {
+          start()
+          val assigned = port
+          shutdown()
+          assigned
+        }
+      try {
+        connectNodeSession(harness.session, deadPort)
+        val start: Long = readField(harness.session, "reconnectWakeCount")
+        harness.session.retryAfterNetworkRestore()
+        val afterRestore: Long = readField(harness.session, "reconnectWakeCount")
+        assertTrue("network restore did not advance the wake count", afterRestore > start)
+        harness.session.reconnect()
+        val afterManual: Long = readField(harness.session, "reconnectWakeCount")
+        assertTrue("manual reconnect did not advance the wake count", afterManual > afterRestore)
+        connectNodeSession(harness.session, deadPort)
+        val afterEndpoint: Long = readField(harness.session, "reconnectWakeCount")
+        assertTrue("replacing the desired endpoint did not advance the wake count", afterEndpoint > afterManual)
+      } finally {
+        harness.session.disconnect()
+        harness.sessionJob.cancelAndJoin()
+      }
+    }
+
   // --- reconnect wake semantics -------------------------------------------------------------
 
   @Test
