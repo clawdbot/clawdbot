@@ -445,7 +445,7 @@ extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot-identity-cache.ts	1
 extensions/feishu/src/bot-name.ts	4
 extensions/feishu/src/bot-sender-name.ts	2
-extensions/feishu/src/bot.ts	9
+extensions/feishu/src/bot.ts	8
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
 extensions/feishu/src/channel.ts	7

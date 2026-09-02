@@ -48,7 +48,6 @@ import {
   checkBotMentioned,
   normalizeFeishuCommandProbeBody,
   normalizeMentions,
-  parseMergeForwardContent,
   parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
@@ -430,23 +429,13 @@ export async function handleFeishuMessage(params: {
       `feishu[${account.accountId}]: processing merge_forward message, fetching full content via API`,
     );
     try {
-      // Websocket event doesn't include sub-messages, need to fetch via API
-      // The API returns all sub-messages in the items array
-      const client = createFeishuClient(account);
-      const response = (await client.im.message.get({
-        params: { card_msg_content_type: "user_card_content" },
-        path: { message_id: event.message.message_id },
-      })) as { code?: number; data?: { items?: unknown[] } };
-
-      if (response.code === 0 && response.data?.items && response.data.items.length > 0) {
-        log(
-          `feishu[${account.accountId}]: merge_forward API returned ${response.data.items.length} items`,
-        );
-        const expandedContent = parseMergeForwardContent({
-          content: JSON.stringify(response.data.items),
-          log,
-        });
-        ctx = { ...ctx, content: expandedContent };
+      const messageInfo = await getMessageFeishu({
+        cfg,
+        messageId: event.message.message_id,
+        accountId: account.accountId,
+      });
+      if (messageInfo) {
+        ctx = { ...ctx, content: messageInfo.content };
       } else {
         log(`feishu[${account.accountId}]: merge_forward API returned no items`);
         ctx = { ...ctx, content: "[Merged and Forwarded Message - could not fetch]" };

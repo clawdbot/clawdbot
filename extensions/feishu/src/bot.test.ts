@@ -11,7 +11,6 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
-import { parseMergeForwardContent } from "./bot-content.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage, parseFeishuMessageEvent } from "./bot.js";
 import {
@@ -20,6 +19,7 @@ import {
   createFeishuTestRoute,
 } from "./bot.test-support.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
+import { parseMergeForwardContent } from "./message-content.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
@@ -2559,67 +2559,18 @@ describe("handleFeishuMessage command authorization", () => {
 
   it("expands merge_forward content from API sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
-    const mockGetMerged = vi.fn().mockResolvedValue({
-      code: 0,
-      data: {
-        items: [
-          {
-            message_id: "container",
-            msg_type: "merge_forward",
-            body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
-          },
-          {
-            message_id: "sub-2",
-            upper_message_id: "container",
-            msg_type: "file",
-            body: { content: JSON.stringify({ file_name: "report.pdf" }) },
-            create_time: "2000",
-          },
-          {
-            message_id: "sub-card",
-            msg_type: "interactive",
-            body: {
-              content: JSON.stringify({
-                schema: "2.0",
-                header: { title: { tag: "plain_text", content: "Task summary" } },
-                body: {
-                  elements: [
-                    {
-                      tag: "table",
-                      columns: [
-                        { name: "task", display_name: "Task" },
-                        { name: "owner", display_name: "Owner" },
-                      ],
-                      rows: [{ task: "Investigate", owner: { name: "Alice" } }],
-                    },
-                  ],
-                },
-              }),
-            },
-            create_time: "1500",
-          },
-          {
-            message_id: "sub-1",
-            upper_message_id: "container",
-            msg_type: "text",
-            body: { content: JSON.stringify({ text: "alpha" }) },
-            create_time: "1000",
-          },
-        ],
-      },
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "msg-merge-forward",
+      chatId: "oc_group_1",
+      contentType: "merge_forward",
+      content:
+        "[Merged and Forwarded Messages]\n" +
+        "- alpha\n" +
+        "- Task summary\n" +
+        "Task | Owner\n" +
+        "Investigate | Alice\n" +
+        "- [File: report.pdf]",
     });
-    mockCreateFeishuClient.mockReturnValue({
-      contact: {
-        user: {
-          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
-        },
-      },
-      im: {
-        message: {
-          get: mockGetMerged,
-        },
-      },
-    } as unknown as PluginRuntime);
 
     const cfg = createFeishuTestConfig({ dmPolicy: "open" });
     const event = createFeishuTestEvent({
@@ -2631,9 +2582,10 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    expect(mockGetMerged).toHaveBeenCalledWith({
-      params: { card_msg_content_type: "user_card_content" },
-      path: { message_id: "msg-merge-forward" },
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      accountId: "default",
+      messageId: "msg-merge-forward",
     });
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
     expect(context.BodyForAgent).toContain(
