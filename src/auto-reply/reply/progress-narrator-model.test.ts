@@ -13,6 +13,7 @@ const prepared: Parameters<typeof generateNarrationWithUtilityModel>[0]["prepare
   config: {},
   provider: "openai",
   model: "gpt-test",
+  authProfileId: undefined,
   agentId: "main",
   agentDir: "/unused-narration-test",
 };
