@@ -1,5 +1,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import {
   removeConfigFormValue,
   serializeFormForSubmit,
@@ -200,6 +201,61 @@ describe("config form map integrity", () => {
     nestedKey.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["values", "primary"], { zone: "west" });
   });
+
+  it.each(["env", "headers"] as const)(
+    "allows blank MCP %s entries to be renamed but blocks redacted entries",
+    (section) => {
+      const analysis = analyzeConfigSchema({
+        type: "object",
+        properties: {
+          [section]: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+        },
+      });
+      const container = document.createElement("div");
+      const onPatch = vi.fn();
+      render(
+        renderConfigForm({
+          schema: analysis.schema,
+          uiHints: {},
+          unsupportedPaths: analysis.unsupportedPaths,
+          value: {
+            [section]: {
+              "custom-1": "",
+              stored: REDACTED_SENTINEL,
+            },
+          },
+          showAdvanced: true,
+          onShowAdvanced: () => {},
+          onPatch,
+        }),
+        container,
+      );
+
+      const blankKey = expectElement(
+        container.querySelector<HTMLInputElement>('[aria-label="Key: custom-1"]'),
+        `${section} blank entry key`,
+      );
+      const renamedKey = section === "env" ? "OPENAPI_MCP_HEADERS" : "X-OpenAPI-MCP";
+      blankKey.value = renamedKey;
+      blankKey.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(onPatch).toHaveBeenCalledWith([section], {
+        [renamedKey]: "",
+        stored: REDACTED_SENTINEL,
+      });
+
+      const storedKey = expectElement(
+        container.querySelector<HTMLInputElement>('[aria-label="Key: stored"]'),
+        `${section} stored entry key`,
+      );
+      storedKey.value = "renamed-stored";
+      storedKey.dispatchEvent(new Event("change", { bubbles: true }));
+      expect(storedKey.value).toBe("stored");
+      expect(onPatch).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     ["boolean", true],

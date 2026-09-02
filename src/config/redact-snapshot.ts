@@ -34,6 +34,10 @@ function isEnvVarPlaceholder(value: string): boolean {
   return ENV_VAR_PLACEHOLDER_PATTERN.test(value.trim());
 }
 
+function shouldRedactSensitiveString(value: string): boolean {
+  return value !== "" && !isEnvVarPlaceholder(value);
+}
+
 function isWholeObjectSensitivePath(path: string): boolean {
   const lowered = normalizeLowercaseStringOrEmpty(path);
   return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
@@ -48,7 +52,7 @@ function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
   if (typeof value === "string") {
-    if (!isEnvVarPlaceholder(value)) {
+    if (shouldRedactSensitiveString(value)) {
       values.push(value);
     }
     return;
@@ -64,7 +68,7 @@ function collectSensitiveStrings(value: unknown, values: string[]): void {
     // SecretRef objects include structural fields like source/provider that are
     // not secret material and may appear widely in config text.
     if (isSecretRefShape(obj)) {
-      if (!isEnvVarPlaceholder(obj.id)) {
+      if (shouldRedactSensitiveString(obj.id)) {
         values.push(obj.id);
       }
       return;
@@ -173,7 +177,7 @@ function redactValue(
     return obj.map((item) => {
       if (
         typeof item === "string" &&
-        !isEnvVarPlaceholder(item) &&
+        shouldRedactSensitiveString(item) &&
         (schemaMatched || heuristicSensitive)
       ) {
         values.push(item);
@@ -197,7 +201,7 @@ function redactValue(
       : undefined;
     if (candidate) {
       result[key] = value;
-      if (typeof value === "string" && !isEnvVarPlaceholder(value)) {
+      if (typeof value === "string" && shouldRedactSensitiveString(value)) {
         result[key] = REDACTED_SENTINEL;
         values.push(value);
       } else if (typeof value === "object" && value !== null) {
@@ -218,6 +222,7 @@ function redactValue(
           result[key] = redactValue(value, candidate, values, context);
         }
       } else if (
+        typeof value !== "string" &&
         context.hints?.[candidate]?.sensitive === true &&
         value !== undefined &&
         value !== null
@@ -233,7 +238,7 @@ function redactValue(
       typeof value === "string" &&
       !markedNonSensitive &&
       isSensitivePath(path) &&
-      !isEnvVarPlaceholder(value)
+      shouldRedactSensitiveString(value)
     ) {
       result[key] = REDACTED_SENTINEL;
       values.push(value);

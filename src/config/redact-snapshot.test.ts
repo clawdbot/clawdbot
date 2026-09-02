@@ -798,7 +798,7 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
-  it("does not mangle raw when a sensitive field value is empty string", () => {
+  it("preserves empty sensitive field values without mangling raw", () => {
     const config = {
       gateway: { auth: { token: "" } },
       other: "",
@@ -806,9 +806,55 @@ describe("redactConfigSnapshot", () => {
     const raw = '{ "gateway": { "auth": { "token": "" } }, "other": "" }';
     const snapshot = makeSnapshot(config, raw);
     const result = redactConfigSnapshot(snapshot);
-    expect(result.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+    expect(result.config.gateway?.auth?.token).toBe("");
     expect(result.raw).toBe(raw);
     expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
+  });
+
+  it("preserves empty MCP env and header entries while redacting populated values", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    const config = {
+      mcp: {
+        servers: {
+          remote: {
+            env: {
+              NEW_ENV: "",
+              EXISTING_ENV: "secret-env-value",
+            },
+            headers: {
+              NEW_HEADER: "",
+              EXISTING_HEADER: "secret-header-value",
+            },
+          },
+        },
+      },
+    };
+    const snapshot = makeSnapshot(config, JSON.stringify(config, null, 2));
+    const result = redactConfigSnapshot(snapshot, hints);
+    const redactedConfig = result.config as {
+      mcp: {
+        servers: Record<
+          string,
+          {
+            env: Record<string, string>;
+            headers: Record<string, string>;
+          }
+        >;
+      };
+    };
+    const remote = expectDefined(
+      redactedConfig.mcp.servers.remote,
+      "servers.remote test invariant",
+    );
+
+    expect(remote.env.NEW_ENV).toBe("");
+    expect(remote.env.EXISTING_ENV).toBe(REDACTED_SENTINEL);
+    expect(remote.headers.NEW_HEADER).toBe("");
+    expect(remote.headers.EXISTING_HEADER).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain('"NEW_ENV": ""');
+    expect(result.raw).toContain('"NEW_HEADER": ""');
+    expect(result.raw).not.toContain("secret-env-value");
+    expect(result.raw).not.toContain("secret-header-value");
   });
 
   it("redacts each projection without using its secrets to rewrite another projection", () => {
