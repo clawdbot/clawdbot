@@ -1,39 +1,28 @@
-// Test Live Models Docker tests cover direct live model Docker script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const SCRIPT_PATH = path.resolve(import.meta.dirname, "../../scripts/test-live-models-docker.sh");
-
-describe("scripts/test-live-models-docker.sh", () => {
-  it("validates optional live model limits before auth or Docker setup", () => {
-    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain('LIVE_MAX_MODELS="${OPENCLAW_LIVE_MAX_MODELS:-}"');
-    expect(script).toContain('[[ -n "$LIVE_MAX_MODELS" && ! "$LIVE_MAX_MODELS" =~ ^\\+?[0-9]+$ ]]');
-    expect(script).toContain(
-      'openclaw_live_read_positive_int_env OPENCLAW_LIVE_MODEL_TIMEOUT_MS "$LIVE_MODEL_TIMEOUT_MS"',
-    );
-    expect(script).toContain('-e OPENCLAW_LIVE_MAX_MODELS="$LIVE_MAX_MODELS"');
-    expect(script).toContain('-e OPENCLAW_LIVE_MODEL_TIMEOUT_MS="$LIVE_MODEL_TIMEOUT_MS"');
-  });
-
+describe("live model Docker wrappers", () => {
   it.each([
-    ["max models", "OPENCLAW_LIVE_MAX_MODELS", "3models"],
-    ["model timeout", "OPENCLAW_LIVE_MODEL_TIMEOUT_MS", "45s"],
-  ])("rejects invalid %s values before live Docker setup", (_label, envName, value) => {
-    const result = spawnSync("bash", [SCRIPT_PATH], {
+    ["test-live-gateway-models-docker.sh", "OPENCLAW_LIVE_GATEWAY_MAX_MODELS", "two"],
+    ["test-live-gateway-models-docker.sh", "OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS", "45s"],
+    ["test-live-gateway-models-docker.sh", "OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS", "90s"],
+    ["test-live-models-docker.sh", "OPENCLAW_LIVE_MAX_MODELS", "3models"],
+    ["test-live-models-docker.sh", "OPENCLAW_LIVE_MODEL_TIMEOUT_MS", "45s"],
+  ])("guards validation and Docker forwarding for %s %s", (script, envName, value) => {
+    const scriptPath = path.resolve(import.meta.dirname, `../../scripts/${script}`);
+    const result = spawnSync("bash", [scriptPath], {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        [envName]: value,
-      },
+      env: { ...process.env, [envName]: value },
     });
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
     expect(result.stderr).not.toContain("docker");
     expect(result.stderr).not.toContain("Cannot find package 'tsx'");
+    expect(fs.readFileSync(scriptPath, "utf8")).toContain(
+      `-e ${envName}="$${envName.replace("OPENCLAW_", "")}"`,
+    );
   });
 });

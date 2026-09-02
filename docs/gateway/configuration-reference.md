@@ -519,6 +519,8 @@ See [Plugins](/tools/plugin).
   behind a DevTools HTTP(S) discovery endpoint or direct WS(S) endpoint. In that
   mode OpenClaw passes the endpoint to Chrome MCP instead of using auto-connect;
   `userDataDir` is ignored for Chrome MCP launch arguments.
+  Valid endpoint arguments in `mcpArgs` take precedence over `cdpUrl`; see
+  [Custom Chrome MCP launch](/tools/browser#custom-chrome-mcp-launch).
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
@@ -684,10 +686,13 @@ only while it is connected and the effective approved command remains allowed.
 
 For VncAuth, `desktop.host.passwordFile` stays on the node and is delivered only
 to the Gateway's authenticated relay. Without a password file, the Control UI
-prompts for the VNC password. macOS ARD credentials are always prompted per
-observation. The Gateway completes ARD or VNC authentication before exposing a
-no-auth RFB handshake to the browser, so credentials are not returned in URLs,
-logs, or RPC results.
+prompts for the VNC password. macOS ARD asks for account credentials when you
+first connect to a node in the Desktop panel. The panel keeps them in memory
+for reconnects to the same node. Closing the panel or selecting another desktop
+clears them; an authentication rejection asks for the password again. The
+Gateway completes ARD or VNC authentication before exposing a no-auth RFB
+handshake to the browser, so credentials are not returned in URLs, logs, or RPC
+results.
 
 Desktop bytes use a dedicated outbound binary WebSocket from the node. The
 normal node invoke remains only as the cancellable lifecycle handle and never

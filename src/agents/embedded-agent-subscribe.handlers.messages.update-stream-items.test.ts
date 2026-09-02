@@ -103,15 +103,13 @@ describe("handleMessageUpdate text signatures", () => {
       onPartialReply,
       state: {
         deltaBuffer: "First block",
-        lastStreamedAssistant: "First block",
-        lastStreamedAssistantCleaned: "First block",
+        assistantStream: { raw: "First block", text: "First block" },
         lastAssistantStreamContentIndex: 0,
       },
     });
     const resetAssistantMessageState = vi.fn(() => {
       context.state.deltaBuffer = "";
-      context.state.lastStreamedAssistant = undefined;
-      context.state.lastStreamedAssistantCleaned = undefined;
+      context.state.assistantStream = undefined;
     });
     context.resetAssistantMessageState = resetAssistantMessageState;
     context.params.onAssistantMessageStart = onAssistantMessageStart;
@@ -166,7 +164,7 @@ describe("handleMessageUpdate text signatures", () => {
       stream: "assistant",
       data: { text: "Hello", delta: "Hello" },
     });
-    expect(context.state.lastStreamedAssistantCleaned).toBe("Hello");
+    expect(context.state.assistantStream?.text).toBe("Hello");
   });
 
   it.each([
@@ -197,7 +195,7 @@ describe("handleMessageUpdate text signatures", () => {
       assistantMessageEvent: { type: "text_end", content: text },
     });
 
-    expect(context.state.lastStreamedAssistantCleaned).toBe(text);
+    expect(context.state.assistantStream?.text).toBe(text);
     expect(firstMockArg(onAgentEvent, "final assistant event")).toMatchObject({
       stream: "assistant",
       data: { text },

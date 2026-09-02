@@ -65,6 +65,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private presenceSignature = "";
   private readonly connectMachine: ConnectMachineSetupState;
   @state() private imageLightbox: ImageLightboxItem | null = null;
+  @state() private agentPickerOpen = false;
   private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
     () => this.data,
     () => this.context?.revalidate("new-session"),
@@ -191,7 +192,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
               return;
             }
             if (isPlaceTopologyEvent(event.event)) {
-              this.refreshPlaceTopology();
+              void this.gateway.refreshCloudProfiles();
               return;
             }
             const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
@@ -201,7 +202,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             const signature = presenceStateSignature(presence);
             if (signature !== this.presenceSignature) {
               this.presenceSignature = signature;
-              this.refreshPlaceTopology();
+              void this.gateway.refreshCloudProfiles();
             }
           });
         },
@@ -223,10 +224,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),
       );
-  }
-
-  private refreshPlaceTopology() {
-    void this.gateway.refreshCloudProfiles();
   }
 
   handleEvent(event: Event) {
@@ -266,7 +263,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
-    void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
+    void this.context?.agentIdentity.ensure(
+      this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
+    );
     const agentState = this.context?.agents.state;
     const agentsReady = Boolean(
       this.gateway.connected &&
@@ -346,25 +345,11 @@ export class NewSessionPage extends OpenClawLightDomElement {
       : catalog.routeKeyFromSearch(window.location.search);
   }
 
-  private setMessage(message: string, ownerKey = catalog.routeKey(this.data)) {
-    this.submission.setMessage(message);
-    this.messageOwnerKey = ownerKey;
-  }
-
   private setMessageFromUser(message: string) {
     if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-      this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
+      this.submission.setMessage(message);
+      this.messageOwnerKey = catalog.routeKeyFromSearch(window.location.search);
     }
-  }
-
-  private renderAgentSelect() {
-    return renderAgentSelect({
-      agents: this.place.agents(),
-      agentId: this.place.agentId,
-      agentIdentity: this.context?.agentIdentity,
-      disabled: this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
-      onSelect: (agentId) => this.place.selectAgentId(agentId),
-    });
   }
 
   private renderTargetBar() {
@@ -373,7 +358,20 @@ export class NewSessionPage extends OpenClawLightDomElement {
     return catalog.renderBar({
       data: this.data,
       groupPending: catalog.isGroupRoutePending(this.data, sessions),
-      agentSelect: agents.length > 1 ? this.renderAgentSelect() : nothing,
+      agentSelect:
+        agents.length > 1
+          ? renderAgentSelect({
+              agents,
+              agentId: this.place.agentId,
+              agentIdentity: this.context?.agentIdentity,
+              disabled:
+                this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
+              onSelect: (agentId) => this.place.selectAgentId(agentId),
+              onOpenChange: (open) => {
+                this.agentPickerOpen = open;
+              },
+            })
+          : nothing,
       placeSelect: this.renderPlaceChips(),
       retrying:
         this.gateway.catalogRetrying ||

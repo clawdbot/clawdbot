@@ -1,7 +1,10 @@
 // Covers Doctor-only import of the retired exec approvals JSON file.
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import net from "node:net";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -19,6 +22,8 @@ import {
 } from "./exec-approvals-sqlite.js";
 import { loadExecApprovals } from "./exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
+import { resolveExecApprovals } from "./exec-approvals.js";
+import { requestExecHostViaSocket } from "./exec-host.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
@@ -157,6 +162,173 @@ describe("legacy exec approvals migration", () => {
     expect(runReceipt(env)).toMatchObject({ status: "completed" });
   });
 
+  it.each(
+    [
+      { name: "unversioned stub", stub: { defaults: {}, agents: {} } },
+      {
+        name: "socket stub",
+        stub: {
+          defaults: {},
+          agents: {},
+          socket: { path: "/tmp/obsolete.sock", token: "fixture" },
+        },
+      },
+      { name: "versioned stub", stub: { version: 1, defaults: {}, agents: {} } },
+      {
+        name: "token-only stub",
+        stub: { defaults: {}, agents: {}, socket: { token: " fixture " } },
+      },
+      {
+        name: "path-only stub",
+        stub: { defaults: {}, agents: {}, socket: { path: " /tmp/fixture.sock " } },
+      },
+      {
+        name: "blank socket stub",
+        stub: { defaults: {}, agents: {}, socket: { path: " ", token: " " } },
+      },
+    ].flatMap((entry) =>
+      [false, true].flatMap((claimed) =>
+        ["missing", "valid", "invalid"].map((canonical) => ({
+          name: entry.name,
+          stub: entry.stub,
+          claimed,
+          canonical,
+        })),
+      ),
+    ),
+  )(
+    "retires $name (claimed=$claimed, canonical=$canonical)",
+    async ({ stub, claimed, canonical }) => {
+      const { env, stateDir, sourcePath } = useStateDir();
+      const policy = { version: 1 as const, defaults: { security: "deny" as const }, agents: {} };
+      if (canonical !== "missing") {
+        writeExecApprovalsConfigRow({
+          db: database(env),
+          file: policy,
+          raw: canonical === "invalid" ? "{invalid" : undefined,
+        });
+      }
+      const originalRow = readExecApprovalsConfigRow(database(env));
+      await writeLegacy(claimed ? `${sourcePath}.doctor-importing` : sourcePath, stub);
+      const original = await fsp.readFile(claimed ? `${sourcePath}.doctor-importing` : sourcePath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+
+      const result = await migrate({ env, stateDir });
+
+      expect(result.warnings).toEqual([]);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+      const socket = "socket" in stub ? stub.socket : undefined;
+      const expectedSocket = {
+        path: socket?.path?.trim() || undefined,
+        token: socket?.token?.trim() || undefined,
+      };
+      if (canonical === "missing" && (expectedSocket.path || expectedSocket.token)) {
+        expect(loadExecApprovals().socket).toEqual(expectedSocket);
+      } else {
+        expect(readExecApprovalsConfigRow(database(env))).toEqual(originalRow);
+      }
+      expect(() => loadExecApprovals()).not.toThrow();
+      const archives = (await fsp.readdir(stateDir)).filter((name) =>
+        name.startsWith("exec-approvals.json.migrated."),
+      );
+      expect(archives).toHaveLength(1);
+      expect(await fsp.readFile(`${stateDir}/${archives[0]}`)).toEqual(original);
+      expect(receipt(env)).toMatchObject({ removed_source: 1, status: "completed" });
+      await expect(migrate({ env, stateDir })).resolves.toEqual({ changes: [], warnings: [] });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a running exec peer authenticated after retiring an empty socket stub",
+    async () => {
+      const stateDir = tempDirs.make("oc-ea-", "/tmp");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const sourcePath = resolveExecApprovalsPath(env);
+      const socketPath = path.join(stateDir, "exec-approvals.sock");
+      const originalToken = "synthetic-stable-socket-token";
+      const sockets = new Set<net.Socket>();
+      const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+        sockets.add(socket);
+        socket.once("close", () => sockets.delete(socket));
+        let wire = "";
+        socket.setEncoding("utf8");
+        socket.on("data", (chunk: string) => {
+          wire += chunk;
+        });
+        socket.on("end", () => {
+          const envelope = JSON.parse(wire) as {
+            id: string;
+            nonce: string;
+            ts: number;
+            requestJson: string;
+            hmac: string;
+          };
+          const hmac = createHmac("sha256", originalToken)
+            .update(`${envelope.nonce}:${envelope.ts}:${envelope.requestJson}`)
+            .digest("hex");
+          socket.end(
+            `${JSON.stringify({
+              type: "exec-res",
+              id: envelope.id,
+              ...(envelope.hmac === hmac
+                ? {
+                    ok: true,
+                    payload: {
+                      exitCode: 0,
+                      timedOut: false,
+                      success: true,
+                      stdout: "",
+                      stderr: "",
+                    },
+                  }
+                : { ok: false, error: { code: "INVALID_REQUEST", message: "invalid auth" } }),
+            })}\n`,
+          );
+        });
+      });
+      try {
+        const listening = once(server, "listening");
+        server.listen(socketPath);
+        await listening;
+        await writeLegacy(sourcePath, {
+          defaults: {},
+          agents: {},
+          socket: { path: socketPath, token: originalToken },
+        });
+        setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+        expect((await migrate({ env, stateDir })).warnings).toEqual([]);
+        const resolved = resolveExecApprovals(undefined, { requireSocket: true });
+        await expect(
+          requestExecHostViaSocket({
+            socketPath: resolved.socketPath,
+            token: resolved.token,
+            request: { command: ["synthetic-no-execution"] },
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({ ok: true });
+      } finally {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it("leaves a missing legacy file and canonical state untouched", async () => {
+    const { env, stateDir } = useStateDir();
+    expect(detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(
+      false,
+    );
+    await expect(migrate({ env, stateDir })).resolves.toEqual({ changes: [], warnings: [] });
+    expect(readExecApprovalsConfigRow(database(env))).toBeUndefined();
+    expect(receipt(env)).toBeUndefined();
+  });
+
   it("is idempotent after successful source removal", async () => {
     const { env, stateDir, sourcePath } = useStateDir();
     await writeLegacy(sourcePath, { version: 1, agents: {} });
@@ -251,6 +423,18 @@ describe("legacy exec approvals migration", () => {
       raw: legacyWithInvalidEntry({ pattern: "  " }),
       problem: "agents entry #2.allowlist[1].pattern: expected a non-empty string",
     },
+    ...[
+      { defaults: { security: "deny" }, agents: {} },
+      { defaults: {}, agents: { main: { allowlist: ["/usr/bin/true"] } } },
+      { defaults: {}, agents: {}, unknownPolicy: true },
+      { defaults: null, agents: {} },
+      { defaults: {}, agents: {}, socket: { token: 42 } },
+      { version: 2, defaults: {}, agents: {} },
+    ].map((value, index) => ({
+      name: `non-stub legacy shape #${index + 1}`,
+      raw: JSON.stringify(value),
+      problem: "version: expected a supported value",
+    })),
     {
       name: "JSON syntax",
       raw: "{malformed-private-marker",
@@ -398,12 +582,18 @@ describe("legacy exec approvals migration", () => {
     expect(receipt(env)).toBeUndefined();
   });
 
-  it("retains the null-metadata source claim after cleanup failure and converges on retry", async () => {
+  it.each([
+    {
+      name: "null-metadata import",
+      value: {
+        version: 1,
+        agents: { main: { allowlist: [{ pattern: "/usr/bin/rg", lastUsedAt: null }] } },
+      },
+    },
+    { name: "empty stub retirement", value: { defaults: {}, agents: {} } },
+  ])("retains $name claim after cleanup failure and converges on retry", async ({ value }) => {
     const { env, stateDir, sourcePath } = useStateDir();
-    await writeLegacy(sourcePath, {
-      version: 1,
-      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg", lastUsedAt: null }] } },
-    });
+    await writeLegacy(sourcePath, value);
     const first = await migrate({
       env,
       stateDir,

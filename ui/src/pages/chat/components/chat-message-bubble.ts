@@ -310,6 +310,7 @@ export function renderGroupedMessage(
   // Suppress empty bubbles when tool cards are the only content and toggle is off
   if (
     !markdown &&
+    !reasoningMarkdown &&
     !hasToolCards &&
     !hasImages &&
     !hasPairingQrExpiryNotices &&

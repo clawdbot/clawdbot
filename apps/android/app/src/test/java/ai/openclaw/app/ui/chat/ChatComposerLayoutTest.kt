@@ -10,12 +10,15 @@ import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.gateway.GatewayRegistryEntry
+import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import android.content.Context
 import android.provider.Settings
+import android.speech.SpeechRecognizer
 import android.view.KeyEvent
 import android.view.inspector.WindowInspector
 import androidx.compose.foundation.background
@@ -79,6 +82,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowSpeechRecognizer
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
@@ -168,6 +172,68 @@ class ChatComposerLayoutTest {
     editor.performTextReplacement("")
     assertComposerControlsVisible(primaryAction = "Start Talk")
     composeRule.onNodeWithContentDescription(nativeString("Send")).assertDoesNotExist()
+  }
+
+  @Test
+  fun unavailableDictationOffersExplicitVoiceNoteRecoveryWithoutChangingTheDraft() {
+    prefs.gatewayRegistry.upsert(
+      GatewayRegistryEntry(
+        stableId = AndroidScreenshotFixture.gatewayId,
+        kind = GatewayRegistryEntryKind.MANUAL,
+        name = "Test gateway",
+      ),
+    )
+    prefs.gatewayRegistry.setActive(AndroidScreenshotFixture.gatewayId)
+    val recognitionAvailable = SpeechRecognizer.isOnDeviceRecognitionAvailable(app)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(false)
+    try {
+      val viewModel = showChat(viewportWidth = 320.dp)
+      composeRule.runOnIdle {
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"${AndroidScreenshotFixture.mainSessionKey}","runId":"android-screenshot-active-run","seq":1,"stream":"lifecycle","data":{"phase":"end"}}""",
+        )
+      }
+      val editor = composeRule.onNode(hasSetTextAction())
+      editor.performTextReplacement("Existing draft")
+      val dictation =
+        composeRule.onNode(
+          SemanticsMatcher("dictation control") { node ->
+            node.config.getOrNull(SemanticsActions.OnClick)?.label == nativeString("Dictation")
+          },
+        )
+      dictation.performClick()
+
+      composeRule.onNodeWithText(nativeString("On-device speech recognition is unavailable.")).assertIsDisplayed()
+      composeRule.onNodeWithText("Microphone permission is required to record a voice note.").assertDoesNotExist()
+      composeRule.onNodeWithContentDescription(nativeString("Cancel voice note")).assertDoesNotExist()
+      dictation.assertIsDisplayed()
+      editor.assertTextEquals("Existing draft")
+
+      val recovery = composeRule.onNodeWithText(nativeString("Record voice note")).assertIsDisplayed().assertHasClickAction()
+      recovery.performClick()
+
+      composeRule.onNodeWithText("Microphone permission is required to record a voice note.").assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("On-device speech recognition is unavailable.")).assertDoesNotExist()
+      composeRule.onNodeWithText(nativeString("Record voice note")).assertDoesNotExist()
+      editor.assertTextEquals("Existing draft")
+
+      composeRule.runOnIdle { viewModel.forgetGateway(AndroidScreenshotFixture.gatewayId) }
+      composeRule.waitUntil {
+        viewModel.activeGatewayStableId.value == null &&
+          prefs.gatewayRegistry.entries.value
+            .isEmpty()
+      }
+      assertTrue("Forgetting the last gateway leaves Chat accessible", viewModel.onboardingCompleted.value)
+      editor.performTextReplacement("Draft after forgetting")
+      dictation.performClick()
+      composeRule.onNodeWithText(nativeString("On-device speech recognition is unavailable.")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Record voice note")).assertDoesNotExist()
+      dictation.assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnLongClick))
+      editor.assertTextEquals("Draft after forgetting")
+    } finally {
+      ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(recognitionAvailable)
+    }
   }
 
   @Test
@@ -267,7 +333,17 @@ class ChatComposerLayoutTest {
         """{"reason":"patch","session":{"key":"${AndroidScreenshotFixture.mainSessionKey}","thinkingLevel":"max","thinkingLevels":[{"id":"max","label":"max"}]}}""",
       )
     }
-    thinking.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "${nativeString("Max")}, ${nativeString("Fast mode")}: ${nativeString("Off")}"))
+    thinking.assert(
+      SemanticsMatcher.expectValue(
+        SemanticsProperties.StateDescription,
+        nativeString(
+          "\$selectedLabel, \$fastModeLabel: \$fastModeState",
+          nativeString("Max"),
+          nativeString("Fast mode"),
+          nativeString("Off"),
+        ),
+      ),
+    )
     thinking.performClick()
     composeRule.onNode(hasText(nativeString("Max")) and hasClickAction()).assertIsDisplayed().assertIsSelected()
   }
@@ -651,7 +727,17 @@ class ChatComposerLayoutTest {
             .onNodeWithContentDescription(nativeString("Thinking"))
             .assertIsDisplayed()
             .assertHasClickAction()
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "$thinkingLabel, ${nativeString("Fast mode")}: ${nativeString("Off")}")),
+            .assert(
+              SemanticsMatcher.expectValue(
+                SemanticsProperties.StateDescription,
+                nativeString(
+                  "\$selectedLabel, \$fastModeLabel: \$fastModeState",
+                  thinkingLabel,
+                  nativeString("Fast mode"),
+                  nativeString("Off"),
+                ),
+              ),
+            ),
         )
     val controlBounds = controls.map { it.getUnclippedBoundsInRoot() }.toMutableList()
     val primary = controlBounds.first()

@@ -11,7 +11,9 @@ import {
 import {
   readMemoryFile,
   MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  type MemoryIndexIdentityState,
   type MemoryProviderStatus,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -25,7 +27,7 @@ import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.j
 import { awaitPendingManagerWork } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { closeMemoryDatabase } from "./manager-db.js";
+import { closeMemoryDatabase, memoryDatabaseTableExists } from "./manager-db.js";
 import {
   clearMemoryEmbeddingProbeCache,
   resolveEffectiveMemorySearchSettings,
@@ -45,7 +47,6 @@ import {
   type MemoryIndexManagerPurpose,
 } from "./manager-registry.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
-import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import {
@@ -53,6 +54,7 @@ import {
   resolveInitialMemoryDirty,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
+import type { MemoryReindexRetryState } from "./manager-sync-base.js";
 import {
   enqueueMemoryTargetedSessionSync,
   hasTargetedSessionSyncParams,
@@ -124,10 +126,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   private queuedForce = false;
   private queuedProgressCallbacks = new Set<NonNullable<MemorySyncParams["progress"]>>();
   private queuedSessionSync: Promise<void> | null = null;
-  protected indexIdentityState: MemoryIndexIdentityState = {
-    status: "missing",
-    reason: "index metadata is missing",
-  };
+  protected indexIdentityState: MemoryIndexIdentityState;
 
   static async get(params: {
     cfg: OpenClawConfig;
@@ -212,7 +211,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     for (const source of effectiveSettings.sources) {
       this.sources.add(source);
     }
-    this.publishedDatabase = new MemoryIndexDatabase(this.openDatabase());
+    this.publishedDatabase = new MemoryIndexDatabase(this.openDatabase(this.purpose === "status"));
     try {
       this.providerKey = this.computeProviderKey();
       this.cache = {
@@ -220,7 +219,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         maxEntries: effectiveSettings.cache.maxEntries,
       };
       this.fts.enabled = effectiveSettings.query.hybrid.enabled;
-      this.ensureSchema();
+      if (this.purpose === "status") {
+        this.fts.available =
+          this.fts.enabled && memoryDatabaseTableExists(this.db, "main", MEMORY_INDEX_FTS_TABLE);
+      } else {
+        this.ensureSchema();
+      }
       this.vector.enabled = effectiveSettings.store.vector.enabled;
       this.vector.extensionPath = effectiveSettings.store.vector.extensionPath;
       const meta = this.readMeta();
@@ -277,7 +281,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   async sync(params?: MemorySyncParams): Promise<void> {
+    if (this.purpose === "status") {
+      throw new Error("Memory status managers are read-only");
+    }
     return await this.withPublishedDatabase(() => this.syncPublished(params));
+  }
+
+  adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
+    this.restoreReindexRetryState(snapshot);
   }
 
   private async syncPublished(params?: MemorySyncParams): Promise<void> {

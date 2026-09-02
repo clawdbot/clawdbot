@@ -116,6 +116,10 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
+Search-triggered maintenance applies pending memory and session changes
+incrementally while searches remain available. A failed full rebuild retains
+its full-retry state; ordinary dirty content does not itself force a rebuild.
+
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache

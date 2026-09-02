@@ -120,7 +120,12 @@ suite.define(() => {
         };
         textarea.addEventListener(
           "keydown",
-          () => {
+          function onSubmit(event) {
+            // Meta+Enter emits a modifier keydown first; only submission queues the next input.
+            if (event.key !== "Enter") {
+              return;
+            }
+            textarea.removeEventListener("keydown", onSubmit, true);
             const channel = new MessageChannel();
             channel.port1.addEventListener(
               "message",
@@ -142,13 +147,11 @@ suite.define(() => {
             channel.port1.start();
             channel.port2.postMessage(undefined);
           },
-          { capture: true, once: true },
+          { capture: true },
         );
       });
 
-      // A chord fires the one-shot listener on its modifier before submission.
-      // Arm the next-input task from the actual submit key instead.
-      await composer.press("Enter");
+      await composer.press("Meta+Enter");
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({ message: "first prompt" });
       await expect

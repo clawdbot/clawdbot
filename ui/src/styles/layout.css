@@ -1798,6 +1798,10 @@ openclaw-settings-save-indicator:empty {
   text-align: center;
 }
 
+.sidebar-session-catalog-project > .sidebar-session-pagination--catalog {
+  padding-left: calc(var(--sidebar-text-offset) + var(--sidebar-lead));
+}
+
 .sidebar-session-pagination {
   display: flex;
   justify-content: flex-start;

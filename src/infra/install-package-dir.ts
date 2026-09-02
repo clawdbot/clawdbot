@@ -30,6 +30,16 @@ type HiddenProjectConfigFile = {
 type InstallPackageDirFailure = { ok: false; error: string };
 type InstallPackageDirSuccess = { ok: true };
 
+export function hasPackageRuntimeDependencies(manifest: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}): boolean {
+  return (
+    Object.keys(manifest.dependencies ?? {}).length > 0 ||
+    Object.keys(manifest.optionalDependencies ?? {}).length > 0
+  );
+}
+
 async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   const manifestPath = path.join(targetDir, "package.json");
   const parsed = await tryReadJson<unknown>(manifestPath);
@@ -477,32 +487,4 @@ export async function installPackageDir<
       },
     },
   );
-}
-
-/**
- * Installs a manifest-backed package directory while deriving whether npm
- * dependencies must be installed and which hardlink policy is safe to use.
- */
-export async function installPackageDirWithManifestDeps<
-  TAfterInstallFailure extends InstallPackageDirFailure = InstallPackageDirFailure,
->(params: {
-  sourceDir: string;
-  targetDir: string;
-  mode: "install" | "update";
-  timeoutMs: number;
-  logger?: { info?: (message: string) => void; warn?: (message: string) => void };
-  copyErrorPrefix: string;
-  depsLogMessage: string;
-  manifestDependencies?: Record<string, unknown>;
-  afterCopy?: (installedDir: string) => void | Promise<void>;
-  afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
-  afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
-  beforePersistentApply?: () => void;
-}): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
-  const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
-  return installPackageDir<TAfterInstallFailure>({
-    ...params,
-    hasDeps,
-    sourceHardlinks: hasDeps ? "package-manager" : "reject",
-  });
 }

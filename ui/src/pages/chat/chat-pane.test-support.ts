@@ -357,6 +357,7 @@ export function createTestChatPane(params: {
     connectionEpoch: 4,
     hello: sessionMutationGatewayHello(),
     lastError: null,
+    modelAuthStatusRequestVersion: 0,
     requestUpdate,
     sessionKey: "agent:main:current",
     sessions: params.sessions,
