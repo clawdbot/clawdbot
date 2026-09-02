@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setTestEnvValue } from "../test-utils/env.js";
-import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   createGatewayConfigPath,
@@ -366,11 +366,10 @@ describe("Gateway Code Mode clock rollback", () => {
             type: "function_call_output",
             output: expect.any(String),
           });
-          expect(
-            (JSON.parse(
-              String((completedCodeModeOutput as { output?: unknown }).output),
-            ) as { status?: unknown }).status,
-          ).toBe("completed");
+          const completedCodeModeResult = JSON.parse(
+            String((completedCodeModeOutput as { output?: unknown }).output),
+          ) as { status?: unknown };
+          expect(completedCodeModeResult.status).toBe("completed");
         } finally {
           await disconnectGatewayClient(client);
           await server.close({ reason: "Code Mode clock rollback proof complete" });
