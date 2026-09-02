@@ -7,10 +7,6 @@ import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
-import {
-  NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-  NATIVE_UPDATE_DECLINED_EVENT,
-} from "../app/native-link-routing.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
@@ -55,6 +51,11 @@ type SidebarAttentionPanelRenderer =
 type SidebarAttentionPanelRuntime = typeof import("./sidebar-attention-panel.runtime.ts");
 type UpdateProgressWatcher = (listener: (progress: UpdateProgress) => void) => () => void;
 type SidebarAttentionAgentScope = { selectedId: string | null; scopeId: string | null };
+type SidebarAttentionOwner = {
+  gateway: ApplicationContext["gateway"];
+  connectionRevision: number;
+  profileId: string | null;
+};
 
 // A visibility change only refetches a connection-scoped stale snapshot.
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
@@ -86,7 +87,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   @property({ attribute: false }) watchUpdateProgress?: UpdateProgressWatcher;
 
   private loadedClient: GatewayBrowserClient | null = null;
-  private loadedGateway: ApplicationContext["gateway"] | null = null;
+  private loadedOwner: SidebarAttentionOwner | null = null;
   private loadedAgentScope: SidebarAttentionAgentScope | null = null;
   // Cron events may restart the combined task; retain the committed auth owner so an
   // interrupted agent switch reissues auth instead of displaying the prior agent's alert.
@@ -98,7 +99,6 @@ class SidebarAttention extends OpenClawLightDomElement {
   private panelRenderer: SidebarAttentionPanelRenderer | null = null;
   private panelLoad: Promise<SidebarAttentionPanelRuntime> | null = null;
   private panelGeneration = 0;
-  private nativeUpdateDeclined = false;
 
   private readonly loadTask = new Task(this, {
     autoRun: false,
@@ -231,17 +231,11 @@ class SidebarAttention extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.nativeUpdateDeclined = false;
     // Dismissal belongs to the connected Inbox, including while its panel imports.
     document.addEventListener("pointerdown", this.handleOutsideInteraction, true);
     document.addEventListener("keydown", this.handleOutsideInteraction, true);
     document.addEventListener("visibilitychange", this.refreshIfStale);
     globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
-    window.addEventListener(
-      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-      this.handleNativeUpdateAvailabilityChanged,
-    );
-    window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
     this.idleRefreshTimer = globalThis.setInterval(this.refreshIfStale, IDLE_REFRESH_INTERVAL_MS);
   }
 
@@ -250,11 +244,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     document.removeEventListener("keydown", this.handleOutsideInteraction, true);
     document.removeEventListener("visibilitychange", this.refreshIfStale);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
-    window.removeEventListener(
-      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-      this.handleNativeUpdateAvailabilityChanged,
-    );
-    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
     this.closePanel(false);
     if (this.idleRefreshTimer !== null) {
       globalThis.clearInterval(this.idleRefreshTimer);
@@ -265,35 +254,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     this.loadedClient = null;
     super.disconnectedCallback();
   }
-
-  private readonly handleNativeUpdateAvailabilityChanged = () => {
-    this.nativeUpdateDeclined = false;
-    this.requestUpdate();
-  };
-
-  // This element outlives the lazy panel, so a confirmed native handoff can
-  // always continue through the Gateway when the host declines it.
-  private readonly handleNativeUpdateDeclined = () => {
-    if (this.nativeUpdateDeclined) {
-      return;
-    }
-    this.nativeUpdateDeclined = true;
-    const snapshot = this.context?.overlays.snapshot;
-    const campaign = snapshot?.updateSchedule?.campaign;
-    const busy =
-      snapshot?.updateRunning ||
-      snapshot?.updateReconciliationPending ||
-      campaign?.state === "applying";
-    if (
-      snapshot &&
-      (snapshot.updateAvailable || campaign) &&
-      !busy &&
-      !snapshot.controlUiRefreshRequired &&
-      canCallGatewayMethod(this.context?.gateway.snapshot, "update.run", "operator.admin")
-    ) {
-      void this.context?.overlays.runUpdate();
-    }
-  };
 
   protected override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("activeRouteId") && changed.get("activeRouteId") !== undefined) {
@@ -322,7 +282,7 @@ class SidebarAttention extends OpenClawLightDomElement {
     if (snapshot.phase !== "connected" || !snapshot.client) {
       void this.loadTask.run([null, null, null, false]);
       this.loadedClient = null;
-      this.loadedGateway = null;
+      this.loadedOwner = null;
       this.loadedAgentScope = null;
       this.modelAuthAgentId = null;
       this.cronJobs = [];
@@ -334,8 +294,19 @@ class SidebarAttention extends OpenClawLightDomElement {
       selectedId: this.context?.agentSelection.state.selectedId ?? null,
       scopeId: this.context?.agentSelection.state.scopeId ?? null,
     };
-    // Surface remounts keep the committed snapshot; a different Gateway owner must not.
-    if (this.loadedGateway && gateway !== this.loadedGateway) {
+    const owner: SidebarAttentionOwner = {
+      gateway,
+      connectionRevision: gateway.connectionRevision,
+      profileId: snapshot.selfUser?.id ?? null,
+    };
+    const loadedOwner = this.loadedOwner;
+    const ownerChanged =
+      loadedOwner !== null &&
+      (owner.gateway !== loadedOwner.gateway ||
+        owner.connectionRevision !== loadedOwner.connectionRevision ||
+        owner.profileId !== loadedOwner.profileId);
+    // Surface remounts keep the committed snapshot; a different authenticated owner must not.
+    if (ownerChanged) {
       this.cronJobs = [];
       this.cronSchedulerEnabled = null;
       this.modelAuthStatus = null;
@@ -343,7 +314,7 @@ class SidebarAttention extends OpenClawLightDomElement {
     }
     const loadedAgentScope = this.loadedAgentScope;
     if (
-      gateway === this.loadedGateway &&
+      !ownerChanged &&
       snapshot.client === this.loadedClient &&
       loadedAgentScope &&
       agentScope.selectedId === loadedAgentScope.selectedId &&
@@ -358,7 +329,7 @@ class SidebarAttention extends OpenClawLightDomElement {
     if (loadedAgentScope && agentScope.scopeId !== loadedAgentScope.scopeId) {
       this.cronJobs = [];
     }
-    this.loadedGateway = gateway;
+    this.loadedOwner = owner;
     this.loadedClient = snapshot.client;
     this.loadedAgentScope = agentScope;
     void this.loadTask.run([

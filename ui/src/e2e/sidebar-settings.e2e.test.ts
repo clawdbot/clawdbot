@@ -171,6 +171,38 @@ suite.define(() => {
         });
         await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
       }
+
+      await gateway.setMethodResponse("cron.list", {
+        ...FAILED_CRON_RESPONSE,
+        jobs: [],
+        total: 0,
+      });
+      await gateway.setMethodResponse("models.authStatus", { ts: 2, providers: [] });
+      for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
+        await gateway.deferNext(method);
+        await gateway.deferNext(method);
+      }
+      await page.keyboard.press("Control+Shift+,");
+      await waitForControlUiSettingsTakeover(page);
+      await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
+      await page.getByLabel("Gateway Token", { exact: true }).fill("replacement-owner-token");
+      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.phase;
+          }),
+        )
+        .toBe("connected");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+      expect(
+        await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").count(),
+      ).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

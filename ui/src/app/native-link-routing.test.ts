@@ -5,7 +5,11 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/github-link-hovercard-registration.ts";
 import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.runtime.ts";
 import "../components/modal-dialog.ts";
-import { startNativeLinkRouting } from "./native-link-routing.ts";
+import {
+  NATIVE_UPDATE_DECLINED_EVENT,
+  postNativeUpdate,
+  startNativeLinkRouting,
+} from "./native-link-routing.ts";
 
 type NativeLinkRouting = ReturnType<typeof startNativeLinkRouting>;
 
@@ -90,6 +94,23 @@ function menuItem(label: string): HTMLButtonElement {
 }
 
 describe("native link routing", () => {
+  it("delivers each native update decline once across route changes", () => {
+    const onNativeUpdateDeclined = vi.fn();
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawUpdate: { postMessage } } });
+    routing = startNativeLinkRouting({ onNativeUpdateDeclined });
+
+    expect(postNativeUpdate()).toBe(true);
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    expect(onNativeUpdateDeclined).toHaveBeenCalledOnce();
+
+    expect(postNativeUpdate()).toBe(true);
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    expect(onNativeUpdateDeclined).toHaveBeenCalledTimes(2);
+    expect(postMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("does not install native behavior without the WebKit bridge", () => {
     routing = startNativeLinkRouting();
     const anchor = appendLink("https://example.com/report");
