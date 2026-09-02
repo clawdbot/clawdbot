@@ -48,8 +48,7 @@ export const uiE2ePrivateServerTestFiles = [
 
 export const uiE2eRuntimeBudgetTestFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
 
-// Local whole-suite runs select both projects. Real Gateways stay here so they
-// never overlap the two-worker bundled project when the CI skip is absent.
+// Real Gateways never overlap the parallel phase when the CI skip is absent.
 export const uiE2eSerialTestFiles = [
   ...new Set([
     ...uiE2ePrivateServerTestFiles,
@@ -57,6 +56,14 @@ export const uiE2eSerialTestFiles = [
     uiE2eRuntimeBudgetTestFile,
   ]),
 ].toSorted();
+
+// These independent fixture/build owners do not share the source optimizer cache.
+// New files stay bundled unless they own every UI server they use.
+const uiE2eStandaloneTestFiles = [
+  "ui/src/e2e/board-fixture.e2e.test.ts",
+  "ui/src/e2e/control-ui-retained-assets.e2e.test.ts",
+  "ui/src/e2e/service-worker-update.e2e.test.ts",
+];
 
 export function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
@@ -77,20 +84,30 @@ export function createUiE2eVitestConfig(
     narrowIncludePatternsForCli(uiE2eIncludePatterns, argv) ??
     uiE2eIncludePatterns;
   const serialInclude = (intersectIncludePatterns(uiE2eSerialTestFiles, include) ?? []).toSorted();
+  const chromiumSetup = "test/vitest/vitest.ui-e2e.global-setup.ts";
   // Vitest resolves dependency directories per project even though ProjectConfig
   // narrows that type. Keep the shared cached dependency roots intact.
   const projectTest: TestUserConfig = {
     ...baseTest,
     environment: "node",
-    // Polls await Chromium renders; both projects retain the loaded-CI budget.
+    // Polls await Chromium renders; all projects retain the loaded-CI budget.
     expect: { poll: { interval: 100, timeout: 15_000 } },
-    globalSetup: undefined,
+    globalSetup: [chromiumSetup],
     isolate: true,
     // Inherit root concurrency so Vitest's --maxWorkers override still applies.
     maxWorkers: undefined,
     pool: "forks",
     runner: undefined,
+    setupFiles: [],
+  };
+  const bundledSetup = {
+    globalSetup: [chromiumSetup, "test/vitest/vitest.ui-e2e.bundled.global-setup.ts"],
     setupFiles: ["test/vitest/vitest.ui-e2e.setup.ts"],
+  };
+  const serialScheduling = {
+    fileParallelism: false,
+    maxWorkers: 1,
+    sequence: { ...baseSequence, groupOrder: 1 },
   };
 
   return defineConfig({
@@ -99,10 +116,10 @@ export function createUiE2eVitestConfig(
     test: {
       ...baseTest,
       exclude,
-      // One root-owned build supplies the inherited URL to both named projects.
-      globalSetup: ["test/vitest/vitest.ui-e2e.global-setup.ts"],
+      // Only a selected bundle consumer acquires the invocation's shared preview.
+      globalSetup: [],
       // Keep the root inventory visible to config discovery. Vitest runs only
-      // the inline projects when `projects` is present; the root owns setup.
+      // the inline projects when `projects` is present.
       include,
       maxWorkers: Math.min(2, baseTest.maxWorkers),
       // ui-e2e-projects-contract-v1: frozen-target preflight may select these projects.
@@ -112,9 +129,21 @@ export function createUiE2eVitestConfig(
           cacheDir: ".artifacts/vite-ui-e2e-bundled",
           test: {
             ...projectTest,
-            exclude: [...exclude, ...uiE2eSerialTestFiles],
+            ...bundledSetup,
+            exclude: [...exclude, ...uiE2eSerialTestFiles, ...uiE2eStandaloneTestFiles],
             include,
             name: "ui-e2e-bundled",
+            sequence: { ...baseSequence, groupOrder: 0 },
+          },
+        },
+        {
+          ...base,
+          cacheDir: ".artifacts/vite-ui-e2e-standalone",
+          test: {
+            ...projectTest,
+            exclude,
+            include: intersectIncludePatterns(uiE2eStandaloneTestFiles, include) ?? [],
+            name: "ui-e2e-standalone",
             sequence: { ...baseSequence, groupOrder: 0 },
           },
         },
@@ -123,12 +152,22 @@ export function createUiE2eVitestConfig(
           cacheDir: ".artifacts/vite-ui-e2e-serial",
           test: {
             ...projectTest,
+            ...bundledSetup,
+            ...serialScheduling,
             exclude,
-            fileParallelism: false,
-            include: serialInclude,
-            maxWorkers: 1,
+            include: serialInclude.filter((file) => !uiE2ePrivateServerTestFiles.includes(file)),
             name: "ui-e2e-serial",
-            sequence: { ...baseSequence, groupOrder: 1 },
+          },
+        },
+        {
+          ...base,
+          cacheDir: ".artifacts/vite-ui-e2e-serial-standalone",
+          test: {
+            ...projectTest,
+            ...serialScheduling,
+            exclude,
+            include: serialInclude.filter((file) => uiE2ePrivateServerTestFiles.includes(file)),
+            name: "ui-e2e-serial-standalone",
           },
         },
       ],

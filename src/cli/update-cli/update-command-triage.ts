@@ -7,10 +7,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import {
-  prepareUpdateFailureTriage,
-  type UpdateTriageTarget as TriageTarget,
-} from "../../infra/update-triage.js";
+import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
@@ -30,6 +27,7 @@ export async function withUpdateFailureTriage(
     : !opts.yes && isTerminalInteractive()
       ? "interactive"
       : "non-interactive";
+  const { prepareUpdateFailureTriage } = await import("../../infra/update-triage.js");
   const runTriage = await prepareUpdateFailureTriage({
     mode,
     runtime: {

@@ -171,7 +171,7 @@ class DeviceHandlerTest {
         calendarWrite = true,
       )
     val handler =
-      DeviceHandler.forTesting(
+      DeviceHandler(
         appContext = app,
         appSource = FakeDeviceAppSource(emptyList()),
         smsEnabled = true,
@@ -210,103 +210,39 @@ class DeviceHandlerTest {
   }
 
   @Test
-  fun smsTopLevelStatusTreatsSendOnlyPartialGrantAsGranted() {
-    assertTrue(
-      DeviceHandler.hasAnySmsCapability(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = true,
-        smsReadGranted = false,
-      ),
-    )
-  }
+  fun handleDevicePermissions_reportsSmsGrantsAndPromptability() {
+    val send = Manifest.permission.SEND_SMS
+    val read = Manifest.permission.READ_SMS
+    val cases =
+      listOf(
+        SmsPermissionCase(true, true, emptyList(), "denied", true),
+        SmsPermissionCase(true, true, listOf(send), "granted", true),
+        SmsPermissionCase(true, true, listOf(read), "granted", true),
+        SmsPermissionCase(true, true, listOf(send, read), "granted", false),
+        SmsPermissionCase(false, true, listOf(send, read), "denied", false),
+        SmsPermissionCase(true, false, listOf(send, read), "denied", false),
+        SmsPermissionCase(false, true, emptyList(), "denied", false),
+        SmsPermissionCase(true, false, emptyList(), "denied", false),
+      )
+    val app = appContext()
+    for (case in cases) {
+      shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, case.telephony)
+      shadowOf(app).denyPermissions(send, read)
+      shadowOf(app).grantPermissions(*case.permissions.toTypedArray())
+      val handler = DeviceHandler(app, smsEnabled = case.smsEnabled)
 
-  @Test
-  fun smsTopLevelStatusTreatsReadOnlyPartialGrantAsGranted() {
-    assertTrue(
-      DeviceHandler.hasAnySmsCapability(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = false,
-        smsReadGranted = true,
-      ),
-    )
-  }
+      val result = handler.handleDevicePermissions(null)
 
-  @Test
-  fun smsTopLevelStatusTreatsNoSmsGrantAsDenied() {
-    assertTrue(
-      !DeviceHandler.hasAnySmsCapability(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = false,
-        smsReadGranted = false,
-      ),
-    )
-  }
-
-  @Test
-  fun smsTopLevelStatusTreatsDisabledSmsAsDenied() {
-    assertTrue(
-      !DeviceHandler.hasAnySmsCapability(
-        smsEnabled = false,
-        telephonyAvailable = true,
-        smsSendGranted = true,
-        smsReadGranted = true,
-      ),
-    )
-  }
-
-  @Test
-  fun smsTopLevelStatusTreatsMissingTelephonyAsDenied() {
-    assertTrue(
-      !DeviceHandler.hasAnySmsCapability(
-        smsEnabled = true,
-        telephonyAvailable = false,
-        smsSendGranted = true,
-        smsReadGranted = true,
-      ),
-    )
-  }
-
-  @Test
-  fun smsTopLevelPromptableStaysTrueUntilBothSmsPermissionsAreGranted() {
-    assertTrue(
-      DeviceHandler.isSmsPromptable(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = true,
-        smsReadGranted = false,
-      ),
-    )
-    assertTrue(
-      !DeviceHandler.isSmsPromptable(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = true,
-        smsReadGranted = true,
-      ),
-    )
-  }
-
-  @Test
-  fun smsTopLevelPromptableIsFalseWhenSmsCannotExist() {
-    assertTrue(
-      !DeviceHandler.isSmsPromptable(
-        smsEnabled = false,
-        telephonyAvailable = true,
-        smsSendGranted = false,
-        smsReadGranted = false,
-      ),
-    )
-    assertTrue(
-      !DeviceHandler.isSmsPromptable(
-        smsEnabled = true,
-        telephonyAvailable = false,
-        smsSendGranted = false,
-        smsReadGranted = false,
-      ),
-    )
+      assertTrue(result.ok)
+      val sms =
+        parsePayload(result.payloadJson)
+          .getValue("permissions")
+          .jsonObject
+          .getValue("sms")
+          .jsonObject
+      assertEquals(case.toString(), case.expectedStatus, sms.getValue("status").jsonPrimitive.content)
+      assertEquals(case.toString(), case.expectedPromptable, sms.getValue("promptable").jsonPrimitive.boolean)
+    }
   }
 
   @Test
@@ -422,7 +358,7 @@ class DeviceHandlerTest {
   @Test
   fun handleDeviceApps_filtersAndLimitsVisibleApps() {
     val handler =
-      DeviceHandler.forTesting(
+      DeviceHandler(
         appContext = appContext(),
         appSource =
           FakeDeviceAppSource(
@@ -491,7 +427,7 @@ class DeviceHandlerTest {
           ),
         ),
       )
-    val handler = DeviceHandler.forTesting(appContext = appContext(), appSource = source)
+    val handler = DeviceHandler(appContext = appContext(), appSource = source)
 
     val result = handler.handleDeviceApps("""{"includeSystem":true,"includeNonLaunchable":true}""")
 
@@ -522,6 +458,14 @@ class DeviceHandlerTest {
   }
 
   private fun appContext(): Application = RuntimeEnvironment.getApplication()
+
+  private data class SmsPermissionCase(
+    val smsEnabled: Boolean,
+    val telephony: Boolean,
+    val permissions: List<String>,
+    val expectedStatus: String,
+    val expectedPromptable: Boolean,
+  )
 
   private fun parsePayload(payloadJson: String?): JsonObject {
     val jsonString = payloadJson ?: error("expected payload")

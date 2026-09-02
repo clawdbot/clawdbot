@@ -54,6 +54,14 @@ function child(key: string, runId: string) {
   };
 }
 
+function withoutChildRunIdentity(entry: ReturnType<typeof child>) {
+  const missing = structuredClone(entry);
+  Reflect.set(missing, "runAttempt", null);
+  Reflect.set(missing, "runId", "");
+  Reflect.set(missing, "url", "");
+  return missing;
+}
+
 function requiredChildren() {
   return [
     child("normalCi", "101"),
@@ -427,7 +435,7 @@ describe("FRV continuation preflight", () => {
     "Prepare release npm artifacts / Prepare publishable npm package",
     "Prepare release Docker artifacts / Seal prepared Docker images",
   ])("rejects rerunning a parent that owns publication artifacts from %s", async (name) => {
-    const selected = child("normalCi", "101");
+    const selected = withoutChildRunIdentity(child("normalCi", "101"));
     const client = preflightMethods([selected], (entry) => runFor(entry, 1, "failure"));
     await expect(
       preflightContinuation(plan([selected]), "77", {
@@ -439,7 +447,7 @@ describe("FRV continuation preflight", () => {
     ).rejects.toThrow("parent-owned publication artifacts");
   });
   it("rejects parent-owned candidate artifacts before any GitHub access", async () => {
-    const selected = child("normalCi", "101");
+    const selected = withoutChildRunIdentity(child("normalCi", "101"));
     const parentOwnedPlan = {
       ...plan([selected]),
       candidate: { producer: { runId: "77" } },
@@ -533,6 +541,46 @@ describe("FRV continuation preflight", () => {
     expect(mutations).toBe(0);
   });
 
+  it("rejects missing selected child identities before child reads or mutations", async () => {
+    const first = withoutChildRunIdentity(child("pluginPrerelease", "202"));
+    const second = withoutChildRunIdentity(child("normalCi", "101"));
+    let downstreamReads = 0;
+    let mutations = 0;
+    const downstreamRead = async () => {
+      downstreamReads += 1;
+      throw new Error("unexpected downstream read");
+    };
+    const mutate = async () => {
+      mutations += 1;
+    };
+
+    await expect(
+      continueFailed(plan([first, second]), "77", {
+        getAttemptJobs: downstreamRead,
+        getJobLog: downstreamRead,
+        getParentJobs: async () => [
+          {
+            conclusion: "success",
+            id: 1,
+            name: "Resolve target ref",
+            run_attempt: 1,
+            status: "completed",
+          },
+        ],
+        getRun: downstreamRead,
+        getRunAttempt: async () => rootRun(),
+        repository: REPOSITORY,
+        rerunFailed: mutate,
+        rerunParent: mutate,
+        verify: mutate,
+      }),
+    ).rejects.toThrow(
+      "selected FRV children did not record exact run IDs and attempts: normalCi, pluginPrerelease; start a fresh all-group FRV",
+    );
+    expect(downstreamReads).toBe(0);
+    expect(mutations).toBe(0);
+  });
+
   it("requires every selected child to be emitted by its exact parent job", async () => {
     const selected = child("normalCi", "101");
     await expect(
@@ -546,6 +594,45 @@ describe("FRV continuation preflight", () => {
 });
 
 describe("FRV same-parent recovery", () => {
+  it("reports missing selected children without reading nonexistent runs", async () => {
+    const selected = child("normalCi", "101");
+    const missing = withoutChildRunIdentity(child("pluginPrerelease", "202"));
+    const runReads: string[] = [];
+    const attemptReads: Array<[string, number]> = [];
+    const result = await inspectContinuation(plan([selected, missing]), {
+      getAttemptJobs: async (runId: string, attempt: number) => {
+        attemptReads.push([runId, attempt]);
+        return [job("test")];
+      },
+      getRun: async (runId: string) => {
+        runReads.push(runId);
+        return runFor(selected, 1, "success");
+      },
+      repository: REPOSITORY,
+    });
+
+    expect(runReads).toEqual(["101"]);
+    expect(attemptReads).toEqual([["101", 1]]);
+    expect(result.children).toEqual([
+      expect.objectContaining({ key: "normalCi", status: "passed" }),
+      {
+        compositeJobsSha256: "",
+        conclusion: "",
+        effectiveRunAttempt: null,
+        key: "pluginPrerelease",
+        passed: false,
+        plannedRunAttempt: null,
+        runId: "",
+        status: "missing",
+        url: "",
+      },
+    ]);
+    expect(result.active).toEqual([]);
+    expect(result.failed).toEqual([]);
+    expect(result.missing).toEqual([result.children[1]]);
+    expect(result.passed).toEqual([result.children[0]]);
+  });
+
   it("reports the effective attempt and composite job evidence", async () => {
     const selected = child("normalCi", "101");
     const result = await inspectContinuation(plan([selected]), {
@@ -596,7 +683,11 @@ describe("FRV same-parent recovery", () => {
     const second = child("pluginPrerelease", "202");
     const green = child("releaseChecks", "303");
     const telegram = child("npmTelegram", "505");
-    const selectedPlan = { ...plan([first, second, green, telegram]), releaseProfile: "full" };
+    const selectedPlan = {
+      ...plan([first, second, green, telegram]),
+      candidate: { producer: { runId: "606" } },
+      releaseProfile: "full",
+    };
     const childRuns = new Map([
       ["101", { attempt: 1, conclusion: "failure" }],
       ["202", { attempt: 1, conclusion: "failure" }],
@@ -606,8 +697,22 @@ describe("FRV same-parent recovery", () => {
     const parent = { attempt: 1, conclusion: "failure" as string | null };
     const events: string[] = [];
     let parentReruns = 0;
+    const controller = controllerClient(selectedPlan.children, childRuns, parent);
     const client = {
-      ...controllerClient(selectedPlan.children, childRuns, parent),
+      ...controller,
+      getParentJobs: async () => [
+        ...(await controller.getParentJobs()),
+        ...[
+          "Prepare release npm artifacts",
+          "Prepare release Docker artifacts",
+          "Acquire full release candidate",
+        ].map((name) => ({
+          name,
+          run_attempt: 1,
+          status: "completed",
+          conclusion: "success",
+        })),
+      ],
       rerunFailed: async (runId: string) => {
         events.push(`child:${runId}`);
         childRuns.set(runId, { attempt: 2, conclusion: "success" });

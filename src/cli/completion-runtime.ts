@@ -69,16 +69,10 @@ export function resolveShellFromEnv(
 ): CompletionShell {
   const shellPath = normalizeOptionalString(env.SHELL) ?? "";
   const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
-  if (shellName === "zsh") {
-    return "zsh";
+  if (isCompletionShell(shellName)) {
+    return shellName;
   }
-  if (shellName === "bash") {
-    return "bash";
-  }
-  if (shellName === "fish") {
-    return "fish";
-  }
-  if (shellName === "pwsh" || shellName === "powershell") {
+  if (shellName === "pwsh") {
     return "powershell";
   }
   return platform === "win32" ? "powershell" : "zsh";
@@ -97,14 +91,13 @@ function resolveCompletionCacheDir(env: NodeJS.ProcessEnv = process.env): string
   return path.join(stateDir, "completions");
 }
 
-function completionShellExtension(shell: CompletionShell): string {
-  return shell === "powershell" ? "ps1" : shell;
-}
-
 /** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
 export function resolveCompletionCachePath(shell: CompletionShell, binName: string): string {
   const basename = sanitizeCompletionBasename(binName);
-  return path.join(resolveCompletionCacheDir(), `${basename}.${completionShellExtension(shell)}`);
+  return path.join(
+    resolveCompletionCacheDir(),
+    `${basename}.${shell === "powershell" ? "ps1" : shell}`,
+  );
 }
 
 /** Check if the completion cache file exists for the given shell. */
@@ -116,18 +109,25 @@ export async function completionCacheExists(
   return pathExists(cachePath);
 }
 
-function escapePowerShellSingleQuotedString(value: string): string {
-  return value.replace(/'/g, "''");
+function quoteCompletionPath(shell: CompletionShell, value: string): string {
+  if (shell === "powershell") {
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+  // Single quotes also keep pasted reload hints literal when interactive history expansion is on.
+  const escaped =
+    shell === "fish" ? value.replace(/[\\']/gu, "\\$&") : value.replaceAll("'", "'\\''");
+  return `'${escaped}'`;
 }
 
 function formatCompletionSourceLine(shell: CompletionShell, cachePath: string): string {
+  const quotedPath = quoteCompletionPath(shell, cachePath);
   if (shell === "powershell") {
-    return `. '${escapePowerShellSingleQuotedString(cachePath)}'`;
+    return `. ${quotedPath}`;
   }
   if (shell === "fish") {
-    return `test -f "${cachePath}"; and source "${cachePath}"`;
+    return `test -f ${quotedPath}; and source ${quotedPath}`;
   }
-  return `[ -f "${cachePath}" ] && source "${cachePath}"`;
+  return `[ -f ${quotedPath} ] && source ${quotedPath}`;
 }
 
 function appendCompletionProfilePath(
@@ -144,61 +144,70 @@ function appendCompletionProfilePath(
 /** Formats the command users can run to reload the shell profile after installation. */
 export function formatCompletionReloadCommand(shell: CompletionShell, profilePath: string): string {
   if (shell === "powershell") {
-    return `. '${escapePowerShellSingleQuotedString(profilePath)}'`;
+    return `. ${quoteCompletionPath(shell, profilePath)}`;
   }
   if (/^[a-zA-Z0-9_./~+-]+$/u.test(profilePath)) {
     return `source ${profilePath}`;
   }
   const homePrefix = profilePath.startsWith("~/") ? "~/" : "";
   const value = profilePath.slice(homePrefix.length);
-  const escapedPath =
-    shell === "fish" ? value.replace(/[\\']/gu, "\\$&") : value.replaceAll("'", "'\\''");
-  return `source ${homePrefix}'${escapedPath}'`;
+  return `source ${homePrefix}${quoteCompletionPath(shell, value)}`;
 }
 
 function isCompletionProfileHeader(line: string): boolean {
   return line.trim() === "# OpenClaw Completion";
 }
 
-function isCompletionProfileLine(line: string, binName: string, cachePath: string | null): boolean {
+function isCompletionProfileLine(line: string, binName: string, cachePath: string): boolean {
   if (isSlowDynamicCompletionLine(line, binName)) {
     return true;
   }
-  if (!cachePath) {
-    return false;
-  }
   const trimmed = line.trim();
   return (
+    // Stable releases wrote these paths without escaping shell expansion characters.
     trimmed === `source "${cachePath}"` ||
+    trimmed === `[ -f "${cachePath}" ] && source "${cachePath}"` ||
+    trimmed === `test -f "${cachePath}"; and source "${cachePath}"` ||
     COMPLETION_SHELLS.some((shell) => trimmed === formatCompletionSourceLine(shell, cachePath))
   );
 }
 
-function isPreviousCompletionSourceLine(line: string, currentCachePath: string | null): boolean {
-  if (!currentCachePath) {
+function isPreviousCompletionSourceLine(
+  line: string,
+  currentCachePath: string,
+  shell: CompletionShell,
+): boolean {
+  const trimmed = line.trim();
+  const guarded = /^(?:\[\s+-f|test\s+-f)\s+(.+?)\s*(?:\]\s*&&|;\s*and)\s+source\s+\1$/u.exec(
+    trimmed,
+  );
+  const direct = /^(source|\.)\s+(.+)$/u.exec(trimmed);
+  const quotedPath = guarded?.[1] ?? direct?.[2];
+  if (!quotedPath) {
     return false;
   }
-  const trimmed = line.trim();
-  const guarded =
-    /^(?:\[\s+-f|test\s+-f)\s+"([^"]+)"\s*(?:\]\s*&&|;\s*and)\s+source\s+"([^"]+)"$/u.exec(trimmed);
-  const direct = /^source\s+"([^"]+)"$/u.exec(trimmed);
-  const powershell = /^\.\s+'((?:[^']|'')+)'$/u.exec(trimmed);
-  let sourcePath: string | undefined;
-  if (guarded && guarded[1] === guarded[2]) {
-    sourcePath = guarded[1];
-  } else if (direct) {
-    sourcePath = direct[1];
-  } else if (powershell) {
-    sourcePath = powershell[1]?.replace(/''/g, "'");
-  }
-  if (!sourcePath) {
+  const quoteShell = direct?.[1] === "." ? "powershell" : shell;
+  // Old guarded emitters repeated raw paths even when they contained quotes.
+  const legacyPath = guarded
+    ? /^"(.+)"$/u.exec(quotedPath)?.[1]
+    : /^source\s+"([^"]+)"$/u.exec(trimmed)?.[1];
+  const escapedPath = quotedPath.slice(1, -1);
+  const sourcePath =
+    legacyPath ??
+    (quoteShell === "powershell"
+      ? escapedPath.replaceAll("''", "'")
+      : quoteShell === "fish"
+        ? escapedPath.replace(/\\([\\'])/gu, "$1")
+        : escapedPath.replaceAll("'\\''", "'"));
+  // Only our complete literal operand is owned; never consume compound profile commands.
+  if (!legacyPath && quoteCompletionPath(quoteShell, sourcePath) !== quotedPath) {
     return false;
   }
   const sourcePaths = sourcePath.includes("\\") ? path.win32 : path;
-  if (sourcePaths.basename(sourcePaths.dirname(sourcePath)) !== "completions") {
-    return false;
-  }
-  return sourcePaths.basename(sourcePath) === path.basename(currentCachePath);
+  return (
+    sourcePaths.basename(sourcePaths.dirname(sourcePath)) === "completions" &&
+    sourcePaths.basename(sourcePath) === path.basename(currentCachePath)
+  );
 }
 
 function isOwnedCompletionInvocation(invocation: string, binName: string): boolean {
@@ -206,22 +215,12 @@ function isOwnedCompletionInvocation(invocation: string, binName: string): boole
   if (command !== binName || action !== "completion") {
     return false;
   }
-  if (args.length === 0) {
-    return true;
-  }
-  if (args.length === 1) {
-    const argument = args[0] ?? "";
-    const shell = argument.startsWith("--shell=")
-      ? argument.slice("--shell=".length)
-      : argument.startsWith("-s") && argument.length > 2
-        ? argument.slice(2).replace(/^=/u, "")
-        : argument;
-    return isCompletionShell(shell);
+  if (args.length === 2 && (args[0] === "--shell" || args[0] === "-s")) {
+    return isCompletionShell(args[1] ?? "");
   }
   return (
-    args.length === 2 &&
-    (args[0] === "--shell" || args[0] === "-s") &&
-    isCompletionShell(args[1] ?? "")
+    args.length === 0 ||
+    (args.length === 1 && isCompletionShell((args[0] ?? "").replace(/^(?:--shell=|-s=?)/u, "")))
   );
 }
 
@@ -271,8 +270,8 @@ function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
 function updateCompletionProfile(
   content: string,
   binName: string,
-  cachePath: string | null,
-  sourceLine: string,
+  cachePath: string,
+  shell: CompletionShell,
 ): { next: string; changed: boolean; hadExisting: boolean } {
   // Remove both cached and old dynamic blocks so installs converge to one fast source line.
   const lines = content.split("\n");
@@ -287,7 +286,7 @@ function updateCompletionProfile(
       const following = lines[i + 1] ?? "";
       if (
         isCompletionProfileLine(following, binName, cachePath) ||
-        isPreviousCompletionSourceLine(following, cachePath)
+        isPreviousCompletionSourceLine(following, cachePath, shell)
       ) {
         i += 1;
       }
@@ -301,7 +300,7 @@ function updateCompletionProfile(
   }
 
   const trimmed = filtered.join("\n").trimEnd();
-  const block = `# OpenClaw Completion\n${sourceLine}`;
+  const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };
 }
@@ -443,14 +442,9 @@ export async function usesSlowDynamicCompletion(
 
   const cachePath = resolveCompletionCachePath(shell, binName);
   const { content } = await readCompletionProfile(profilePath, shell);
-  const lines = content.split("\n");
-
-  for (const line of lines) {
-    if (isSlowDynamicCompletionLine(line, binName) && !line.includes(cachePath)) {
-      return true;
-    }
-  }
-  return false;
+  return content
+    .split("\n")
+    .some((line) => isSlowDynamicCompletionLine(line, binName) && !line.includes(cachePath));
 }
 
 const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
@@ -463,8 +457,7 @@ export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoExcep
 }
 
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
-  const isShellSupported = isCompletionShell(shell);
-  if (!isShellSupported) {
+  if (!isCompletionShell(shell)) {
     throw new Error(`Automated installation not supported for ${shell} yet.`);
   }
 
@@ -477,7 +470,6 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   }
 
   const profilePath = resolveCompletionProfilePath(shell);
-  const sourceLine = formatCompletionSourceLine(shell, cachePath);
 
   try {
     let content: string;
@@ -494,7 +486,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       content = "";
     }
 
-    const update = updateCompletionProfile(content, binName, cachePath, sourceLine);
+    const update = updateCompletionProfile(content, binName, cachePath, shell);
     if (!update.changed) {
       if (!yes) {
         console.log(`Completion already installed in ${profilePath}`);

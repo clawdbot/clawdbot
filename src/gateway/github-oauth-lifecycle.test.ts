@@ -25,6 +25,7 @@ import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const mocks = vi.hoisted(() => ({
+  clearVerificationCache: vi.fn(),
   verifyCredential: vi.fn(),
   requestDeviceCode: vi.fn(),
   pollDeviceToken: vi.fn(),
@@ -40,6 +41,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/github-oauth-client.js", () => ({
+  clearGitHubCredentialVerificationCache: mocks.clearVerificationCache,
   verifyGitHubCredential: mocks.verifyCredential,
   requestGitHubOAuthDeviceCode: mocks.requestDeviceCode,
   pollGitHubOAuthDeviceToken: mocks.pollDeviceToken,
@@ -280,6 +282,13 @@ afterEach(async () => {
 });
 
 describe("GitHub OAuth authorization lifecycle", () => {
+  it("clears verified GitHub credentials when the lifecycle stops", async () => {
+    const lifecycle = createLifecycle();
+    expect(mocks.clearVerificationCache).not.toHaveBeenCalled();
+    await lifecycle.stop();
+    expect(mocks.clearVerificationCache).toHaveBeenCalledOnce();
+  });
+
   it.each(["system", "agent"] as const)(
     "records an exact %s-scope CAS snapshot and delays the initial poll",
     async (scope) => {

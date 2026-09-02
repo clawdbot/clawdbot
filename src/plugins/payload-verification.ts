@@ -43,21 +43,17 @@ export type MissingPluginInstallPayload = {
   reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
 };
 
-/** Reports whether an install record has neither a package nor a valid bundle payload. */
-export function isInstalledPluginPayloadMissingOnDisk(
-  record: PluginInstallRecord | undefined,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const installPath = normalizeOptionalString(record?.installPath);
+export function isPayloadMissing(env: NodeJS.ProcessEnv, rawInstallPath?: string): boolean {
+  const installPath = normalizeOptionalString(rawInstallPath);
   if (!installPath) {
     return true;
   }
   const resolved = resolveUserPath(installPath, env);
-  if (existsSync(path.join(resolved, "package.json"))) {
-    return false;
-  }
   const bundleFormat = detectBundleManifestFormat(resolved);
-  return !bundleFormat || !loadBundleManifest({ rootDir: resolved, bundleFormat }).ok;
+  return (
+    !existsSync(path.join(resolved, "package.json")) &&
+    (!bundleFormat || !loadBundleManifest({ rootDir: resolved, bundleFormat }).ok)
+  );
 }
 
 /** Finds tracked install records whose package payload is absent on disk. */
@@ -123,7 +119,7 @@ export async function collectMissingPluginInstallPayloads(params: {
       }
       continue;
     }
-    if (isInstalledPluginPayloadMissingOnDisk(record, env)) {
+    if (isPayloadMissing(env, record.installPath)) {
       missing.push({ pluginId, installPath, reason: "missing-package-json" });
     }
   }

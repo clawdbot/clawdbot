@@ -601,6 +601,47 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(fixture.activeSession.prompt).not.toHaveBeenCalled();
   });
 
+  it("closes the real execution deadline when the provider idle owner aborts locally", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const fixture = await createFixture({ exerciseTerminalMerges: false });
+    fixture.input.attempt.timeoutMs = 100;
+    const onAttemptDeadlineChanged = vi.fn();
+    fixture.input.attempt.onAttemptDeadlineChanged = onAttemptDeadlineChanged;
+    const idleError = new Error("provider idle timeout");
+    fixture.runAbort.mockImplementation(() => fixture.input.runAbortController.abort(idleError));
+    const { prepareEmbeddedAttemptTimeout } = await vi.importActual<
+      typeof import("./attempt-timeout-prepare.js")
+    >("./attempt-timeout-prepare.js");
+    mocks.prepareTimeout.mockImplementationOnce(prepareEmbeddedAttemptTimeout);
+    mocks.runSettledPhase.mockImplementationOnce(async (settledInput) => {
+      try {
+        expect(onAttemptDeadlineChanged.mock.calls).toEqual([
+          [{ kind: "bounded", deadlineAtMs: 100 }],
+        ]);
+        mocks.installStreamGuards.mock.calls[0]?.[0].onIdleTimeout(idleError);
+        await vi.advanceTimersByTimeAsync(200);
+
+        expect(fixture.runAbort).toHaveBeenCalledExactlyOnceWith(true, idleError);
+        expect(fixture.state.terminal).toEqual({
+          kind: "timeout",
+          phase: "prompt",
+          source: "idle",
+        });
+        expect(onAttemptDeadlineChanged).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+        return fixture.result;
+      } finally {
+        settledInput.preparedStreamRuntime.timeout.clearTimers();
+      }
+    });
+    try {
+      await expect(runEmbeddedAttemptExecutionPhase(fixture.input)).resolves.toBe(fixture.result);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("attributes an idle timeout during authoritative compaction to compaction", async () => {
     const fixture = await createFixture({ exerciseTerminalMerges: false });
     fixture.activeSession.isCompacting = true;

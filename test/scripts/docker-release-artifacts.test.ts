@@ -174,6 +174,7 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
       },
     ],
   };
+  const attemptRun = structuredClone(run);
   const readApi = (endpoint: string) => {
     if (endpoint.includes("/artifacts?")) {
       return { artifacts: artifacts.filter((artifact) => endpoint.includes(artifact.name)) };
@@ -196,6 +197,9 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
         ],
         total_count: 2,
       };
+    }
+    if (endpoint.endsWith(`/actions/runs/${runId}/attempts/${runAttempt}`)) {
+      return attemptRun;
     }
     if (endpoint.endsWith(`/actions/runs/${runId}`)) {
       return run;
@@ -227,36 +231,127 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
     checkRunId: "7",
     readApi,
   });
-  return { root, manifest, run, job, artifacts, readApi };
+  return { root, manifest, run, attemptRun, job, artifacts, readApi };
+}
+
+async function createPublicationRetry(conclusion = "failure") {
+  const fixture = await createPreparedRelease(false);
+  const workflow = ".github/workflows/openclaw-release-publish.yml";
+  fixture.manifest.producer.workflowRef = `${repository}/${workflow}@refs/heads/main`;
+  fixture.run.path = fixture.attemptRun.path = workflow;
+  fixture.attemptRun.status = "completed";
+  fixture.attemptRun.conclusion = conclusion;
+  fixture.run.run_attempt += 1;
+  fixture.run.referenced_workflows = [];
+  return {
+    ...fixture,
+    publisher: {
+      publisherSha: toolingSha,
+      publisherRunId: runId,
+      publisherRunAttempt: String(fixture.run.run_attempt),
+      readApi: fixture.readApi,
+    },
+  };
 }
 
 describe("prepared Docker publication", () => {
-  it("binds a complete native build to exact immutable artifacts and its own seal job", async () => {
-    const fixture = await createPreparedRelease();
-    const manifest = verifyDockerReleaseProducer(fixture.manifest, {
-      publisherSha: toolingSha,
-      readApi: fixture.readApi,
-    });
-    expect(manifest.producer.jobId).toBe("7");
-    expect(
-      manifest.architectures.map((entry: { architecture: string }) => entry.architecture),
-    ).toEqual(["amd64", "arm64"]);
-    expect(
-      manifest.architectures.flatMap((entry: { images: { variant: string }[] }) =>
-        entry.images.map((image) => image.variant),
-      ),
-    ).toEqual(["default", "browser", "default", "browser"]);
-    fixture.run.status = "completed";
-    fixture.run.conclusion = "success";
-    expect(
-      verifyDockerReleaseProducer(manifest, { publisherSha: toolingSha, readApi: fixture.readApi }),
-    ).toBe(manifest);
+  it.each(["full-release-validation", "full-release-artifacts"])(
+    "binds native builds to exact artifacts and the %s seal job",
+    async (workflow) => {
+      const fixture = await createPreparedRelease();
+      fixture.run.path = `.github/workflows/${workflow}.yml`;
+      fixture.manifest.producer.workflowRef = `${repository}/${fixture.run.path}@refs/heads/main`;
+      const manifest = verifyDockerReleaseProducer(fixture.manifest, {
+        publisherSha: toolingSha,
+        readApi: fixture.readApi,
+      });
+      expect(manifest.producer.jobId).toBe("7");
+      expect(
+        manifest.architectures.map((entry: { architecture: string }) => entry.architecture),
+      ).toEqual(["amd64", "arm64"]);
+      expect(
+        manifest.architectures.flatMap((entry: { images: { variant: string }[] }) =>
+          entry.images.map((image) => image.variant),
+        ),
+      ).toEqual(["default", "browser", "default", "browser"]);
+      fixture.run.status = "completed";
+      fixture.run.conclusion = "success";
+      expect(
+        verifyDockerReleaseProducer(manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        }),
+      ).toBe(manifest);
+    },
+  );
+
+  it.each(["failure", "cancelled", "timed_out"])(
+    "reuses its successful preparation when retrying a %s publication attempt",
+    async (conclusion) => {
+      const fixture = await createPublicationRetry(conclusion);
+      expect(verifyDockerReleaseProducer(fixture.manifest, fixture.publisher)).toBe(
+        fixture.manifest,
+      );
+    },
+  );
+
+  it.each([
+    "unrelated publisher",
+    "stale publisher attempt",
+    "different publisher source",
+    "failed current parent",
+    "changed historical source",
+    "wrong historical attempt",
+    "changed historical workflow",
+    "missing historical preparation",
+    "failed seal",
+    "replaced artifact",
+  ])("rejects a publication retry with %s", async (failure) => {
+    const fixture = await createPublicationRetry();
+    if (failure === "unrelated publisher") {
+      fixture.publisher.publisherRunId = "200";
+    }
+    if (failure === "stale publisher attempt") {
+      fixture.publisher.publisherRunAttempt = runAttempt;
+    }
+    if (failure === "different publisher source") {
+      fixture.publisher.publisherSha = sourceSha;
+    }
+    if (failure === "failed current parent") {
+      fixture.run.status = "completed";
+      fixture.run.conclusion = "failure";
+    }
+    if (failure === "changed historical source") {
+      fixture.attemptRun.head_sha = sourceSha;
+    }
+    if (failure === "wrong historical attempt") {
+      fixture.attemptRun.run_attempt += 1;
+    }
+    if (failure === "changed historical workflow") {
+      fixture.attemptRun.path = ".github/workflows/ci.yml";
+    }
+    if (failure === "missing historical preparation") {
+      fixture.attemptRun.referenced_workflows = [];
+    }
+    if (failure === "failed seal") {
+      fixture.job.conclusion = "failure";
+    }
+    if (failure === "replaced artifact") {
+      fixture.artifacts[0]!.id += 100;
+    }
+    expect(() => verifyDockerReleaseProducer(fixture.manifest, fixture.publisher)).toThrow();
+  });
+
+  it("retains successful historical preparation for an unrelated publisher", async () => {
+    const fixture = await createPublicationRetry("success");
+    fixture.publisher.publisherRunId = "200";
+    expect(verifyDockerReleaseProducer(fixture.manifest, fixture.publisher)).toBe(fixture.manifest);
   });
 
   it.each([
     "unfinished job",
     "failed parent",
-    "new attempt",
+    "unfinished historical attempt",
     "different tooling",
     "replaced artifact",
     "wrong workflow",
@@ -269,7 +364,7 @@ describe("prepared Docker publication", () => {
       fixture.run.status = "completed";
       fixture.run.conclusion = "failure";
     }
-    if (failure === "new attempt") {
+    if (failure === "unfinished historical attempt") {
       fixture.run.run_attempt += 1;
     }
     if (failure === "different tooling") {
@@ -500,50 +595,99 @@ describe("prepared Docker publication", () => {
     ).toThrow("alpha");
   });
 
-  it("requires the Release SHA's own prepared evidence and preserves historical preparation", async () => {
-    const { manifest } = await createPreparedRelease(false);
-    const prepared = {
-      preparedRunId: runId,
-      preparedRunAttempt: runAttempt,
-      preparedArtifactName: manifest.artifactName,
-      preparedManifestSha256: "c".repeat(64),
-    };
-    const full = {
-      runId,
-      runAttempt: Number(runAttempt),
-      targetSha: sourceSha,
-      publicationArtifacts: { docker: prepared },
-    };
-    expect(
-      preparedDockerEvidenceFromFullRelease({ manifest: full, sourceSha, runId, runAttempt }),
-    ).toBe(prepared);
-    expect(
-      preparedDockerEvidenceFromFullRelease({ manifest: {}, sourceSha, runId, runAttempt }),
-    ).toBeNull();
-    expect(() =>
-      preparedDockerEvidenceFromFullRelease({
+  it.each([
+    { workflow: "full-release-validation", fullRunId: runId, fullRunAttempt: runAttempt },
+    { workflow: "full-release-artifacts", fullRunId: "200", fullRunAttempt: "3" },
+  ])(
+    "resolves $workflow Docker evidence from its selected full release",
+    async ({ workflow, fullRunId, fullRunAttempt }) => {
+      const fixture = await createPreparedRelease(false);
+      const { manifest } = fixture;
+      fixture.run.path = `.github/workflows/${workflow}.yml`;
+      fixture.run.status = "completed";
+      fixture.run.conclusion = "success";
+      Object.assign(fixture.attemptRun, structuredClone(fixture.run));
+      manifest.producer.workflowRef = `${repository}/${fixture.run.path}@refs/heads/main`;
+      const prepared = {
+        preparedRunId: runId,
+        preparedRunAttempt: runAttempt,
+        preparedArtifactName: manifest.artifactName,
+        preparedManifestSha256: "c".repeat(64),
+      };
+      const full = {
+        runId: fullRunId,
+        runAttempt: Number(fullRunAttempt),
+        targetSha: sourceSha,
+        publicationArtifacts: { docker: prepared },
+      };
+      const selection = {
         manifest: full,
-        sourceSha: toolingSha,
-        runId,
-        runAttempt,
-      }),
-    ).toThrow("selected full release");
-    prepared.preparedRunAttempt = "1";
-    expect(() =>
-      preparedDockerEvidenceFromFullRelease({ manifest: full, sourceSha, runId, runAttempt }),
-    ).toThrow("incomplete or stale");
-    expect(() =>
-      validateDockerReleaseManifest(manifest, {
+        sourceSha,
+        runId: fullRunId,
+        runAttempt: fullRunAttempt,
+      };
+      const selected = preparedDockerEvidenceFromFullRelease(selection);
+      expect(selected).toBe(prepared);
+      const expected = {
         repository,
-        sourceSha: toolingSha,
+        sourceSha,
         tag: manifest.tag,
         imageTagSuffix: manifest.imageTagSuffix,
-        artifactName: manifest.artifactName,
-        runId,
-        runAttempt,
-      }),
-    ).toThrow("does not match");
-  });
+        artifactName: selected.preparedArtifactName,
+        runId: selected.preparedRunId,
+        runAttempt: selected.preparedRunAttempt,
+      };
+      expect(validateDockerReleaseManifest(manifest, expected)).toBe(manifest);
+      expect(
+        verifyDockerReleaseProducer(manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        }),
+      ).toBe(manifest);
+      expect(preparedDockerEvidenceFromFullRelease({ ...selection, manifest: {} })).toBeNull();
+      for (const mismatch of [{ sourceSha: toolingSha }, { runId: "300" }, { runAttempt: "4" }]) {
+        expect(() => preparedDockerEvidenceFromFullRelease({ ...selection, ...mismatch })).toThrow(
+          "selected full release",
+        );
+      }
+      for (const invalid of [
+        { preparedRunId: 100 },
+        { preparedRunId: "0" },
+        { preparedRunAttempt: 2 },
+        { preparedRunAttempt: "0" },
+        { preparedRunAttempt: "1" },
+        { preparedArtifactName: dockerReleaseArtifactName(sourceSha, "3") },
+        { preparedManifestSha256: "invalid" },
+      ]) {
+        expect(() =>
+          preparedDockerEvidenceFromFullRelease({
+            ...selection,
+            manifest: {
+              ...full,
+              publicationArtifacts: { docker: { ...prepared, ...invalid } },
+            },
+          }),
+        ).toThrow("incomplete or stale");
+      }
+      expect(() => validateDockerReleaseManifest(manifest, { ...expected, runId: "300" })).toThrow(
+        "producer identity mismatch",
+      );
+      fixture.run.run_attempt += 1;
+      expect(
+        verifyDockerReleaseProducer(manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        }),
+      ).toBe(manifest);
+      fixture.attemptRun.conclusion = "failure";
+      expect(() =>
+        verifyDockerReleaseProducer(manifest, {
+          publisherSha: toolingSha,
+          readApi: fixture.readApi,
+        }),
+      ).toThrow("Historical Docker producer did not qualify");
+    },
+  );
 
   it("prepares both native architectures with one release identity and smokes before sealing", () => {
     const prepare = parse(readFileSync(".github/workflows/docker-release-prepare.yml", "utf8"));

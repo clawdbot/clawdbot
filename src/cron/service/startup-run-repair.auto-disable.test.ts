@@ -364,13 +364,13 @@ describe("startup run repair auto-disable", () => {
     });
 
     expect(restored?.shouldDelete).toBe(completionStatus === "succeeded");
-    expect(job).toMatchObject({
-      enabled: false,
-      state: {
-        lastRunStatus: "ok",
-        consecutiveErrors: 0,
-      },
+    expect(job.state).toMatchObject({
+      lastRunStatus: "ok",
+      consecutiveErrors: 0,
     });
+    if (!restored?.shouldDelete) {
+      expect(job.enabled).toBe(false);
+    }
     expect(job.state.nextRunAtMs).toBeUndefined();
     expect(deferredNotifications).toEqual([]);
     expect(state.deps.sendCronFailureAlert).not.toHaveBeenCalled();

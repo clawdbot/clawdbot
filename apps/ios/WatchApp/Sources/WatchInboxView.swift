@@ -1326,7 +1326,7 @@ private struct WatchChatTimelineView: View {
         self.voiceReplyTimeout = Task { @MainActor in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled else { return }
-            self.store.cancelVoiceTurn()
+            self.scheduleVoiceReplyTimeout()
         }
     }
 }

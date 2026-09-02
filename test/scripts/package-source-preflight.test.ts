@@ -324,19 +324,21 @@ function runReleaseInputCapture(params: {
 }
 
 describe("package source preflight", () => {
-  it.each(["2026.8.1", "2026.8.1-beta.4", "2026.9.1"])(
-    "accepts aligned %s source manifests with Unreleased notes",
-    (version) => {
-      expect(
-        validatePackageSource({
-          aiManifestContent: aiManifest({ version }),
-          allowUnreleasedChangelog: true,
-          changelogContent: changelog,
-          rootManifestContent: rootManifest({ version }),
-        }),
-      ).toBe(version);
-    },
-  );
+  it.each([
+    ["2026.8.1", "Unreleased"],
+    ["2026.8.1-beta.4", "Unreleased"],
+    ["2026.9.1", "Unreleased"],
+    ["2026.9.1", "2026.8.3 (Unreleased)"],
+  ])("accepts aligned %s source manifests with %s notes", (version, heading) => {
+    expect(
+      validatePackageSource({
+        aiManifestContent: aiManifest({ version }),
+        allowUnreleasedChangelog: true,
+        changelogContent: changelog.replace("## Unreleased", `## ${heading}`),
+        rootManifestContent: rootManifest({ version }),
+      }),
+    ).toBe(version);
+  });
 
   it("uses canonical package changelog validation", () => {
     expect(() =>

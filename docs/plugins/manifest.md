@@ -1496,7 +1496,7 @@ Implications:
 
 - **Every plugin must ship a JSON Schema**, even if it accepts no config.
 - An empty schema is acceptable (for example, `{ "type": "object", "additionalProperties": false }`).
-- Schemas are validated at config read/write time, not at runtime.
+- Config is validated against the manifest schema at config read/write time and before the plugin loads.
 - When extending or forking a bundled plugin with new config keys, update that plugin's `openclaw.plugin.json` `configSchema` at the same time. Bundled plugin schemas are strict, so adding `plugins.entries.<id>.config.myNewKey` in user config without adding `myNewKey` to `configSchema.properties` will be rejected before the plugin runtime loads.
 
 Example schema extension:
@@ -1517,8 +1517,9 @@ Example schema extension:
 
 ## Validation behavior
 
+- Required-field errors identify every missing field after schema defaults are applied. For dependencies on multiple fields, the error reports the dependency condition without claiming that fields already present are missing.
 - Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.
-- `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup.
+- `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup. An exact `{ enabled: false }` plugin entry is an intentional uninstall marker, so validation and Doctor keep it without a stale-config warning.
 - `plugins.slots.memory` referencing an unknown plugin id is an **error**, except for the known `memory-lancedb` official external plugin, which warns instead.
 - If a plugin is installed but has a broken or missing manifest or schema, validation fails and Doctor reports the plugin error.
 - If plugin config exists but the plugin is **disabled**, the config is kept and a **warning** is surfaced in Doctor + logs.

@@ -120,7 +120,12 @@ suite.define(() => {
         };
         textarea.addEventListener(
           "keydown",
-          () => {
+          function onSubmit(event) {
+            // Meta+Enter emits a modifier keydown first; only submission queues the next input.
+            if (event.key !== "Enter") {
+              return;
+            }
+            textarea.removeEventListener("keydown", onSubmit, true);
             const channel = new MessageChannel();
             channel.port1.addEventListener(
               "message",
@@ -142,12 +147,13 @@ suite.define(() => {
             channel.port1.start();
             channel.port2.postMessage(undefined);
           },
-          { capture: true, once: true },
+          { capture: true },
         );
       });
 
       await composer.press("Meta+Enter");
-      await gateway.waitForRequest("chat.send");
+      const request = await gateway.waitForRequest("chat.send");
+      expect(request.params).toMatchObject({ message: "first prompt" });
       await expect
         .poll(() => composer.getAttribute("data-submit-task-order"))
         .toBe(JSON.stringify(["next-input-task", "transport:second prompt"]));

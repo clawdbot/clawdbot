@@ -2,9 +2,8 @@ import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
-import type { CompactionStatus, FallbackStatus } from "../tool-stream-contract.ts";
+import type { FallbackStatus } from "../tool-stream-contract.ts";
 
-const COMPACTION_TOAST_DURATION_MS = 5000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
 export type ComposerRunStatus =
@@ -30,38 +29,6 @@ export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | 
       ${icons.square}<span class="agent-chat__run-status-label">${interrupted}</span>
     </span>
   `;
-}
-
-export function renderCompactionIndicator(status: CompactionStatus | null | undefined) {
-  if (!status) {
-    return nothing;
-  }
-  if (status.phase === "active" || status.phase === "retrying") {
-    return html`
-      <div
-        class="compaction-indicator compaction-indicator--active"
-        role="status"
-        aria-live="polite"
-      >
-        ${icons.loader} ${t("chat.composer.compactingContext")}
-      </div>
-    `;
-  }
-  if (status.completedAt) {
-    const elapsed = Date.now() - status.completedAt;
-    if (elapsed < COMPACTION_TOAST_DURATION_MS) {
-      return html`
-        <div
-          class="compaction-indicator compaction-indicator--complete"
-          role="status"
-          aria-live="polite"
-        >
-          ${icons.check} ${t("chat.composer.contextCompacted")}
-        </div>
-      `;
-    }
-  }
-  return nothing;
 }
 
 export function renderFallbackIndicator(status: FallbackStatus | null | undefined) {

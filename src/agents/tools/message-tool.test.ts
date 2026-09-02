@@ -29,20 +29,18 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   consumePreExecutionBlockedToolCall,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { createOpenClawTools } from "../openclaw-tools.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-type CreateMessageTool = typeof import("./message-tool-execution.js").createMessageTool;
-type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
-type ResetPluginRuntimeStateForTest =
-  typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
-type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
-type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
-type RunMessageAction =
-  typeof import("../../infra/outbound/message-action-runner.js").runMessageAction;
+import { createMessageTool } from "./message-tool-execution.js";
+
+type CreateMessageTool = typeof createMessageTool;
 
 const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
 const CRITICAL_THRESHOLD = 20;
@@ -51,13 +49,6 @@ const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   channels: [],
   getChannel: () => undefined,
 } as const;
-
-let createMessageTool: CreateMessageTool;
-let createOpenClawTools: CreateOpenClawTools;
-let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
-let setActivePluginRegistry: SetActivePluginRegistry;
-let createTestRegistry: CreateTestRegistry;
-let actualRunMessageAction: RunMessageAction;
 
 type DescribeMessageTool = NonNullable<
   NonNullable<ChannelPlugin["actions"]>["describeMessageTool"]
@@ -395,16 +386,9 @@ function expectStringSchema(
   }
 }
 
-beforeAll(async () => {
-  ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
-    await import("../../plugins/runtime.js"));
-  ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
-  ({ createMessageTool } = await import("./message-tool-execution.js"));
-  ({ createOpenClawTools } = await import("../openclaw-tools.js"));
-  ({ runMessageAction: actualRunMessageAction } = await vi.importActual(
-    "../../infra/outbound/message-action-runner.js",
-  ));
-});
+const { runMessageAction: actualRunMessageAction } = await vi.importActual<
+  typeof import("../../infra/outbound/message-action-runner.js")
+>("../../infra/outbound/message-action-runner.js");
 
 const mintedTurnCapabilities: string[] = [];
 
@@ -4734,95 +4718,32 @@ describe("message tool boot-echo guard", () => {
     });
   });
 
-  it("sanitizes boot echo text and still sends when media content remains", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
+  it.each([
+    ["mediaUrl", "text", "file:///tmp/status.png"],
+    ["media_url", "text", "file:///tmp/status.png"],
+    ["media_urls", "text", ["file:///tmp/one.png", "file:///tmp/two.png"]],
+    ["attachments", "message", [{ media: "file:///tmp/status.png" }]],
+    ["attachments", "message", [{ file_path: "/tmp/status.png" }]],
+  ] as const)(
+    "preserves %s after sanitizing boot echo in %s: %j",
+    async (mediaField, textField, media) => {
+      setBootEchoContextForSession("agent:main", longBootPrompt);
+      mockSendResult({ channel: "telegram", to: "telegram:123" });
 
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        mediaUrl: "file:///tmp/status.png",
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
-  });
-
-  it("sanitizes boot echo text and still sends when snake_case media content remains", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        media_url: "file:///tmp/status.png",
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.media_url).toBe("file:///tmp/status.png");
-  });
-
-  it("sanitizes boot echo text and still sends when snake_case media arrays remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        media_urls: ["file:///tmp/one.png", "file:///tmp/two.png"],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.media_urls).toEqual(["file:///tmp/one.png", "file:///tmp/two.png"]);
-  });
-
-  it("sanitizes boot echo text and still sends when structured attachments remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        message: echoedText,
-        attachments: [{ media: "file:///tmp/status.png" }],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.message).toBe("");
-    expect(call?.params?.attachments).toEqual([{ media: "file:///tmp/status.png" }]);
-  });
-
-  it("sanitizes boot echo text and still sends when structured attachment aliases remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        message: echoedText,
-        attachments: [{ file_path: "/tmp/status.png" }],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.message).toBe("");
-    expect(call?.params?.attachments).toEqual([{ file_path: "/tmp/status.png" }]);
-  });
+      const echoedText =
+        "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+      const call = await executeSend({
+        action: {
+          target: "telegram:123",
+          [textField]: echoedText,
+          [mediaField]: structuredClone(media),
+        },
+        toolOptions: { agentSessionKey: "agent:main" },
+      });
+      expect(call?.params?.[textField]).toBe("");
+      expect(call?.params?.[mediaField]).toEqual(media);
+    },
+  );
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
     setBootEchoContextForSession("agent:main", longBootPrompt);

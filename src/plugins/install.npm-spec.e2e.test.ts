@@ -11,14 +11,21 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
+import { withPluginInstallRoots } from "./install-root-context.js";
 import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import {
-  packPlugin,
-  registryPackage,
+  configWithInstalledPackageTreeBlockPolicy,
+  createInstalledPackageTreePolicyExec,
+} from "./install.npm-spec.test-support.js";
+import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
+import {
+  packPlugins,
+  registryPackages,
   startStaticRegistry,
   startMutableRegistry,
   type RegistryPackage,
 } from "./test-helpers/npm-registry-fixtures.js";
+import { syncPluginsForUpdateChannel } from "./update-channel.js";
 
 const tempDirs = createTempDirTracker();
 const servers: http.Server[] = [];
@@ -54,54 +61,6 @@ function uniquePackageName(prefix: string): string {
 
 async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
-}
-
-const installedPackageTreePolicySource = `
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => {
-  const request = JSON.parse(input);
-  if (request.sourcePathKind === "directory") {
-    process.stdout.write(JSON.stringify({
-      protocolVersion: 1,
-      decision: "block",
-      reason: "blocked installed package tree",
-    }));
-    return;
-  }
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
-});
-`;
-
-async function createInstalledPackageTreePolicyExec(rootDir: string) {
-  if (process.platform === "win32") {
-    return { command: process.execPath, args: ["-e", installedPackageTreePolicySource] };
-  }
-  const command = path.join(rootDir, "install-policy.cjs");
-  await fs.writeFile(command, `#!${process.execPath}\n${installedPackageTreePolicySource}`, "utf8");
-  await fs.chmod(command, 0o700);
-  return { command, args: [] };
-}
-
-function configWithInstalledPackageTreeBlockPolicy(exec: {
-  command: string;
-  args: string[];
-}): OpenClawConfig {
-  return {
-    security: {
-      installPolicy: {
-        enabled: true,
-        exec: {
-          source: "exec",
-          command: exec.command,
-          args: exec.args,
-          timeoutMs: 5000,
-          maxOutputBytes: 16 * 1024,
-        },
-      },
-    },
-  };
 }
 
 function pluginNpmProjectRoot(npmRoot: string, packageName: string): string {
@@ -160,6 +119,70 @@ async function installProjectDependencies(
 }
 
 describe("installPluginFromNpmSpec e2e", () => {
+  it("relocates a bundled plugin through real npm only after artifact consent", async () => {
+    const { rootDir, npmRoot } = await makeInstallFixture("relocation-e2e");
+    const packageName = uniquePackageName("relocated-plugin");
+    await useStaticRegistry(await registryPackages(rootDir, [{ packageName }]));
+    const bundledPath = path.join(rootDir, "old", "extensions", packageName);
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: { [packageName]: { enabled: true } },
+        load: { paths: [bundledPath] },
+        installs: {
+          [packageName]: { source: "path", sourcePath: bundledPath, installPath: bundledPath },
+        },
+      },
+    };
+    const roots = {
+      npmDir: npmRoot,
+      extensionsDir: path.join(rootDir, "extensions"),
+      gitDir: path.join(rootDir, "git"),
+      stateDir: path.join(rootDir, "state"),
+    };
+    const sync = (accept: boolean) =>
+      withPluginInstallRoots(roots, () =>
+        syncPluginsForUpdateChannel({
+          config,
+          channel: "stable",
+          env: { ...process.env, OPENCLAW_STATE_DIR: roots.stateDir },
+          externalizedBundledPluginBridges: [
+            { bundledPluginId: packageName, npmSpec: packageName },
+          ],
+          ...(accept
+            ? {
+                onCapabilityConsent: async (details: { reviewToken: string }) => ({
+                  reviewToken: details.reviewToken,
+                }),
+              }
+            : {}),
+        }),
+      );
+    const refused = await sync(false);
+    expect(refused.config).toEqual(config);
+    expect(refused.summary.errors).toEqual([
+      expect.objectContaining({
+        pluginId: packageName,
+        code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      }),
+    ]);
+    expect(refused.summary.errors[0]?.message).toContain(
+      "did not install the replacement plugin payload",
+    );
+    expect(refused.summary.errors[0]?.message).not.toContain("payload is missing");
+    const projectDir = pluginNpmProjectRoot(npmRoot, packageName);
+    await expect(fs.access(projectDir)).rejects.toHaveProperty("code", "ENOENT");
+    const accepted = await sync(true);
+    expect(accepted.summary.errors).toEqual([]);
+    expect(accepted.config.plugins?.load?.paths).toEqual([]);
+    expect(accepted.config.plugins?.installs?.[packageName]?.source).toBe("npm");
+    expect(
+      await runPluginPayloadSmokeCheck({
+        records: accepted.config.plugins?.installs ?? {},
+        env: process.env,
+      }),
+    ).toEqual({ checked: [packageName], failures: [] });
+  }, 120_000);
+
   it.each(["plugin", "hook pack"] as const)(
     "does not persist an npm %s when delegated authority closes during download",
     { timeout: 180_000 },
@@ -168,13 +191,12 @@ describe("installPluginFromNpmSpec e2e", () => {
       const packageName = uniquePackageName("delegated-install");
       const downloadBarrier = { requested: createDeferred(), released: createDeferred() };
       const registry = await startStaticRegistry(
-        [
-          await registryPackage({
+        await registryPackages(rootDir, [
+          {
             packageName,
-            rootDir,
             ...(kind === "hook pack" ? { hookName: "cancel-test-hook" } : {}),
-          }),
-        ],
+          },
+        ]),
         servers,
         downloadBarrier,
       );
@@ -348,20 +370,18 @@ describe("installPluginFromNpmSpec e2e", () => {
       install: { minHostVersion: ">=2026.4.25" },
       compat: { pluginApi: ">=2026.5.27" },
     };
-    const versions = [
-      await packPlugin({
+    const versions = await packPlugins(rootDir, [
+      {
         packageName,
         version: "2026.5.26",
-        rootDir,
         openclaw: compatibleOpenClaw,
-      }),
-      await packPlugin({
+      },
+      {
         packageName,
         version: "2026.5.27",
-        rootDir,
         openclaw: incompatibleOpenClaw,
-      }),
-    ];
+      },
+    ]);
     await useStaticRegistry([{ packageName, latest: "2026.5.27", versions }]);
     const previousHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
     process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = "2026.5.10-beta.1";
@@ -398,20 +418,20 @@ describe("installPluginFromNpmSpec e2e", () => {
   it("scrubs root openclaw materialized by required npm peers", async () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-required-peer-e2e");
     const packageName = uniquePackageName("required-peer-plugin");
-    const registry = await useStaticRegistry([
-      await registryPackage({
-        packageName,
-        peerDependencies: { openclaw: ">=2026.0.0" },
-        peerDependenciesMeta: {},
-        rootDir,
-      }),
-      await registryPackage({
-        packageName: "openclaw",
-        pluginId: "registry-openclaw-copy",
-        version: "2026.0.0",
-        rootDir,
-      }),
-    ]);
+    const registry = await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          packageName,
+          peerDependencies: { openclaw: ">=2026.0.0" },
+          peerDependenciesMeta: {},
+        },
+        {
+          packageName: "openclaw",
+          pluginId: "registry-openclaw-copy",
+          version: "2026.0.0",
+        },
+      ]),
+    );
 
     const rawNpmRoot = path.join(rootDir, "raw-managed-npm");
     await fs.mkdir(rawNpmRoot, { recursive: true });
@@ -474,16 +494,17 @@ describe("installPluginFromNpmSpec e2e", () => {
     const pluginWithRuntimePeer = uniquePackageName("runtime-peer-plugin");
     const laterPlugin = uniquePackageName("later-plugin");
     const runtimePeer = uniquePackageName("runtime-peer");
-    await useStaticRegistry([
-      await registryPackage({
-        packageName: pluginWithRuntimePeer,
-        peerDependencies: { [runtimePeer]: "^1.0.0" },
-        peerDependenciesMeta: {},
-        rootDir,
-      }),
-      await registryPackage({ packageName: laterPlugin, rootDir }),
-      await registryPackage({ packageName: runtimePeer, rootDir }),
-    ]);
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          packageName: pluginWithRuntimePeer,
+          peerDependencies: { [runtimePeer]: "^1.0.0" },
+          peerDependenciesMeta: {},
+        },
+        { packageName: laterPlugin },
+        { packageName: runtimePeer },
+      ]),
+    );
 
     const first = await installNpmPlugin({
       spec: `${pluginWithRuntimePeer}@1.0.0`,
@@ -515,20 +536,20 @@ describe("installPluginFromNpmSpec e2e", () => {
     const pluginWithOptionalDependency = uniquePackageName("optional-owner-plugin");
     const optionalDependency = uniquePackageName("optional-dep");
     const runtimePeer = uniquePackageName("optional-peer");
-    await useStaticRegistry([
-      await registryPackage({
-        packageName: pluginWithOptionalDependency,
-        optionalDependencies: { [optionalDependency]: "1.0.0" },
-        rootDir,
-      }),
-      await registryPackage({
-        packageName: optionalDependency,
-        peerDependencies: { [runtimePeer]: "^1.0.0" },
-        peerDependenciesMeta: {},
-        rootDir,
-      }),
-      await registryPackage({ packageName: runtimePeer, rootDir }),
-    ]);
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          packageName: pluginWithOptionalDependency,
+          optionalDependencies: { [optionalDependency]: "1.0.0" },
+        },
+        {
+          packageName: optionalDependency,
+          peerDependencies: { [runtimePeer]: "^1.0.0" },
+          peerDependenciesMeta: {},
+        },
+        { packageName: runtimePeer },
+      ]),
+    );
 
     const result = await installNpmPlugin({
       spec: `${pluginWithOptionalDependency}@1.0.0`,
@@ -558,16 +579,17 @@ describe("installPluginFromNpmSpec e2e", () => {
     const pluginWithRuntimePeer = uniquePackageName("existing-peer-plugin");
     const laterPlugin = uniquePackageName("later-plugin");
     const runtimePeer = uniquePackageName("runtime-peer");
-    await useStaticRegistry([
-      await registryPackage({
-        packageName: pluginWithRuntimePeer,
-        peerDependencies: { [runtimePeer]: "^1.0.0" },
-        peerDependenciesMeta: {},
-        rootDir,
-      }),
-      await registryPackage({ packageName: laterPlugin, rootDir }),
-      await registryPackage({ indexJs: "eval('1');\n", packageName: runtimePeer, rootDir }),
-    ]);
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          packageName: pluginWithRuntimePeer,
+          peerDependencies: { [runtimePeer]: "^1.0.0" },
+          peerDependenciesMeta: {},
+        },
+        { packageName: laterPlugin },
+        { indexJs: "eval('1');\n", packageName: runtimePeer },
+      ]),
+    );
 
     await installProjectDependencies(npmRoot, { [pluginWithRuntimePeer]: "1.0.0" });
     await expect(
@@ -602,10 +624,12 @@ describe("installPluginFromNpmSpec e2e", () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-peer-cycle-e2e");
     const existingPlugin = uniquePackageName("existing-plugin");
     const laterPlugin = uniquePackageName("later-plugin");
-    await useStaticRegistry([
-      await registryPackage({ packageName: existingPlugin, rootDir }),
-      await registryPackage({ packageName: laterPlugin, rootDir }),
-    ]);
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        { packageName: existingPlugin },
+        { packageName: laterPlugin },
+      ]),
+    );
 
     await installProjectDependencies(npmRoot, { [existingPlugin]: "1.0.0" });
     const existingPluginDir = path.join(npmRoot, "node_modules", existingPlugin);
@@ -635,16 +659,17 @@ describe("installPluginFromNpmSpec e2e", () => {
     const policyExec = await createInstalledPackageTreePolicyExec(rootDir);
     const blockedPlugin = uniquePackageName("blocked-plugin");
     const runtimePeer = uniquePackageName("runtime-peer");
-    await useStaticRegistry([
-      await registryPackage({
-        indexJs: "eval('1');\n",
-        packageName: blockedPlugin,
-        peerDependencies: { [runtimePeer]: "^1.0.0" },
-        peerDependenciesMeta: {},
-        rootDir,
-      }),
-      await registryPackage({ packageName: runtimePeer, rootDir }),
-    ]);
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          indexJs: "eval('1');\n",
+          packageName: blockedPlugin,
+          peerDependencies: { [runtimePeer]: "^1.0.0" },
+          peerDependenciesMeta: {},
+        },
+        { packageName: runtimePeer },
+      ]),
+    );
 
     const result = await installNpmPlugin({
       config: configWithInstalledPackageTreeBlockPolicy(policyExec),
@@ -682,14 +707,15 @@ describe("installPluginFromNpmSpec e2e", () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-peer-plan-fallback-e2e");
     const blockedPlugin = uniquePackageName("missing-peer-plugin");
     const missingPeer = uniquePackageName("missing-peer");
-    await useStaticRegistry([
-      await registryPackage({
-        packageName: blockedPlugin,
-        peerDependencies: { [missingPeer]: "^1.0.0" },
-        peerDependenciesMeta: {},
-        rootDir,
-      }),
-    ]);
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          packageName: blockedPlugin,
+          peerDependencies: { [missingPeer]: "^1.0.0" },
+          peerDependenciesMeta: {},
+        },
+      ]),
+    );
 
     const result = await installNpmPlugin({
       spec: `${blockedPlugin}@1.0.0`,
@@ -716,20 +742,21 @@ describe("installPluginFromNpmSpec e2e", () => {
     const existingRootDependency = uniquePackageName("existing-root");
     const blockedPlugin = uniquePackageName("blocked-plugin");
     const runtimePeer = uniquePackageName("runtime-peer");
-    await useStaticRegistry([
-      await registryPackage({ packageName: existingRootDependency, rootDir }),
-      await registryPackage({
-        indexJs: "eval('1');\n",
-        packageName: blockedPlugin,
-        peerDependencies: {
-          [existingRootDependency]: "^1.0.0",
-          [runtimePeer]: "^1.0.0",
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        { packageName: existingRootDependency },
+        {
+          indexJs: "eval('1');\n",
+          packageName: blockedPlugin,
+          peerDependencies: {
+            [existingRootDependency]: "^1.0.0",
+            [runtimePeer]: "^1.0.0",
+          },
+          peerDependenciesMeta: {},
         },
-        peerDependenciesMeta: {},
-        rootDir,
-      }),
-      await registryPackage({ packageName: runtimePeer, rootDir }),
-    ]);
+        { packageName: runtimePeer },
+      ]),
+    );
 
     const blockedProjectRoot = pluginNpmProjectRoot(npmRoot, blockedPlugin);
     await installProjectDependencies(blockedProjectRoot, {
@@ -776,26 +803,25 @@ describe("installPluginFromNpmSpec e2e", () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-sibling-peer-e2e");
     const codexName = uniquePackageName("codex-peer-plugin");
     const opikName = uniquePackageName("opik-peer-plugin");
-    await useStaticRegistry([
-      await registryPackage({
-        packageName: codexName,
-        peerDependencies: { openclaw: ">=2026.5.5-beta.2" },
-        peerDependenciesMeta: { openclaw: { optional: true } },
-        rootDir,
-      }),
-      await registryPackage({
-        packageName: opikName,
-        peerDependencies: { openclaw: ">=2026.3.2" },
-        peerDependenciesMeta: {},
-        rootDir,
-      }),
-      await registryPackage({
-        packageName: "openclaw",
-        pluginId: "registry-openclaw-copy",
-        version: "2026.5.4",
-        rootDir,
-      }),
-    ]);
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          packageName: codexName,
+          peerDependencies: { openclaw: ">=2026.5.5-beta.2" },
+          peerDependenciesMeta: { openclaw: { optional: true } },
+        },
+        {
+          packageName: opikName,
+          peerDependencies: { openclaw: ">=2026.3.2" },
+          peerDependenciesMeta: {},
+        },
+        {
+          packageName: "openclaw",
+          pluginId: "registry-openclaw-copy",
+          version: "2026.5.4",
+        },
+      ]),
+    );
 
     const first = await installNpmPlugin({
       spec: `${codexName}@1.0.0`,
@@ -840,14 +866,15 @@ describe("installPluginFromNpmSpec e2e", () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-peer-e2e");
     const peerPackageName = uniquePackageName("peer-plugin");
     const laterPackageName = uniquePackageName("later-plugin");
-    await useStaticRegistry([
-      await registryPackage({
-        packageName: peerPackageName,
-        peerDependencies: { openclaw: ">=2026.0.0" },
-        rootDir,
-      }),
-      await registryPackage({ packageName: laterPackageName, rootDir }),
-    ]);
+    await useStaticRegistry(
+      await registryPackages(rootDir, [
+        {
+          packageName: peerPackageName,
+          peerDependencies: { openclaw: ">=2026.0.0" },
+        },
+        { packageName: laterPackageName },
+      ]),
+    );
 
     const first = await installNpmPlugin({
       spec: `${peerPackageName}@1.0.0`,
@@ -882,10 +909,10 @@ describe("installPluginFromNpmSpec e2e", () => {
   it("pins a mutable npm tag to the version resolved before install", async () => {
     const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-e2e");
     const packageName = uniquePackageName("mutable-plugin");
-    const versions = [
-      await packPlugin({ packageName, version: "1.0.0", rootDir }),
-      await packPlugin({ packageName, version: "2.0.0", rootDir }),
-    ];
+    const versions = await packPlugins(rootDir, [
+      { packageName, version: "1.0.0" },
+      { packageName, version: "2.0.0" },
+    ]);
     const registry = await startMutableRegistry(
       {
         packageName,

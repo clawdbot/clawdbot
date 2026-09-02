@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements bus server behavior.
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -322,10 +323,10 @@ export async function closeQaHttpServer(server: Server, state?: QaBusState): Pro
       server.close((error) => (error ? reject(error) : resolve()));
       state?.reset(true); // Fence first so late request bodies cannot add waiter timers.
       server.closeIdleConnections?.();
+      // Awaited shutdown must keep its deadline alive even when paused sockets cannot wake Node.
       forceCloseTimer = setTimeout(() => {
         server.closeAllConnections?.();
       }, 250);
-      forceCloseTimer.unref();
     });
   } finally {
     if (forceCloseTimer) {
@@ -487,10 +488,7 @@ export function createQaBusServer(state: QaBusState): Server {
 
 export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
   const server = createQaBusServer(params.state);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params.port ?? 0, "127.0.0.1", () => resolve());
-  });
+  await once(server.listen(params.port ?? 0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("qa-bus failed to bind");

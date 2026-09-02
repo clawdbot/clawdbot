@@ -23,6 +23,7 @@ import {
   createFakeCodexAppServerClient,
 } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import * as elicitationBridge from "./elicitation-bridge.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isJsonObject,
@@ -619,11 +620,35 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    createOpenClawCodingToolsMock.mockReturnValue([
+      {
+        name: "wiki_status",
+        description: "Check wiki status",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+        execute: toolExecuteMock,
+      },
+      {
+        name: "web_search",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+        execute: toolExecuteMock,
+      },
+      {
+        name: "session_status",
+        description: "Show session status",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        execute: toolExecuteMock,
+      },
+    ]);
 
     const result = await runCodexAppServerSideQuestion(
       sideParams({
+        cfg: {
+          agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+        } as never,
         messageChannel: "discord",
         messageProvider: "discord-voice",
         chatId: "discord-native-room",
@@ -736,6 +761,13 @@ describe("runCodexAppServerSideQuestion", () => {
       {
         threadId: "side-thread",
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
+        additionalContext: {
+          openclaw_temporal_context: {
+            kind: "application",
+            value:
+              "## Temporal Context\nCurrent date: 2026-09-01\nTime zone: America/Los_Angeles\nFor the exact current time, use `session_status`.",
+          },
+        },
         cwd: "/tmp/workspace",
         model: "codex-side-execution-model",
         personality: "none",
@@ -841,12 +873,26 @@ describe("runCodexAppServerSideQuestion", () => {
   );
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
+    const approvalSpy = vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest");
     const client = createFakeClient({ completeTurn: false });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const run = runCodexAppServerSideQuestion(sideParams());
     await vi.waitFor(() =>
       expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
     );
+
+    const item = {
+      type: "mcpToolCall",
+      id: "side-mcp",
+      server: "configured-server",
+      tool: "raw-tool",
+      arguments: { query: "side query" },
+      status: "inProgress",
+    };
+    client.emit({
+      method: "item/started",
+      params: { threadId: "side-thread", turnId: "turn-1", item },
+    });
 
     await expect(
       handleClientRequestWhenReady(client, {
@@ -869,9 +915,20 @@ describe("runCodexAppServerSideQuestion", () => {
       },
     });
 
-    client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
-    client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-    await expect(run).resolves.toEqual({ text: "Side answer." });
+    const correlate = approvalSpy.mock.calls[0]?.[0].getActiveMcpToolCall;
+    try {
+      expect(correlate?.(item.server)).toEqual({
+        id: item.id,
+        server: item.server,
+        tool: item.tool,
+        arguments: item.arguments,
+      });
+    } finally {
+      client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+      client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+      await expect(run).resolves.toEqual({ text: "Side answer." });
+    }
+    expect(correlate?.(item.server)).toBeUndefined();
   });
 
   it("routes a remote-exec side question through the injected sandbox environment", async () => {
@@ -2369,7 +2426,7 @@ describe("runCodexAppServerSideQuestion", () => {
   it("keeps native hook relays alive across side-thread startup and completion timeouts", async () => {
     const client = createFakeClient();
     const requestTimeoutMs = 400_000;
-    const completionTimeoutMs = 700_000;
+    const completionTimeoutMs = 10 * 60_000;
     const expectedRelayTtlMs = requestTimeoutMs * 3 + completionTimeoutMs + 5 * 60_000;
     let relayIdDuringFork: string | undefined;
     let startedAtMs = 0;
@@ -2415,7 +2472,6 @@ describe("runCodexAppServerSideQuestion", () => {
           pluginConfig: {
             appServer: {
               requestTimeoutMs,
-              turnCompletionIdleTimeoutMs: completionTimeoutMs,
             },
           },
           nativeHookRelay: { enabled: true },

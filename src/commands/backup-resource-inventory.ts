@@ -101,6 +101,7 @@ export async function createBackupResourceInventory(params: {
   configPath: string;
   oauthDir: string;
   workspaceDirs: readonly string[];
+  excludedWorkspaceDirs: readonly string[];
   agentRoots: readonly BackupAgentRoot[];
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
@@ -180,10 +181,13 @@ export async function createBackupResourceInventory(params: {
       }),
   );
   const protectedPaths = Object.freeze([...protectedPathSet].toSorted());
+  // Workspace exclusions stop traversal but are not regenerable resources;
+  // protected nested owners remain reachable through isIncluded below.
   const excludedPaths = Object.freeze(
-    uniqueRegenerableRoots
-      .map((resource) => resource.sourcePath)
-      .toSorted((left, right) => right.length - left.length || left.localeCompare(right)),
+    [
+      ...uniqueRegenerableRoots.map((resource) => resource.sourcePath),
+      ...new Set(params.excludedWorkspaceDirs.map((dir) => path.resolve(dir))),
+    ].toSorted((left, right) => right.length - left.length || left.localeCompare(right)),
   );
 
   const isIncluded = (sourcePath: string): boolean => {

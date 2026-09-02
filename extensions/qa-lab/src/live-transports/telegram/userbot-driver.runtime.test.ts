@@ -43,12 +43,12 @@ describe("Telegram userbot driver runtime", () => {
         "for line in sys.stdin:",
         "    request = json.loads(line)",
         "    message_id = 10 + int(request['id'])",
-        "    update = {'kind':'message','chatId':-1001,'messageId':message_id + 1,'senderId':200,'timestamp':1000,'text':request['text'],'entities':entities}",
+        "    update = {'kind':'message','chatId':-1001,'messageId':message_id + 1,'senderId':200,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messagePhoto'}",
         "    print(json.dumps({'type':'update','update':update}), flush=True)",
         "    for replacement in [edited_entities, []]:",
-        "        update = {**update, 'kind':'edit', 'entities':replacement}",
+        "        update = {**update, 'kind':'edit', 'entities':replacement, 'contentType':'messageVideo'}",
         "        print(json.dumps({'type':'update','update':update}), flush=True)",
-        "    result = {'chatId':-1001,'messageId':message_id,'senderId':100,'timestamp':1000,'text':request['text'],'entities':entities}",
+        "    result = {'chatId':-1001,'messageId':message_id,'senderId':100,'timestamp':1000,'text':request['text'],'entities':entities,'contentType':'messageText'}",
         "    print(json.dumps({'type':'response','id':request['id'],'result':result}), flush=True)",
       ].join("\n"),
     );
@@ -67,14 +67,28 @@ describe("Telegram userbot driver runtime", () => {
       await expect(driver.send({ text })).resolves.toMatchObject({
         messageId: 11,
         senderId: 100,
+        contentType: "messageText",
         text,
         entities,
       });
       await vi.waitFor(() => expect(updates).toHaveLength(3));
       expect(updates).toMatchObject([
-        { kind: "message", messageId: 12, senderId: 200, text, entities },
-        { kind: "edit", messageId: 12, text, entities: editedEntities },
-        { kind: "edit", messageId: 12, text, entities: [] },
+        {
+          kind: "message",
+          messageId: 12,
+          senderId: 200,
+          contentType: "messagePhoto",
+          text,
+          entities,
+        },
+        {
+          kind: "edit",
+          messageId: 12,
+          contentType: "messageVideo",
+          text,
+          entities: editedEntities,
+        },
+        { kind: "edit", messageId: 12, contentType: "messageVideo", text, entities: [] },
       ]);
       expect(() => driver.assertHealthy()).not.toThrow();
     } finally {

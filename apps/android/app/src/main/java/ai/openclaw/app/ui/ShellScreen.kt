@@ -12,12 +12,10 @@ import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.firstGraphemeOrNull
-import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -34,6 +32,7 @@ import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
+import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
@@ -70,7 +69,6 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -84,21 +82,16 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -123,19 +116,14 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-internal enum class Tab(
-  val key: String,
-  val label: NativeText,
-  val icon: ImageVector,
-) {
-  Overview(key = "overview", label = nativeText("Home"), icon = Icons.Default.Home),
-  Chat(key = "chat", label = nativeText("Chat"), icon = Icons.Outlined.ChatBubbleOutline),
-  Voice(key = "voice", label = nativeText("Voice"), icon = Icons.Outlined.MicNone),
-  Sessions(key = "sessions", label = nativeText("Threads"), icon = Icons.Outlined.AccessTime),
-  Settings(key = "settings", label = nativeText("Settings"), icon = Icons.Outlined.Settings),
-  ProvidersModels(key = "providers-models", label = nativeText("Providers"), icon = Icons.Outlined.Inventory2),
-  Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
-  Dashboard(key = "dashboard", label = nativeText("Dashboard"), icon = Icons.Outlined.Dashboard),
+internal enum class Tab {
+  Overview,
+  Chat,
+  Sessions,
+  Settings,
+  ProvidersModels,
+  Files,
+  Dashboard,
 }
 
 private val shellContentInsets: WindowInsets
@@ -320,15 +308,6 @@ fun ShellScreen(
             )
           }
 
-          Tab.Voice -> {
-            VoiceShellScreen(
-              viewModel = viewModel,
-              onOpenCommand = { commandOpen = true },
-              onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
-              onOpenVoiceSettings = { nav.openSettingsRoute(SettingsRoute.Voice) },
-            )
-          }
-
           Tab.ProvidersModels -> {
             ProvidersModelsScreen(
               viewModel = viewModel,
@@ -411,6 +390,8 @@ fun ShellScreen(
         // cannot hide a changed TLS identity prompt.
         GatewayTrustDialog(
           prompt = prompt,
+          confirmLabel = stringResource(R.string.trust_and_continue),
+          cancelLabel = stringResource(R.string.cancel),
           onAccept = viewModel::acceptGatewayTrustPrompt,
           onUseSystemTrust = viewModel::useSystemGatewayTrustPrompt,
           onDecline = viewModel::declineGatewayTrustPrompt,
@@ -418,98 +399,6 @@ fun ShellScreen(
       }
     }
   }
-}
-
-/** Modal trust decision for first-seen or changed gateway TLS fingerprints. */
-@Composable
-private fun GatewayTrustDialog(
-  prompt: NodeRuntime.GatewayTrustPrompt,
-  onAccept: (String?) -> Unit,
-  onUseSystemTrust: () -> Unit,
-  onDecline: () -> Unit,
-) {
-  val manualEntry = prompt.fingerprintSha256 == null
-  val systemTrustAvailable = prompt.systemTrustAvailable
-  var manualFingerprint by
-    rememberSaveable(prompt.endpoint.stableId, prompt.probeFailure) {
-      mutableStateOf("")
-    }
-  val normalizedManualFingerprint = normalizeGatewayTlsFingerprintInput(manualFingerprint)
-  val message =
-    when {
-      manualEntry -> {
-        nativeString(
-          "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
-        )
-      }
-
-      prompt.previousFingerprintSha256.isNullOrBlank() -> {
-        stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-      }
-
-      else -> {
-        stringResource(
-          R.string.gateway_trust_changed,
-          prompt.previousFingerprintSha256,
-          prompt.fingerprintSha256,
-        )
-      }
-    }
-
-  AlertDialog(
-    onDismissRequest = onDecline,
-    containerColor = ClawTheme.colors.surfaceRaised,
-    title = {
-      Text(
-        stringResource(R.string.trust_this_gateway),
-        style = ClawTheme.type.section,
-        color = ClawTheme.colors.text,
-      )
-    },
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        if (systemTrustAvailable) {
-          Text(
-            nativeString("This gateway now presents a certificate trusted by this device."),
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.textMuted,
-          )
-        }
-        if (manualEntry) {
-          OutlinedTextField(
-            value = manualFingerprint,
-            onValueChange = { manualFingerprint = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(nativeString("SHA-256 fingerprint")) },
-            singleLine = true,
-          )
-        }
-      }
-    },
-    confirmButton = {
-      TextButton(
-        onClick = {
-          onAccept(if (manualEntry) normalizedManualFingerprint else null)
-        },
-        enabled = !manualEntry || normalizedManualFingerprint != null,
-      ) {
-        Text(stringResource(R.string.trust_and_continue))
-      }
-    },
-    dismissButton = {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (systemTrustAvailable) {
-          TextButton(onClick = onUseSystemTrust) {
-            Text(nativeString("Use system trust"))
-          }
-        }
-        TextButton(onClick = onDecline) {
-          Text(stringResource(R.string.cancel))
-        }
-      }
-    },
-  )
 }
 
 @Composable
@@ -567,7 +456,7 @@ private fun OverviewScreen(
   var recentRows by remember { mutableStateOf<List<RecentSessionListItem>>(emptyList()) }
   val visibleRecentRows = recentRows.ifEmpty { candidateRecentRows }
   val metricCards =
-    overviewMetricCards(
+    overviewMetricCardSpecs(
       isConnected = isConnected,
       hasAttention = attentionRows.isNotEmpty(),
       nodesDevicesSummary = nodesDevicesSummary,
@@ -686,14 +575,6 @@ private fun OverviewScreen(
     }
   }
 }
-
-private data class ModuleRow(
-  val title: String,
-  val subtitle: String?,
-  val icon: ImageVector,
-  val tab: Tab,
-  val settingsRoute: SettingsRoute? = null,
-)
 
 @Composable
 private fun OverviewHeader(
@@ -915,8 +796,8 @@ private fun OverviewStateChip(
 
 @Composable
 private fun OverviewMetricGrid(
-  cards: List<OverviewMetricCard>,
-  onOpen: (OverviewMetricCard) -> Unit,
+  cards: List<OverviewMetricCardSpec>,
+  onOpen: (OverviewMetricCardSpec) -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     cards.chunked(2).forEach { row ->
@@ -934,10 +815,17 @@ private fun OverviewMetricGrid(
 
 @Composable
 private fun OverviewMetricTile(
-  card: OverviewMetricCard,
+  card: OverviewMetricCardSpec,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val tint =
+    when (card.status) {
+      ClawStatus.Success -> ClawTheme.colors.success
+      ClawStatus.Warning -> ClawTheme.colors.warning
+      ClawStatus.Danger -> ClawTheme.colors.danger
+      ClawStatus.Neutral -> ClawTheme.colors.textMuted
+    }
   Surface(
     onClick = onClick,
     modifier = modifier.heightIn(min = overviewMetricTileMinHeight),
@@ -949,14 +837,14 @@ private fun OverviewMetricTile(
   ) {
     Column(modifier = Modifier.padding(ClawTheme.spacing.xs), verticalArrangement = Arrangement.spacedBy(6.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Icon(imageVector = card.icon, contentDescription = null, modifier = Modifier.size(17.dp), tint = card.tint)
+        Icon(imageVector = card.icon, contentDescription = null, modifier = Modifier.size(17.dp), tint = tint)
         Text(text = localizedUppercase(card.title, currentAppLanguage().languageTag), style = ClawTheme.type.caption.copy(fontSize = 10.5.sp, lineHeight = 13.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Icon(imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = nativeString("Open \${card.title}", card.title), modifier = Modifier.size(15.dp), tint = ClawTheme.colors.textMuted)
       }
       Text(text = card.value, style = ClawTheme.type.title.copy(fontSize = 22.sp, lineHeight = 25.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
       Text(text = card.subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
       card.progressFraction?.let { progress ->
-        OverviewProgressBar(progress = progress, tint = card.tint)
+        OverviewProgressBar(progress = progress, tint = tint)
       }
     }
   }
@@ -1099,50 +987,6 @@ internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<Chat
     .map { entry -> entry.value }
 
 private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long = lastActivityAt ?: updatedAtMs ?: Long.MIN_VALUE
-
-internal data class OverviewMetricCard(
-  val title: String,
-  val value: String,
-  val subtitle: String,
-  val icon: ImageVector,
-  val tint: Color,
-  val tab: Tab,
-  val settingsRoute: SettingsRoute? = null,
-  val progressFraction: Float? = null,
-)
-
-@Composable
-private fun overviewMetricCards(
-  isConnected: Boolean,
-  hasAttention: Boolean,
-  nodesDevicesSummary: GatewayNodesDevicesSummary,
-  pendingApprovals: Int,
-  sessionCount: Int,
-): List<OverviewMetricCard> =
-  overviewMetricCardSpecs(
-    isConnected = isConnected,
-    hasAttention = hasAttention,
-    nodesDevicesSummary = nodesDevicesSummary,
-    pendingApprovals = pendingApprovals,
-    sessionCount = sessionCount,
-  ).map { spec ->
-    OverviewMetricCard(
-      title = spec.title,
-      value = spec.value,
-      subtitle = spec.subtitle,
-      icon = spec.icon,
-      tint =
-        when (spec.status) {
-          ClawStatus.Success -> ClawTheme.colors.success
-          ClawStatus.Warning -> ClawTheme.colors.warning
-          ClawStatus.Danger -> ClawTheme.colors.danger
-          ClawStatus.Neutral -> ClawTheme.colors.textMuted
-        },
-      tab = spec.tab,
-      settingsRoute = spec.settingsRoute,
-      progressFraction = spec.progressFraction,
-    )
-  }
 
 internal data class OverviewMetricCardSpec(
   val title: String,
@@ -1423,8 +1267,8 @@ private fun HomeAttentionPanel(
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
       Text(text = nativeString("Needs attention"), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.warning)
       rows.forEach { row ->
-        ModuleListRow(
-          row = ModuleRow(row.title, row.subtitle, row.icon, row.tab, row.settingsRoute),
+        HomeAttentionListRow(
+          row = row,
           onClick = {
             val route = row.settingsRoute
             if (route == null) {
@@ -1460,8 +1304,8 @@ private fun SectionLabel(
 }
 
 @Composable
-private fun ModuleListRow(
-  row: ModuleRow,
+private fun HomeAttentionListRow(
+  row: HomeAttentionRow,
   onClick: () -> Unit,
 ) {
   val localizedTitle = nativeString(row.title)
@@ -1486,9 +1330,7 @@ private fun ModuleListRow(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        row.subtitle?.let {
-          Text(text = nativeString(it), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
+        Text(text = nativeString(row.subtitle), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -1607,26 +1449,6 @@ private fun RecentSessionRowContent(
         tint = ClawTheme.colors.textMuted,
       )
     }
-  }
-}
-
-@Composable
-private fun VoiceShellScreen(
-  viewModel: MainViewModel,
-  onOpenCommand: () -> Unit,
-  onOpenGatewaySettings: () -> Unit,
-  onOpenVoiceSettings: () -> Unit,
-) {
-  ClawScaffold(
-    contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
-    contentWindowInsets = shellContentInsets,
-  ) {
-    VoiceScreen(
-      viewModel = viewModel,
-      onOpenCommand = onOpenCommand,
-      onOpenGatewaySettings = onOpenGatewaySettings,
-      onOpenVoiceSettings = onOpenVoiceSettings,
-    )
   }
 }
 
@@ -2116,24 +1938,19 @@ private fun SettingsGroup(
   onAction: (() -> Unit)? = null,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-    Column {
-      rows.forEachIndexed { index, row ->
-        SettingsListRow(
-          row = row,
-          showDisclosure = row.route != null || onAction != null,
-          onClick = {
-            val rowRoute = row.route
-            if (rowRoute == null) {
-              onAction?.invoke()
-            } else {
-              onOpen(rowRoute)
-            }
-          },
-        )
-        if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
-        }
-      }
+    ClawSeparatedColumn(items = rows) { row ->
+      SettingsListRow(
+        row = row,
+        showDisclosure = row.route != null || onAction != null,
+        onClick = {
+          val rowRoute = row.route
+          if (rowRoute == null) {
+            onAction?.invoke()
+          } else {
+            onOpen(rowRoute)
+          }
+        },
+      )
     }
   }
 }

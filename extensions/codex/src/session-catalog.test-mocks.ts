@@ -1,13 +1,13 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 
 const commandRpcMocks = vi.hoisted(() => ({
-  codexControlRequest: vi.fn(),
+  codexControlRequest: vi.fn() as Mock,
 }));
 const pinnedConnectionMocks = vi.hoisted(() => ({
   client: { connectionId: "pinned-catalog-client" },
-  getClient: vi.fn(),
-  releaseClient: vi.fn(),
-  request: vi.fn(),
+  getClient: vi.fn() as Mock,
+  releaseClient: vi.fn() as Mock,
+  request: vi.fn() as Mock,
 }));
 const transcriptMirrorMocks = vi.hoisted(() => ({
   importCodexThreadHistoryToTranscript: vi.fn(async () => ({

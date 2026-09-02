@@ -881,7 +881,11 @@ export async function handleControlUiHttpRequest(
     const assistantAgentId = resolvedIdentity?.agentId;
     const avatarProjection =
       config && resolvedIdentity
-        ? resolveGatewayAssistantAvatar({ cfg: config, identity: resolvedIdentity })
+        ? resolveGatewayAssistantAvatar({
+            cfg: config,
+            identity: resolvedIdentity,
+            httpBasePath: basePath,
+          })
         : { avatar: identity.avatar, resolution: null };
     const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
     sendJson(res, 200, {

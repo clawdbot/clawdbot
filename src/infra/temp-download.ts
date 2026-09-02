@@ -3,7 +3,7 @@ import "./fs-safe-defaults.js";
 import crypto from "node:crypto";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { tempWorkspace, type TempWorkspace } from "./private-temp-workspace.js";
+import { tempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const logger = createSubsystemLogger("infra:temp-download");
@@ -42,7 +42,9 @@ function sanitizeTempExtension(extension?: string): string {
 export function sanitizeTempFileName(fileName: string): string {
   const base = path.basename(fileName).replace(/[^a-zA-Z0-9._-]+/g, "-");
   const normalized = base.replace(/^-+|-+$/g, "");
-  return normalized || "download.bin";
+  // "." and ".." pass the character class above but are rejected as workspace
+  // leaf names, so returning them hands callers a throw instead of a safe name.
+  return !normalized || normalized === "." || normalized === ".." ? "download.bin" : normalized;
 }
 
 /** Build a stable temp path shape while keeping caller-controlled text filename-safe. */
@@ -65,23 +67,6 @@ export function buildRandomTempFilePath(params: {
   );
 }
 
-function buildTempDownloadTarget(
-  workspace: TempWorkspace,
-  fileName: string | undefined,
-): TempDownloadTarget {
-  const file = (nextName?: string) =>
-    workspace.path(sanitizeTempFileName(nextName ?? fileName ?? "download.bin"));
-  return {
-    dir: workspace.dir,
-    path: file(),
-    file,
-    cleanup: async () => {
-      await workspace.cleanup();
-    },
-    [Symbol.asyncDispose]: workspace[Symbol.asyncDispose].bind(workspace),
-  };
-}
-
 export async function createTempDownloadTarget(params: {
   prefix: string;
   fileName?: string;
@@ -91,7 +76,9 @@ export async function createTempDownloadTarget(params: {
     rootDir: resolveTempRoot(params.tmpDir),
     prefix: sanitizeTempPrefix(params.prefix),
   });
-  const target = buildTempDownloadTarget(workspace, params.fileName);
+  const fileName = params.fileName;
+  const file = (nextName?: string) =>
+    workspace.path(sanitizeTempFileName(nextName ?? fileName ?? "download.bin"));
   const cleanup = async () => {
     try {
       await workspace.cleanup();
@@ -100,7 +87,9 @@ export async function createTempDownloadTarget(params: {
     }
   };
   return {
-    ...target,
+    dir: workspace.dir,
+    path: file(),
+    file,
     cleanup,
     [Symbol.asyncDispose]: cleanup,
   };

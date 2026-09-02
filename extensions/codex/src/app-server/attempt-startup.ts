@@ -37,6 +37,7 @@ import {
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
+  hasCodexMcpToolApprovalOverrides,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
@@ -226,9 +227,16 @@ export async function startCodexAttemptThread(params: {
           resolvedPluginPolicy,
           enabledPluginConfigKeys,
         } = pluginStartupPolicy;
-        const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true ||
+          params.computerUseConfig.enabled ||
+          (params.nativeToolSurfaceEnabled &&
+            params.configuredMcpOwnershipVersion !== 1 &&
+            hasCodexMcpToolApprovalOverrides(
+              params.config?.mcp?.servers,
+              params.bundleMcpThreadConfig.userStaticServerNames,
+              params.bundleMcpThreadConfig.configPatch?.mcp_servers,
+            ));
         pluginAppServer = mcpElicitationDelegationRequired
           ? {
               ...params.appServer,

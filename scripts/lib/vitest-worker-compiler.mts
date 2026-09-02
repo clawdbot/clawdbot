@@ -72,7 +72,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     clean: false,
     outExtensions: () => ({ js: ".js" }),
     deps: {
-      neverBundle: true,
+      // Root runtime dependencies stay external; bundled workspace code owns its private deps.
       alwaysBundle: (id) =>
         (id.startsWith("@openclaw/") || id.startsWith("openclaw/")) &&
         id !== "@openclaw/fs-safe" &&
@@ -136,7 +136,8 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     outputs: sortedOutputs,
     durationMs: performance.now() - started,
   };
-  verifyVitestWorkerArtifacts(directory, manifest);
+  await verifyVitestWorkerArtifacts(directory, manifest);
+  manifest.durationMs = performance.now() - started;
   fs.writeFileSync(path.join(directory, "manifest.json"), `${JSON.stringify(manifest)}\n`, {
     flag: "wx",
   });

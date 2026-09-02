@@ -191,7 +191,8 @@ function resolveCodexNativeTarget(
 
 function resolvePackageJsonFromRoot(packageName: string, root: string): string | undefined {
   try {
-    return createRequire(path.join(root, "package.json")).resolve(`${packageName}/package.json`);
+    const manifestPath = realpathSync(path.join(root, "package.json"));
+    return createRequire(manifestPath).resolve(`${packageName}/package.json`);
   } catch {
     return undefined;
   }

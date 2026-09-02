@@ -270,7 +270,6 @@ async function buildPreparedDataForConfig(
         incompatibleModelKeys.add(logicalModelKey(entry));
       }
       return resolveLogicalModelCatalogEntryState({
-        entry,
         evaluation,
         authBacked: options.view === "all" || evaluation.availability === true,
         routePolicy: openAIModelCatalogRoutePolicy,

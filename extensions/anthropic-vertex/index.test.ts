@@ -127,15 +127,6 @@ describe("anthropic-vertex provider plugin", () => {
     });
   });
 
-  it.each(["global", "us", "eu"])("publishes Sonnet 5 for the %s endpoint", (region) => {
-    const provider = buildAnthropicVertexProvider({
-      env: { GOOGLE_CLOUD_LOCATION: region },
-      nowMs: Date.UTC(2026, 7, 31),
-    });
-
-    expect(provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
-  });
-
   it.each([
     {
       region: "global",
@@ -162,80 +153,88 @@ describe("anthropic-vertex provider plugin", () => {
     });
   });
 
-  it.each([
+  describe.each([
     {
       region: "global",
-      nowMs: Date.UTC(2026, 7, 31),
+      baseUrl: "https://aiplatform.googleapis.com",
       cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      retiredCost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
     },
     {
       region: "us",
-      nowMs: Date.UTC(2026, 7, 31),
+      baseUrl: "https://aiplatform.us.rep.googleapis.com",
       cost: { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
-    },
-    {
-      region: "global",
-      nowMs: Date.UTC(2026, 8, 1),
-      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      retiredCost: { input: 3.3, output: 16.5, cacheRead: 0.33, cacheWrite: 4.125 },
     },
     {
       region: "eu",
-      nowMs: Date.UTC(2026, 8, 1),
-      cost: { input: 3.3, output: 16.5, cacheRead: 0.33, cacheWrite: 4.125 },
+      baseUrl: "https://aiplatform.eu.rep.googleapis.com",
+      cost: { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
+      retiredCost: { input: 3.3, output: 16.5, cacheRead: 0.33, cacheWrite: 4.125 },
     },
-  ])("uses the documented Sonnet 5 pricing for $region", ({ region, nowMs, cost }) => {
-    const provider = buildAnthropicVertexProvider({
-      env: { GOOGLE_CLOUD_LOCATION: region },
-      nowMs,
-    });
+  ])("Sonnet 5 pricing for $region", ({ region, baseUrl, cost, retiredCost }) => {
+    describe.each([
+      { boundary: "before", nowMs: Date.UTC(2026, 8, 1) - 1 },
+      { boundary: "at", nowMs: Date.UTC(2026, 8, 1) },
+      { boundary: "after", nowMs: Date.UTC(2026, 8, 1) + 1 },
+    ])("$boundary the retired September 1 boundary", ({ nowMs }) => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(nowMs);
+      });
 
-    expect(provider.models.find((model) => model.id === "claude-sonnet-5")).toMatchObject({
-      cost,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-    });
-  });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
 
-  it("restores missing or stale Sonnet 5 pricing during runtime normalization", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(Date.UTC(2026, 8, 1));
-    try {
-      const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
-      const model = {
-        id: "claude-sonnet-5",
-        name: "Claude Sonnet 5",
-        api: "anthropic-messages",
-        provider: "anthropic-vertex",
-        baseUrl: "https://aiplatform.us.rep.googleapis.com",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_000_000,
-        contextTokens: 1_000_000,
-        maxTokens: 128_000,
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      };
-      const expectedCost = {
-        input: 3.3,
-        output: 16.5,
-        cacheRead: 0.33,
-        cacheWrite: 4.125,
-      };
+      it("publishes current pricing with or without the shipped nowMs argument", () => {
+        const env = { GOOGLE_CLOUD_LOCATION: region };
+        const providers = [
+          buildAnthropicVertexProvider({ env }),
+          buildAnthropicVertexProvider({ env, nowMs }),
+        ];
+        for (const provider of providers) {
+          expect(provider.models.find((model) => model.id === "claude-sonnet-5")).toMatchObject({
+            cost,
+            contextWindow: 1_000_000,
+            maxTokens: 128_000,
+            thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+          });
+        }
+      });
 
-      for (const cost of [
-        undefined,
-        { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 },
-      ]) {
-        const normalized = provider.normalizeResolvedModel?.({
+      it("repairs missing or retired pricing and leaves current pricing unchanged", async () => {
+        const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+        const model = {
+          id: "claude-sonnet-5",
+          name: "Claude Sonnet 5",
+          api: "anthropic-messages",
           provider: "anthropic-vertex",
-          modelId: "claude-sonnet-5",
-          model: { ...model, cost },
-        } as never);
-        expect(normalized?.cost).toEqual(expectedCost);
-      }
-    } finally {
-      vi.useRealTimers();
-    }
+          baseUrl,
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+          maxTokens: 128_000,
+          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        };
+        for (const staleCost of [undefined, retiredCost]) {
+          const normalized = provider.normalizeResolvedModel?.({
+            provider: "anthropic-vertex",
+            modelId: model.id,
+            model: { ...model, cost: staleCost },
+          } as never);
+          expect(normalized?.cost).toEqual(cost);
+        }
+        expect(
+          provider.normalizeResolvedModel?.({
+            provider: "anthropic-vertex",
+            modelId: model.id,
+            model: { ...model, cost },
+          } as never),
+        ).toBeUndefined();
+      });
+    });
   });
 
   it("restores missing or stale Opus 5 metadata during runtime normalization", async () => {

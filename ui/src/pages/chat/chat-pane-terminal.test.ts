@@ -43,6 +43,7 @@ describe("chat pane terminal action", () => {
             false,
             undefined,
             false,
+            null,
           ),
           container,
         );
@@ -106,6 +107,7 @@ describe("chat pane terminal action", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
@@ -144,6 +146,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -182,6 +185,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -208,6 +212,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -292,6 +297,7 @@ describe("chat pane terminal action", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -319,6 +325,7 @@ describe("chat pane terminal action", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );

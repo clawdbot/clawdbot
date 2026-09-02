@@ -4,7 +4,6 @@ import { t } from "../../i18n/index.ts";
 import { retireSessionPaneHandoffs } from "../../pages/chat/chat-pane-shared.ts";
 import { deleteStoredChatSessionSnapshots } from "../../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { showToast } from "../toast.ts";
-import { retireDurableComposerDrafts } from "./composer-draft-store.runtime.ts";
 import { retireStoredComposerDrafts } from "./outbox-store-retirement.ts";
 import { storedChatOutboxScopeKey } from "./outbox-store.ts";
 
@@ -54,14 +53,15 @@ export async function retireDeletedComposerDrafts(
     if (!client.recoveryScopeReady || !client.recoveryScope) {
       failed = true;
     } else {
-      const durable = await retireDurableComposerDrafts(
-        { gatewayOwner: stored.gatewayOwner, recoveryScope: client.recoveryScope },
-        stored.retirements.map((retirement) => ({
-          scopeKey: `chat:v3:${storedChatOutboxScopeKey(retirement.scope)}`,
-          minimumRevision: retirement.minimumRevision,
-          retireBeforeRevision: retirement.retireBeforeRevision,
-        })),
-      );
+      // Bind deletion to its scope before the lazy import can yield to a gateway switch.
+      const owner = { gatewayOwner: stored.gatewayOwner, recoveryScope: client.recoveryScope };
+      const retirements = stored.retirements.map((retirement) => ({
+        scopeKey: `chat:v3:${storedChatOutboxScopeKey(retirement.scope)}`,
+        minimumRevision: retirement.minimumRevision,
+        retireBeforeRevision: retirement.retireBeforeRevision,
+      }));
+      const { retireDurableComposerDrafts } = await import("./composer-draft-store.runtime.ts");
+      const durable = await retireDurableComposerDrafts(owner, retirements);
       failed ||= durable === "storage-failed";
     }
     if (failed) {

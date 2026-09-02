@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   pluginSdkEntrypoints,
-  productionPluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   createFixture,
@@ -98,8 +98,8 @@ describe("write-plugin-sdk-entry-dts", () => {
 
   it("publishes fresh canonical partitions with stable bytes and public nominal identity", () => {
     const { root, write, writeDeclarations, production, qa } = createFixture();
-    expect(production).toEqual(
-      expect.arrayContaining(productionPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`)),
+    expect(production.toSorted()).toEqual(
+      publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`).toSorted(),
     );
     expect(qa).toEqual(
       expect.arrayContaining(pluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`)),
@@ -144,41 +144,14 @@ describe("write-plugin-sdk-entry-dts", () => {
       expect(fs.existsSync(path.join(root, `dist/${entry}.d.ts`)), entry).toBe(false);
     }
 
-    write("test/unrelated.test.ts", "export const test = 2;\n");
-    write("ui/unrelated.ts", "export const view = 2;\n");
-    write(".github/workflows/unrelated.yml", "name: unrelated after\n");
-    const unrelated = runWriter(root);
-    expect(unrelated.status, unrelated.stdout + unrelated.stderr).toBe(0);
-    expect(unrelated.stdout + unrelated.stderr).not.toContain("[tsdown-build] invocation");
-    expect(treeHashes(path.join(root, "dist"))).toEqual(before);
-    expectStagingClean(root);
-
-    // Restore into an equivalent checkout; copying the whole fixture can turn
-    // Windows junctions into source directories and correctly invalidate its cache.
-    const { root: relocated } = createFixture();
-    fs.cpSync(
-      path.join(root, ".artifacts/build-all-cache"),
-      path.join(relocated, ".artifacts/build-all-cache"),
-      { recursive: true },
-    );
-    const restored = runWriter(relocated);
-    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
-    expect(restored.stdout + restored.stderr).not.toContain("[tsdown-build] invocation");
-    const restoredFiles = treeHashes(path.join(relocated, "dist"));
-    expect(restoredFiles).toEqual(
-      Object.fromEntries(
-        Object.entries(before).filter(([file]) => !Object.hasOwn(preserved, `dist/${file}`)),
-      ),
-    );
-    expectOutputs(relocated, production, Object.keys(restoredFiles));
-    expectStagingClean(relocated);
     // Identical sources with a different QA selection must emit the extra canonical entries.
     const privateQa = runWriter(root, true);
     expect(privateQa.status, privateQa.stdout + privateQa.stderr).toBe(0);
     expect(
       (privateQa.stdout + privateQa.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
     ).toHaveLength(2);
-    expectOutputs(root, qa, Object.keys(treeHashes(path.join(root, "dist"))));
+    const priorOutputs = treeHashes(path.join(root, "dist"));
+    expectOutputs(root, qa, Object.keys(priorOutputs));
     expectStagingClean(root);
 
     writeDeclarations("after");
@@ -190,15 +163,16 @@ describe("write-plugin-sdk-entry-dts", () => {
       (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
     ).toHaveLength(2);
     const first = treeHashes(path.join(root, "dist"));
+    const cachedDistFiles = new Set(
+      declarationCacheRecords(root).flatMap((record) =>
+        Object.keys(record.outputs)
+          .filter((file) => file.startsWith("dist/"))
+          .map((file) => file.slice("dist/".length)),
+      ),
+    );
     expectOutputs(root, qa, Object.keys(first));
     expectStagingClean(root);
     expect(first).not.toEqual(before);
-    const repeated = runWriter(root, true);
-    expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
-    expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
-    // Include shared root chunks, not just flat SDK entries, in filename/byte determinism.
-    expect(treeHashes(path.join(root, "dist"))).toEqual(first);
-    expectStagingClean(root);
     expect(fs.existsSync(path.join(root, "dist/plugin-sdk/obsolete.d.ts"))).toBe(false);
     for (const [relative, content] of Object.entries(preserved)) {
       expect(fs.readFileSync(path.join(root, relative), "utf8")).toBe(content);
@@ -206,6 +180,47 @@ describe("write-plugin-sdk-entry-dts", () => {
     expect(fs.readFileSync(path.join(root, "src/schema.sql"), "utf8")).toBe(
       "CREATE TABLE fixture (value TEXT NOT NULL);",
     );
+
+    // One restore proves portable, byte-stable reuse despite unrelated edits.
+    // Copy only the cache: copying Windows junctions can change the source topology.
+    const {
+      root: relocated,
+      write: writeRelocated,
+      writeDeclarations: writeRelocatedDeclarations,
+    } = createFixture();
+    writeRelocatedDeclarations("after");
+    fs.rmSync(path.join(relocated, "contracts/before.ts"));
+    writeRelocated("test/unrelated.test.ts", "export const test = 2;\n");
+    writeRelocated("ui/unrelated.ts", "export const view = 2;\n");
+    writeRelocated(".github/workflows/unrelated.yml", "name: unrelated after\n");
+    for (const [relative, content] of Object.entries(preserved)) {
+      writeRelocated(relative, content);
+    }
+    // The QA build can add shared chunks after the production snapshot. Seed
+    // only unowned history; current cache outputs must come from the restore.
+    for (const file of Object.keys(priorOutputs).filter(
+      (entry) => !entry.startsWith("plugin-sdk/") && !cachedDistFiles.has(entry),
+    )) {
+      expect(first[file]).toBe(priorOutputs[file]);
+      writeRelocated(`dist/${file}`, fs.readFileSync(path.join(root, "dist", file), "utf8"));
+    }
+    writeRelocated("dist/plugin-sdk/obsolete.d.ts", "obsolete restored declaration");
+    fs.cpSync(
+      path.join(root, ".artifacts/build-all-cache"),
+      path.join(relocated, ".artifacts/build-all-cache"),
+      { recursive: true },
+    );
+    const restored = runWriter(relocated, true);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(restored.stdout + restored.stderr).not.toContain("[tsdown-build] invocation");
+    const restoredFiles = treeHashes(path.join(relocated, "dist"));
+    // Include shared root chunks, not just flat SDK entries, in filename/byte determinism.
+    expect(restoredFiles).toEqual(first);
+    expectOutputs(relocated, qa, Object.keys(restoredFiles));
+    expectStagingClean(relocated);
+    for (const [relative, content] of Object.entries(preserved)) {
+      expect(fs.readFileSync(path.join(relocated, relative), "utf8")).toBe(content);
+    }
 
     write(
       "consumer.ts",

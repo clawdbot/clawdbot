@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -16,13 +16,10 @@ import {
   repairMissingConfiguredPluginInstalls,
 } from "./missing-configured-plugin-install.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });
 
 function writeProviderPlugin(rootDir: string): void {
@@ -74,10 +71,7 @@ async function writePathInstallRecord(params: {
 async function createConfiguredCodexBundleFixture(
   manifestState: "valid" | "absent" | "malformed",
 ): Promise<{ cfg: OpenClawConfig; env: NodeJS.ProcessEnv; pluginDir: string }> {
-  const rootDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-codex-${manifestState}-`)),
-  );
-  tempDirs.push(rootDir);
+  const rootDir = tempDirs.make(`openclaw-codex-${manifestState}-`);
   const pluginDir = path.join(rootDir, "gmail");
   fs.mkdirSync(path.join(pluginDir, ".codex-plugin"), { recursive: true });
   if (manifestState !== "absent") {
@@ -147,10 +141,7 @@ function writeBundledOpenCodeGoPlugin(bundledPluginsDir: string): void {
 
 describe("configured plugin install health for explicit load paths", () => {
   it("persists removal of a stale path record shadowed by a configured plugin", async () => {
-    const rootDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-stale-path-record-")),
-    );
-    tempDirs.push(rootDir);
+    const rootDir = tempDirs.make("openclaw-stale-path-record-");
     const pluginDir = path.join(rootDir, "configured-plugin");
     const stalePath = path.join(rootDir, "removed-plugin");
     writeProviderPlugin(pluginDir);
@@ -189,10 +180,7 @@ describe("configured plugin install health for explicit load paths", () => {
   });
 
   it("uses configured selection when a load path keeps bundled origin", async () => {
-    const rootDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-stale-bundled-record-")),
-    );
-    tempDirs.push(rootDir);
+    const rootDir = tempDirs.make("openclaw-stale-bundled-record-");
     const bundledPluginsDir = path.join(rootDir, "dist", "extensions");
     const pluginDir = path.join(bundledPluginsDir, "opencode-go");
     const stalePath = path.join(rootDir, "removed-plugin");
@@ -231,10 +219,7 @@ describe("configured plugin install health for explicit load paths", () => {
   });
 
   it("keeps a record whose source path resolves to the configured plugin", async () => {
-    const rootDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-stale-path-alias-")),
-    );
-    tempDirs.push(rootDir);
+    const rootDir = tempDirs.make("openclaw-stale-path-alias-");
     const pluginDir = path.join(rootDir, "configured-plugin");
     const sourceAlias = path.join(rootDir, "source-alias");
     const stalePath = path.join(rootDir, "removed-install");
@@ -270,8 +255,7 @@ describe("configured plugin install health for explicit load paths", () => {
   });
 
   it("does not install a provider plugin already present at a configured load path", async () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-load-path-provider-"));
-    tempDirs.push(rootDir);
+    const rootDir = tempDirs.make("openclaw-load-path-provider-");
     const pluginDir = path.join(rootDir, "kilocode-provider");
     writeProviderPlugin(pluginDir);
 
@@ -349,8 +333,7 @@ describe("configured plugin install health for explicit load paths", () => {
   );
 
   it("discovers packaged OpenCode Go before configured-plugin repair", async () => {
-    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-opencode-go-"));
-    tempDirs.push(rootDir);
+    const rootDir = tempDirs.make("openclaw-bundled-opencode-go-");
     const homeDir = path.join(rootDir, "home");
     const stateDir = path.join(rootDir, "state");
     const configPath = path.join(stateDir, "openclaw.json");

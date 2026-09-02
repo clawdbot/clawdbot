@@ -234,12 +234,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   fi
 
   OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
-  TRUSTED_TSX_NODE_MODULES="$HARNESS_ROOT_DIR/node_modules"
-  TRUSTED_TSX_IMPORT="$TRUSTED_TSX_NODE_MODULES/tsx/dist/loader.mjs"
-  if [ ! -f "$TRUSTED_TSX_IMPORT" ]; then
-    echo "Trusted upgrade-survivor tsx loader not found: $TRUSTED_TSX_IMPORT" >&2
-    exit 1
-  fi
 
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
@@ -260,7 +254,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS:-60}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK="${OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS="$ROOT_MANAGED_VPS" \
-    -e OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT=/tmp/openclaw-release-harness/node_modules/tsx/dist/loader.mjs \
     -e OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON=/tmp/openclaw-upgrade-survivor-artifacts/summary.json \
     -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="$START_BUDGET_SECONDS" \
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="$STATUS_BUDGET_SECONDS" \
@@ -269,7 +262,6 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     "${PROBE_ENV_ARGS[@]}" \
     ${LIVE_OPENAI_ENV_ARGS[@]+"${LIVE_OPENAI_ENV_ARGS[@]}"} \
     -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
-    -v "$TRUSTED_TSX_NODE_MODULES:/tmp/openclaw-release-harness/node_modules:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/clawhub-fixture-server.cjs:/tmp/openclaw-clawhub-fixture-server.cjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/config-parking.mjs:/tmp/openclaw-config-parking.mjs:ro" \
     -v "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/run.sh:/tmp/openclaw-upgrade-survivor-run.sh:ro" \

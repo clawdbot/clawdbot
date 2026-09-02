@@ -4448,9 +4448,11 @@ describe("doctor health contributions", () => {
       );
     });
 
-    it("forwards explicit paths through later doctor repair writes", async () => {
+    it("consumes committed roster format while preserving later explicit edits", async () => {
       const ctx = buildWriteConfigCtx({});
-      ctx.configResult.explicitSetPaths = [["agents", "entries"]];
+      ctx.cfg.agents = { ownership: "explicit", entries: { default: {} } };
+      ctx.configResult.persistCanonicalAgentRoster = true;
+      ctx.configResult.explicitSetPaths = [["agents", "ownership"]];
 
       await writeConfigContribution.run(ctx);
 
@@ -4458,12 +4460,16 @@ describe("doctor health contributions", () => {
         1,
         expect.objectContaining({
           writeOptions: expect.objectContaining({
-            explicitSetPaths: [["agents", "entries"]],
+            persistCanonicalAgentRoster: true,
+            explicitSetPaths: [["agents", "ownership"]],
           }),
         }),
       );
 
-      ctx.cfg = { gateway: { mode: "remote" } };
+      expect(ctx.configResultWriteCommitted).toBe(true);
+      expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
+
+      ctx.cfg = { ...ctx.cfg, gateway: { mode: "remote" } };
       await writeConfigContribution.run(ctx);
 
       expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
@@ -4471,7 +4477,8 @@ describe("doctor health contributions", () => {
         2,
         expect.objectContaining({
           writeOptions: expect.objectContaining({
-            explicitSetPaths: [["agents", "entries"]],
+            persistCanonicalAgentRoster: undefined,
+            explicitSetPaths: [["agents", "ownership"]],
           }),
         }),
       );

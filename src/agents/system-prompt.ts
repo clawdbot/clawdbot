@@ -44,6 +44,7 @@ import {
   buildFullBootstrapPromptLines,
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
+import { buildTemporalContextSection } from "./date-time.js";
 import { buildDelegationGuidanceSection } from "./delegation-guidance.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
@@ -69,6 +70,7 @@ import type {
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { buildCredentialSafetyPrompt } from "./transcript-credential-safety.js";
+import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -416,25 +418,6 @@ function buildOwnerIdentityLine(
     return undefined;
   }
   return `${OWNER_PROMPT_PREFIX}${displayOwnerNumbers.join(", ")}${OWNER_PROMPT_SUFFIX}`;
-}
-
-function buildTemporalContextSection(params: {
-  userDate?: string;
-  userTimezone?: string;
-  sessionStatusAvailable: boolean;
-}) {
-  const userDate = params.userDate?.trim();
-  const userTimezone = params.userTimezone?.trim();
-  if (!userDate || !userTimezone) {
-    return [];
-  }
-  return [
-    "## Temporal Context",
-    `Current date: ${userDate}`,
-    `Time zone: ${userTimezone}`,
-    ...(params.sessionStatusAvailable ? ["For the exact current time, use `session_status`."] : []),
-    "",
-  ];
 }
 
 function buildAssistantOutputDirectivesSection(params: {
@@ -1477,6 +1460,19 @@ export function buildAgentSystemPrompt(params: {
           }),
         ]),
     ...buildUserIdentitySection(ownerLine, isMinimal),
+    ...(!isMinimal
+      ? [
+          buildUiPresentationPrompt({
+            showWidgetToolName: availableTools.has("show_widget")
+              ? resolveToolName("show_widget")
+              : undefined,
+            dashboardToolName: availableTools.has("dashboard")
+              ? resolveToolName("dashboard")
+              : undefined,
+            portalToolName: availableTools.has("portal") ? resolveToolName("portal") : undefined,
+          }),
+        ]
+      : []),
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,

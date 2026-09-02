@@ -346,6 +346,13 @@ When bundle MCP is enabled, OpenClaw:
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config/settings shape;
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
 
+The node-only `exec` tool is offered only when policy permits it and a connected
+node advertises `system.run`. Offline paired devices and approval-only phones do
+not make remote execution available. A configured node binding must identify an
+eligible node; it never redirects to another device. When several eligible nodes
+are connected, select one explicitly. When local execution is allowed by policy,
+use the CLI's native shell for local work.
+
 `tools.allow` and `tools.deny` also constrain configured native MCP servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same
 provider-safe `<safe-server>__<safe-tool>` identities used by embedded tools,

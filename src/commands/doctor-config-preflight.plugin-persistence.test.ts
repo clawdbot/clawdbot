@@ -436,6 +436,36 @@ describe("Doctor plugin persistence", () => {
       });
     });
   });
+
+  it("returns the final accepted startup read with its metadata producer", async () => {
+    await withPreflightPluginFixture(async (_writeVersion, config) => {
+      const initial = await readPluginPreflight();
+      config.plugins!.entries = { "preflight-fixture": { enabled: false } };
+      await fs.writeFile(initial.snapshot.path, JSON.stringify(config));
+      let acceptedRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
+      const result = await runDoctorConfigPreflight({
+        migrateState: false,
+        migrateLegacyConfig: false,
+        requireStartupMigrationCheckpoint: true,
+        preparePluginMetadataSnapshot: true,
+        observe: false,
+        measure: async (name, operation) => {
+          const measured = await operation();
+          if (name === "doctor.config-preflight.config-snapshot") {
+            acceptedRead = measured as DoctorConfigPreflightPluginSnapshotRead;
+          }
+          return measured;
+        },
+      });
+      expect(acceptedRead?.pluginMetadataSnapshot?.registrySource).toBe("persisted");
+      // The post-convergence generation, not the preceding persistence read, owns startup.
+      expect(result.snapshot === acceptedRead?.snapshot).toBe(true);
+      expect(result.baseConfig === acceptedRead?.snapshot.sourceConfig).toBe(true);
+      expect(result.pluginMetadataSnapshot === acceptedRead?.pluginMetadataSnapshot).toBe(true);
+      expect(migrationCheckpoint.hasActiveStartupMigrationLease({ env: process.env })).toBe(false);
+    });
+  });
+
   it("refuses persistence verification when package facts change before the durable reread", async () => {
     const fixturePluginId = "preflight-\u001b[31mfixture";
     await withPreflightPluginFixture(

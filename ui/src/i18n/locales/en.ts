@@ -5117,6 +5117,7 @@ export const en: TranslationMap & {
   chat: {
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
+    details: "Details",
     copyError: "Copy error",
     diskSpace: {
       warningTitle: "Cloud session disk space is low",
@@ -5813,11 +5814,11 @@ export const en: TranslationMap & {
       fastMode: "Fast mode",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      onlyForSession: "Only for this session",
-      selectionTargetSession: "Selection target: This session only",
-      selectionTargetAgent: "Selection target: This agent's default",
-      selectionTargetGlobal: "Selection target: Global default",
-      useDefaultModel: "Use default ({model})",
+      selectionTargetSession: "This session",
+      selectionTargetAgent: "Agent default",
+      selectionTargetGlobal: "Global default",
+      resetSessionModel: "Reset session model",
+      useDefaultModel: "Use default ({model}) for this session",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",
@@ -5976,7 +5977,6 @@ export const en: TranslationMap & {
       noMatches: "No matching messages",
     },
     pendingInputs: {
-      queued: "Message received. Waiting for the agent to start it.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
@@ -5990,6 +5990,7 @@ export const en: TranslationMap & {
       badge: "Expired",
     },
     composer: {
+      composerInput: "Chat composer",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",

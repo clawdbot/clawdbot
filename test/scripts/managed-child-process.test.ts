@@ -1482,6 +1482,92 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
   });
 
   posixIt.each([
+    { first: "abort", setupFails: false, cleanupFails: false },
+    { first: "signal", setupFails: false, cleanupFails: false },
+    { first: "abort", setupFails: true, cleanupFails: false },
+    { first: "signal", setupFails: true, cleanupFails: false },
+    { first: "abort", setupFails: true, cleanupFails: true },
+    { first: "signal", setupFails: true, cleanupFails: true },
+  ])(
+    "joins reentrant $first cancellation (setup failure: $setupFails, cleanup failure: $cleanupFails)",
+    async ({ first, setupFails, cleanupFails }) => {
+      const dir = createTempDir("openclaw-managed-reentrant-");
+      // Deliberate failed finalization owns a separate namespace; the controller
+      // joins its real child before this fixture is removed.
+      createVitestResourceOwner(dir);
+      const script = path.join(dir, "controller.mjs");
+      fs.writeFileSync(
+        script,
+        `
+import assert from 'node:assert/strict';
+import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
+const controller = new AbortController();
+const setupError = new Error('setup failed');
+const cleanupError = new Error('taskkill failed synchronously');
+const first = ${JSON.stringify(first)};
+const setupFails = ${setupFails};
+const cleanupFails = ${cleanupFails};
+let child, closed;
+let terminations = 0;
+const kill = process.kill.bind(process);
+process.kill = (pid, signal) => {
+  if (signal && pid === -child?.pid) {
+    terminations++;
+  }
+  return kill(pid, signal);
+};
+const outcome = await runManagedCommand({
+  bin: process.execPath,
+  args: ['-e', 'setTimeout(() => process.exit(73), 5000)'],
+  shell: false,
+  stdio: 'ignore',
+  signal: controller.signal,
+  platform: cleanupFails ? 'win32' : process.platform,
+  runTaskkill() {
+    terminations++;
+    child.kill('SIGKILL');
+    throw cleanupError;
+  },
+  onReady(owned) {
+    child = owned;
+    closed = new Promise(resolve => child.once('close', resolve));
+    const cancel = kind => kind === 'abort' ? controller.abort() : process.emit('SIGTERM');
+    cancel(first);
+    assert.equal(terminations, 1, 'cancellation must initiate termination synchronously');
+    cancel(first === 'abort' ? 'signal' : 'abort');
+    assert.equal(terminations, 1, 'reentrant cancellation must reuse finalization');
+    if (setupFails) {
+      throw setupError;
+    }
+  },
+}).catch(error => error);
+await closed;
+assert.throws(() => kill(child.pid, 0));
+assert.equal(terminations, 1, 'setup failure must also join the same finalizer');
+if (cleanupFails) {
+  assert.ok(outcome instanceof AggregateError);
+  assert.deepEqual(outcome.errors, [setupError, cleanupError]);
+  assert.equal(outcome.cause, cleanupError);
+} else if (setupFails) {
+  assert.equal(outcome, setupError);
+} else if (first === 'abort') {
+  assert.equal(outcome.code, 'ABORT_ERR');
+} else {
+  assert.equal(outcome, 143);
+}
+`,
+      );
+      const result = spawnSync(process.execPath, [script], {
+        encoding: "utf8",
+        env: { ...process.env, TMPDIR: dir, TMP: dir, TEMP: dir },
+        timeout: 10_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+    },
+  );
+
+  posixIt.each([
     { runner: "managed", output: "ignore" },
     { runner: "managed", output: "inherit" },
     { runner: "preparation", output: "ignore" },
@@ -1490,6 +1576,8 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
     "rejects and drains descendants left after a successful leader exit through $runner ($output output)",
     async ({ runner, output }) => {
       const dir = createTempDir("openclaw-managed-lingering-");
+      const owner = createVitestResourceOwner(dir);
+      const env = { ...process.env, TMPDIR: dir, TMP: dir, TEMP: dir };
       const descendantPidPath = path.join(dir, "descendant.pid");
       const args = [
         "-e",
@@ -1507,10 +1595,11 @@ child.once("message", () => process.exit(0));
       try {
         const command =
           runner === "preparation"
-            ? runNodeStep("lingering-prep", args, 1_000)
+            ? runNodeStep("lingering-prep", args, 1_000, { env })
             : runManagedCommand({
                 bin: process.execPath,
                 args,
+                env,
                 requireProcessTreeExit: true,
                 shell: false,
                 stdio: output,
@@ -1518,7 +1607,11 @@ child.once("message", () => process.exit(0));
               });
         const failure = await command.catch((error: unknown) => error);
         const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
-        expect.soft(failure).toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
+        expect.soft(failure).toMatchObject({
+          code: "EPROCESSGROUP_CLEANUP_FAILED",
+          processTreeState: "terminated",
+        });
+        expect(() => owner.assertReleased()).not.toThrow();
         expect
           .soft(
             isProcessAlive(descendantPid),

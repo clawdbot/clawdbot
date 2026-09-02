@@ -60,6 +60,32 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it("persists compaction item identity under each current run across reload", async () => {
+    const { sessionManager, root, target } = await openPersistedSessionManager();
+    for (const runId of ["run-first", "run-second"]) {
+      const guarded = guardSessionManager(sessionManager, { runId });
+      const keptId = guarded.appendMessage({ role: "user", content: runId, timestamp: 1 });
+      guarded.appendCompaction("summary", keptId, 100, { source: "hook" }, true, {
+        itemId: `compaction-${runId}`,
+      });
+    }
+    const compactions = SessionManager.open(target, root)
+      .getBranch()
+      .filter((entry) => entry.type === "compaction");
+    expect(compactions).toMatchObject([
+      {
+        __openclaw: { runId: "run-first", itemId: "compaction-run-first" },
+        details: { source: "hook" },
+        fromHook: true,
+      },
+      {
+        __openclaw: { runId: "run-second", itemId: "compaction-run-second" },
+        details: { source: "hook" },
+        fromHook: true,
+      },
+    ]);
+  });
+
   it("consumes a steered source under its own custody and does not repeat its approval hook", async () => {
     const { root, target, sessionEntry } = await openPersistedSessionManager();
     const recorderTarget = { ...target, sessionEntry };

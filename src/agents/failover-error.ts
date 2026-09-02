@@ -48,6 +48,7 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
+  "ActiveTurnClaimError",
 ]);
 
 function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {

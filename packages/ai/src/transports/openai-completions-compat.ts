@@ -48,7 +48,7 @@ type DetectedOpenAICompletionsCompat = {
 
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
-  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders"
+  "cacheControlFormat" | "openRouterRouting" | "sendSessionAffinityHeaders" | "reasoningEffortMap"
 > & {
   cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
   openRouterRouting?: OpenAICompletionsCompat["openRouterRouting"];
