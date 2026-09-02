@@ -38,6 +38,7 @@ import {
   validatePluginConfig,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
+import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
@@ -246,6 +247,11 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+    const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+      pluginId,
+      packageName: candidate.packageName,
+      packageBuild: candidate.packageManifest?.build,
+    });
     let mod: OpenClawPluginModule | null;
     try {
       mod = withProfile(
@@ -265,6 +271,7 @@ export async function loadOpenClawPluginCliRegistry(
         error,
         logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
         diagnosticMessagePrefix: "failed to load plugin: ",
+        missingDependencyHint,
       });
       continue;
     }
@@ -359,6 +366,7 @@ export async function loadOpenClawPluginCliRegistry(
         error,
         logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
         diagnosticMessagePrefix: "plugin failed during register: ",
+        missingDependencyHint,
       });
     }
   }

@@ -203,6 +203,7 @@ function normalizeActivationBlockedReason(reason?: string): ConfiguredChannelBlo
     case "blocked by denylist":
       return "blocked-by-denylist";
     case "disabled in config":
+    case "channel disabled in config":
       return "plugin-disabled";
     case "not in allowlist":
       return "not-in-allowlist";

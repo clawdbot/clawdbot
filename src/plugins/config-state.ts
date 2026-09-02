@@ -11,8 +11,8 @@ import {
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
-  isBundledChannelEnabledByChannelConfig as isBundledChannelEnabledByChannelConfigShared,
   normalizePluginsConfigWithResolverCore,
+  resolveChannelConfigEnablement,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -216,7 +216,7 @@ function resolvePluginActivationState(params: {
           plugins: params.config,
         }),
       allowBundledChannelExplicitBypassesAllowlist: true,
-      isBundledChannelEnabledByChannelConfig: isBundledChannelEnabledByChannelConfigShared,
+      resolveChannelConfigEnablement,
     }),
   );
 }

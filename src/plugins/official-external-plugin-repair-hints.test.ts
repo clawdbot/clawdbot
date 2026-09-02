@@ -84,7 +84,7 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
     expect(mocks.resolveConfiguredChannelPresencePolicy).not.toHaveBeenCalled();
   });
 
-  it("prefers the ClawHub install hint for externalized WhatsApp", () => {
+  it("prefers the npm install hint for externalized WhatsApp", () => {
     mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
       {
         channelId: "whatsapp",
@@ -104,8 +104,8 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
       pluginId: "whatsapp",
       channelId: "whatsapp",
       label: "WhatsApp",
-      installSpec: "clawhub:@openclaw/whatsapp",
-      installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
+      installSpec: "@openclaw/whatsapp",
+      installCommand: "openclaw plugins install @openclaw/whatsapp",
     });
   });
 

@@ -790,6 +790,27 @@ describe("loadOpenClawPlugins", () => {
         expect(telegram?.error).toBe("disabled in config");
       },
     },
+    {
+      name: "keeps channels.<id>.enabled=false authoritative over plugins.entries enablement",
+      config: {
+        channels: {
+          telegram: {
+            enabled: false,
+          },
+        },
+        plugins: {
+          entries: {
+            telegram: { enabled: true },
+          },
+        },
+      } satisfies PluginLoadConfig,
+      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+        expect(telegram?.status).toBe("disabled");
+        expect(telegram?.error).toBe("channel disabled in config");
+        expect(registry.channels.map((entry) => entry.plugin.id)).not.toContain("telegram");
+      },
+    },
   ] as const)(
     "handles bundled telegram plugin enablement and override rules: $name",
     ({ config, assert }) => {

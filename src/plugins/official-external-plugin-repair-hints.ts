@@ -5,6 +5,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogManifest,
+  isExternallyDistributedPlugin,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstallSources,
   resolveOfficialExternalPluginLabel,
@@ -24,6 +25,25 @@ export type OfficialExternalPluginRepairHint = {
 type MissingOfficialExternalChannelPluginRepairHint = OfficialExternalPluginRepairHint & {
   channelId: string;
 };
+
+/**
+ * Names the install path when an externally distributed plugin fails to import its runtime
+ * dependencies. Source builds compile these plugins into `dist/extensions/<id>` but their
+ * dependencies stay plugin-local, so a moved or pruned checkout leaves the dist link dangling.
+ */
+export function resolveExternalPluginRuntimeDependencyRepairHint(candidate: {
+  pluginId: string;
+  packageName?: string;
+  packageBuild?: { bundledDist?: boolean };
+}): string | undefined {
+  if (!isExternallyDistributedPlugin(candidate)) {
+    return undefined;
+  }
+  const hint = resolveOfficialExternalPluginRepairHint(candidate.pluginId);
+  return hint
+    ? `runtime dependencies are missing for externally distributed plugin ${hint.label}; ${hint.repairHint}`
+    : undefined;
+}
 
 /** Resolves install/doctor commands for an official external plugin or channel id. */
 export function resolveOfficialExternalPluginRepairHint(

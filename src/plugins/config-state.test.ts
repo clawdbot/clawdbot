@@ -489,6 +489,21 @@ describe("resolveEffectivePluginActivationState", () => {
       },
     },
     {
+      name: "keeps an explicit channel disable authoritative over plugin entry enablement",
+      params: { id: "telegram", origin: "bundled" },
+      rawConfig: {
+        channels: { telegram: { enabled: false } },
+        plugins: { entries: { telegram: { enabled: true } } },
+      },
+      expected: {
+        enabled: false,
+        activated: false,
+        explicitlyEnabled: true,
+        source: "disabled",
+        reason: "channel disabled in config",
+      },
+    },
+    {
       name: "keeps a global plugin default-enabled without inventing explicit selection or a reason",
       params: { id: "global-helper", origin: "global" },
       expected: {

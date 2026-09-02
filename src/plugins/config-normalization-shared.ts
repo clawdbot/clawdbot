@@ -255,21 +255,26 @@ export function normalizePluginsConfigWithResolverCore(
   };
 }
 
-export function isBundledChannelEnabledByChannelConfig(
+/**
+ * Reads the operator's `channels.<id>.enabled` decision for a channel plugin id.
+ * `true`/`false` are explicit channel-level decisions; `undefined` means no signal.
+ */
+export function resolveChannelConfigEnablement(
   cfg: OpenClawConfig | undefined,
   pluginId: string,
-): boolean {
+): boolean | undefined {
   const channels = cfg?.channels as Record<string, unknown> | undefined;
   if (!channels) {
-    return false;
+    return undefined;
   }
   const channelId = normalizeChatChannelId(pluginId);
   if (!channelId) {
-    return false;
+    return undefined;
   }
   const entry = channels[channelId];
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
+    return undefined;
   }
-  return (entry as Record<string, unknown>).enabled === true;
+  const enabled = (entry as Record<string, unknown>).enabled;
+  return typeof enabled === "boolean" ? enabled : undefined;
 }
