@@ -181,24 +181,36 @@ async function planWorkshopRelocation(
   records: SkillProposalRecord[],
   env: NodeJS.ProcessEnv,
 ): Promise<{
-  moves: Array<{ source: string; destination: string; updates: SkillProposalRecord[] }>;
+  moves: Array<{
+    source: string;
+    destination: string;
+    adopted: boolean;
+    updates: SkillProposalRecord[];
+  }>;
   updates: SkillProposalRecord[];
 }> {
   const workshopRoot = resolveWorkshopSkillsDir(env);
   const external = records.filter(
     (record) => !isInsideWorkshopRoot(workshopRoot, record.target.skillDir),
   );
-  const plannedMoves = new Map<string, string>();
+  const movesBySource = new Map<string, { destination: string; adopted: boolean }>();
   const staleReasons = new Map<string, string>();
   for (const record of external) {
     if (record.kind !== "create" || record.status !== "applied") {
       continue;
     }
     const source = path.resolve(record.target.skillDir);
-    if (plannedMoves.has(source) || !(await pathExists(source))) {
+    if (movesBySource.has(source)) {
       continue;
     }
     const target = resolveSkillProposalTarget({ skillName: record.target.skillKey, env });
+    if (!(await pathExists(source))) {
+      // The move is durable before metadata persistence; on rerun, adopt the existing destination.
+      if (await pathExists(target.skillFile)) {
+        movesBySource.set(source, { destination: target.skillDir, adopted: true });
+      }
+      continue;
+    }
     if (await pathExists(target.skillDir)) {
       staleReasons.set(
         record.id,
@@ -206,20 +218,20 @@ async function planWorkshopRelocation(
       );
       continue;
     }
-    plannedMoves.set(source, target.skillDir);
+    movesBySource.set(source, { destination: target.skillDir, adopted: false });
   }
 
   const updates: SkillProposalRecord[] = [];
   const updatesBySource = new Map<string, SkillProposalRecord[]>();
   for (const record of external) {
     const source = path.resolve(record.target.skillDir);
-    const movedDestination = plannedMoves.get(source);
+    const move = movesBySource.get(source);
     const conflictReason = staleReasons.get(record.id);
-    const updated = movedDestination
+    const updated = move
       ? retargetWorkshopProposal(record, {
           skillKey: record.target.skillKey,
-          skillDir: movedDestination,
-          skillFile: path.join(movedDestination, "SKILL.md"),
+          skillDir: move.destination,
+          skillFile: path.join(move.destination, "SKILL.md"),
         })
       : conflictReason
         ? staleWorkshopProposal(record, conflictReason)
@@ -235,7 +247,7 @@ async function planWorkshopRelocation(
               )
             : undefined;
     if (updated) {
-      if (movedDestination) {
+      if (move) {
         const sourceUpdates = updatesBySource.get(source) ?? [];
         sourceUpdates.push(updated);
         updatesBySource.set(source, sourceUpdates);
@@ -245,9 +257,10 @@ async function planWorkshopRelocation(
     }
   }
   return {
-    moves: [...plannedMoves].map(([source, destination]) => ({
+    moves: [...movesBySource].map(([source, move]) => ({
       source,
-      destination,
+      destination: move.destination,
+      adopted: move.adopted,
       updates: updatesBySource.get(source) ?? [],
     })),
     updates,
@@ -279,7 +292,9 @@ async function relocateLegacyWorkshopTargets(
   };
   const plan = await planWorkshopRelocation(records, env);
   for (const move of plan.moves) {
-    await moveWorkshopSkillDirectory(move.source, move.destination);
+    if (!move.adopted) {
+      await moveWorkshopSkillDirectory(move.source, move.destination);
+    }
     await persistUpdates(move.updates);
   }
   await persistUpdates(plan.updates);
@@ -293,7 +308,7 @@ async function relocateLegacyWorkshopTargets(
     });
   }
   return {
-    movedSkills: plan.moves.length,
+    movedSkills: plan.moves.filter((move) => !move.adopted).length,
     retargetedProposals,
     staleProposals,
     removedBackupRoots: backups.names.length,
