@@ -52,14 +52,39 @@ describe("collectClawPluginUninstallWarnings", () => {
     );
   });
 
-  it("matches a scoped ClawHub spec recorded without a version", () => {
+  it.each([
+    {
+      label: "matches a scoped spec recorded without a version",
+      record: {
+        source: "clawhub" as const,
+        spec: "clawhub:@owner/audit",
+        version: "2.0.1",
+      },
+      ref: "@owner/audit",
+    },
+    {
+      label: "prefers the canonical package over the raw spec",
+      record: {
+        source: "clawhub" as const,
+        spec: "clawhub:@alias/audit@2.0.1",
+        clawhubPackage: "@owner/audit",
+        version: "2.0.1",
+      },
+      ref: "@owner/audit",
+    },
+    {
+      label: "falls back to the plugin id when the package fields are absent",
+      record: { source: "clawhub" as const, version: "2.0.1" },
+      ref: "audit",
+    },
+  ])("$label", ({ record, ref }) => {
     readClawPackageRefsMock.mockReturnValue([
       {
         kind: "plugin",
         source: "clawhub",
-        ref: "@owner/audit",
+        ref,
         version: "2.0.1",
-        status: "installed",
+        status: "complete",
         clawName: "@owner/audit-claw",
       },
     ]);
@@ -67,11 +92,7 @@ describe("collectClawPluginUninstallWarnings", () => {
     expect(
       collectClawPluginUninstallWarnings({
         pluginId: "audit",
-        installRecord: {
-          source: "clawhub" as const,
-          spec: "clawhub:@owner/audit",
-          version: "2.0.1",
-        },
+        installRecord: record,
       }),
     ).toContain('Warning: plugin "audit" is referenced by Claw: @owner/audit-claw.');
   });
