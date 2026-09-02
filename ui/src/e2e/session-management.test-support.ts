@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Locator, Page } from "playwright";
@@ -18,12 +17,6 @@ export { controlUiSessionPath, controlUiSessionUrl, installMockGateway, waitForC
 
 export const collapsedSessionSectionsStorageKey = "openclaw:sidebar:sessions:collapsed-sections";
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-export const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "thread-management",
-);
 
 export function createSessionManagementE2eSuite(source = false) {
   return createControlUiE2eSuite({
@@ -173,16 +166,19 @@ export async function submitInputDialog(page: Page, value: string): Promise<void
   await field.waitFor({ state: "detached" });
 }
 
-export async function captureUiProof(page: Page, fileName: string) {
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   // Dialogs and menus fade in, so an undisabled capture can land mid-transition
   // and prove nothing about the state it was taken for.
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(owner.artifactDir, fileName),
   });
 }

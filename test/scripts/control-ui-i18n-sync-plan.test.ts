@@ -56,16 +56,26 @@ function localeMeta(overrides: Partial<LocaleMeta> = {}): LocaleMeta {
 }
 
 describe("createControlUiLocaleSyncPlan", () => {
-  it("merges lazy English source catalogs without losing sibling keys", () => {
-    expect(
-      mergeControlUiTranslationMaps(
-        { activity: { title: "Activity" }, common: { ok: "OK" } },
-        { activity: { runInspector: { title: "Run inspector" } } },
-      ),
-    ).toEqual({
-      activity: { title: "Activity", runInspector: { title: "Run inspector" } },
+  it("fills lazy anchors in source order without mutating source or losing siblings", () => {
+    const startup = {
+      updates: { before: "Before", page: {}, after: "After" },
+      settings: {},
       common: { ok: "OK" },
-    });
+    };
+    const fragment = { settings: { title: "Settings" }, updates: { page: { title: "Updates" } } };
+    const merged = mergeControlUiTranslationMaps(startup, fragment);
+
+    expect([...flattenTranslations(merged)]).toEqual([
+      ["updates.before", "Before"],
+      ["updates.page.title", "Updates"],
+      ["updates.after", "After"],
+      ["settings.title", "Settings"],
+      ["common.ok", "OK"],
+    ]);
+    expect(startup.settings).toEqual({});
+    expect(startup.updates.page).toEqual({});
+    expect(merged.updates).not.toBe(startup.updates);
+    expect(merged.settings).not.toBe(fragment.settings);
   });
 
   it("preserves provenance when a configured provider performs no translation", () => {

@@ -45,6 +45,17 @@ const fallbackOptions = {
   fallbacksOverride: ["fixture-next/fixture-model"],
 };
 
+it("does not replay an unscoped preflight subclass on another model", async () => {
+  class PolicyRefusal extends AgentHarnessPreflightError {}
+  const error = new PolicyRefusal("handoff refused", {
+    cause: new FailoverError("529 overloaded", { reason: "overloaded", status: 529 }),
+  });
+  const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("unexpected fallback");
+  await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
+  expect(run).toHaveBeenCalledOnce();
+  expect(providerHook).not.toHaveBeenCalled();
+});
+
 const wrappers = [
   { name: "direct", wrap: (error: FailoverError): unknown => error },
   { name: "error", wrap: (error: FailoverError): unknown => ({ error }) },

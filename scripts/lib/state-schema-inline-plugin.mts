@@ -16,6 +16,10 @@ const STATE_SCHEMA_MODULES = [
   },
 ] as const;
 
+export const STATE_SCHEMA_GENERATOR_INPUTS = STATE_SCHEMA_MODULES.map(
+  ({ schemaPath }) => schemaPath,
+);
+
 /** Inline canonical schema bytes so bundled consumers need no SQL asset. */
 export function createStateSchemaInlinePlugin(rootDir = process.cwd()) {
   const schemasByModulePath = new Map(

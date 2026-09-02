@@ -45,16 +45,13 @@ function resolvePluginRegistryRecordContent(
     packageJson,
     ...record
   } = plugin;
-  // Compare the durable package-build contract. The store intentionally drops
-  // build-only metadata that runtime selection does not consume.
+  // Only bundledDist changes runtime artifact selection. The store drops other build metadata,
+  // so omit packageBuild when bundledDist is undeclared or legacy rows report false drift.
   const stableRecord = Object.assign(
     record,
-    packageBuild === undefined
+    packageBuild?.bundledDist === undefined
       ? {}
-      : {
-          packageBuild:
-            packageBuild.bundledDist === undefined ? {} : { bundledDist: packageBuild.bundledDist },
-        },
+      : { packageBuild: { bundledDist: packageBuild.bundledDist } },
   );
   if (!packageJson || !comparePackageJsonPath) {
     return stableRecord;

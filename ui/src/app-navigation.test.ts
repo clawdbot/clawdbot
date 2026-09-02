@@ -126,7 +126,7 @@ describe("navigationIconForRoute", () => {
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
-      "model-providers": "plug",
+      "model-providers": "box",
       "memory-import": "download",
       notifications: "bell",
       security: "shieldCheck",

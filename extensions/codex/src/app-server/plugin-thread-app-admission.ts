@@ -7,7 +7,7 @@ import {
 } from "./app-inventory-cache.js";
 import type { ResolvedCodexPluginsPolicy } from "./config.js";
 import {
-  resolveOwnedAppReadOnlyToolConfigKeys,
+  resolveOwnedAppApprovalOverrideKeys,
   type CodexPluginInventory,
   type CodexPluginInventoryRecord,
   type CodexPluginOwnedApp,
@@ -188,7 +188,7 @@ export function toCodexPluginOwnedAccountApp(app: v2.AppInfo): CodexPluginOwnedA
     accessible: app.isAccessible,
     enabled: app.isEnabled,
     needsAuth: !app.isAccessible,
-    ...resolveOwnedAppReadOnlyToolConfigKeys(app),
+    ...resolveOwnedAppApprovalOverrideKeys(app),
   };
 }
 

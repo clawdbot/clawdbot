@@ -243,10 +243,11 @@ checkouts also compile first-party plugins published separately with
 `openclaw.build.bundledDist: false`; that marker still preserves the plugin's
 external npm or ClawHub ownership and does not change either artifact contract.
 Unknown, invalid, or ambiguous ids fail the image build.
-Known dependency/source-only ids keep their existing source and dependency
-staging without gaining a compiled root dist entry. A selected plugin with
-unified build entries must compile successfully; unselected external plugin
-source and runtime output are pruned.
+This includes WhatsApp: `OPENCLAW_EXTENSIONS=whatsapp` compiles and packages its
+runtime. Ordinary source builds generate its runtime through the separate
+external-plugin build path; root npm artifacts continue to exclude it. Selected
+plugins must compile successfully; unselected external plugin source and
+runtime output are pruned.
 
 For example, these commands build separate, multi-architecture standalone
 FakeCo gateway images for ClickClack, Slack, and Microsoft Teams. ClawRouter is
@@ -576,11 +577,13 @@ does not reveal the full token.
     keeps both dependency layers cacheable without omitting `packages/*`, selected
     `extensions/*`, or other required workspace metadata.
 
-    Runtime assembly replaces the build dependency trees with the fresh production
-    install while retaining compiled workspace packages and native addon outputs.
-    It does not run `pnpm prune` on dependencies inherited from an image layer;
-    pnpm 12 can fail that operation with `EXDEV` on OverlayFS. The `build` target
-    retains development dependencies for live-test containers.
+    The `runtime-assets` stage inherits `production-deps` and overlays `/app`
+    from `runtime-build-output`, a copy of `build` with dependency trees removed.
+    This reuses the fresh production install's layers while preserving compiled
+    workspace packages and native addon outputs. It does not run `pnpm prune`
+    on dependencies inherited from an image layer; pnpm 12 can fail that operation
+    with `EXDEV` on OverlayFS. The `build` target retains development dependencies
+    for live-test containers.
 
     The same Dockerfile preserves the production runtime contract: digest-pinned
     Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and
@@ -669,11 +672,13 @@ under their own `-riscv64` tag:
 docker pull ghcr.io/openclaw/openclaw:<version>-riscv64
 ```
 
-This tag is best-effort. The build is QEMU-emulated and runs as a non-blocking
-CI job (`continue-on-error`), so a given release may ship without it. It is
-**not** folded into the default `:<version>`/`:latest` tags, which stay
-amd64+arm64 and fully attested; pull the `-riscv64` tag explicitly on RISC-V
-hardware.
+This tag is best-effort. It is produced by a separate, manually dispatched
+`Docker RISC-V` workflow rather than by the release pipeline, so a given release
+may ship without it. It is **not** folded into the default
+`:<version>`/`:latest` tags, which stay amd64+arm64; pull the `-riscv64` tag
+explicitly on RISC-V hardware. Unlike those tags, the riscv64 image is pushed
+directly instead of being promoted from a sealed, attested OCI payload, so it
+carries no provenance attestation.
 
 The riscv64 build differs from amd64/arm64 for two reasons:
 
@@ -682,8 +687,8 @@ The riscv64 build differs from amd64/arm64 for two reasons:
   [unofficial-builds](https://unofficial-builds.nodejs.org).
 - **Cross-built JS**: rolldown (the bundler) ships no riscv64 binary, so the
   JavaScript bundle is built on the host architecture and only native addons are
-  installed natively on riscv64. The build is therefore emulated (QEMU) in CI and
-  runs as a non-blocking job.
+  installed natively on riscv64. The build is therefore QEMU-emulated in CI,
+  which is slow enough that it runs outside the release pipeline.
 
 ### Quick start (riscv64)
 

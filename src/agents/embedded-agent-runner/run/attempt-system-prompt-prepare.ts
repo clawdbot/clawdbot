@@ -243,6 +243,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       agentId: params.sessionAgentId,
       workspaceDir: params.effectiveWorkspace,
       defaultThinkLevel: attempt.thinkLevel,
+      runtimeCwd: params.effectiveCwd,
       reasoningLevel: attempt.reasoningLevel ?? "off",
       extraSystemPrompt,
       ownerNumbers: attempt.ownerNumbers,
@@ -324,9 +325,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       const runtime = resolveSandboxRuntimeStatus({
         cfg: attempt.config,
         agentId:
-          params.sandboxSessionKey === (attempt.sessionKey?.trim() || attempt.sessionId)
+          attempt.sandboxAgentId ??
+          (params.sandboxSessionKey === (attempt.sessionKey?.trim() || attempt.sessionId)
             ? params.sessionAgentId
-            : undefined,
+            : undefined),
         sessionKey: params.sandboxSessionKey,
       });
       return { mode: runtime.mode, sandboxed: runtime.sandboxed };

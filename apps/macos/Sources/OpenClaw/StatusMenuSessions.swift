@@ -425,7 +425,7 @@ extension StatusMenuSessions {
         Task {
             guard SessionActions.confirmDestructiveAction(
                 title: String(localized: "Reset session?"),
-                message: String(localized: "Starts a new session ID for “\(key)”."),
+                message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
                 action: String(localized: "Reset"))
             else { return }
 
@@ -465,7 +465,7 @@ extension StatusMenuSessions {
         Task {
             guard SessionActions.confirmDestructiveAction(
                 title: String(localized: "Delete session?"),
-                message: String(localized: "Deletes the “\(key)” entry and archives its transcript."),
+                message: String(format: String(localized: "Deletes the “%@” entry and archives its transcript."), key),
                 action: String(localized: "Delete"))
             else { return }
 

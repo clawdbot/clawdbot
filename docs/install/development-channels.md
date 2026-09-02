@@ -38,12 +38,19 @@ openclaw update --channel dev
 `--channel` persists the choice to `update.channel` in config and drives both
 install paths:
 
-| Channel           | npm/package installs                                                                                                                                                                   | git installs                                                                                                                                                       |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `stable`          | dist-tag `latest`                                                                                                                                                                      | latest stable git tag (excludes `-alpha.N`, `-beta.N`, `-rc.N`, `-dev.N`, `-next.N`, `-preview.N`, `-canary.N`, `-nightly.N`, and other named prerelease suffixes) |
-| `extended-stable` | resolves the public npm `extended-stable` selector, verifies the exact selected package, and installs that exact version. Fails closed with no fallback to `latest`, `beta`, or `dev`. | unsupported: OpenClaw leaves the checkout unchanged and asks you to use a package installation                                                                     |
-| `beta`            | dist-tag `beta`, falling back to `latest` when `beta` is missing or older                                                                                                              | latest beta git tag, falling back to the latest stable git tag when beta is missing or older                                                                       |
-| `dev`             | switches to a Git checkout, builds it, and reinstalls the global CLI                                                                                                                   | fetches, rebases the checkout on the upstream `main` branch, builds, and reinstalls the global CLI                                                                 |
+| Channel           | npm/package installs                                                                                                                                                                   | git installs                                                                                       |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `stable`          | dist-tag `latest`                                                                                                                                                                      | switches to the npm package at `latest`                                                            |
+| `extended-stable` | resolves the public npm `extended-stable` selector, verifies the exact selected package, and installs that exact version. Fails closed with no fallback to `latest`, `beta`, or `dev`. | unsupported: OpenClaw leaves the checkout unchanged and asks you to use a package installation     |
+| `beta`            | dist-tag `beta`, falling back to `latest` when `beta` is missing or older                                                                                                              | switches to the npm package at `beta`, falling back to `latest` when beta is missing or older      |
+| `dev`             | switches to a Git checkout, builds it, and reinstalls the global CLI                                                                                                                   | fetches, rebases the checkout on the upstream `main` branch, builds, and reinstalls the global CLI |
+
+An explicit `--channel stable` or `--channel beta` switches a Git installation
+to a package installation. A bare `openclaw update` in a Git checkout with a
+previously stored stable or beta channel instead selects the corresponding Git tag.
+For managed Gateways, successful switches refresh the service to the verified
+installation before checking readiness. A refused switch or verified rollback
+recovers the previous service; unverified recovery leaves it stopped for inspection.
 
 For `dev` git installs, the default checkout is `~/openclaw` (or
 `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set); override with

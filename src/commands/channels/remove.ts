@@ -24,6 +24,7 @@ import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 export type ChannelsRemoveOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   delete?: boolean;
@@ -158,6 +159,7 @@ export async function channelsRemoveCommand(
         return await resolveInstallableChannelPlugin({
           cfg,
           runtime,
+          agentId: opts.agent,
           rawChannel: lookupChannel,
           allowInstall: false,
         });

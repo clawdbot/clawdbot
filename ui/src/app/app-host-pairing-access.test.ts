@@ -265,7 +265,11 @@ describe("application shell pairing access", () => {
 
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
     expect(sidebar?.getAttribute("aria-busy")).toBe("true");
-    expect(sidebar?.textContent).toContain("Loading…");
+    const loadingSkeleton = sidebar?.querySelector<HTMLElement>(
+      '.settings-sidebar__loading[role="status"][aria-busy="true"]',
+    );
+    expect(loadingSkeleton?.getAttribute("aria-label")).toBe("Loading…");
+    expect(loadingSkeleton?.querySelectorAll(".settings-sidebar__loading-row")).toHaveLength(7);
     expect(loadRenderer).toHaveBeenCalledOnce();
   });
 

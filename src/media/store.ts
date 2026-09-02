@@ -181,7 +181,11 @@ function hasRecoverableMissingMediaDirCause(err: unknown): boolean {
   return findErrorWithCode(err, "ENOENT") !== undefined;
 }
 
-async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): Promise<T> {
+async function retryAfterRecreatingDir<T>(
+  dir: string,
+  run: () => Promise<T>,
+  canRetry: () => boolean = () => true,
+): Promise<T> {
   return await retryAsync(
     async () => {
       try {
@@ -194,7 +198,7 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
       attempts: 2,
       minDelayMs: 0,
       maxDelayMs: 0,
-      shouldRetry: hasRecoverableMissingMediaDirCause,
+      shouldRetry: (err) => canRetry() && hasRecoverableMissingMediaDirCause(err),
       onRetry: async () => {
         // Cleanup can prune the directory between mkdir and file open. Recreate
         // it once; further failures remain terminal instead of looping.
@@ -433,25 +437,6 @@ function buildSavedMediaResult(params: {
   };
 }
 
-type SavedMediaTempWriteResult = Omit<SavedMedia, "path">;
-
-async function saveMediaSiblingTempFile(params: {
-  dir: string;
-  tempPrefix: string;
-  writeTemp: (tempPath: string) => Promise<SavedMediaTempWriteResult>;
-}): Promise<SavedMedia> {
-  const { result } = await retryAfterRecreatingDir(params.dir, () =>
-    writeSiblingTempFile<SavedMediaTempWriteResult>({
-      dir: params.dir,
-      mode: MEDIA_FILE_MODE,
-      tempPrefix: params.tempPrefix,
-      writeTemp: params.writeTemp,
-      resolveFinalPath: (resultLocal) => path.join(params.dir, resultLocal.id),
-    }),
-  );
-  return buildSavedMediaResult({ dir: params.dir, ...result });
-}
-
 async function writeSavedMediaBuffer(params: {
   subdir: string;
   id: string;
@@ -474,7 +459,7 @@ async function writeMediaStreamToFile(params: {
   maxBytes: number;
 }): Promise<{ sniffBuffer: Buffer; size: number }> {
   const handle = await fs.open(params.tempPath, "wx", MEDIA_FILE_MODE);
-  const sniffChunks: Buffer[] = [];
+  const sniffBuffer = Buffer.allocUnsafe(16384);
   let sniffLen = 0;
   let total = 0;
   try {
@@ -498,15 +483,14 @@ async function writeMediaStreamToFile(params: {
       if (total > params.maxBytes) {
         throw new Error(`Media exceeds ${formatMediaLimitMb(params.maxBytes)} limit`);
       }
-      if (sniffLen < 16384) {
-        const remaining = 16384 - sniffLen;
-        sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
-        sniffLen += Math.min(buffer.byteLength, remaining);
+      if (sniffLen < sniffBuffer.length) {
+        // The next pull may reuse the chunk; retain only the prefix we own.
+        sniffLen += buffer.copy(sniffBuffer, sniffLen);
       }
       await handle.writeFile(buffer);
     }
     return {
-      sniffBuffer: Buffer.concat(sniffChunks, sniffLen),
+      sniffBuffer: sniffBuffer.subarray(0, sniffLen),
       size: total,
     };
   } finally {
@@ -645,31 +629,46 @@ export async function saveMediaStream(
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const baseId = crypto.randomUUID();
   const headerExt = extensionForAuthoritativeHeaderMime(contentType);
-  return await saveMediaSiblingTempFile({
+  // Directory setup may retry before iteration starts. A consumed stream cannot
+  // be replayed after a write or publication failure.
+  let consumptionStarted = false;
+  const mediaStream = (async function* () {
+    consumptionStarted = true;
+    yield* stream;
+  })();
+  const { result } = await retryAfterRecreatingDir(
     dir,
-    tempPrefix: `.${baseId}`,
-    writeTemp: async (tempPath) => {
-      const { sniffBuffer, size } = await writeMediaStreamToFile({
-        stream,
-        tempPath,
-        maxBytes,
-      });
-      const mime = await detectMime({
-        buffer: sniffBuffer,
-        headerMime: contentType,
-        filePath: originalFilename ?? detectionFilePathHint,
-      });
-      const ext = resolveSavedMediaExtension({
-        detectedMime: mime,
-        headerExt,
-        contentType,
-        originalFilename,
-        detectionFilePathHint,
-      });
-      const id = buildSavedMediaId({ baseId, ext, originalFilename });
-      return { id, size, contentType: mime };
-    },
-  });
+    () =>
+      writeSiblingTempFile<Omit<SavedMedia, "path">>({
+        dir,
+        mode: MEDIA_FILE_MODE,
+        tempPrefix: `.${baseId}`,
+        writeTemp: async (tempPath) => {
+          const { sniffBuffer, size } = await writeMediaStreamToFile({
+            stream: mediaStream,
+            tempPath,
+            maxBytes,
+          });
+          const mime = await detectMime({
+            buffer: sniffBuffer,
+            headerMime: contentType,
+            filePath: originalFilename ?? detectionFilePathHint,
+          });
+          const ext = resolveSavedMediaExtension({
+            detectedMime: mime,
+            headerExt,
+            contentType,
+            originalFilename,
+            detectionFilePathHint,
+          });
+          const id = buildSavedMediaId({ baseId, ext, originalFilename });
+          return { id, size, contentType: mime };
+        },
+        resolveFinalPath: (resultLocal) => path.join(dir, resultLocal.id),
+      }),
+    () => !consumptionStarted,
+  );
+  return buildSavedMediaResult({ dir, ...result });
 }
 
 /**

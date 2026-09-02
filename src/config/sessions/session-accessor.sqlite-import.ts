@@ -1,5 +1,4 @@
 import {
-  executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
@@ -30,7 +29,10 @@ import {
   ensureTranscriptSessionRoot,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  appendTranscriptEventsInTransaction,
+  createTranscriptEventInserter,
+} from "./session-accessor.sqlite-transcript-store.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
 
@@ -40,6 +42,7 @@ type SqliteSessionImportRowsParams = Pick<
   "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
 > & {
   allowMalformedRowRepair?: boolean;
+  repairLegacyTranscript?: boolean;
   preserveExactStoredKey?: boolean;
   readExactTranscriptRows?: (
     append: (row: { createdAt: number; eventJson: string }) => void,
@@ -55,6 +58,7 @@ type SqliteSessionImportRowsResult = {
   sessionId: string;
   sessionKey: string;
   skippedExisting?: true;
+  recovery?: { complete: boolean; repaired: boolean; events: number };
   transcriptEvents: number;
 };
 
@@ -75,6 +79,7 @@ function importSqliteSessionRowsInTransaction(
   prepared: ReturnType<typeof resolveSqliteSessionImport>,
   stage: SqliteSessionImportStage,
   source: number,
+  repair?: ReturnType<SqliteSessionImportStage["repairLegacyTranscript"]>,
 ): SqliteSessionImportRowsResult {
   const { params, resolved } = prepared;
   let transcriptEvents = 0;
@@ -130,6 +135,7 @@ function importSqliteSessionRowsInTransaction(
         .limit(1),
     );
     if (!existing) {
+      const insertEvent = createTranscriptEventInserter(database, params.entry.sessionId);
       for (const row of stage.rows(source)) {
         if (row.seq === 0) {
           ensureTranscriptSessionRoot(database, transcriptScope, row.createdAt!, {
@@ -137,15 +143,7 @@ function importSqliteSessionRowsInTransaction(
           });
           ensureTranscriptGenerationInTransaction(database, params.entry.sessionId);
         }
-        executeSqliteQuerySync(
-          database.db,
-          db.insertInto("transcript_events").values({
-            session_id: params.entry.sessionId,
-            seq: row.seq,
-            event_json: row.eventJson,
-            created_at: row.createdAt!,
-          }),
-        );
+        insertEvent({ seq: row.seq, eventJson: row.eventJson, createdAt: row.createdAt! });
         transcriptEvents += 1;
       }
       // Doctor imports run outside gateway requests and must finish with a complete projection.
@@ -190,6 +188,15 @@ function importSqliteSessionRowsInTransaction(
     sessionId: params.entry.sessionId,
     sessionKey: resolved.sessionKey,
     transcriptEvents,
+    ...(repair
+      ? {
+          recovery: {
+            complete: repair.recognized && stage.complete,
+            repaired: repair.repaired,
+            events: repair.events,
+          },
+        }
+      : {}),
   };
 }
 
@@ -213,6 +220,10 @@ export async function importSqliteSessionRowsBatch(
   return await runExclusiveSqliteSessionWrite(resolved, async () =>
     withSqliteSessionImportStage((stage) => {
       const validators: Array<() => void> = [];
+      const repairs = new Map<
+        number,
+        ReturnType<SqliteSessionImportStage["repairLegacyTranscript"]>
+      >();
       for (const [source, { params: importParams }] of prepared.entries()) {
         let seq = 0;
         importParams.readExactTranscriptRows?.((row) =>
@@ -224,6 +235,9 @@ export async function importSqliteSessionRowsBatch(
         if (validate) {
           validators.push(validate);
         }
+        if (importParams.repairLegacyTranscript && importParams.readTranscriptEvents) {
+          repairs.set(source, stage.repairLegacyTranscript(source));
+        }
       }
       // Recheck every source after the last reader, before any canonical transaction.
       // No filesystem readers or callbacks cross the synchronous SQLite commit boundary.
@@ -233,7 +247,7 @@ export async function importSqliteSessionRowsBatch(
       return runOpenClawAgentWriteTransaction(
         (database) =>
           prepared.map((row, source) =>
-            importSqliteSessionRowsInTransaction(database, row, stage, source),
+            importSqliteSessionRowsInTransaction(database, row, stage, source, repairs.get(source)),
           ),
         toDatabaseOptions(resolved),
       );

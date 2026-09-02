@@ -20,7 +20,7 @@ import {
 } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources,
-  listSessionPendingInputConsumptions,
+  listSessionPendingInputReceipts,
   listSessionPendingInputs,
   readSessionPendingInput,
   stageSessionPendingInput,
@@ -172,12 +172,12 @@ describe("accepted input custody", () => {
     expect(listSessionPendingInputs(scope())).toEqual({ items: [], total: 0 });
     expect(readSessionPendingInput(scope(), first.inputId)).toBeUndefined();
     expect(
-      listSessionPendingInputConsumptions(scope(), {
+      listSessionPendingInputReceipts(scope(), {
         runIds: ["collect-a", "collect-b", "unknown"],
       }),
     ).toEqual([
-      { runId: "collect-a", consumedByEventId: aggregate.inputId },
-      { runId: "collect-b", consumedByEventId: aggregate.inputId },
+      { runId: "collect-a", state: "consumed", consumedByEventId: aggregate.inputId },
+      { runId: "collect-b", state: "consumed", consumedByEventId: aggregate.inputId },
     ]);
     aggregate.finish("cancelled");
     await replaceTranscriptEvents(scope(), []);
@@ -216,7 +216,7 @@ describe("accepted input custody", () => {
       },
     ]);
     expect(
-      listSessionPendingInputConsumptions(
+      listSessionPendingInputReceipts(
         { ...scope(), sessionId: "other" },
         { runIds: ["collect-a"] },
       ),
@@ -243,9 +243,10 @@ describe("accepted input custody", () => {
     await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect(listSessionPendingInputs(scope()).total).toBe(2);
-    expect(
-      listSessionPendingInputConsumptions(scope(), { runIds: ["atomic-a", "atomic-b"] }),
-    ).toEqual([]);
+    expect(listSessionPendingInputReceipts(scope(), { runIds: ["atomic-a", "atomic-b"] })).toEqual([
+      { runId: "atomic-a", state: "pending" },
+      { runId: "atomic-b", state: "pending" },
+    ]);
     database().db.exec("DROP TRIGGER reject_collect_consume");
     expect(await promote(aggregate)).toMatchObject({
       appended: true,
@@ -476,39 +477,49 @@ describe("accepted input custody", () => {
     },
   );
 
-  it("rejects retained custody on an inactive branch without changing ordinary historical replay", async () => {
-    const receipt = await stage("terminal-off-path");
-    let replacementId: string;
-    await receipt.run(async () => {
-      await appendTranscriptMessage(scope(), { message: receipt.message });
-      const replacement = await appendTranscriptMessage(scope(), {
-        message: message("replacement"),
-        parentId: null,
+  it.each([false, true])(
+    "rejects retained custody on an inactive branch with context exclusion %s",
+    async (excludeFromContext) => {
+      const receipt = await stage("terminal-off-path", {
+        message: {
+          ...message("terminal-off-path"),
+          ...(excludeFromContext ? { excludeFromContext: true } : {}),
+        },
       });
-      replacementId = replacement.messageId;
-      expect(replacement.effectiveParentId).toBeNull();
+      let replacementId: string;
+      await receipt.run(async () => {
+        await appendTranscriptMessage(scope(), { message: receipt.message });
+        const replacement = await appendTranscriptMessage(scope(), {
+          message: message("replacement"),
+          parentId: null,
+        });
+        replacementId = replacement.messageId;
+        expect(replacement.effectiveParentId).toBeNull();
+        expect(
+          readActiveTranscriptEntryAnchor({ ...scope(), entryId: receipt.inputId }),
+        ).toBeUndefined();
+        expect(
+          readActiveTranscriptEntryAnchor({ ...scope(), entryId: replacementId }),
+        ).toBeUndefined();
+        receipt.finish("cancelled");
+        await expect(
+          appendTranscriptMessage(scope(), { message: receipt.message }),
+        ).rejects.toThrow("no longer active");
+      });
+      await waitForSessionTranscriptProjection(scope());
       expect(
         readActiveTranscriptEntryAnchor({ ...scope(), entryId: receipt.inputId }),
       ).toBeUndefined();
       expect(
-        readActiveTranscriptEntryAnchor({ ...scope(), entryId: replacementId }),
-      ).toBeUndefined();
-      receipt.finish("cancelled");
-      await expect(appendTranscriptMessage(scope(), { message: receipt.message })).rejects.toThrow(
-        "no longer active",
-      );
-    });
-    await waitForSessionTranscriptProjection(scope());
-    expect(
-      readActiveTranscriptEntryAnchor({ ...scope(), entryId: receipt.inputId }),
-    ).toBeUndefined();
-    expect(readActiveTranscriptEntryAnchor({ ...scope(), entryId: replacementId! })).toMatchObject({
-      entryId: replacementId!,
-    });
-    expect(await appendTranscriptMessage(scope(), { message: receipt.message })).toMatchObject({
-      appended: false,
-    });
-  });
+        readActiveTranscriptEntryAnchor({ ...scope(), entryId: replacementId! }),
+      ).toMatchObject({
+        entryId: replacementId!,
+      });
+      expect(await appendTranscriptMessage(scope(), { message: receipt.message })).toMatchObject({
+        appended: false,
+      });
+    },
+  );
 
   it("retains repaired pending input as interrupted and never transfers live custody", async () => {
     const receipt = await stage("repair");
@@ -582,8 +593,14 @@ describe("accepted input custody", () => {
         });
         expect(duplicate?.state).toBe("consumed");
         expect(
-          listSessionPendingInputConsumptions(destinationScope, { runIds: ["cross-agent"] }),
-        ).toEqual([{ runId: "cross-agent", consumedByEventId: aggregate!.inputId }]);
+          listSessionPendingInputReceipts(destinationScope, { runIds: ["cross-agent"] }),
+        ).toEqual([
+          {
+            runId: "cross-agent",
+            state: "consumed",
+            consumedByEventId: aggregate!.inputId,
+          },
+        ]);
       }
       await expect(
         receipt.run(() => appendTranscriptMessage(destinationScope, { message: receipt.message })),

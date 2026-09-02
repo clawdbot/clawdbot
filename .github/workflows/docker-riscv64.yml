@@ -1,0 +1,164 @@
+name: Docker RISC-V
+
+# Best-effort linux/riscv64 image, published on its own `-riscv64` tag.
+#
+# Deliberately a standalone, manually dispatched workflow rather than a job in
+# the release pipeline. That pipeline builds sealed OCI payloads and promotes
+# them only after attestation verification, and every architecture it prepares
+# is required and folded into the multi-arch aliases. riscv64 cannot meet that
+# contract: the build is QEMU-emulated, slow, and depends on an unofficial Node
+# tarball, so a required riscv64 leg would block stable releases. Keeping it out
+# of that workflow is what makes it non-blocking -- no `continue-on-error`
+# swallowing failures, and no path from here to `:latest` or `:VERSION`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Immutable stable, extended-stable, or beta release tag
+        required: true
+        type: string
+      release_sha:
+        description: Full immutable commit SHA resolved from tag
+        required: true
+        type: string
+      image_tag_suffix:
+        description: Optional dated rebuild suffix matching the release refresh
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  publish:
+    name: Build and publish linux/riscv64
+    runs-on: ubuntu-24.04
+    # QEMU emulation makes this an order of magnitude slower than a native leg.
+    timeout-minutes: 180
+    # Reuses the publication approval gate and registry credentials that the
+    # release pipeline's own publish job runs under.
+    environment: docker-release
+    # riscv64 writes only its own tag, so it never contends with the alias lock
+    # held by `docker-release-publish`.
+    concurrency:
+      group: docker-riscv64-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
+    steps:
+      - name: Validate immutable tag and SHA inputs
+        run: |
+          set -euo pipefail
+          if [[ -n "${IMAGE_TAG_SUFFIX}" && ! "${IMAGE_TAG_SUFFIX}" =~ ^-r[0-9]{8}$ ]]; then
+            echo "::error::Invalid Docker image tag suffix: ${IMAGE_TAG_SUFFIX}"
+            exit 1
+          fi
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-(beta\.)?[1-9][0-9]*)?$ ||
+                ! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::riscv64 publication requires an immutable release tag and full SHA."
+            exit 1
+          fi
+
+      - name: Checkout immutable release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify tag, SHA, and package identity agree
+        id: identity
+        run: |
+          set -euo pipefail
+          # Refuse to publish an image built from anything but the exact SHA the
+          # dispatcher named, so a moved tag cannot redirect the build.
+          test "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "${RELEASE_SHA}"
+          test "$(git rev-parse HEAD)" = "${RELEASE_SHA}"
+          version="${RELEASE_TAG#v}"
+          test "$(node -p 'require("./package.json").version')" = "${version}"
+          {
+            echo "version=${version}"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        with:
+          platforms: riscv64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve riscv64 image tags
+        id: tags
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Matches the per-architecture tag shape the release publisher already
+          # writes (`:VERSION-amd64`, `:VERSION-arm64`).
+          ghcr="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "value<<EOF"
+            echo "${ghcr}:${VERSION}${IMAGE_TAG_SUFFIX}-riscv64"
+            echo "docker.io/openclaw/openclaw:${VERSION}${IMAGE_TAG_SUFFIX}-riscv64"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push riscv64 image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.riscv64
+          platforms: linux/riscv64
+          cache-from: type=gha,scope=docker-riscv64
+          cache-to: type=gha,mode=max,scope=docker-riscv64
+          build-args: |
+            GIT_COMMIT=${{ inputs.release_sha }}
+            OPENCLAW_BUILD_TIMESTAMP=${{ steps.identity.outputs.built_at }}
+            OPENCLAW_DOCKER_BUILD_VERSION=${{ steps.identity.outputs.version }}
+            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
+          labels: |
+            org.opencontainers.image.revision=${{ inputs.release_sha }}
+            org.opencontainers.image.version=${{ steps.identity.outputs.version }}
+          # This tag is pushed directly rather than promoted from a sealed OCI
+          # payload, so it carries no provenance attestation. Documented as such
+          # in docs/install/docker.md; the attested aliases stay amd64+arm64.
+          provenance: false
+          sbom: false
+          push: true
+
+      - name: Smoke test riscv64 runtime
+        env:
+          IMAGE_REFS: ${{ steps.tags.outputs.value }}
+        run: |
+          set -euo pipefail
+          mapfile -t image_refs <<< "${IMAGE_REFS}"
+          docker run --rm --platform linux/riscv64 --entrypoint /bin/sh "${image_refs[0]}" -lc '
+            set -eu
+            node /app/openclaw.mjs --version
+          '

@@ -63,6 +63,10 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       | { cwd?: string }
       | undefined;
     expect(resourceLoaderInit?.cwd).toBe(taskRepo);
+    expect(hoisted.embeddedSystemPromptInputs[0]).toMatchObject({
+      workspaceDir: bootstrapCall?.workspaceDir,
+      runtimeCwd: taskRepo,
+    });
   });
 
   it.each([

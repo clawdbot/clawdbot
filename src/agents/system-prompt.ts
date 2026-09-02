@@ -69,6 +69,7 @@ import type {
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { buildCredentialSafetyPrompt } from "./transcript-credential-safety.js";
+import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
 import {
   buildWatchedSessionsPromptLines,
   type PreparedWatchedSessionsPrompt,
@@ -505,8 +506,8 @@ function buildControlUiSessionCompanionSection(params: {
     return [];
   }
   return [
-    "## Control UI Session Companion",
-    "- Operator has a read-only rail companion for this session's status and explanations.",
+    "## Control UI Side Chat",
+    "- Operator has a read-only Side chat for this session's status and explanations.",
     "- On request, do not spawn sub-agents or burn main-thread turns merely to summarize status or re-explain recent work.",
     ...(params.sessionsSpawnAvailable
       ? ["- Reserve `sessions_spawn` for delegated work with its own deliverable."]
@@ -739,7 +740,7 @@ export function buildModelIdentityPromptLine(model?: string): string | undefined
   if (!trimmed) {
     return undefined;
   }
-  return `${MODEL_IDENTITY_PREFIX} ${trimmed}. Model question: answer this current-run value.`;
+  return `${MODEL_IDENTITY_PREFIX} ${trimmed}. If asked what model you are, answer with this value for the current run.`;
 }
 
 export function appendModelIdentitySystemPrompt(params: {
@@ -782,6 +783,7 @@ export function appendModelIdentitySystemPrompt(params: {
 
 export function buildAgentSystemPrompt(params: {
   workspaceDir: string;
+  runtimeCwd?: string;
   defaultThinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
@@ -910,7 +912,7 @@ export function buildAgentSystemPrompt(params: {
     sessions_yield: "End turn; await subagent events",
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
-    skill_workshop: "Manage reusable-skill proposals",
+    skill_workshop: "Author reusable skills",
     image: "Analyze images",
     image_generate: "Generate/edit images",
   };
@@ -1081,6 +1083,8 @@ export function buildAgentSystemPrompt(params: {
     : (params.silentReplyPromptMode ?? "generic");
   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
+  const runtimeCwd = params.runtimeCwd ?? params.workspaceDir;
+  const hasSeparateRuntimeCwd = !sandboxedRuntime && runtimeCwd !== params.workspaceDir;
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
     ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
     : "";
@@ -1099,8 +1103,15 @@ export function buildAgentSystemPrompt(params: {
       : "Single global file workspace unless explicitly told otherwise.";
   const workspaceOnlyGuidance =
     params.fsWorkspaceOnly === true
-      ? "tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in workspace, preferably `.openclaw/tmp/`. If file tools need it later, never exec-write `/tmp`; use workspace path."
+      ? `tools.fs.workspaceOnly ON: file-tool scratch/temp/meta stays in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. If file tools need it later, never exec-write \`/tmp\`; use ${hasSeparateRuntimeCwd ? "working directory" : "workspace"} path.`
       : "";
+  const directorySection = hasSeparateRuntimeCwd
+    ? [
+        "## Directory Roles",
+        `Working directory: ${sanitizeForPromptLiteral(runtimeCwd)} (tools and deliverables).`,
+        `Agent workspace: ${sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
+      ]
+    : ["## Workspace", `Working directory: ${displayWorkspaceDir}`, workspaceGuidance];
   const safetySection = [
     "## Safety",
     "No independent goals, self-preservation, replication, resource acquisition, power-seeking, or plans beyond user request.",
@@ -1164,6 +1175,7 @@ export function buildAgentSystemPrompt(params: {
   });
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
+    runtimeCwd,
     promptMode,
     promptSurface,
     toolLines,
@@ -1342,9 +1354,7 @@ export function buildAgentSystemPrompt(params: {
         ? params.modelAliasLines.join("\n")
         : "",
       params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
-      "## Workspace",
-      `Working directory: ${displayWorkspaceDir}`,
-      workspaceGuidance,
+      ...directorySection,
       workspaceOnlyGuidance,
       ...workspaceNotes,
       "",
@@ -1468,6 +1478,19 @@ export function buildAgentSystemPrompt(params: {
           }),
         ]),
     ...buildUserIdentitySection(ownerLine, isMinimal),
+    ...(!isMinimal
+      ? [
+          buildUiPresentationPrompt({
+            showWidgetToolName: availableTools.has("show_widget")
+              ? resolveToolName("show_widget")
+              : undefined,
+            dashboardToolName: availableTools.has("dashboard")
+              ? resolveToolName("dashboard")
+              : undefined,
+            portalToolName: availableTools.has("portal") ? resolveToolName("portal") : undefined,
+          }),
+        ]
+      : []),
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,

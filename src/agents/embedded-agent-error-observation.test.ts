@@ -53,6 +53,15 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.rawErrorPreview).toContain("Cookie: session=");
   });
 
+  it("redacts provider error types as well as message previews", () => {
+    const observed = buildApiErrorObservationFields(
+      JSON.stringify({
+        error: { type: `x-api-key: ${OBSERVATION_BEARER_TOKEN}`, message: "Request failed" },
+      }),
+    );
+    expect(observed.providerErrorType).toBe("x-api-key: ***");
+  });
+
   it("does not let cookie redaction consume unrelated fields on the same line", () => {
     const observed = buildApiErrorObservationFields(
       `Cookie: session=${OBSERVATION_COOKIE_VALUE} status=503 request_id=req_cookie`,

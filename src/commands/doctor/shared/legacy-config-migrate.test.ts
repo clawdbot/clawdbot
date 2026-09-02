@@ -1189,8 +1189,8 @@ describe("legacy memory search config migrate", () => {
 
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
       "agents.defaults.memorySearch",
-      "agents.list",
-      "agents.list",
+      "agents",
+      "agents",
       "agents.list",
     ]);
 
@@ -1201,10 +1201,10 @@ describe("legacy memory search config migrate", () => {
     expect(res.config?.agents?.list?.[1]?.memory?.search?.provider).toBe("openai-compatible");
     expect(res.changes).toEqual([
       "Moved legacy memorySearch defaults → memory.search.",
-      "Moved agents.list.0.memorySearch → agents.list.0.memory.search.",
-      "Moved agents.list.1.memorySearch → agents.list.1.memory.search.",
+      "Moved agents.list[0].memorySearch → agents.list[0].memory.search.",
+      "Moved agents.list[1].memorySearch → agents.list[1].memory.search.",
       'Moved memory.search.provider from legacy "auto" to "openai".',
-      'Moved agents.list.0.memory.search.provider from legacy "auto" to "openai".',
+      'Moved agents.list[0].memory.search.provider from legacy "auto" to "openai".',
     ]);
   });
 });
@@ -1300,7 +1300,7 @@ describe("legacy agent system prompt override config migrate", () => {
 
     expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
       "agents.defaults.systemPromptOverride",
-      "agents.list",
+      "agents",
       "agents.list",
     ]);
 
@@ -1311,7 +1311,7 @@ describe("legacy agent system prompt override config migrate", () => {
     expect(res.config?.agents?.list?.[1]).toEqual({ id: "beta" });
     expect(res.changes).toEqual([
       "Removed agents.defaults.systemPromptOverride.",
-      "Removed agents.list.0.systemPromptOverride.",
+      "Removed agents.list[0].systemPromptOverride.",
     ]);
   });
 });
@@ -1662,8 +1662,8 @@ describe("legacy agent model timeout migrate", () => {
     expect(res.changes).toStrictEqual([
       "Removed agents.defaults.model.timeoutMs; agent model config only selects models.",
       "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
-      "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
-      "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list[0].model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list[0].subagents.model.timeoutMs; agent model config only selects models.",
       "Moved agents.defaults.imageGenerationModel → agents.defaults.mediaModels.image.",
     ]);
   });
@@ -2447,8 +2447,8 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([
       "Removed agents.defaults.embeddedHarness; runtime is now provider/model scoped.",
-      "Removed agents.list.0.embeddedHarness; runtime is now provider/model scoped.",
-      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+      "Removed agents.list[0].embeddedHarness; runtime is now provider/model scoped.",
+      "Removed agents.list[0].agentRuntime; runtime is now provider/model scoped.",
     ]);
     expect(res.config?.agents?.defaults).toStrictEqual({});
     expect(res.config?.agents?.list?.[0]).toEqual({
@@ -2485,8 +2485,8 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.changes).toStrictEqual([
       "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
       "Removed agents.defaults.agentRuntime; runtime is now provider/model scoped.",
-      "Moved agents.list.0.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
-      "Removed agents.list.0.agentRuntime; runtime is now provider/model scoped.",
+      "Moved agents.list[0].agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+      "Removed agents.list[0].agentRuntime; runtime is now provider/model scoped.",
       "Copied the legacy default model map to agents.defaults.modelPolicy.allow.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
@@ -2566,7 +2566,7 @@ describe("legacy migrate sandbox scope aliases", () => {
 
     expect(res.changes).toStrictEqual([
       "Moved agents.defaults.embeddedPi → agents.defaults.embeddedAgent.",
-      "Moved agents.list.0.embeddedPi → agents.list.0.embeddedAgent.",
+      "Moved agents.list[0].embeddedPi → agents.list[0].embeddedAgent.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({
       embeddedAgent: {
@@ -2642,7 +2642,7 @@ describe("legacy migrate sandbox scope aliases", () => {
     });
 
     expect(res.changes).toStrictEqual([
-      "Moved agents.list.0.sandbox.perSession → agents.list.0.sandbox.scope (shared).",
+      "Moved agents.list[0].sandbox.perSession → agents.list[0].sandbox.scope (shared).",
     ]);
     expect(res.config?.agents?.list?.[0]?.sandbox).toEqual({
       scope: "shared",
@@ -2787,7 +2787,7 @@ describe("legacy migrate sandbox scope aliases", () => {
       },
     };
 
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["agents.entries"]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["agents"]);
     const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toStrictEqual([
@@ -2820,13 +2820,13 @@ describe("legacy migrate sandbox scope aliases", () => {
     };
 
     expect(findLegacyConfigIssues(raw)).toContainEqual({
-      path: "agents.list",
+      path: "agents",
       message: expect.stringContaining('sandbox.browser.network = "none"'),
     });
     const res = migrateLegacyConfigForTest(raw);
 
     expect(res.changes).toStrictEqual([
-      'Disabled agents.list.0.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+      'Disabled agents.list[0].sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
     ]);
     expect(res.config?.agents?.entries?.legacy?.sandbox?.browser).toEqual({
       enabled: false,

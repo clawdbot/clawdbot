@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,7 +15,13 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = artifactRoot
+    ? createControlUiE2eArtifactDir("device-scope-upgrade", artifactRoot)
+    : undefined;
+});
 
 const LIMITED_SCOPES = ["operator.read", "operator.write"];
 const FULL_SCOPES = [
@@ -57,7 +63,6 @@ async function captureProof(page: Page, name: string): Promise<void> {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.screenshot({ fullPage: true, path: path.join(proofDir, name) });
 }
 
@@ -245,10 +250,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     await captureProof(page, "desktop-inbox-upgrade-pending.png");
 
     await closeInbox(page);
-    await page
-      .locator(".shell-chrome-controls")
-      .getByRole("button", { name: "Collapse sidebar" })
-      .click();
+    await page.locator(".sidebar-brand__collapse").click();
     const collapsedItem = await openLimitedAccessItem(await openInbox(page));
     await waitForPendingUpgradeItem(collapsedItem);
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);

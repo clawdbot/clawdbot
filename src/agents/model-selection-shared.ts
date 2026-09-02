@@ -114,7 +114,7 @@ function resolveManifestPluginsForModelIdNormalization(params: {
     const currentManifestPlugins = getCurrentPluginMetadataSnapshot({
       config: params.cfg,
       env: process.env,
-    })?.plugins;
+    });
     if (currentManifestPlugins) {
       return currentManifestPlugins;
     }
@@ -123,7 +123,7 @@ function resolveManifestPluginsForModelIdNormalization(params: {
     config: params.cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
-  }).plugins;
+  });
 }
 
 function createModelManifestPluginContext(params: {
@@ -1354,13 +1354,13 @@ function resolveConfiguredModelManifestPlugins(params: {
     return getCurrentPluginMetadataSnapshot({
       config: params.cfg,
       env: process.env,
-    })?.plugins;
+    });
   }
   return loadManifestMetadataSnapshot({
     config: params.cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
-  }).plugins;
+  });
 }
 
 /** Build catalog entries from configured provider model rows. */

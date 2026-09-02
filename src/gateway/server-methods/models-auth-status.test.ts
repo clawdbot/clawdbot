@@ -11,8 +11,15 @@ import {
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveProviderAuthLookupMaps } from "../../secrets/provider-env-vars.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createChatRunState } from "../server-chat-state.js";
@@ -285,11 +292,7 @@ function resetAuthStatusMocks(): void {
   );
   mocks.resolveDefaultAgentId.mockReturnValue("main");
   setPreparedAuthStore({ version: 1, profiles: {} });
-  setPreparedMetadataSnapshot({
-    index: { plugins: [] },
-    manifestRegistry: { plugins: [] },
-    plugins: [],
-  });
+  setPreparedMetadataSnapshot(createPluginMetadataSnapshotFixture());
   mocks.readPreparedCatalog.mockImplementation(async (_context, agentId: string) =>
     createPreparedOwnerSnapshot(agentId),
   );
@@ -328,6 +331,7 @@ function firstDeferredAuthScope() {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  resetConfigRuntimeState();
 });
 
 function expectLogoutFailurePreservesRun(params: {
@@ -510,6 +514,35 @@ describe("models.authStatus", () => {
     );
   });
 
+  it("does not wait for full catalog discovery during auth status refresh", async () => {
+    let releaseDiscovery!: () => void;
+    const discovery = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    mocks.loadDeferredCatalog.mockImplementation(async (_context, agentId, options) => {
+      const deferredOptions = requireRecord(options);
+      if (deferredOptions.refreshFullCatalog !== false) {
+        await discovery;
+      }
+      return createPreparedOwnerSnapshot(agentId);
+    });
+
+    const request = handler(createOptions({ refresh: true }));
+    try {
+      await expect(
+        Promise.race([
+          Promise.resolve(request).then(() => "replied" as const),
+          new Promise<"timed-out">((resolve) => {
+            setTimeout(() => resolve("timed-out"), 25);
+          }),
+        ]),
+      ).resolves.toBe("replied");
+    } finally {
+      releaseDiscovery();
+    }
+    await request;
+  });
+
   it("reports an unavailable prepared owner without failing the RPC or discovering credentials", async () => {
     mocks.readPreparedCatalog.mockResolvedValueOnce(undefined);
 
@@ -576,39 +609,49 @@ describe("models.authStatus", () => {
   });
 
   it("projects provider capabilities from the published lifecycle metadata", async () => {
-    const plugins = [
-      {
-        id: "provider-auth",
-        origin: "bundled",
-        providerAuthAliases: { "openai-legacy": "openai" },
-        providerAuthChoices: [
-          {
-            provider: "openai-legacy",
-            method: "api-key",
-            choiceId: "openai-api-key",
-            choiceLabel: "OpenAI API key",
-            appGuidedSecret: true,
-          },
-          {
-            provider: "openai",
-            method: "oauth",
-            choiceId: "openai-oauth",
-            choiceLabel: "OpenAI OAuth",
-          },
-          {
-            provider: "github-copilot",
-            method: "oauth",
-            choiceId: "github-copilot-oauth",
-            choiceLabel: "GitHub Copilot OAuth",
-          },
-        ],
-      },
-    ];
-    setPreparedMetadataSnapshot({
-      index: { plugins: [] },
-      manifestRegistry: { plugins },
-      plugins,
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "provider-auth",
+          origin: "bundled",
+          providers: ["OpenAI", "github-copilot", "media-only"],
+          providerAuthAliases: { "openai-legacy": "openai" },
+          providerAuthChoices: [
+            {
+              provider: "openai-legacy",
+              method: "api-key",
+              choiceId: "openai-api-key",
+              choiceLabel: "OpenAI API key",
+              appGuidedSecret: true,
+            },
+            {
+              provider: "openai",
+              method: "oauth",
+              choiceId: "openai-oauth",
+              choiceLabel: "OpenAI OAuth",
+            },
+            {
+              provider: "media-only",
+              method: "api-key",
+              choiceId: "media-only-key",
+              choiceLabel: "Media API key",
+              onboardingScopes: ["image-generation"],
+            },
+            {
+              provider: "github-copilot",
+              method: "oauth",
+              choiceId: "github-copilot-oauth",
+              choiceLabel: "GitHub Copilot OAuth",
+            },
+          ],
+        },
+        {
+          id: "search-tool",
+          setup: { providers: [{ id: "search-tool", authMethods: ["api-key"] }] },
+        },
+      ],
     });
+    setPreparedMetadataSnapshot(snapshot);
 
     const result = await readAuthStatus();
 
@@ -621,32 +664,23 @@ describe("models.authStatus", () => {
   it("uses the published metadata owner for provider env auth and aliases", async () => {
     const cfg = {};
     const policyHash = resolveInstalledPluginIndexPolicyHash(cfg);
-    const plugins = [
-      {
-        id: "prepared-auth",
-        origin: "bundled",
-        setup: {
-          providers: [{ id: "prepared-owner", envVars: ["PREPARED_OWNER_API_KEY"] }],
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "prepared-auth",
+          origin: "bundled",
+          setup: {
+            providers: [{ id: "prepared-owner", envVars: ["PREPARED_OWNER_API_KEY"] }],
+          },
+          providerAuthAliases: { "prepared-owner-alias": "prepared-owner" },
         },
-        providerAuthAliases: { "prepared-owner-alias": "prepared-owner" },
-      },
-    ];
+      ],
+    });
     mocks.getRuntimeConfig.mockReturnValue(cfg);
     setPreparedMetadataSnapshot({
+      ...snapshot,
       policyHash,
-      index: {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash,
-        generatedAtMs: 1,
-        installRecords: {},
-        plugins: [],
-        diagnostics: [],
-      },
-      manifestRegistry: { plugins },
-      plugins,
+      index: { ...snapshot.index, policyHash },
     });
     vi.stubEnv("PREPARED_OWNER_API_KEY", "prepared-owner-secret");
 
@@ -1093,16 +1127,27 @@ describe("models.authStatus", () => {
     }
   });
 
-  it("reports non-env SecretRefs as presence-only config auth", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
+  it("reports runtime-resolved non-env SecretRefs as presence-only config auth", async () => {
+    const sourceProvider: ModelProviderConfig = {
+      baseUrl: "https://example.test/v1",
+      models: [],
+      apiKey: { source: "file", provider: "mounted-json", id: "model-provider-key" },
+    };
+    const runtimeProvider: ModelProviderConfig = {
+      baseUrl: sourceProvider.baseUrl,
+      models: sourceProvider.models,
+      apiKey: "runtime-secret-value",
+    };
+    const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
-          openai: Object.fromEntries([
-            ["apiKey", { source: "file", provider: "mounted-json", id: "model-provider-key" }],
-          ]),
+          openai: sourceProvider,
         },
       },
-    });
+    };
+    const runtimeConfig: OpenClawConfig = { models: { providers: { openai: runtimeProvider } } };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
       warnAfterMs: 0,

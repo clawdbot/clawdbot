@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
+import { resolveModelFallbackAvailability } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -157,11 +157,15 @@ export async function completeReplyAgentRun(input: {
       normalizeOptionalString(activeSessionEntry?.traceLevel),
     fallbackEligible:
       runResult.meta?.requestShaping?.fallbackEligible ??
-      hasConfiguredModelFallbacks({
-        cfg,
+      resolveModelFallbackAvailability({
+        cfg: cfg ?? {},
         agentId: followupRun.run.agentId,
         sessionKey: followupRun.run.sessionKey,
-      }),
+        hasSessionModelOverride: followupRun.run.hasSessionModelOverride === true,
+        modelOverrideSource: followupRun.run.modelOverrideSource,
+        hasAutoFallbackProvenance: followupRun.run.hasAutoFallbackProvenance === true,
+        modelSelectionLocked: followupRun.run.modelSelectionLocked,
+      }).kind === "active",
     blockStreaming:
       runResult.meta?.requestShaping?.blockStreaming ??
       normalizeOptionalString(resolvedBlockStreamingBreak),

@@ -12,6 +12,7 @@ without making you scan the raw changelog first.
 
 ## Releases
 
+- [v2026.8.2](/releases/2026.8.2) - Home beside your work, a Linux desktop companion, background sessions, safer upgrades, dependable replies and voice, and four new themes.
 - [v2026.8.1](/releases/2026.8.1) - A rebuilt web experience, simpler
   onboarding, stronger memory and session continuity, and a very large
   reliability pass across OpenClaw.

@@ -10,6 +10,7 @@ import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import * as threadItems from "./chat-thread-items.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
@@ -312,6 +313,75 @@ describe("assistant commentary grouping", () => {
     expect(runAToolIndex).toBeLessThan(steerAIndex);
     expect(runBToolIndex).toBeLessThan(steerBIndex);
   });
+
+  it.each(
+    [
+      {
+        name: "independently unique boundaries",
+        boundaries: [{ afterBoundaryRunId: "a" }, { boundaryRunId: "c" }],
+        timestamp: 1_000,
+        orders: ["A B tool C", "A B tool C", "A B tool C"],
+      },
+      {
+        name: "ambiguous after boundary",
+        boundaries: [{ afterBoundaryRunId: "a", boundaryRunId: "c" }, { afterBoundaryRunId: "b" }],
+        timestamp: 0,
+        orders: ["tool A B C", "A tool B C", "A B tool C"],
+      },
+      {
+        name: "ambiguous before boundary",
+        boundaries: [{ boundaryRunId: "b" }, { afterBoundaryRunId: "a", boundaryRunId: "c" }],
+        timestamp: 1_000,
+        orders: ["A tool B C", "A tool B C", "A B tool C"],
+      },
+      {
+        name: "repeated equal boundaries remain ambiguous",
+        boundaries: [
+          { afterBoundaryRunId: "unloaded", boundaryRunId: "c" },
+          { afterBoundaryRunId: "unloaded", boundaryRunId: "c" },
+        ],
+        timestamp: 1_000,
+        orders: ["A B C tool", "A B tool C", "A B tool C"],
+      },
+    ].flatMap(({ name, boundaries, timestamp, orders }) =>
+      [undefined, "run-1", "run-2"].map((runId, index) => ({
+        name,
+        boundaries,
+        timestamp,
+        runId,
+        expectedOrder: orders[index]!.split(" "),
+      })),
+    ),
+  )(
+    "resolves $name independently for tool owner $runId",
+    ({ boundaries, timestamp, runId, expectedOrder }) => {
+      const paneId = `independent-tool-boundaries:${JSON.stringify([boundaries, runId])}`;
+      try {
+        const groups = messageGroups({
+          paneId,
+          messages: [
+            userMessage("A", 100, { __openclaw: { idempotencyKey: "a:user" } }),
+            userMessage("B", 200, { __openclaw: { idempotencyKey: "b:user" } }),
+            userMessage("C", 300, { __openclaw: { idempotencyKey: "c:user" } }),
+          ],
+          streamSegments: boundaries.map((boundary, index) => ({
+            text: "",
+            ts: 10,
+            runId: `run-${index + 1}`,
+            toolCallId: "shared-call",
+            ...boundary,
+          })),
+          toolMessages: [toolResultMessage("shared-call", "read", "output", timestamp, { runId })],
+        });
+
+        expect(
+          groups.map((group) => (group.role === "tool" ? "tool" : messageRecord(group).content)),
+        ).toEqual(expectedOrder);
+      } finally {
+        resetChatThreadState(paneId);
+      }
+    },
+  );
 
   it("keeps a post-steer tool segment and card after a textless steer", () => {
     const toolCallId = "call-after-steer";
@@ -654,37 +724,89 @@ describe("assistant commentary grouping", () => {
     ]);
   });
 
-  it("keeps a queued current prompt before a terminal delivered ahead of its ACK", () => {
-    const paneId = "terminal-before-send-ack";
-    const terminal = rememberLiveTerminalRun(
-      assistantMessage("Terminal reply", 1_000),
-      "run-active",
-    );
-    const sending = queuedSend("sending-current", "Current prompt", 2_000, "sending", {
-      sendAttempts: 1,
-      sendRunId: "run-active",
-    });
-    const liveItems = buildCachedChatItems(
-      createProps({ paneId, runId: "run-active", messages: [terminal], queue: [sending] }),
-    );
-    const stableItems = buildCachedChatItems(
-      createProps({
-        paneId,
-        messages: [
-          userMessage("Current prompt", 2_000, {
-            __openclaw: { idempotencyKey: "run-active:user" },
+  it.each([
+    { source: "live terminal", sendState: "sending", search: false, active: true },
+    { source: "durable reply", sendState: "sending", search: false, active: true },
+    { source: "durable reply", sendState: "waiting-reconnect", search: false, active: true },
+    { source: "durable reply", sendState: "sending", search: true, active: true },
+    { source: "durable reply", sendState: "waiting-reconnect", search: false, active: false },
+  ] as const)(
+    "keeps a $sendState prompt before its $source under clock skew with search=$search active=$active",
+    ({ source, sendState, search, active }) => {
+      const paneId = `reply-before-user:${source}:${sendState}:${search}:${active}`;
+      const terminal =
+        source === "live terminal"
+          ? rememberLiveTerminalRun(assistantMessage("Current reply", 1_000), "run-active")
+          : assistantMessage("Current reply", 1_000, {
+              __openclaw: { id: "durable-reply", seq: 6, runId: "run-active" },
+            });
+      const preceding = [
+        userMessage("Earlier prompt", 500),
+        assistantMessage("Unowned reply", 4_000),
+        assistantMessage("Unrelated reply", 300, { __openclaw: { runId: "other-run" } }),
+        assistantMessage("Imported reply", 2_500, {
+          __openclaw: {
+            importedFrom: "claude-cli",
+            cliSessionId: "external-session",
+            externalId: "external-reply",
+            runId: "run-active",
+          },
+        }),
+        assistantMessage("Unattributed run hint", 900, { runId: "run-active" }),
+      ];
+      if (search) {
+        preceding.push(
+          assistantMessage("Hidden earlier output", 950, {
+            __openclaw: { id: "hidden-output", seq: 5, runId: "run-active" },
           }),
-          terminal,
-        ],
-      }),
-    );
-    const roles = (items: ReturnType<typeof buildCachedChatItems>) =>
-      items.filter((item) => item.kind === "group").map((item) => item.role);
+        );
+      }
+      const sending = queuedSend("sending-current", "Current prompt", 2_000, sendState, {
+        sendAttempts: 1,
+        sendRunId: "run-active",
+      });
+      const liveItems = buildCachedChatItems(
+        createProps({
+          paneId,
+          runId: active ? "run-active" : null,
+          searchOpen: search,
+          searchQuery: "Current",
+          messages: [...preceding, terminal],
+          queue: [sending],
+        }),
+      );
+      const stableItems = buildCachedChatItems(
+        createProps({
+          paneId,
+          searchOpen: search,
+          searchQuery: "Current",
+          messages: [
+            ...preceding,
+            userMessage([{ type: "text", text: "Current prompt" }], 2_000, {
+              __openclaw: { idempotencyKey: "run-active:user" },
+            }),
+            terminal,
+          ],
+        }),
+      );
+      const messages = (items: ReturnType<typeof buildCachedChatItems>) =>
+        items.flatMap((item) =>
+          item.kind === "group" ? item.messages.map(({ message }) => message) : [],
+        );
 
-    expect(roles(liveItems)).toEqual(["user", "assistant"]);
-    expect(roles(stableItems)).toEqual(["user", "assistant"]);
-    resetChatThreadState(paneId);
-  });
+      resetChatThreadState(paneId);
+      const expected = [
+        ...(search ? [] : preceding),
+        expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: "Current prompt" }],
+        }),
+        terminal,
+      ];
+      expect(messages(liveItems)).toEqual(expected);
+      expect(messages(stableItems)).toEqual(expected);
+    },
+  );
 
   it("keeps keyed commentary separate from the terminal assistant reply", () => {
     const groups = messageGroups({
@@ -823,7 +945,7 @@ describe("collapseCompletedTurnWork", () => {
     },
   );
 
-  it("keeps durable context compaction inside completed work instead of treating it as the reply", () => {
+  it("renders durable context compaction as a marker, not an assistant reply", () => {
     const items = collapsedItems({
       messages: [
         userMessage("do it", 1_000),
@@ -841,16 +963,8 @@ describe("collapseCompletedTurnWork", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
-    const work = requireWorkGroup(items[1]);
-    expect(work.groups).toHaveLength(1);
-    expect(work.groups[0]?.messages[0]?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Context compacted" }],
-      runId: "run-1",
-      __openclaw: { runtimeActivityKind: "context_compaction" },
-    });
-    expect(work.groups[0]?.messages[0]?.message).not.toHaveProperty("idempotencyKey");
+    expect(items.map((item) => item.kind)).toEqual(["group", "divider", "group"]);
+    expect(items[1]).toMatchObject({ compaction: "complete", label: "Context compacted" });
     expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({
       content: "All done.",
     });
@@ -1940,17 +2054,14 @@ describe("buildCachedChatItems working spark", () => {
 describe("buildCachedChatItems", () => {
   it("does not inspect ordinary transcript messages for tool previews", () => {
     const messages = [userMessage("hello", 1_000), assistantMessage("reply", 1_001)];
-    const previewExtraction = vi.spyOn(toolCards, "extractToolCardsCached");
+    const previewExtraction = vi.spyOn(threadItems, "extractChatMessagePreview");
+    try {
+      buildCachedChatItems(createProps({ paneId: "ordinary-transcript", messages }));
 
-    buildCachedChatItems(createProps({ paneId: "ordinary-transcript", messages }));
-
-    expect(
-      previewExtraction.mock.calls.filter(
-        ([message, prefix]) =>
-          messages.includes(message as (typeof messages)[number]) && prefix === "preview",
-      ),
-    ).toEqual([]);
-    previewExtraction.mockRestore();
+      expect(previewExtraction).not.toHaveBeenCalled();
+    } finally {
+      previewExtraction.mockRestore();
+    }
   });
 
   it("sender provenance separates namespaces without splitting profile renames", () => {
@@ -2230,7 +2341,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).role).toBe("tool");
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "coalesced");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "call-shell",
@@ -2271,7 +2382,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "native-reversed");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "call-native",
@@ -2309,9 +2420,7 @@ describe("buildCachedChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
-      extractToolCards(entry.message, `native-same-name-${index}`),
-    );
+    const cards = groupAt(groups, 0).messages.flatMap((entry) => extractToolCards(entry.message));
     expect(cards).toHaveLength(2);
     expect(cards.find((card) => card.callId === "call-a")).toMatchObject({
       args: { path: "a.ts" },
@@ -2347,7 +2456,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "bundled-reversed");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
@@ -2376,7 +2485,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     const entries = groupAt(groups, 0).messages;
-    const cards = entries.flatMap((entry) => extractToolCards(entry.message, entry.key));
+    const cards = entries.flatMap((entry) => extractToolCards(entry.message));
     expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
@@ -2397,9 +2506,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).role).toBe("tool");
     expect(groupAt(groups, 0).messages).toHaveLength(2);
-    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
-      extractToolCards(entry.message, `interleaved-${index}`),
-    );
+    const cards = groupAt(groups, 0).messages.flatMap((entry) => extractToolCards(entry.message));
     expect(cards).toHaveLength(2);
     expect(cards[0]).toMatchObject({ callId: "call-a", outputText: "contents of a" });
     expect(cards[1]).toMatchObject({ callId: "call-b", outputText: "contents of b" });
@@ -2416,7 +2523,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "repeated-snapshot");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "call-x",
@@ -2452,7 +2559,7 @@ describe("buildCachedChatItems", () => {
       );
     const cardsFor = (messages: unknown[], toolMessages: unknown[] = []) =>
       messageGroups({ messages, toolMessages }).flatMap((group) =>
-        group.messages.flatMap((entry) => extractToolCards(entry.message, entry.key)),
+        group.messages.flatMap((entry) => extractToolCards(entry.message)),
       );
 
     it.each([
@@ -2511,7 +2618,7 @@ describe("buildCachedChatItems", () => {
         });
         const visible = groups.flatMap((group) =>
           group.messages.flatMap((entry) => {
-            const cards = extractToolCards(entry.message, entry.key);
+            const cards = extractToolCards(entry.message);
             return cards.length ? cards : [requireRecord(entry.message).content];
           }),
         );
@@ -2568,7 +2675,7 @@ describe("buildCachedChatItems", () => {
           toolMessages: [live],
         });
         const cards = groups.flatMap((group) =>
-          group.messages.flatMap((entry) => extractToolCards(entry.message, entry.key)),
+          group.messages.flatMap((entry) => extractToolCards(entry.message)),
         );
         expect(cards).toHaveLength(2);
         expect(cards.filter((card) => card.outputText === "working")).toHaveLength(1);
@@ -2644,7 +2751,7 @@ describe("buildCachedChatItems", () => {
         toolMessages: [snapshot("a"), snapshot("b")],
       });
       const entries = groups.flatMap((group) => group.messages);
-      const cards = entries.flatMap((entry) => extractToolCards(entry.message, entry.key));
+      const cards = entries.flatMap((entry) => extractToolCards(entry.message));
       expect(cards).toHaveLength(2);
       expect(cards.find((card) => card.callId === "a")).toMatchObject({
         args: { command: "first" },
@@ -2854,9 +2961,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(17);
-    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
-      extractToolCards(entry.message, `many-open-${index}`),
-    );
+    const cards = groupAt(groups, 0).messages.flatMap((entry) => extractToolCards(entry.message));
     expect(cards).toHaveLength(17);
     expect(cards.find((card) => card.callId === "call-0")).toMatchObject({
       outputText: "first contents",
@@ -2880,9 +2985,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(2);
-    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
-      extractToolCards(entry.message, `bundled-results-${index}`),
-    );
+    const cards = groupAt(groups, 0).messages.flatMap((entry) => extractToolCards(entry.message));
     expect(cards.map((card) => [card.callId, card.outputText])).toEqual([
       ["call-a", "contents of a"],
       ["call-b", "contents of b"],
@@ -2907,7 +3010,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).role).toBe("tool");
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "canonical-parallel");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(2);
     expect(cards[0]).toMatchObject({
       callId: "call-a",
@@ -2944,7 +3047,7 @@ describe("buildCachedChatItems", () => {
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).role).toBe("tool");
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "canonical-provider");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards.map((card) => [card.callId, card.outputText])).toEqual([
       ["call-a", "contents of a"],
       ["call-b", "contents of b"],
@@ -3019,7 +3122,7 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(1);
     expect(groupAt(groups, 0).messages).toHaveLength(1);
-    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "provider-coalesced");
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "provider-call",
@@ -3527,14 +3630,22 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("keeps an unkeyed preamble from corrupting the accumulated prefix tracker", () => {
-    // A standalone (itemId-less) preamble whose text is not part of the
-    // cumulative run text must not become the prefix baseline — pre-fix the
-    // next cumulative snapshot re-rendered every earlier segment's text.
-    const items = buildCachedChatItems(
-      createProps({
+  it.each([false, true])(
+    "keeps cumulative text around an unkeyed preamble with persisted prefix=%s",
+    (persistedPrefix) => {
+      // A durable prefix hides only its row; an unrelated unkeyed preamble must
+      // neither replace that baseline nor revive it on later cumulative updates.
+      const paneId = `persisted-prefix:${persistedPrefix}`;
+      const input = createProps({
+        paneId,
+        messages: persistedPrefix ? [assistantMessage("First thought.", 1)] : [],
         streamSegments: [
-          { text: "First thought.", ts: 1, toolCallId: "call-1" },
+          {
+            text: "First thought.",
+            ts: 1,
+            toolCallId: "call-1",
+            ...(persistedPrefix ? { persisted: true } : {}),
+          },
           { text: "Standalone preamble", ts: 2 },
           { text: "First thought. After tool.", ts: 3, toolCallId: "call-2" },
         ],
@@ -3542,15 +3653,31 @@ describe("buildCachedChatItems", () => {
           chatMessage("toolResult", "Tool one", 2),
           chatMessage("toolResult", "Tool two", 4),
         ],
-      }),
-    );
-
-    expect(items.filter((item) => item.kind === "stream")).toMatchObject([
-      { text: "First thought." },
-      { text: "Standalone preamble" },
-      { text: "After tool." },
-    ]);
-  });
+        stream: "First thought. After tool. Continued.",
+        streamStartedAt: 5,
+      });
+      const streamTexts = (items: ReturnType<typeof buildCachedChatItems>) =>
+        items.flatMap((item) => (item.kind === "stream" ? [item.text] : []));
+      const precedingTexts = [
+        ...(persistedPrefix ? [] : ["First thought."]),
+        "Standalone preamble",
+        "After tool.",
+      ];
+      try {
+        const initial = buildCachedChatItems(input);
+        expect(streamTexts(initial)).toEqual([...precedingTexts, "Continued."]);
+        const next = { ...input, stream: "First thought. After tool. Continued. Again." };
+        const cached = buildCachedChatItems(next);
+        expect(cached).toBe(initial);
+        expect(streamTexts(cached)).toEqual([...precedingTexts, "Continued. Again."]);
+        expect(
+          streamTexts(buildCachedChatItems({ ...next, messages: [...next.messages] })),
+        ).toEqual([...precedingTexts, "Continued. Again."]);
+      } finally {
+        resetChatThreadState(paneId);
+      }
+    },
+  );
 
   it("deduplicates accumulated stream snapshots around tool cards", () => {
     const items = buildCachedChatItems(
@@ -3679,8 +3806,8 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    const cards = groups.flatMap((group, index) =>
-      group.messages.flatMap((entry) => extractToolCards(entry.message, `restored-${index}`)),
+    const cards = groups.flatMap((group) =>
+      group.messages.flatMap((entry) => extractToolCards(entry.message)),
     );
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ callId: "call-read", name: "read" });
@@ -3691,26 +3818,43 @@ describe("buildCachedChatItems", () => {
     ).toBe(true);
   });
 
-  it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {
-    const items = buildCachedChatItems(
-      createProps({
-        streamSegments: [
-          { text: "First tool.", ts: 2_000, toolCallId: "call-read" },
-          { text: "First tool. Second tool.", ts: 2_000, toolCallId: "call-list" },
-        ],
-        toolMessages: [
-          toolResultMessage("call-read", "read", "file contents", 1_000),
-          toolResultMessage("call-list", "list", "file list", 1_000),
-        ],
-      }),
-    );
+  it.each([false, true])(
+    "keeps same-millisecond segments interleaved with tools and mixed preambles=%s",
+    (mixedPreambles) => {
+      const items = buildCachedChatItems(
+        createProps({
+          streamSegments: [
+            { text: "First tool.", ts: 2_000, toolCallId: "call-read" },
+            { text: "First tool. Second tool.", ts: 2_000, toolCallId: "call-list" },
+            ...(mixedPreambles
+              ? [
+                  { text: "Unmatched preamble", ts: 2_000 },
+                  { text: "Keyed preamble", ts: 2_000, itemId: "keyed-preamble" },
+                ]
+              : []),
+          ],
+          toolMessages: [
+            toolResultMessage("call-read", "read", "file contents", 1_000),
+            toolResultMessage("call-list", "list", "file list", 1_000),
+          ],
+        }),
+      );
 
-    expect(items).toHaveLength(4);
-    expect(items[0]).toMatchObject({ kind: "stream", text: "First tool." });
-    expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
-    expect(items[2]).toMatchObject({ kind: "stream", text: "Second tool." });
-    expect(messageRecord(requireGroup(items[3])).toolCallId).toBe("call-list");
-  });
+      expect(items).toHaveLength(mixedPreambles ? 6 : 4);
+      expect(items[0]).toMatchObject({ kind: "stream", text: "First tool." });
+      expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
+      expect(items[2]).toMatchObject({ kind: "stream", text: "Second tool." });
+      expect(messageRecord(requireGroup(items[3])).toolCallId).toBe("call-list");
+      expect(items.slice(4)).toEqual(
+        mixedPreambles
+          ? [
+              expect.objectContaining({ kind: "stream", text: "Unmatched preamble" }),
+              expect.objectContaining({ kind: "stream", text: "Keyed preamble" }),
+            ]
+          : [],
+      );
+    },
+  );
 
   it("keeps a live tool card after its stream segment when an unkeyed preamble shifts indexes", () => {
     const items = buildCachedChatItems(
@@ -4467,8 +4611,8 @@ describe("buildCachedChatItems", () => {
     expect(items).toHaveLength(1);
     const divider = requireRecord(items[0]);
     expect(divider.kind).toBe("divider");
-    expect(divider.label).toBe("Compacted history");
-    expect(divider.icon).toBe("foldVertical");
+    expect(divider.label).toBe("Context compacted");
+    expect(divider.compaction).toBe("complete");
     expect(divider.description).toBe("The compacted transcript is preserved as a checkpoint.");
     const action = requireRecord(divider.action);
     expect(action.kind).toBe("session-checkpoints");
@@ -4489,7 +4633,7 @@ describe("buildCachedChatItems", () => {
 
     expect(items[0]).toMatchObject({
       kind: "divider",
-      label: "Compacted history",
+      label: "Context compacted",
       metric: "saved 875.3k tokens",
     });
   });

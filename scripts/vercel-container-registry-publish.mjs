@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
 import { verifyDockerAttestations } from "./verify-docker-attestations.mjs";
@@ -164,28 +165,6 @@ function inspectManifestDescriptor(imageRef, execFileSyncImpl) {
   }
 }
 
-function formatCommandError(error) {
-  if (!(error instanceof Error)) {
-    return String(error);
-  }
-  const output = [error.message];
-  for (const field of ["stderr", "stdout"]) {
-    const value = error[field];
-    if (typeof value === "string") {
-      output.push(value);
-    } else if (Buffer.isBuffer(value)) {
-      output.push(value.toString("utf8"));
-    }
-  }
-  return output.join("\n");
-}
-
-function isMissingManifestError(error) {
-  return /(?:manifest unknown|no such manifest|:\s*not found(?:\s|$))/i.test(
-    formatCommandError(error),
-  );
-}
-
 function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false } = {}) {
   const versions = new Map();
   for (const [index, architecture] of ARCHITECTURES.entries()) {
@@ -197,7 +176,7 @@ function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false 
         execFileSyncImpl,
       );
     } catch (error) {
-      if (allowMissing && index === 0 && isMissingManifestError(error)) {
+      if (allowMissing && index === 0 && isMissingManifestError(error, imageRef)) {
         return null;
       }
       throw error;

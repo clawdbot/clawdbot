@@ -44,6 +44,7 @@ import {
 import type { ChatState } from "./chat-state-contract.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
+import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import {
   captureChatSessionScrollPosition,
   saveChatSessionScrollPosition,
@@ -379,7 +380,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         const messages = Array.isArray(result.messages) ? result.messages : [];
         const nextMessages = this.prependUniqueNativeMessages(messages, state.chatMessages);
         const grew = nextMessages.length > state.chatMessages.length;
-        state.chatMessages = nextMessages;
+        publishChatSessionProjectionMessages(state, nextMessages);
         const appliedPagination: ChatHistoryPagination = exhausted
           ? {
               hasMore: false,

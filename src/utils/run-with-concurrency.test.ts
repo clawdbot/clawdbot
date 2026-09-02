@@ -1,6 +1,5 @@
-// Concurrency runner tests cover bounded parallel task execution.
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { runTasksWithConcurrency } from "./run-with-concurrency.js";
 
 describe("runTasksWithConcurrency", () => {
@@ -30,13 +29,14 @@ describe("runTasksWithConcurrency", () => {
     const tasks = [first, second, third, fourth].map((task) => task.run);
 
     const resultPromise = runTasksWithConcurrency({ tasks, limit: 2 });
-    await Promise.all([first.started, second.started]);
+    await withTestTimeout(first.started, 1_000, "task 0 did not start");
+    await withTestTimeout(second.started, 1_000, "task 1 did not start");
 
     second.release();
-    await third.started;
+    await withTestTimeout(third.started, 1_000, "task 2 did not start after releasing task 1");
 
     first.release();
-    await fourth.started;
+    await withTestTimeout(fourth.started, 1_000, "task 3 did not start after releasing task 0");
 
     third.release();
     fourth.release();

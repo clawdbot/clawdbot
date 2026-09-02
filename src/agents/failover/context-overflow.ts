@@ -8,6 +8,7 @@ import {
 import {
   classifyProviderPluginError,
   looksLikeProviderContextOverflowCandidate,
+  type PreparedProviderFailoverOwner,
 } from "./provider-patterns.js";
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
@@ -49,14 +50,18 @@ export function isContextOverflowErrorFromTables(errorMessage?: string): boolean
   );
 }
 
-export function isContextOverflowError(errorMessage?: string): boolean {
+export function isContextOverflowError(
+  errorMessage?: string,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
+): boolean {
   if (!errorMessage) {
     return false;
   }
   return (
     isContextOverflowErrorFromTables(errorMessage) ||
     (looksLikeProviderContextOverflowCandidate(errorMessage) &&
-      classifyProviderPluginError({ errorMessage }) === "context_overflow")
+      classifyProviderPluginError({ errorMessage, providerPlugin: opts?.providerPlugin }) ===
+        "context_overflow")
   );
 }
 

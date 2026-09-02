@@ -23,6 +23,7 @@ export type ApplicationGatewaySnapshot = {
   sessionKey: string;
   lastError: string | null;
   lastErrorCode: string | null;
+  lastErrorAuthReason?: string | null;
   /** Identity projected from this browser connection's own presence entry. */
   selfUser?: AuthenticatedUser | null;
 };
