@@ -258,7 +258,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       navigationSurfaceHidden,
       mobileNavLayout,
       onboarding,
-      settingsTakeover,
       compact: mergedChatChrome,
     })
   ) {
@@ -576,7 +575,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
-          settingsTakeover,
           compact: mergedChatChrome,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,
