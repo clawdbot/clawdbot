@@ -223,23 +223,51 @@ export function createVerifiedConversationContextStreamFilter(
   };
 }
 
+function splitBlocksOutsideCode(text: string): string[] {
+  const codeRegions = findCodeRegions(text);
+  const blocks: string[] = [];
+  let start = 0;
+  for (const match of text.matchAll(/\n{2,}/g)) {
+    if (isInsideCode(match.index, codeRegions)) {
+      continue;
+    }
+    blocks.push(text.slice(start, match.index));
+    start = match.index + match[0].length;
+  }
+  blocks.push(text.slice(start));
+  return blocks;
+}
+
+function normalizeBlockForComparison(block: string): string {
+  return block.trim().replace(/\s+/g, " ");
+}
+
+function hasConsecutiveDuplicateBlocks(blocks: string[]): boolean {
+  let lastNormalized: string | null = null;
+  for (const block of blocks) {
+    const normalized = normalizeBlockForComparison(block);
+    if (lastNormalized && normalized === lastNormalized) {
+      return true;
+    }
+    lastNormalized = normalized;
+  }
+  return false;
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
+  const trimmed = text.replace(/^(?:[ \t]*\r?\n)+/, "").trimEnd();
+  if (!trimmed || !hasConsecutiveDuplicateBlocks(trimmed.split(/\n{2,}/))) {
     return text;
   }
-  const blocks = trimmed.split(/\n{2,}/);
-  if (blocks.length < 2) {
-    return text;
-  }
+  const blocks = splitBlocksOutsideCode(trimmed);
   const result: string[] = [];
   let lastNormalized: string | null = null;
   for (const block of blocks) {
-    const normalized = block.trim().replace(/\s+/g, " ");
+    const normalized = normalizeBlockForComparison(block);
     if (lastNormalized && normalized === lastNormalized) {
       continue;
     }
-    result.push(block.trim());
+    result.push(block);
     lastNormalized = normalized;
   }
   return result.length === blocks.length ? text : result.join("\n\n");
