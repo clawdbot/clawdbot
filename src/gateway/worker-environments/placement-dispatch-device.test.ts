@@ -17,8 +17,8 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { VERSION } from "../../version.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST, type PlacementStore } from "./placement-dispatch-test-fixtures.js";
