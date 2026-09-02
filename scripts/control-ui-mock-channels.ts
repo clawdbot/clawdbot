@@ -182,6 +182,12 @@ export function buildChannelWizardMocks() {
     },
     next: {
       cases: [
+        ...channelOptions.map(({ value }) => ({
+          match: {
+            answer: { stepId: `mock-wizard-step-${value}`, value: null },
+          },
+          response: { done: true, status: "done", channels: [value] },
+        })),
         {
           match: {
             answer: { stepId: "mock-wizard-step-channel", value: "telegram" },

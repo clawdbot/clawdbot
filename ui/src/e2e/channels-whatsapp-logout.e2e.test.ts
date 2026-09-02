@@ -1,6 +1,7 @@
 // Control UI tests cover WhatsApp logout feedback against a mocked Gateway.
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -28,6 +29,49 @@ beforeEach(() => {
 });
 
 suite.define(() => {
+  it("completes direct setup as the selected channel", async () => {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const channelWizard = buildChannelWizardMocks();
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["channels.status", "channels.pairing.list", "wizard.start", "wizard.next"],
+        methodResponses: {
+          "channels.status": {
+            ts: Date.now(),
+            channelOrder: ["slack"],
+            channelLabels: { slack: "Slack" },
+            channelMeta: [{ id: "slack", label: "Slack" }],
+            channels: { slack: { configured: false, running: false } },
+            channelAccounts: {},
+            channelDefaultAccountId: {},
+          },
+          "channels.pairing.list": {
+            accounts: [],
+            requests: [],
+            commandOwnerConfigured: true,
+            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+          },
+          "wizard.start": channelWizard.start,
+          "wizard.next": channelWizard.next,
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}settings/channels`);
+      const slackRow = page.locator(".channels-item", { hasText: "Slack" }).first();
+      await slackRow.getByRole("button", { name: "Set up", exact: true }).click();
+      const wizard = page.locator(".channels-wizard");
+      await wizard.getByRole("button", { name: "Continue" }).click();
+
+      expect((await gateway.getRequests("wizard.next")).map(({ params }) => params)).toEqual([
+        {
+          sessionId: "mock-wizard-session",
+          answer: { stepId: "mock-wizard-step-slack", value: null },
+        },
+      ]);
+      await wizard.getByText("Channel configured", { exact: true }).waitFor();
+      await wizard.getByRole("heading", { name: "Set up Slack" }).waitFor();
+    });
+  });
+
   it("shows rejected channel configuration saves in the open editor without losing the draft", async () => {
     await suite.withPage(
       {

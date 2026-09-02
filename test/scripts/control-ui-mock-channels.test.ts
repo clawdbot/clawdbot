@@ -16,4 +16,20 @@ describe("buildChannelWizardMocks", () => {
       },
     });
   });
+
+  it.each(["telegram", "slack", "signal", "imessage"])(
+    "completes direct %s setup as the selected channel",
+    (channel) => {
+      const mocks = buildChannelWizardMocks();
+      const completion = mocks.next.cases.find(
+        (candidate) =>
+          "match" in candidate && candidate.match?.answer.stepId === `mock-wizard-step-${channel}`,
+      );
+
+      expect(completion).toEqual({
+        match: { answer: { stepId: `mock-wizard-step-${channel}`, value: null } },
+        response: { done: true, status: "done", channels: [channel] },
+      });
+    },
+  );
 });
