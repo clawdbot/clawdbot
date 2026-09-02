@@ -94,6 +94,13 @@ flow:
             expr: "emptyTask.terminalOutcome === 'succeeded' && emptyTask.deliveryStatus === 'not_applicable'"
             message:
               expr: "`empty completion did not close at its lifecycle owner: ${JSON.stringify(emptyTask)}`"
+        - call: waitForCondition
+          saveAs: requesterVisibleParentMessages
+          args:
+            - lambda:
+                expr: "(() => { const messages = state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId && String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED'); return messages.length > 0 ? messages : undefined; })()"
+            - 60000
+            - 250
         - set: emptyOutboundHistory
           value:
             expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId)"
@@ -106,13 +113,6 @@ flow:
         - set: emptyTerminalOutbound
           value:
             expr: "emptyOutboundHistory.filter((message) => String(message.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
-        - set: requesterVisibleParentMessages
-          value:
-            expr: "emptyOutboundHistory.filter((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
-        - assert:
-            expr: "requesterVisibleParentMessages.length > 0"
-            message:
-              expr: "`requester did not receive a visible parent acknowledgement; outbound=${recentOutboundSummary(state)}`"
         - assert:
             expr: "emptyTerminalOutbound.length === 0"
             message:
