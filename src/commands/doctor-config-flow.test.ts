@@ -1620,43 +1620,26 @@ describe("doctor config flow", () => {
     });
   });
 
-  it("previews and applies the legacy Tailscale Serve migration through Doctor", async () => {
+  it("reports external Tailscale Serve without changing ingress during Doctor repair", async () => {
     const config: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { mode: "token", token: "secret" },
-        tailscale: { mode: "off" },
-      },
+      gateway: { bind: "lan", auth: { mode: "token", token: "secret" } },
     };
+    const warning = "External Tailscale Serve: configuration was not changed.";
     prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
-      config: {
-        ...cfg,
-        gateway: {
-          ...cfg.gateway,
-          bind: "loopback" as const,
-          tailscale: { ...cfg.gateway?.tailscale, mode: "serve" as const },
-        },
-      },
-      changes: ["Migrated legacy Tailscale Serve to managed ingress."],
-      warnings: [],
+      config: cfg,
+      changes: [],
+      warnings: [warning],
     }));
 
-    const preview = await runDoctorConfigWithInput({
-      config,
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-    const repair = await runDoctorConfigWithInput({
-      config,
-      repair: true,
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-
-    expect(preview.shouldWriteConfig).toBe(false);
-    expect(preview.cfg.gateway?.bind).toBe("lan");
-    expect(repair.shouldWriteConfig).toBe(true);
-    expect(repair.cfg.gateway?.bind).toBe("loopback");
-    expect(repair.cfg.gateway?.tailscale?.mode).toBe("serve");
-    expect(prepareTailscaleConfigMigrationMock).toHaveBeenCalledTimes(2);
+    for (const repair of [false, true]) {
+      const result = await runDoctorConfigWithInput({
+        config,
+        repair,
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      expect(result.cfg.gateway).toEqual(config.gateway);
+    }
+    expect(terminalNoteMock).toHaveBeenCalledWith(warning, "Doctor warnings");
   });
 
   it("plans persistence of the injected main roster during doctor repair", async () => {

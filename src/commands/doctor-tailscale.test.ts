@@ -36,35 +36,31 @@ function runner(stdout: string): TailscaleStatusCommandRunner {
 }
 
 describe("prepareTailscaleConfigMigration", () => {
-  it("moves the shipped LAN Serve shape to managed ingress", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        mode: "local",
-        bind: "lan",
-        port: 18789,
-        auth: { mode: "token", token: "secret", allowTailscale: true },
-        tailscale: { mode: "off", preserveFunnel: true },
-      },
-    };
+  it.each([undefined, { mode: "off" as const, preserveFunnel: true }])(
+    "preserves externally managed Serve with tailscale=%j",
+    async (tailscale) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          mode: "local",
+          bind: "lan",
+          port: 18789,
+          auth: { mode: "token", token: "secret", allowTailscale: true },
+          ...(tailscale ? { tailscale } : {}),
+        },
+      };
+      const before = structuredClone(cfg);
+      const result = await prepareTailscaleConfigMigration({
+        cfg,
+        env: {},
+        runCommandWithTimeout: runner(serveStatus()),
+      });
 
-    const result = await prepareTailscaleConfigMigration({
-      cfg,
-      env: {},
-      runCommandWithTimeout: runner(serveStatus()),
-    });
-
-    expect(result.config.gateway).toEqual({
-      mode: "local",
-      bind: "loopback",
-      port: 18789,
-      auth: { mode: "token", token: "secret", allowTailscale: true },
-      tailscale: { mode: "serve" },
-    });
-    expect(result.changes).toHaveLength(1);
-    expect(result.changes.join("\n")).toContain("managed Tailscale Serve ingress");
-    expect(result.warnings).toEqual([]);
-    expect(cfg.gateway?.bind).toBe("lan");
-  });
+      expect(result.config).toEqual(before);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("not changed");
+      expect(result.warnings.join("\n")).toContain("trustedProxies");
+    },
+  );
 
   it.each([
     ["no matching route", {}, "{}"],
@@ -125,6 +121,7 @@ describe("prepareTailscaleConfigMigration", () => {
     expect(result.config).toBe(cfg);
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("not changed");
+    expect(result.warnings.join("\n")).toContain("authentication");
   });
 
   it("warns on malformed status but stays quiet when Tailscale is unavailable", async () => {

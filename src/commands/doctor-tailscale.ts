@@ -1,4 +1,4 @@
-// Doctor migration for Tailscale config and shipped external Serve routes.
+// Doctor diagnoses external Serve routes without taking over their ownership.
 import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
@@ -19,15 +19,6 @@ function result(
   warnings: string[] = [],
 ): DoctorTailscaleMigrationResult {
   return { config, changes, warnings };
-}
-
-function isCanonicalServeUrl(raw: string): boolean {
-  try {
-    const url = new URL(raw);
-    return url.protocol === "wss:" && (url.port === "" || url.port === "443");
-  } catch {
-    return false;
-  }
 }
 
 export async function prepareTailscaleConfigMigration(params: {
@@ -66,7 +57,7 @@ export async function prepareTailscaleConfigMigration(params: {
       config,
       [],
       [
-        "Tailscale Serve status could not be parsed, so legacy Serve configuration was not changed. Review `tailscale serve status --json`, then rerun Doctor.",
+        "Tailscale Serve status could not be parsed, so legacy Serve configuration was not changed. Inspect `tailscale serve status --json` and repair the external route through its owner.",
       ],
     );
   }
@@ -74,35 +65,13 @@ export async function prepareTailscaleConfigMigration(params: {
     return result(config);
   }
 
-  // The managed startup command owns the device's default HTTPS root. Custom ports
-  // need an operator-selected target, so Doctor must not guess at them.
-  const migrationIsUnambiguous =
-    inspection.urls.length === 1 &&
-    isCanonicalServeUrl(inspection.urls[0] ?? "") &&
-    gateway.auth?.mode !== "none";
-  if (!migrationIsUnambiguous) {
-    return result(
-      config,
-      [],
-      [
-        `Legacy Tailscale Serve still targets Gateway port ${gatewayPort}, but its custom endpoint, Service, or disabled authentication cannot be migrated safely; configuration was not changed. Remove that route or configure gateway.bind="loopback" and gateway.tailscale.mode="serve" manually.`,
-      ],
-    );
-  }
-
-  const { preserveFunnel: _preserveFunnel, ...tailscale } = gateway.tailscale ?? {};
-  return {
-    config: {
-      ...config,
-      gateway: {
-        ...gateway,
-        bind: "loopback",
-        tailscale: { ...tailscale, mode: "serve" },
-      },
-    },
-    changes: [
-      `Migrated legacy Tailscale Serve on port ${gatewayPort} to managed Tailscale Serve ingress (gateway.bind="loopback", gateway.tailscale.mode="serve"); restart the Gateway to claim the route.`,
+  // A matching persistent route does not prove OpenClaw ownership. Enabling
+  // managed ingress here makes startup reject the same route as an unowned claim.
+  return result(
+    config,
+    [],
+    [
+      `External Tailscale Serve targets Gateway port ${gatewayPort}; configuration was not changed. Keep gateway.tailscale.mode="off" and configure gateway.trustedProxies for the external route. To choose managed Serve, configure token, password, or trusted-proxy authentication, inspect and remove only the route you intend to replace, then explicitly select gateway.bind="loopback" and gateway.tailscale.mode="serve". See https://docs.openclaw.ai/gateway/tailscale#externally-managed-serve-and-funnel.`,
     ],
-    warnings: [],
-  };
+  );
 }
