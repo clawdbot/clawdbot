@@ -372,7 +372,7 @@ export function renderHeartbeatRunFailureCopy(reason?: string): string {
 
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
-export const PROVIDER_BIOLOGICAL_RISK_ERROR_USER_MESSAGE =
+const PROVIDER_BIOLOGICAL_RISK_ERROR_USER_MESSAGE =
   "⚠️ The model provider blocked this turn due to its biological-risk policy. Your current session and conversation context remain intact — rephrase your request, or select another approved model.";
 const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
