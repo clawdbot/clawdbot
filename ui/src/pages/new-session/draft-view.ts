@@ -136,15 +136,10 @@ export function renderNewSessionDraftView(options: {
             ? undefined
             : () => void submission.submit(undefined, true),
       })}
-      ${titlePreparation.available()
-        ? html`<div class="new-session-page__title-notice">
-            <span>${t("newSession.titlePreparationDisclosure")}</span>
-            ${preparedTitle
-              ? html`<span class="new-session-page__prepared-title" role="status"
-                  >${t("newSession.preparedTitle", { title: preparedTitle })}</span
-                >`
-              : nothing}
-          </div>`
+      ${preparedTitle
+        ? html`<span class="new-session-page__prepared-title" role="status"
+            >${t("newSession.preparedTitle", { title: preparedTitle })}</span
+          >`
         : nothing}
       ${!isCatalogTarget
         ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")

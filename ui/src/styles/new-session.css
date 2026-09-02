@@ -1253,14 +1253,9 @@ wa-popover.new-session-page__project-popover::part(body) {
   }
 }
 
-.new-session-page__title-notice {
-  display: grid;
-  gap: 4px;
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .new-session-page__prepared-title {
+  display: block;
+  margin-top: 8px;
   color: var(--text);
+  font-size: 12px;
 }

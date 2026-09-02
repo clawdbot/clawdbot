@@ -19,8 +19,11 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.getByText("When you pause, draft text is sent", { exact: false }).waitFor();
       const message = page.locator(".new-session-page__message");
+      await message.waitFor();
+      expect(
+        await page.getByText("When you pause, draft text is sent", { exact: false }).count(),
+      ).toBe(0);
       await message.fill("repair the sidebar naming");
       await page.getByText("Session name: Repair sidebar naming", { exact: true }).waitFor();
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);

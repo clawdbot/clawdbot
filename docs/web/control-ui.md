@@ -47,9 +47,8 @@ The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the
 ## New session names
 
 In **New session**, pausing typing for one second prepares a suggested name using
-only the selected agent's utility model. The composer discloses that unsent draft
-text is sent to the title provider. Preparation starts after at least 12 characters
-and sends at most the first 1,000 characters; it does not send attachments.
+only the selected agent's utility model. Preparation starts after at least 12
+characters and sends at most the first 1,000 characters; it does not send attachments.
 
 Preparation is disabled in incognito and for slash commands. Edits replace stale
 suggestions, and only one request runs at a time. A missing or failed utility model
