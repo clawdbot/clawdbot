@@ -3502,9 +3502,9 @@ openclaw-sidebar-attention {
   flex: 0 0 32px;
   place-items: center;
   padding: 0;
-  border: 0;
+  border: var(--sidebar-issues-border, 0);
   border-radius: var(--radius-md);
-  background: transparent;
+  background: var(--sidebar-issues-background, transparent);
   color: var(--muted);
   cursor: var(--cursor-action);
 }
