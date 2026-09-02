@@ -273,13 +273,14 @@ export async function prepareAgentCommandExecution(
   const acpResolution = sessionKey
     ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
     : null;
-  // Configured run cwd is a Gateway-local path; paired/ACP sessions execute on
-  // their own node with a node-owned execCwd, so the config fallback stays
-  // local-only and never bridges into node placements.
+  // Configured run cwd is a Gateway-local path; ACP-placed sessions ("ready" or
+  // "stale") execute on their own node with a node-owned execCwd, so the config
+  // fallback applies only to ordinary sessions and never bridges into a node.
+  const isAcpPlacedSession = acpResolution !== null && acpResolution.kind !== "none";
   const cwd =
     normalizeOptionalString(opts.cwd) ??
     normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
-    (acpResolution ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
+    (isAcpPlacedSession ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
