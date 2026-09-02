@@ -200,7 +200,7 @@ suite.define(() => {
     await availableItem.getByRole("button", { name: "Request admin" }).waitFor();
   });
 
-  it("resurfaces Request admin after a dismissed incident clears between app lifetimes", async () => {
+  it("resurfaces Request admin after a dismissed incident clears directly in Settings", async () => {
     const context = await createContext();
     const dismissPage = await context.newPage();
     await installMockGateway(dismissPage, { operatorScopes: LIMITED_SCOPES });
@@ -215,8 +215,9 @@ suite.define(() => {
 
     const clearedPage = await context.newPage();
     await installMockGateway(clearedPage, { operatorScopes: FULL_SCOPES });
-    await clearedPage.goto(`${suite.server.baseUrl}activity`);
-    await clearedPage.locator(".sidebar-issues-button").waitFor();
+    await clearedPage.goto(`${suite.server.baseUrl}settings/appearance`);
+    await waitForControlUiSettingsTakeover(clearedPage);
+    expect(await clearedPage.locator("openclaw-sidebar-attention").count()).toBe(0);
     await clearedPage.close();
 
     const recurrencePage = await context.newPage();

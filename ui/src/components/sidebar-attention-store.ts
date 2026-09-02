@@ -8,7 +8,6 @@ import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../lib
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
-  clearSidebarAttentionDismissal,
   dismissSidebarAttention,
   dismissalStoreKey,
   isSidebarAttentionDismissed,
@@ -54,7 +53,6 @@ export class SidebarAttentionStoreController implements StoreController {
   private readonly stopSelection: () => void;
   private readonly stopAgents: () => void;
   private readonly stopOverlays: () => void;
-  private readonly stopScopeUpgrade: () => void;
   private readonly idleRefreshTimer: ReturnType<typeof globalThis.setInterval>;
 
   constructor(
@@ -71,7 +69,6 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopSelection = sources.agentSelection.subscribe(() => this.synchronizeGateway());
     this.stopAgents = sources.agents.subscribe(onChange);
     this.stopOverlays = sources.overlays.subscribe(onChange);
-    this.stopScopeUpgrade = sources.scopeUpgrade.subscribe(() => this.synchronizeScopeUpgrade());
     document.addEventListener("visibilitychange", this.refreshIfStale);
     globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
     this.idleRefreshTimer = globalThis.setInterval(this.refreshIfStale, IDLE_REFRESH_INTERVAL_MS);
@@ -249,7 +246,6 @@ export class SidebarAttentionStoreController implements StoreController {
       this.onChange();
       return;
     }
-    this.reconcileScopeUpgradeDismissal();
     const owner = this.owner();
     const agentScope = this.sources.agentSelection.state;
     const ownerChanged = this.loadedOwner !== null && !this.ownerEquals(owner, this.loadedOwner);
@@ -281,24 +277,6 @@ export class SidebarAttentionStoreController implements StoreController {
     this.load();
   }
 
-  private reconcileScopeUpgradeDismissal(): void {
-    if (this.dismissedScope) {
-      const snapshot = this.sources.gateway.snapshot;
-      const entry = buildScopeUpgradeInboxEntry({
-        scopes: snapshot.hello?.auth?.scopes,
-        state: this.sources.scopeUpgrade.state,
-      });
-      if (snapshot.phase === "connected" && snapshot.hello?.auth?.scopes && !entry?.dismissal) {
-        this.dismissed = clearSidebarAttentionDismissal(this.dismissedScope, "scopeUpgrade");
-      }
-    }
-  }
-
-  private synchronizeScopeUpgrade(): void {
-    this.reconcileScopeUpgradeDismissal();
-    this.onChange();
-  }
-
   private readonly refreshIfStale = () => {
     if (
       document.visibilityState === "visible" &&
@@ -313,10 +291,16 @@ export class SidebarAttentionStoreController implements StoreController {
       this.dismissedScope &&
       (event.key === null || event.key === dismissalStoreKey(this.dismissedScope))
     ) {
+      this.syncDismissals();
+    }
+  };
+
+  syncDismissals(): void {
+    if (this.dismissedScope) {
       this.dismissed = loadDismissals(this.dismissedScope);
       this.onChange();
     }
-  };
+  }
 
   dismiss(dismissal: SidebarAttentionDismissal): void {
     if (this.dismissedScope) {
@@ -332,7 +316,6 @@ export class SidebarAttentionStoreController implements StoreController {
     this.stopSelection();
     this.stopAgents();
     this.stopOverlays();
-    this.stopScopeUpgrade();
     document.removeEventListener("visibilitychange", this.refreshIfStale);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
     globalThis.clearInterval(this.idleRefreshTimer);

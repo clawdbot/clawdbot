@@ -1,6 +1,8 @@
-import type {
-  SidebarAttentionDismissal,
-  SidebarInboxEntry,
+import { clearSidebarAttentionDismissal } from "../components/sidebar-attention-dismissals.ts";
+import {
+  buildScopeUpgradeInboxEntry,
+  type SidebarAttentionDismissal,
+  type SidebarInboxEntry,
 } from "../components/sidebar-attention-entries.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
@@ -19,6 +21,7 @@ export type SidebarAttentionStoreSources = {
 export type SidebarAttentionStoreController = {
   readonly entries: readonly SidebarInboxEntry[];
   dismiss(dismissal: SidebarAttentionDismissal): void;
+  syncDismissals(): void;
   dispose(): void;
 };
 
@@ -45,6 +48,22 @@ export function createSidebarAttentionStore(
       listener();
     }
   };
+  // Settings intentionally mounts no Inbox, so dismissal retirement belongs to this eager facade.
+  const synchronizeScopeUpgradeDismissal = () => {
+    const snapshot = sources.gateway.snapshot;
+    const scopes = snapshot.hello?.auth?.scopes;
+    if (
+      snapshot.phase === "connected" &&
+      scopes &&
+      !buildScopeUpgradeInboxEntry({ scopes, state: sources.scopeUpgrade.state })?.dismissal
+    ) {
+      clearSidebarAttentionDismissal(sources.gateway.connection.gatewayUrl, "scopeUpgrade");
+    }
+    controller?.syncDismissals();
+  };
+  const stopGateway = sources.gateway.subscribe(synchronizeScopeUpgradeDismissal);
+  const stopScopeUpgrade = sources.scopeUpgrade.subscribe(synchronizeScopeUpgradeDismissal);
+  synchronizeScopeUpgradeDismissal();
   return {
     get entries() {
       return controller?.entries ?? [];
@@ -60,6 +79,8 @@ export function createSidebarAttentionStore(
       return () => listeners.delete(listener);
     },
     dispose() {
+      stopGateway();
+      stopScopeUpgrade();
       controller?.dispose();
       controller = null;
       listeners.clear();
