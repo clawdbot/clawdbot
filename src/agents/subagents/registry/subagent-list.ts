@@ -294,13 +294,17 @@ function buildSharedCwdIndex(params: {
       continue;
     }
     const id = sharedCwdGroups.length + 1;
+    const sampledRunIds = group.runIds.slice(0, SHARED_CWD_RUN_SAMPLE_MAX);
     sharedCwdGroups.push({
       id,
       path: group.displayPath,
       runCount: group.runIds.length,
-      runIds: group.runIds.slice(0, SHARED_CWD_RUN_SAMPLE_MAX),
+      runIds: sampledRunIds,
     });
-    for (const runId of group.runIds) {
+    // Keep the advisory constant-cost even when one configured swarm has
+    // thousands of members. The exact total lives on the group summary; row
+    // references are only navigation aids for its bounded sample.
+    for (const runId of sampledRunIds) {
       groupIdByRunId.set(runId, id);
     }
   }

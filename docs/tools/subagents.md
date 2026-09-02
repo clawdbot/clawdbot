@@ -393,9 +393,10 @@ checkouts that differ only in their final segment stay separate groups.
 `runCount` is the exact number of live runs sharing the directory. `runIds` is
 a **bounded sample** of at most three runs, not a complete list; read
 `runCount` for the real total. At most eight groups are emitted, while
-`sharedCwdGroupTotal` reports the exact total. Rows for omitted groups carry no
-group id. The human-readable view emits each reported path once in a matching
-`shared working directories` section; individual rows carry only
+`sharedCwdGroupTotal` reports the exact total. Only the sampled runs carry a
+group id; rows outside the sample or in omitted groups carry none. The
+human-readable view emits each reported path once in a matching
+`shared working directories` section; sampled rows carry only
 `[shared cwd group N]`.
 
 The group, sample, and path caps bound this advisory across the complete

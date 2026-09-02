@@ -718,7 +718,7 @@ describe("buildSubagentList", () => {
     // schema maximum of 20 children for one agent session that measured ~30 KB /
     // ~7.5K tokens of model-visible output. These tests pin the caps, not just
     // the happy path.
-    it("emits one bounded summary at the supported child maximum", async () => {
+    it("bounds group summaries and row references at the per-agent child maximum", async () => {
       const now = Date.now();
       const sharedDir = path.join(testWorkspaceDir, "shared-tree-max-children");
       // 20 == `maxChildrenPerAgent`'s `.max(20)` in zod-schema.agent-defaults.ts.
@@ -746,9 +746,14 @@ describe("buildSubagentList", () => {
           runIds: runs.slice(0, 3).map((run) => run.runId),
         },
       ]);
-      for (const item of list.active) {
-        expect(item.sharedCwdGroupId).toBe(1);
-        expect(item.line).toContain("[shared cwd group 1]");
+      for (const [index, item] of list.active.entries()) {
+        if (index < 3) {
+          expect(item.sharedCwdGroupId).toBe(1);
+          expect(item.line).toContain("[shared cwd group 1]");
+        } else {
+          expect(item.sharedCwdGroupId).toBeUndefined();
+          expect(item.line).not.toContain("shared cwd");
+        }
       }
       expect(list.text.split(path.resolve(sharedDir))).toHaveLength(2);
     });

@@ -383,6 +383,16 @@ async function main(): Promise<void> {
       assert.equal(at50.list.sharedCwdGroups[0]?.runCount, 50);
       assert.equal(at50.list.sharedCwdGroups[0]?.runIds.length, 3);
     });
+    check("only the sampled members carry row-level group references", () => {
+      assert.equal(
+        at20.list.active.filter((item) => item.sharedCwdGroupId !== undefined).length,
+        3,
+      );
+      assert.equal(
+        at50.list.active.filter((item) => item.sharedCwdGroupId !== undefined).length,
+        3,
+      );
+    });
     check(`the reported directory is capped at ${PATH_MAX} characters`, () => {
       const reported = at20.list.sharedCwdGroups[0]?.path ?? "";
       assert.ok(reported.length <= PATH_MAX, `reported path was ${reported.length} characters`);
