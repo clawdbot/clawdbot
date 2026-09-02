@@ -1784,12 +1784,14 @@ describe("package-mac-app plist stamping", () => {
   });
 
   it.each([
-    { operation: "create", exitCode: 1, reason: "No such file or directory" },
-    { operation: "attach", exitCode: 73, reason: "Permission denied" },
-    { operation: "none", exitCode: 0, reason: "" },
+    { operation: "create", exitCode: 1, reason: "No such file or directory", mounts: "empty" },
+    { operation: "attach", exitCode: 73, reason: "Permission denied", mounts: "empty" },
+    { operation: "none", exitCode: 0, reason: "", mounts: "empty" },
+    { operation: "attach", exitCode: 73, reason: "Permission denied", mounts: "mounted" },
+    { operation: "attach", exitCode: 73, reason: "Permission denied", mounts: "failed" },
   ])(
-    "preserves Peekaboo snapshot diagnostics and cleanup: $operation",
-    ({ operation, exitCode, reason }) => {
+    "preserves Peekaboo snapshot diagnostics and cleanup: $operation / $mounts",
+    ({ operation, exitCode, reason, mounts }) => {
       const root = tempDirs.make("openclaw-peekaboo-snapshot-fixture-");
       const buildPath = path.join(root, "build with spaces");
       const checkout = path.join(buildPath, "checkouts", "Peekaboo");
@@ -1830,6 +1832,15 @@ describe("package-mac-app plist stamping", () => {
         `,
       );
       chmodSync(hdiutil, 0o755);
+      const mountCommand = path.join(root, "mount");
+      writeFileSync(
+        mountCommand,
+        `#!/bin/bash
+printf 'mount\\n' >> "$operations"
+${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on %s/work/snapshot/mount (apfs, read-only)\\n' "$fixture_root"` : "exit 0"}
+`,
+      );
+      chmodSync(mountCommand, 0o755);
 
       const result = runHelper(
         `
@@ -1866,13 +1877,19 @@ describe("package-mac-app plist stamping", () => {
       if (operation === "none") {
         expectedOperations.push(`verify:${mount}:${expectedCommit}`, "snapshot-ready");
       }
-      expectedOperations.push(
-        "detach",
-        `remove:-rf ${snapshotRoot}  ${path.join(root, "work/resource-backups")}`,
-      );
-      expect(result.status).toBe(exitCode);
+      expectedOperations.push("detach");
+      if (operation !== "none") {
+        expectedOperations.push("mount");
+      }
+      const retained = mounts !== "empty";
+      if (!retained) {
+        expectedOperations.push(
+          `remove:-rf ${snapshotRoot}  ${path.join(root, "work/resource-backups")}`,
+        );
+      }
+      expect(result.status).toBe(retained ? 1 : exitCode);
       expect(readFileSync(operationsPath, "utf8").trim().split("\n")).toEqual(expectedOperations);
-      expect(existsSync(snapshotRoot)).toBe(false);
+      expect(existsSync(snapshotRoot)).toBe(retained);
       expect(readFileSync(path.join(checkout, "source"), "utf8")).toBe("source preserved\n");
       expect(readFileSync(unrelated, "utf8")).toBe("unrelated snapshot preserved\n");
       const readArgs = (command: string) =>

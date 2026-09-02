@@ -442,7 +442,7 @@ cleanup_swift_architecture() {
     hdiutil detach -quiet "$PEEKABOO_SNAPSHOT_MOUNT" >/dev/null 2>&1 || {
       # An unattached directory is safe to remove; a live mount must be retained.
       local mounts
-      if ! mounts="$(/sbin/mount)"; then
+      if ! mounts="$(mount)"; then
         cleanup_status=1
       elif printf '%s\n' "$mounts" | grep -F " on $PEEKABOO_SNAPSHOT_MOUNT (" >/dev/null; then
         cleanup_status=1
