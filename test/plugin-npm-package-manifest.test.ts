@@ -1,7 +1,16 @@
 // Plugin npm manifest tests validate generated plugin package manifests.
 import { execFile, spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -275,7 +284,7 @@ function writePatchedRuntimeFixture(bundling = "default") {
             : ""),
   );
   writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
-  const installedDir = join(repoDir, "node_modules", "local-runtime-dep");
+  let installedDir = join(repoDir, "node_modules", "local-runtime-dep");
   writeJsonFile(join(installedDir, "package.json"), {
     name: "local-runtime-dep",
     version: "1.0.0",
@@ -344,6 +353,36 @@ function writePatchedRuntimeFixture(bundling = "default") {
       [`local-runtime-dep@${patchedVersion}`]: ["node_modules/local-runtime-dep"],
     },
   });
+  if (bundling.startsWith("isolated")) {
+    const virtualStoreDirMaxLength = bundling === "isolated-short" ? 60 : 120;
+    const filename = `local-runtime-dep@1.0.0_patch_hash=${patchHash}`;
+    const slot =
+      virtualStoreDirMaxLength === 60
+        ? `${filename.slice(0, 27)}_${createHash("sha256").update(filename).digest("hex").slice(0, 32)}`
+        : filename;
+    const isolatedDir = join(
+      repoDir,
+      "node_modules",
+      ".pnpm",
+      slot,
+      "node_modules",
+      "local-runtime-dep",
+    );
+    mkdirSync(dirname(isolatedDir), { recursive: true });
+    renameSync(installedDir, isolatedDir);
+    installedDir = isolatedDir;
+    mkdirSync(join(packageDir, "node_modules"), { recursive: true });
+    symlinkSync(
+      installedDir,
+      join(packageDir, "node_modules", "local-runtime-dep"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    writeJsonFile(join(repoDir, "node_modules", ".modules.yaml"), {
+      nodeLinker: "isolated",
+      virtualStoreDir: ".pnpm",
+      virtualStoreDirMaxLength,
+    });
+  }
   for (const yamlPath of [
     join(repoDir, "pnpm-workspace.yaml"),
     join(repoDir, "node_modules", ".modules.yaml"),
@@ -915,6 +954,8 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
 
   it.each([
     "default",
+    "isolated",
+    "isolated-short",
     "partial",
     "all",
     "clawhub",
@@ -1141,11 +1182,17 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
     }
   });
 
-  it.each(["bundle opt-out", "stale install", "stale importer spec", "wrong package identity"])(
-    "rejects a patched artifact when its packaging precondition fails (%s)",
-    (scenario) => {
+  it.each(
+    ["default", "isolated"].flatMap((layout) =>
+      ["bundle opt-out", "stale install", "stale importer spec", "wrong package identity"].map(
+        (scenario) => ({ layout, scenario }),
+      ),
+    ),
+  )(
+    "rejects a patched artifact when its packaging precondition fails ($layout / $scenario)",
+    ({ layout, scenario }) => {
       const { repoDir, packageDir, sourceManifest, installedDir, lock } =
-        writePatchedRuntimeFixture();
+        writePatchedRuntimeFixture(layout);
       if (scenario === "bundle opt-out") {
         sourceManifest.openclaw.release.bundleRuntimeDependencies = false;
         writeJsonFile(join(packageDir, "package.json"), sourceManifest);
@@ -1179,6 +1226,37 @@ console.log(JSON.stringify({ path: path.join(destination, packed.filename) }));
               : "identity mismatch",
       );
       expect(readFileSync(join(installedDir, "index.js"), "utf8")).toBe("module.exports = 2;\n");
+    },
+  );
+
+  it.each(["foreign target", "redirected slot", "unpatched slot"])(
+    "rejects an isolated package link outside its frozen patched slot (%s)",
+    (scenario) => {
+      const { repoDir, packageDir, installedDir } = writePatchedRuntimeFixture("isolated");
+      const target =
+        scenario === "unpatched slot"
+          ? join(
+              repoDir,
+              "node_modules",
+              ".pnpm",
+              "local-runtime-dep@1.0.0",
+              "node_modules",
+              "local-runtime-dep",
+            )
+          : join(repoDir, "foreign-runtime");
+      mkdirSync(dirname(target), { recursive: true });
+      renameSync(installedDir, target);
+      const link =
+        scenario === "redirected slot"
+          ? installedDir
+          : join(packageDir, "node_modules", "local-runtime-dep");
+      rmSync(link, { force: true });
+      symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+      expect(() =>
+        withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
+          throw new Error("unsafe artifact reached pack callback");
+        }),
+      ).toThrow("not the frozen pnpm package");
     },
   );
 
