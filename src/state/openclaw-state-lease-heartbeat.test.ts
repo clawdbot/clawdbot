@@ -40,8 +40,8 @@ afterEach(() => {
 describe("maintenance lease heartbeat", () => {
   it("retains ownership while synchronous maintenance exceeds the lease duration", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-blocked" }, async (state) => {
-      await withOpenClawStateLease(options(state.env), async (lease) => {
-        block(1_250);
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
+        block(10_250);
         expect(() => lease.renew?.()).not.toThrow();
         expect(() => lease.assertOwned()).not.toThrow();
         expect(lease.signal.aborted).toBe(false);
@@ -148,11 +148,13 @@ describe("maintenance lease heartbeat", () => {
         const spawned = once(process, "worker") as Promise<[Worker]>;
         let retained: OpenClawStateLeaseContext | undefined;
         const operation = withOpenClawStateLease(
-          options(state.env, controller.signal),
+          { ...options(state.env, controller.signal), leaseMs: 10_000 },
           async (lease) => {
             retained = lease;
             if (ending === "abort") {
+              const [worker] = await spawned;
               controller.abort();
+              await once(worker, "exit");
               const stopped = readLease(state.env);
               await new Promise((resolve) => {
                 setTimeout(resolve, 450);

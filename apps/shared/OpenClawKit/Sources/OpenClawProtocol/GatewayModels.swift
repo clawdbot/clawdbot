@@ -1627,6 +1627,7 @@ public struct StateVersion: Codable, Sendable {
 }
 
 public struct Snapshot: Codable, Sendable {
+    public let suspension: GatewaySuspension?
     public let presence: [PresenceEntry]
     public let health: [String: AnyCodable]
     public let stateversion: StateVersion
@@ -1640,6 +1641,7 @@ public struct Snapshot: Codable, Sendable {
     public let updateschedule: UpdateScheduleState?
 
     public init(
+        suspension: GatewaySuspension? = nil,
         presence: [PresenceEntry],
         health: [String: AnyCodable],
         stateversion: StateVersion,
@@ -1652,6 +1654,7 @@ public struct Snapshot: Codable, Sendable {
         updateavailable: UpdateAvailable? = nil,
         updateschedule: UpdateScheduleState? = nil)
     {
+        self.suspension = suspension
         self.presence = presence
         self.health = health
         self.stateversion = stateversion
@@ -1666,6 +1669,7 @@ public struct Snapshot: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case suspension
         case presence
         case health
         case stateversion = "stateVersion"
@@ -1874,6 +1878,16 @@ public struct GatewaySuspendTaskBlocker: Codable, Sendable {
         case runid = "runId"
         case label
         case title
+    }
+}
+
+public struct GatewaySuspension: Codable, Sendable {
+    public let phase: AnyCodable
+
+    public init(
+        phase: AnyCodable)
+    {
+        self.phase = phase
     }
 }
 

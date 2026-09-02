@@ -13,6 +13,8 @@ export function createGatewayMethodsIsolatedVitestConfig(
     isolate: true,
     name: "gateway-methods-isolated",
     passWithNoTests: true,
+    // Native Date timezone changes require a process rather than a worker's copied environment.
+    pool: "forks",
     useNonIsolatedRunner: true,
   });
 }

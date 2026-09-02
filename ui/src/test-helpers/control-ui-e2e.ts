@@ -334,6 +334,7 @@ export type ControlUiMockGatewayScenario = {
   serverBuildId?: string;
   /** Exact Gateway lifecycle generation served in hello. */
   gatewayBootId?: string;
+  gatewaySuspensionPhase?: "accepting" | "preparing" | "draining" | "prepared";
   /** Optional startup update snapshot for rich local mock fixtures. */
   updateAvailable?: UpdateAvailable | null;
   /** Optional automatic-update campaign snapshot for rich local mock fixtures. */
@@ -971,6 +972,7 @@ function normalizeScenario(
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
     gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
+    gatewaySuspensionPhase: scenario.gatewaySuspensionPhase ?? "accepting",
     updateAvailable: scenario.updateAvailable ?? null,
     updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
@@ -1846,6 +1848,7 @@ function installControlUiMockGateway(
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
           },
           snapshot: {
+            suspension: { phase: scenario.gatewaySuspensionPhase },
             ...presenceSnapshot(params),
             ...(scenario.updateAvailable ? { updateAvailable: scenario.updateAvailable } : {}),
             ...(scenario.updateSchedule ? { updateSchedule: scenario.updateSchedule } : {}),

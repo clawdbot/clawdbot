@@ -512,6 +512,8 @@ function runFullReleaseInputValidation(
 }
 
 function runFullReleaseTargetIdentityValidation(params: {
+  anonymousGitUnavailable?: boolean;
+  apiError?: "base" | "context" | "comparison";
   baseTagSha?: string;
   comparisonStatus?: string;
   remoteSha?: string;
@@ -541,6 +543,10 @@ function runFullReleaseTargetIdentityValidation(params: {
     `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *"ls-remote"* ]]; then
+  if [[ "$FAKE_ANONYMOUS_GIT_UNAVAILABLE" == "true" ]]; then
+    echo 'fatal: could not read Username for https://github.com: terminal prompts disabled' >&2
+    exit 128
+  fi
   ref="\${!#}"
   if [[ "$ref" == "refs/tags/v$FAKE_PACKAGE_VERSION" || "$ref" == "refs/tags/v$FAKE_PACKAGE_VERSION^{}" ]]; then
     printf '%s\\t%s\\n' "$FAKE_BASE_SHA" "$ref"
@@ -557,11 +563,23 @@ exit 64
     resolve(fakeBin, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"api repos/"*"/compare/"* ]]; then
-  printf '%s\\n' "$FAKE_COMPARISON_STATUS"
-  exit 0
+[[ "\${GH_TOKEN:-}" == "test-token" ]] || exit 4
+[[ "$1" == "api" ]] || exit 64
+shift
+if [[ "$1" == "--method" && "$2" == "GET" ]]; then shift 2; fi
+[[ "$#" == 3 && "$2" == "--jq" ]] || exit 64
+case "$1" in
+  "$FAKE_BASE_ENDPOINT") kind=base; value="$FAKE_BASE_SHA"; query=.sha ;;
+  "$FAKE_CONTEXT_ENDPOINT") kind=context; value="$FAKE_REMOTE_SHA"; query=.sha ;;
+  "$FAKE_COMPARISON_ENDPOINT") kind=comparison; value="$FAKE_COMPARISON_STATUS"; query=.status ;;
+  *) echo "Unexpected GitHub API endpoint: $1" >&2; exit 64 ;;
+esac
+[[ "$3" == "$query" ]] || exit 64
+if [[ "$FAKE_API_ERROR" == "$kind" ]]; then
+  echo 'gh: Service Unavailable (HTTP 503)' >&2
+  exit 1
 fi
-exit 64
+printf '%s\\n' "$value"
 `,
     { mode: 0o755 },
   );
@@ -572,17 +590,25 @@ exit 64
   const remoteRef = normalizedContextRef.startsWith("v")
     ? `refs/tags/${normalizedContextRef}`
     : `refs/heads/${normalizedContextRef}`;
+  const remoteSha = params.remoteSha ?? targetSha;
+  const commitEndpoint = (ref: string) =>
+    `repos/openclaw/openclaw/commits/${encodeURIComponent(ref)}`;
   const outputPath = resolve(workdir, "output");
   const result = spawnSync("bash", ["-c", step.run ?? ""], {
     cwd: workdir,
     encoding: "utf8",
     env: {
+      FAKE_ANONYMOUS_GIT_UNAVAILABLE: String(params.anonymousGitUnavailable ?? false),
+      FAKE_API_ERROR: params.apiError ?? "",
+      FAKE_BASE_ENDPOINT: commitEndpoint(`refs/tags/v${params.version}`),
+      FAKE_CONTEXT_ENDPOINT: commitEndpoint(remoteRef),
+      FAKE_COMPARISON_ENDPOINT: `repos/openclaw/openclaw/compare/${targetSha}...${remoteSha}`,
       FAKE_COMPARISON_STATUS: params.comparisonStatus ?? "ahead",
       FAKE_REMOTE_REF: remoteRef,
-      FAKE_REMOTE_SHA: params.remoteSha ?? targetSha,
+      FAKE_REMOTE_SHA: remoteSha,
       FAKE_BASE_SHA: params.baseTagSha ?? params.remoteSha ?? targetSha,
       FAKE_PACKAGE_VERSION: params.version,
-      GH_TOKEN: "test-token",
+      GH_TOKEN: step.env?.GH_TOKEN === "${{ github.token }}" ? "test-token" : "",
       GITHUB_REPOSITORY: "openclaw/openclaw",
       GITHUB_OUTPUT: outputPath,
       PATH: `${fakeBin}:${process.env.PATH}`,
@@ -6915,6 +6941,67 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(rejected.stderr).toContain("expected 2026.8.1 or a beta prerelease");
   });
 
+  it.each([
+    {
+      label: "branch head",
+      targetContextRef: "refs/heads/release/2026.8.1",
+      comparisonStatus: "identical",
+    },
+    {
+      label: "branch ancestor",
+      targetContextRef: "release/2026.8.1",
+      remoteSha: "b".repeat(40),
+      comparisonStatus: "ahead",
+    },
+    { label: "release tag commit", targetContextRef: "refs/tags/v2026.8.1" },
+    { label: "correction base commit", targetContextRef: "release/2026.8.1-1" },
+  ])("validates $label through authenticated refs when anonymous Git is unavailable", (entry) => {
+    const { label: _label, ...identity } = entry;
+    const result = runFullReleaseTargetIdentityValidation({
+      ...identity,
+      anonymousGitUnavailable: true,
+      targetRef: "a".repeat(40),
+      version: "2026.8.1",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.output).toContain("ci_release_scope=full\n");
+  });
+
+  it.each([
+    { apiError: "context", targetContextRef: "release/2026.8.1" },
+    { apiError: "comparison", targetContextRef: "release/2026.8.1" },
+    { apiError: "base", targetContextRef: "release/2026.8.1-1" },
+  ] as const)("fails closed on a $apiError API error", ({ apiError, targetContextRef }) => {
+    const result = runFullReleaseTargetIdentityValidation({
+      anonymousGitUnavailable: true,
+      apiError,
+      targetContextRef,
+      targetRef: "a".repeat(40),
+      version: "2026.8.1",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("HTTP 503");
+    expect(result.output).not.toContain("ci_release_scope=");
+  });
+
+  it.each(["refs/tags/release/2026.8.1", "refs/heads/v2026.8.1", "release-ci/2026.8.1"])(
+    "rejects the wrong release context namespace %s before ref lookup",
+    (targetContextRef) => {
+      const result = runFullReleaseTargetIdentityValidation({
+        anonymousGitUnavailable: true,
+        targetContextRef,
+        targetRef: "a".repeat(40),
+        version: "2026.8.1",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("must be a canonical OpenClaw release branch or tag");
+      expect(result.output).not.toContain("ci_release_scope=");
+    },
+  );
+
   it("validates an exact-SHA extended-stable successor against its canonical branch", () => {
     const result = runFullReleaseTargetIdentityValidation({
       targetContextRef: "extended-stable/2026.6.33",
@@ -8209,14 +8296,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     }
   });
 
-  it("isolates Open WebUI release coverage on a lean large-disk runner", () => {
+  it("isolates Open WebUI release coverage with lean runtime setup", () => {
     const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_openwebui");
     const setupNode = workflowStep(job, "Setup Node environment");
 
     expect(job.if).toBe(
       "inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')",
     );
-    expect(job["runs-on"]).toBe("blacksmith-32vcpu-ubuntu-2404");
     expect(job.env?.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE).toBe("${{ inputs.release_test_profile }}");
     expect(setupNode.with).toMatchObject({
       "cache-mode": "off",
@@ -8834,19 +8920,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, jobName)["runs-on"]).toBe("ubuntu-24.04");
     }
 
-    for (const jobName of [
-      "run_mock_parity",
-      "run_live_matrix",
-      "run_live_telegram",
-      "run_live_discord",
-      "run_live_whatsapp",
-      "run_live_slack",
-      "run_live_runtime_token_efficiency",
-    ]) {
-      expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName)["runs-on"]).toBe(
-        "blacksmith-16vcpu-ubuntu-2404",
-      );
-    }
     expectTextToIncludeAll(liveE2eWorkflow, [
       "OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000",
       "OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
@@ -10679,7 +10752,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       FULL_RELEASE_VALIDATION_WORKFLOW,
       "release_checks_candidate",
     );
-    expect(releaseChecksParent["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
     expect(releaseChecksParent["timeout-minutes"]).toBe(15);
     const releasePackageTimeouts = {
       beta: releasePackagePaths.beta.reduce((total, timeout) => total + timeout, 0),
