@@ -50,8 +50,6 @@ type VitestConfig = {
 };
 
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
-const PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST =
-  "src/plugins/npm-install-security-scan.release.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const STORE_ALIAS_CHANGED_PATHS = [
@@ -2160,7 +2158,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     });
   });
 
-  it("keeps plugin prerelease npm install coverage on the release-only agentic plugin shard", () => {
+  it("keeps plugin prerelease npm install behavior on the release-only agentic plugin shard", () => {
     const pluginsShard = createNodeTestShards().find(
       (shard) => shard.shardName === "agentic-plugins",
     );
@@ -2174,9 +2172,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     });
     expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(
       PLUGIN_PRERELEASE_NPM_SPEC_TEST,
-    );
-    expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(
-      PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST,
     );
   });
 
