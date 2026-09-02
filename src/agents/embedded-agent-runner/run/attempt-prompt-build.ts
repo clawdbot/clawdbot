@@ -59,6 +59,7 @@ import {
 } from "./attempt-llm-boundary.js";
 import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
+  mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
@@ -313,13 +314,12 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   let promptForRuntimeContextSplit = promptBeforePromptBuildHooks;
   const leafEntry = input.orphanRepair?.messageEntry;
   if (leafEntry && input.orphanRepair) {
-    const messageMergeStrategy = input.orphanRepair.strategy;
-    const orphanPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+    const orphanPromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: effectivePrompt,
       trigger: attempt.trigger,
       leafMessage: leafEntry.message,
     });
-    const runtimePromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+    const runtimePromptMerge = mergeOrphanedTrailingUserPrompt({
       prompt: promptForRuntimeContextSplit,
       trigger: attempt.trigger,
       leafMessage: leafEntry.message,
@@ -327,7 +327,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     const transcriptPromptMerge =
       effectiveTranscriptPrompt === undefined
         ? undefined
-        : messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
+        : mergeOrphanedTrailingUserPrompt({
             prompt: effectiveTranscriptPrompt,
             trigger: attempt.trigger,
             leafMessage: leafEntry.message,
