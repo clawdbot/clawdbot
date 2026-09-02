@@ -30,7 +30,8 @@ export type ApplicationOverlays = {
   readonly snapshot: ApplicationOverlaySnapshot;
   subscribe: (listener: (snapshot: ApplicationOverlaySnapshot) => void) => () => void;
   refreshUpdateStatus: () => Promise<void>;
-  runUpdate: () => Promise<void>;
+  runUpdate: (options?: { sessionKey?: string }) => Promise<void>;
+  setActiveSessionKeyProvider: (provider: (() => string | undefined) | undefined) => void;
   holdUpdate: () => Promise<boolean>;
   decideApproval: (
     decision: ExecApprovalDecision,

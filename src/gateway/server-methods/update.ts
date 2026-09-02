@@ -60,8 +60,13 @@ import {
   initializeGatewayUpdateStatus,
   refreshGatewayUpdateStatus,
 } from "../../infra/update-startup.js";
+import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
+import {
+  resolveGatewayLifecycleNoticeRoute,
+  sendGatewayLifecycleNotice,
+} from "../server-restart-sentinel-notice.js";
 import {
   getLatestUpdateRestartSentinel,
   recordLatestUpdateRestartSentinel,
@@ -217,7 +222,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     const restartDelayMs = normalizeGatewayRestartDelayMs(requestedRestartDelayMs);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
       extractDeliveryInfo(sessionKey);
-    const deliveryContext = requestedDeliveryContext ?? sessionDeliveryContext;
+    const deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
     const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
@@ -232,6 +237,11 @@ export const updateHandlers: GatewayRequestHandlers = {
       | { status: "unavailable"; command: string; message: string }
       | null = null;
     let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
+    let ackDelivered = false;
+    let notice:
+      | Omit<Parameters<typeof sendGatewayLifecycleNotice>[0], "message" | "deliveryIntentId">
+      | undefined;
+    const noticeAttemptId = randomUUID();
     let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
     const sentinelMeta: UpdateRestartSentinelMeta = {
@@ -304,6 +314,29 @@ export const updateHandlers: GatewayRequestHandlers = {
         );
       }
       const devTarget = explicitDevTarget ?? adoptedDevTarget;
+      const acknowledgeUpdate = async (beforeVersion: string | null) => {
+        try {
+          const route = resolveGatewayLifecycleNoticeRoute({
+            cfg: config,
+            deliveryContext,
+            threadId,
+          });
+          if (!route) {
+            return;
+          }
+          notice = { ...route, cfg: config, deps: context.deps, sessionKey };
+          const targetVersion = adoptedPackageTargetVersion ?? getUpdateAvailable()?.latestVersion;
+          ackDelivered = await sendGatewayLifecycleNotice({
+            ...notice,
+            message: `⬆️ Updating OpenClaw ${beforeVersion ?? VERSION} → ${targetVersion ?? "the latest release"}. The gateway restarts in about a minute; you'll get a message here when it's back.`,
+            deliveryIntentId: `update-run-ack:${sessionKey ?? "sessionless"}:${noticeAttemptId}`,
+          });
+        } catch (err) {
+          context?.logGateway?.warn(
+            `update.run acknowledgement failed: ${formatUpdateRunErrorMessage(err)}`,
+          );
+        }
+      };
       const supervisor = detectRespawnSupervisor(process.env, process.platform, {
         includeLinuxOpenClawGatewayServiceMarker: true,
       });
@@ -402,6 +435,9 @@ export const updateHandlers: GatewayRequestHandlers = {
             // Managed services update from a detached helper so the running
             // gateway does not replace its own package or git-built dist tree
             // while still serving RPCs.
+            // Root RPC admission stays held through the bounded send, before either
+            // the helper or restart signal can park this process.
+            await acknowledgeUpdate(beforeVersion);
             const started = await startManagedServiceUpdateHandoff({
               root: installRoot,
               timeoutMs,
@@ -515,6 +551,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         // the detached handoff above. This direct path is unsupervised, so keep
         // doctor service mutation disabled: it could rewrite or terminate the
         // RPC server before the response and restart sentinel become durable.
+        // Resolve and load delivery before a package swap rotates dist chunk hashes.
+        await acknowledgeUpdate(await readPackageVersion(installSurface.root));
         result = await runGatewayUpdate({
           timeoutMs,
           cwd: installSurface.root,
@@ -615,6 +653,13 @@ export const updateHandlers: GatewayRequestHandlers = {
             },
           })
         : null);
+    if (ackDelivered && result.status !== "ok" && !restart && notice) {
+      await sendGatewayLifecycleNotice({
+        ...notice,
+        message: `⚠️ Update did not start: ${result.reason ?? result.status}. ${handoff && "message" in handoff ? handoff.message : ""}`,
+        deliveryIntentId: `update-run-failed:${sessionKey ?? "sessionless"}:${noticeAttemptId}`,
+      });
+    }
     context?.logGateway?.info(
       `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
     );
@@ -628,6 +673,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: result.status === "ok" || handoff?.status === "started",
+        ackDelivered,
         result,
         ...(handoff ? { handoff } : {}),
         restart,

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -120,11 +121,11 @@ const mocks = vi.hoisted(() => {
       storeKeys: [sessionKey],
       legacyKey: undefined,
     })),
-    deliveryContextFromSession: vi.fn(
-      ():
-        | { channel?: string; to?: string; accountId?: string; threadId?: string | number }
-        | undefined => undefined,
-    ),
+    loadCombinedSessionStoreForGatewayCore:
+      vi.fn<typeof import("./session-utils.js").loadCombinedSessionStoreForGatewayCore>(),
+    deliveryContextFromSession: vi.fn<
+      typeof import("../utils/delivery-context.shared.js").deliveryContextFromSession
+    >(() => undefined),
     mergeDeliveryContext: vi.fn((a?: Record<string, unknown>, b?: Record<string, unknown>) => ({
       ...b,
       ...a,
@@ -322,6 +323,7 @@ vi.mock("../config/sessions/thread-info.js", () => ({
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: mocks.loadSessionEntry,
+  loadCombinedSessionStoreForGatewayCore: mocks.loadCombinedSessionStoreForGatewayCore,
 }));
 
 vi.mock("../utils/delivery-context.shared.js", async (importOriginal) => ({
@@ -471,7 +473,9 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
   };
 });
 
-vi.mock("../logging/subsystem.js", () => {
+vi.mock("../logging/subsystem.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../logging/subsystem.js")>("../logging/subsystem.js");
   const logger = {
     debug: mocks.logDebug,
     info: mocks.logInfo,
@@ -482,7 +486,10 @@ vi.mock("../logging/subsystem.js", () => {
   };
   logger.child.mockReturnValue(logger);
   return {
-    createSubsystemLogger: vi.fn(() => logger),
+    ...actual,
+    createSubsystemLogger: vi.fn((subsystem: string) =>
+      subsystem === "gateway/restart-sentinel" ? logger : actual.createSubsystemLogger(subsystem),
+    ),
   };
 });
 
@@ -667,6 +674,13 @@ describe("scheduleRestartSentinelWake", () => {
     }));
     mocks.deliveryContextFromSession.mockReset();
     mocks.deliveryContextFromSession.mockReturnValue(undefined);
+    mocks.loadCombinedSessionStoreForGatewayCore.mockReset();
+    mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+      store: {},
+      storePath: "/tmp/sessions.json",
+      durableTargets: [],
+      agentIdBySessionKey: new Map(),
+    });
     mocks.getChannelPlugin.mockReset();
     mocks.getChannelPlugin.mockReturnValue(undefined);
     mocks.normalizeChannelId.mockClear();
@@ -3003,6 +3017,80 @@ describe("scheduleRestartSentinelWake", () => {
       sessionKey: "agent:ops:main",
     });
   });
+
+  it.each(["main", "recent-direct"] as const)(
+    "delivers a session-less update notice to the %s session route without continuing its turn",
+    async (routeSource) => {
+      const sessionKey =
+        routeSource === "main" ? "agent:ops:main" : "agent:main:telegram:direct:123";
+      const context = { channel: "telegram", to: "123", accountId: "bot", threadId: "7" };
+      const entry: SessionEntry = {
+        sessionId: "operator-session",
+        updatedAt: 1,
+        lastInteractionAt: 123,
+        delivery: normalizeSessionDeliveryState({ context, origin: { chatType: "direct" } }),
+      };
+      const store = { [sessionKey]: entry };
+      mocks.loadSessionEntry.mockImplementation((key) => ({
+        cfg: {},
+        agentId: key === "agent:ops:main" ? "ops" : "main",
+        entry: store[key],
+        store: store[key] ? { [key]: store[key] } : {},
+        storePath: "/tmp/sessions.json",
+        canonicalKey: key,
+        storeKeys: [key],
+        legacyKey: undefined,
+      }));
+      mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+        store,
+        storePath: "/tmp/sessions.json",
+        durableTargets: [],
+        agentIdBySessionKey: new Map([[sessionKey, "main"]]),
+      });
+      mocks.deliveryContextFromSession.mockImplementation((loaded) =>
+        loaded?.delivery?.kind === "external" ? loaded.delivery.context : undefined,
+      );
+      mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "123" });
+      mocks.readRestartSentinel.mockResolvedValue({
+        version: 1,
+        revision: 123,
+        payload: {
+          kind: "update",
+          status: "ok",
+          ts: 123,
+          continuation: { kind: "agentTurn", message: "must not continue an inferred session" },
+        },
+      });
+
+      await scheduleRestartSentinelWake({ deps: {} as never });
+
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          to: "123",
+          accountId: "bot",
+          threadId: "7",
+          payloads: [{ text: "restart message" }],
+        }),
+      );
+      const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
+      expect(eventOptions).toMatchObject({ sessionKey, deliveryContext: context });
+      expect(resolveSystemEventOptionsOwnerAgentId(eventOptions as object)).toBe("ops");
+      expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+        source: "restart-sentinel",
+        intent: "immediate",
+        reason: "wake",
+        agentId: "ops",
+        sessionKey,
+      });
+      expect(mocks.recordInboundSessionAndDispatchReply).not.toHaveBeenCalled();
+      expect(mocks.enqueueSessionDelivery).toHaveBeenCalledTimes(1);
+      expect(mocks.logWarn).toHaveBeenCalledWith(
+        "restart summary: continuation skipped: restart sentinel sessionKey unavailable",
+        { sessionKey, continuationKind: "agentTurn" },
+      );
+    },
+  );
 
   it("durably wakes the configured system-agent session when the sentinel has no sessionKey", async () => {
     mocks.readRestartSentinel.mockResolvedValue({

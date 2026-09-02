@@ -36,6 +36,7 @@ import { createUpdateNoticeSession } from "./update-success-notice.ts";
 
 export type ApplicationUpdateOverlayHooks = {
   connectionBootstrap?: ConnectionBootstrapCoordinator;
+  getActiveSessionKey?: () => string | undefined;
   /** Barrier awaited after update-running is published and before update.run
    * is issued, so in-flight config writes cannot overlap the install. */
   drainConfigWrites?: () => Promise<void>;
@@ -112,6 +113,7 @@ export function createApplicationUpdateOverlays(
   let updateHoldInFlight = false;
   let observedApplyingCampaignId: string | null = null;
   let currentFailure: { failure: UpdateFailureTriage; profileId: string | null } | null = null;
+  let getActiveSessionKey = hooks.getActiveSessionKey;
 
   function publish(failurePrepared = false) {
     const wasBusy = snapshot.updateRunning || snapshot.updateReconciliationPending;
@@ -484,7 +486,10 @@ export function createApplicationUpdateOverlays(
       }
     },
     refreshUpdateStatus,
-    async runUpdate(this: void) {
+    setActiveSessionKeyProvider(this: void, provider: (() => string | undefined) | undefined) {
+      getActiveSessionKey = provider ?? hooks.getActiveSessionKey;
+    },
+    async runUpdate(this: void, options?: { sessionKey?: string }) {
       const client = gateway.snapshot.client;
       if (
         !client ||
@@ -496,6 +501,7 @@ export function createApplicationUpdateOverlays(
       ) {
         return;
       }
+      const sessionKey = options?.sessionKey ?? getActiveSessionKey?.();
       const generation = ++updateRunGeneration;
       updateStatusRevision += 1;
       updateRequestRunning = true;
@@ -532,7 +538,10 @@ export function createApplicationUpdateOverlays(
         };
         setPendingUpdate(admittedPending);
         publish();
-        const response = await client.request<UpdateRunResponse>("update.run", {});
+        const response = await client.request<UpdateRunResponse>(
+          "update.run",
+          sessionKey ? { sessionKey } : {},
+        );
         if (
           disposed ||
           generation !== updateRunGeneration ||

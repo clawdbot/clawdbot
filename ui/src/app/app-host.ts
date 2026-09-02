@@ -379,7 +379,14 @@ class OpenClawShell
       )
       .watch(
         () => this.context?.overlays,
-        (overlays, notify) => overlays.subscribe(notify),
+        (overlays, notify) => {
+          overlays.setActiveSessionKeyProvider(() => this.activeSessionKey || undefined);
+          const unsubscribe = overlays.subscribe(notify);
+          return () => {
+            overlays.setActiveSessionKeyProvider(undefined);
+            unsubscribe();
+          };
+        },
       )
       .watch(
         () => this.context?.sessions,

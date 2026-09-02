@@ -6,17 +6,15 @@ import {
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcherCore } from "../auto-reply/reply/provider-dispatcher.js";
-import type { ChatType } from "../channels/chat-type.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
 import { dispatchAssembledChannelTurn } from "../channels/turn/lifecycle.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
+import { findMostRecentDirectSessionWithRoute } from "../config/sessions/recent-direct-session.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   clearRestartSentinelIfRevision,
   finalizeUpdateRestartSentinelRunningVersion,
@@ -46,7 +44,6 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
@@ -56,13 +53,14 @@ import {
   mergeDeliveryContext,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
 import {
   deliverRestartSentinelNotice,
   enqueueRestartSentinelNotice,
+  resolveGatewayLifecycleNoticeRoute,
 } from "./server-restart-sentinel-notice.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadCombinedSessionStoreForGatewayCore, loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
@@ -129,27 +127,6 @@ const buildRestartContinuationMessageId = (params: {
   kind: RestartSentinelContinuation["kind"];
   revision: number;
 }) => `restart-sentinel:${params.sessionKey}:${params.kind}:${params.revision}`;
-
-function resolveRestartContinuationRoute(params: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  replyToId?: string;
-  threadId?: string;
-  chatType: ChatType;
-}): SessionDeliveryRoute | undefined {
-  if (!params.channel || !params.to) {
-    return undefined;
-  }
-  return {
-    channel: params.channel,
-    to: params.to,
-    ...(params.accountId ? { accountId: params.accountId } : {}),
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    ...(params.threadId ? { threadId: params.threadId } : {}),
-    chatType: params.chatType,
-  };
-}
 
 function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
   return (
@@ -470,6 +447,8 @@ async function loadRestartSentinelStartupTask(params: {
   );
 
   const run = async () => {
+    let routedSessionKey = sessionKey;
+    let wakeAgentId: string | undefined;
     if (isPendingControlPlaneUpdateRestartSentinel(payload)) {
       const attempt = params.attempt ?? 0;
       if (attempt < CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS) {
@@ -492,7 +471,7 @@ async function loadRestartSentinelStartupTask(params: {
       });
     }
 
-    if (!sessionKey) {
+    if (!routedSessionKey) {
       const controlPlaneOnlyConfigRestart =
         (payload.kind === "config-patch" || payload.kind === "config-apply") &&
         (typeof payload.message !== "string" || payload.message.trim().length === 0) &&
@@ -508,34 +487,45 @@ async function loadRestartSentinelStartupTask(params: {
         }
         return { status: "ran" as const };
       }
-      const systemTarget = resolveSystemMainSessionTarget(getRuntimeConfig());
+      const cfg = getRuntimeConfig();
+      const systemTarget = resolveSystemMainSessionTarget(cfg);
       const mainSessionKey = systemTarget.sessionKey;
-      const wakeQueueId = await enqueueSessionDelivery(
-        buildQueuedRestartContinuation({
-          sessionKey: mainSessionKey,
-          agentId: systemTarget.agentId,
-          continuation: { kind: "systemEvent", text: message },
-          revision: sentinelRevision,
-          idempotencyKey: `restart-sentinel-wake:${mainSessionKey}:${sentinelRevision}`,
-        }),
-      );
-      if (payload.continuation) {
-        log.warn(`${summary}: continuation skipped: restart sentinel sessionKey unavailable`, {
-          sessionKey: mainSessionKey,
-          continuationKind: payload.continuation.kind,
-        });
+      const mainContext = deliveryContextFromSession(loadSessionEntry(mainSessionKey).entry);
+      routedSessionKey =
+        hasDeliveryTargetFields(mainContext) && isDeliverableMessageChannel(mainContext.channel)
+          ? mainSessionKey
+          : findMostRecentDirectSessionWithRoute(loadCombinedSessionStoreForGatewayCore(cfg).store);
+      // Inferring an operator route must not transfer system-work ownership or resume their turn.
+      wakeAgentId = systemTarget.agentId;
+      if (!routedSessionKey) {
+        const wakeQueueId = await enqueueSessionDelivery(
+          buildQueuedRestartContinuation({
+            sessionKey: mainSessionKey,
+            agentId: systemTarget.agentId,
+            continuation: { kind: "systemEvent", text: message },
+            revision: sentinelRevision,
+            idempotencyKey: `restart-sentinel-wake:${mainSessionKey}:${sentinelRevision}`,
+          }),
+        );
+        if (payload.continuation) {
+          log.warn(`${summary}: continuation skipped: restart sentinel sessionKey unavailable`, {
+            sessionKey: mainSessionKey,
+            continuationKind: payload.continuation.kind,
+          });
+        }
+        const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
+        if (!consumed) {
+          log.info(`${summary}: newer restart sentinel preserved while draining durable wake`);
+        }
+        await drainRestartContinuationQueue({ deps: params.deps, entryId: wakeQueueId, log });
+        return { status: "ran" as const };
       }
-      const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
-      if (!consumed) {
-        log.info(`${summary}: newer restart sentinel preserved while draining durable wake`);
-      }
-      await drainRestartContinuationQueue({ deps: params.deps, entryId: wakeQueueId, log });
-      return { status: "ran" as const };
     }
 
-    const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
+    const continuation = sessionKey ? payload.continuation : undefined;
+    const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(routedSessionKey);
 
-    const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    const { cfg, entry, canonicalKey } = loadSessionEntry(routedSessionKey);
 
     const sentinelContext = payload.deliveryContext;
     let sessionDeliveryContext = deliveryContextFromSession(entry);
@@ -543,7 +533,7 @@ async function loadRestartSentinelStartupTask(params: {
     if (
       !hasDeliveryTargetFields(sessionDeliveryContext) &&
       baseSessionKey &&
-      baseSessionKey !== sessionKey
+      baseSessionKey !== routedSessionKey
     ) {
       const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
       chatType =
@@ -558,102 +548,64 @@ async function loadRestartSentinelStartupTask(params: {
 
     const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
 
-    const channelRaw = origin?.channel;
-    const channel = channelRaw ? normalizeChannelId(channelRaw) : null;
-    const to = origin?.to;
-    const threadId =
-      payload.threadId ??
-      sessionThreadId ??
-      (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined);
-    let resolvedTo: string | undefined;
-    let replyToId: string | undefined;
-    let resolvedThreadId = threadId;
+    const route = resolveGatewayLifecycleNoticeRoute({
+      cfg,
+      deliveryContext: origin,
+      threadId: payload.threadId ?? sessionThreadId,
+    });
+    const deliveryContext = route
+      ? {
+          channel: route.channel,
+          to: route.to,
+          ...(route.accountId ? { accountId: route.accountId } : {}),
+          ...(route.threadId ? { threadId: route.threadId } : {}),
+        }
+      : wakeDeliveryContext;
     let continuationQueueId: string | undefined;
     let wakeQueueId: string | undefined;
     let noticeQueueId: string | undefined;
     let noticeQueueCreated = false;
-    let continuationRoute: SessionDeliveryRoute | undefined;
-
-    if (channel && to) {
-      const resolved = resolveOutboundTarget({
-        channel,
-        to,
-        cfg,
-        accountId: origin?.accountId,
-        mode: "implicit",
-      });
-      if (resolved.ok) {
-        resolvedTo = resolved.to;
-        const replyTransport =
-          getChannelPlugin(channel)?.threading?.resolveReplyTransport?.({
-            cfg,
-            accountId: origin?.accountId,
-            threadId,
-          }) ?? null;
-        replyToId = replyTransport?.replyToId ?? undefined;
-        resolvedThreadId =
-          replyTransport && Object.hasOwn(replyTransport, "threadId")
-            ? replyTransport.threadId != null
-              ? stringifyRouteThreadId(replyTransport.threadId)
-              : undefined
-            : threadId;
-      }
-    }
-
-    if (payload.continuation) {
-      continuationRoute = resolveRestartContinuationRoute({
-        channel: channel ?? undefined,
-        to: resolvedTo,
-        accountId: origin?.accountId,
-        replyToId,
-        threadId: resolvedThreadId,
-        chatType,
-      });
-    }
+    const continuationRoute = continuation && route ? { ...route, chatType } : undefined;
 
     const routedAgentTurnContinuation =
-      payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
+      continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {
       wakeQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
           sessionKey: canonicalKey,
+          agentId: wakeAgentId,
           continuation: { kind: "systemEvent", text: message },
           revision: sentinelRevision,
-          deliveryContext: wakeDeliveryContext,
+          deliveryContext,
           idempotencyKey: `restart-sentinel-wake:${canonicalKey}:${sentinelRevision}`,
         }),
       );
     }
 
-    if (payload.continuation) {
+    if (!sessionKey && payload.continuation) {
+      log.warn(`${summary}: continuation skipped: restart sentinel sessionKey unavailable`, {
+        sessionKey: canonicalKey,
+        continuationKind: payload.continuation.kind,
+      });
+    }
+
+    if (continuation) {
       continuationQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
           sessionKey: canonicalKey,
-          continuation: payload.continuation,
+          continuation,
           revision: sentinelRevision,
           route: continuationRoute,
           expectedSessionId: entry?.sessionId,
-          deliveryContext:
-            resolvedTo && channel
-              ? {
-                  channel,
-                  to: resolvedTo,
-                  ...(origin?.accountId ? { accountId: origin.accountId } : {}),
-                  ...(resolvedThreadId ? { threadId: resolvedThreadId } : {}),
-                }
-              : wakeDeliveryContext,
+          deliveryContext,
         }),
       );
     }
 
-    if (resolvedTo && channel) {
+    if (route) {
       const queuedNotice = await enqueueRestartSentinelNotice({
         cfg,
-        channel,
-        to: resolvedTo,
-        accountId: origin?.accountId,
-        replyToId,
-        threadId: resolvedThreadId,
+        ...route,
         message,
         sessionKey: canonicalKey,
         revision: sentinelRevision,
@@ -675,18 +627,14 @@ async function loadRestartSentinelStartupTask(params: {
       await drainRestartContinuationQueue({ deps: params.deps, entryId: wakeQueueId, log });
     }
 
-    if (resolvedTo && channel && noticeQueueId && noticeQueueCreated) {
+    if (route && noticeQueueId && noticeQueueCreated) {
       await deliverRestartSentinelNotice({
         deps: params.deps,
         cfg,
         sessionKey: canonicalKey,
         summary,
         message,
-        channel,
-        to: resolvedTo,
-        accountId: origin?.accountId,
-        replyToId,
-        threadId: resolvedThreadId,
+        ...route,
         queueId: noticeQueueId,
       });
     } else if (noticeQueueId && !noticeQueueCreated) {

@@ -462,6 +462,20 @@ LaunchAgent when possible. If the Gateway cannot make that handoff safely,
 `update.run` reports a safe shell command instead of running the package
 manager in-process.
 
+When `update.run` has a routable chat session, the Gateway sends an update
+acknowledgement before starting the handoff or in-process update. It waits up to
+10 seconds for delivery; a failed chat send does not block the update. The RPC
+response includes `ackDelivered` so clients can distinguish a delivered
+acknowledgement from an unavailable or failed route. A synchronous failure after
+a delivered acknowledgement sends a second notice when no restart is scheduled.
+
+The Control UI includes its active session in the update request. After restart,
+updates without an originating session send their notice to the system main
+session when it has an external route, otherwise to the most recently used
+eligible direct chat. If neither exists, recovery keeps the system-session wake
+without an outbound chat notice. Session-less recovery never resumes a supplied
+continuation as another chat's turn.
+
 The Control UI sidebar update card shows **Update Gateway** when it will start
 this `update.run` flow directly. This covers browser-hosted Control UI, remote
 Gateways, and manually managed local Gateways.
