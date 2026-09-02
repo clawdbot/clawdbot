@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -14,9 +15,11 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
-import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { raceWithAbortSignal, wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
+  finalizeToolTerminalPresentation,
   isToolWrappedWithBeforeToolCallHook,
+  type ToolOutcomeObservation,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
@@ -48,6 +51,7 @@ import {
   type ToolSearchCatalogRef,
 } from "./tool-search.js";
 import { testing } from "./tool-search.test-support.js";
+import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
@@ -181,6 +185,45 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
     throw new Error(`Expected mock call ${index}`);
   }
   return call;
+}
+
+function observedRuntimeFixture(params: {
+  name: string;
+  ordinal: number;
+  execute?: AnyAgentTool["execute"];
+  executeTool?: NonNullable<ConstructorParameters<typeof ToolSearchRuntime>[0]["executeTool"]>;
+  formatter?: Parameters<typeof setToolTerminalPresentation>[1];
+}) {
+  const catalogRef = createToolSearchCatalogRef();
+  const outcomes: ToolOutcomeObservation[] = [];
+  const runId = `run-${params.name}`;
+  const target = fakeTool(params.name, params.name);
+  if (params.execute) {
+    target.execute = params.execute;
+  }
+  if (params.formatter) {
+    setToolTerminalPresentation(target, params.formatter);
+  }
+  registerHeadlessToolSearchCatalog({
+    catalogRef,
+    tools: [target],
+    hookContext: {
+      runId,
+      sessionId: `session-${params.name}`,
+      onToolOutcome: (outcome) => outcomes.push(outcome),
+      allocateToolOutcomeOrdinal: () => params.ordinal,
+    },
+  });
+  const runtime = new ToolSearchRuntime(
+    {
+      catalogRef,
+      runId,
+      sessionId: `session-${params.name}`,
+      ...(params.executeTool ? { executeTool: params.executeTool } : {}),
+    },
+    resolveToolSearchConfig(),
+  );
+  return { outcomes, runId, runtime };
 }
 
 describe("Tool Search", () => {
@@ -1425,6 +1468,154 @@ describe("Tool Search", () => {
     const call = await runtime.call("orchard_empty_details");
     expect(Object.hasOwn(call.result, "details")).toBe(true);
     await expect(runtime.callValue("orchard_empty_details")).resolves.toBeUndefined();
+  });
+
+  it("finalizes a direct target once with its original model-call ordinal", async () => {
+    let toolCallId: string | undefined;
+    const fixture = observedRuntimeFixture({
+      name: "orchard_direct_terminal",
+      ordinal: 4,
+      execute: async (id) => {
+        toolCallId = id;
+        return jsonResult({ ok: true });
+      },
+    });
+
+    const call = await fixture.runtime.call("orchard_direct_terminal");
+
+    expect(fixture.outcomes).toHaveLength(2);
+    expect(fixture.outcomes[1]).toEqual(
+      expect.objectContaining({
+        toolCallOrdinal: 4,
+        terminalPresentation: undefined,
+        presentationOnly: true,
+      }),
+    );
+    finalizeToolTerminalPresentation({
+      toolCallId: expectDefined(toolCallId, "direct terminal tool call"),
+      runId: fixture.runId,
+      result: call.result,
+      isError: false,
+    });
+    expect(fixture.outcomes).toHaveLength(2);
+  });
+
+  it("formats the result accepted by a supplied executor", async () => {
+    const fixture = observedRuntimeFixture({
+      name: "orchard_accepted_terminal",
+      ordinal: 6,
+      execute: async () => jsonResult({ status: 200 }),
+      formatter: (_params, result) => ({
+        text: `Status ${(result.details as { status: number }).status}`,
+      }),
+      executeTool: async (params) => {
+        await params.tool.execute(
+          params.toolCallId,
+          params.input,
+          params.signal,
+          params.onUpdate,
+          undefined as never,
+        );
+        return await params.acceptResultBeforeProjection(jsonResult({ status: 201 }));
+      },
+    });
+
+    await fixture.runtime.call("orchard_accepted_terminal");
+
+    expect(fixture.outcomes.map((outcome) => outcome.terminalPresentation)).toEqual([
+      "Status 200",
+      "Status 201",
+    ]);
+    expect(fixture.outcomes.map((outcome) => outcome.toolCallOrdinal)).toEqual([6, 6]);
+  });
+
+  it("clears a raw summary when a supplied executor rejects after source success", async () => {
+    const executorError = new Error("synthetic post-source rejection");
+    const fixture = observedRuntimeFixture({
+      name: "orchard_rejected_terminal",
+      ordinal: 8,
+      execute: async () => jsonResult({ ok: true }),
+      formatter: () => ({ text: "Source completed" }),
+      executeTool: async (params) => {
+        const raw = await params.tool.execute(
+          params.toolCallId,
+          params.input,
+          params.signal,
+          params.onUpdate,
+          undefined as never,
+        );
+        await params.acceptResultBeforeProjection(raw);
+        throw executorError;
+      },
+    });
+
+    await expect(fixture.runtime.call("orchard_rejected_terminal")).rejects.toBe(executorError);
+    expect(fixture.outcomes).toHaveLength(2);
+    expect(fixture.outcomes[0]?.terminalPresentation).toBe("Source completed");
+    expect(fixture.outcomes[1]).toEqual(
+      expect.objectContaining({
+        toolCallOrdinal: 8,
+        terminalPresentation: undefined,
+        presentationOnly: true,
+      }),
+    );
+  });
+
+  it("does not publish terminal state after an aborted cancellation-ignoring source", async () => {
+    const sourceResult = jsonResult({ ok: true });
+    const sourceStarted = createDeferred();
+    const source = createDeferred<typeof sourceResult>();
+    let toolCallId: string | undefined;
+    let sourceCompletion: Promise<unknown> | undefined;
+    const fixture = observedRuntimeFixture({
+      name: "orchard_aborted_late_terminal",
+      ordinal: 13,
+      execute: async (id) => {
+        toolCallId = id;
+        sourceStarted.resolve();
+        return await source.promise;
+      },
+      executeTool: async (params) => {
+        const execution = params.tool.execute(
+          params.toolCallId,
+          params.input,
+          params.signal,
+          params.onUpdate,
+          undefined as never,
+        );
+        sourceCompletion = execution;
+        return await raceWithAbortSignal(
+          execution.then(params.acceptResultBeforeProjection),
+          expectDefined(params.signal, "abort-race signal"),
+        );
+      },
+    });
+    const controller = new AbortController();
+    const call = fixture.runtime.call(
+      "orchard_aborted_late_terminal",
+      {},
+      { signal: controller.signal },
+    );
+    await sourceStarted.promise;
+    controller.abort();
+
+    await expect(call).rejects.toMatchObject({ name: "AbortError" });
+    expect(fixture.outcomes).toHaveLength(0);
+    source.resolve(sourceResult);
+    await expectDefined(sourceCompletion, "late source completion");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(fixture.outcomes).toHaveLength(1);
+    expect(fixture.outcomes[0]?.toolCallOrdinal).toBe(13);
+
+    finalizeToolTerminalPresentation({
+      toolCallId: expectDefined(toolCallId, "aborted late terminal tool call"),
+      runId: fixture.runId,
+      result: sourceResult,
+      isError: false,
+    });
+    expect(fixture.outcomes).toHaveLength(1);
   });
 
   it("rejects final catalog details that drift from a declared output schema", async () => {

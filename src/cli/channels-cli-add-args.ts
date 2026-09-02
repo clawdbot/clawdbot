@@ -1,9 +1,8 @@
 import { Option, type Command } from "commander";
 import { getCommandArgsWithRootOptions } from "../infra/cli-root-options.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
-type ChannelSetupCliOptionsModule = typeof import("../channels/plugins/cli-add-options.js");
 type ChannelSetupFlagArity = "boolean" | "value" | "conflict";
 
 export type ChannelSetupCliOption = {
@@ -19,13 +18,9 @@ const CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES = [...CHANNEL_ADD_SHARED_VALUE_OP
   (flag) => `${flag}=`,
 );
 
-const channelSetupCliOptionsLoader = createLazyImportLoader<ChannelSetupCliOptionsModule>(
+export const loadChannelSetupCliOptions = createLazyPromise(
   () => import("../channels/plugins/cli-add-options.js"),
 );
-
-export function loadChannelSetupCliOptions(): Promise<ChannelSetupCliOptionsModule> {
-  return channelSetupCliOptionsLoader.load();
-}
 
 export function getChannelSetupOptionSwitches(flags: string): string[] {
   const option = new Option(flags);

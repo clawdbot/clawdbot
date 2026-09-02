@@ -11,6 +11,18 @@ struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
 
     var body: some View {
+        #if os(iOS)
+        if self.block.language == "mermaid", self.block.isComplete {
+            ChatMermaidBlockView(source: self.block.code)
+        } else {
+            self.codeBody
+        }
+        #else
+        self.codeBody
+        #endif
+    }
+
+    private var codeBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let language = self.block.language {
                 Text(language)

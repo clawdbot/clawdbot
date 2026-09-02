@@ -423,6 +423,21 @@ describe("FRV immutable plan eligibility", () => {
 });
 
 describe("FRV continuation preflight", () => {
+  it.each([
+    "Prepare release npm artifacts / Prepare publishable npm package",
+    "Prepare release Docker artifacts / Seal prepared Docker images",
+  ])("rejects rerunning a parent that owns publication artifacts from %s", async (name) => {
+    const selected = child("normalCi", "101");
+    const client = preflightMethods([selected], (entry) => runFor(entry, 1, "failure"));
+    await expect(
+      preflightContinuation(plan([selected]), "77", {
+        ...client,
+        getParentJobs: async () => [
+          { name, run_attempt: 1, status: "completed", conclusion: "success" },
+        ],
+      }),
+    ).rejects.toThrow("parent-owned publication artifacts");
+  });
   it("rejects parent-owned candidate artifacts before any GitHub access", async () => {
     const selected = child("normalCi", "101");
     const parentOwnedPlan = {
@@ -1043,11 +1058,7 @@ describe("FRV protected gh evidence reads", () => {
     ],
     ["getJobLog", [1], "actions/jobs/1/logs", "job evidence"],
   ])("revalidates %s through the default protected route", (method, args, endpoint, expected) => {
-    const result = runProtectedFrv(
-      String(method),
-      args as Array<string | number>,
-      String(endpoint),
-    );
+    const result = runProtectedFrv(method, args as Array<string | number>, endpoint);
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual(expected);
     expect(result.calls).toHaveLength(1);

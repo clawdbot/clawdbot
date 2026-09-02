@@ -183,25 +183,29 @@ describe("package Telegram live Docker E2E", () => {
     );
     expect(script).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_SET");
     expect(script).toContain("node /tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs");
-    expect(script).toContain("OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org");
+    expect(script).toContain(
+      'OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL:-https://registry.npmjs.org}"',
+    );
     expect(script).toContain('export NPM_CONFIG_REGISTRY="$registry_url"');
   });
 
-  it("serves the verified prerelease registry inside the recovery container", () => {
+  it("serves the verified prerelease registry for installation and recovery", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const recoveryRun = script.slice(
       script.indexOf('run_logged_print_heartbeat "npm-telegram-live-suite"'),
     );
 
     expect(script).toContain(
-      '-v "$resolved_prepublish_plugin_registry_dir:/tmp/openclaw-prepublish-plugin-registry:ro"',
+      'openclaw_prepublish_plugin_registry_configure_docker_args "$resolved_prepublish_plugin_registry_dir"',
     );
     expect(recoveryRun).toContain(
       '${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"}',
     );
-    expect(script).toContain(
-      "-e OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
-    );
+    expect(
+      script.match(
+        /\$\{prepublish_registry_mount_args\[@\]\+"\$\{prepublish_registry_mount_args\[@\]\}"\}/gu,
+      ),
+    ).toHaveLength(2);
     expect(recoveryRun).toContain("source scripts/e2e/lib/prepublish-plugin-registry.sh");
     expect(recoveryRun).toContain("openclaw_prepublish_plugin_registry_start");
     expect(recoveryRun.indexOf("openclaw_prepublish_plugin_registry_start")).toBeLessThan(

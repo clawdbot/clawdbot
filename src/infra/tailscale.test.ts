@@ -217,7 +217,7 @@ describe("tailscale helpers", () => {
         new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
       );
 
-      const claim = await claimTailscaleRoute("serve", 18789);
+      const claim = await claimTailscaleRoute("serve", 18789, 18789, vi.fn());
       expect(claim.isActive()).toBe(true);
 
       await claim.stop();
@@ -237,7 +237,7 @@ describe("tailscale helpers", () => {
       process.env.PATH = `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`;
       process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
 
-      await expect(claimTailscaleRoute("serve", 18789)).rejects.toThrow(
+      await expect(claimTailscaleRoute("serve", 18789, 18789, vi.fn())).rejects.toThrow(
         "ownership OpenClaw cannot prove; it was not modified",
       );
     },
@@ -263,7 +263,7 @@ describe("tailscale helpers", () => {
           }
         });
       });
-      const claimPromise = claimTailscaleRoute("funnel", 18790);
+      const claimPromise = claimTailscaleRoute("funnel", 18790, 18790, vi.fn());
       void claimPromise.catch(() => undefined);
       await markerWritten;
       expect(existsSync(marker)).toBe(true);

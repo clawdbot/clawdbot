@@ -226,6 +226,10 @@ export function intersectIncludePatterns(
   const result: string[] = [];
   for (const candidate of candidatePatterns) {
     if (!isPlainRepoRelativePath(candidate)) {
+      if (literalIncludes) {
+        result.push(...includePatterns.filter((include) => path.matchesGlob(include, candidate)));
+        continue;
+      }
       // Watch directory targets retain their glob so newly added tests appear.
       // Only generated directory globs have a provable ownership intersection.
       const intersection = intersectDirectoryTestPattern(includePatterns, candidate);
@@ -330,8 +334,12 @@ export function relativizeScopedPatterns(values: string[], dir = ""): string[] {
   const normalizedDir = dir.replaceAll("\\", "/").replace(/\/+$/u, "");
   return values.map((value) => {
     const normalized = value.replaceAll("\\", "/");
-    if (!normalizedDir) return normalized;
-    if (normalized === normalizedDir) return ".";
+    if (!normalizedDir) {
+      return normalized;
+    }
+    if (normalized === normalizedDir) {
+      return ".";
+    }
     const prefix = `${normalizedDir}/`;
     return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
   });

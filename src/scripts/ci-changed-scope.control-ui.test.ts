@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 
-const { detectChangedScope } = await import("../../scripts/ci-changed-scope.mjs");
+const { detectChangedScope, shouldRunIosScreenshots } =
+  await import("../../scripts/ci-changed-scope.mjs");
 
 it("runs control-ui localization checks for production UI source", () => {
   expect(detectChangedScope(["ui/src/pages/chat/chat-realtime.ts"])).toMatchObject({
@@ -37,15 +38,16 @@ it.each([
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/package.json",
   "tsconfig.json",
-])("runs browser proof and Android asset builds for %s", (changedPath) => {
+])("runs browser proof and all native asset builds for %s", (changedPath) => {
   expect(detectChangedScope([changedPath])).toMatchObject({
     runNode: true,
     runUiTests: true,
     runAndroid: true,
-    runMacos: false,
-    runIosBuild: false,
+    runMacos: true,
+    runIosBuild: true,
     runControlUiI18n: false,
   });
+  expect(shouldRunIosScreenshots([changedPath])).toBe(true);
 });
 
 it.each([
@@ -55,8 +57,11 @@ it.each([
   expect(detectChangedScope([changedPath])).toMatchObject({
     runNode: true,
     runAndroid: false,
+    runMacos: false,
+    runIosBuild: false,
     runUiTests: false,
   });
+  expect(shouldRunIosScreenshots([changedPath])).toBe(false);
 });
 
 it.each([

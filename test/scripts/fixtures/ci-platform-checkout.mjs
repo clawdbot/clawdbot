@@ -1199,6 +1199,9 @@ async function supervise() {
     }
     const code = await closed;
     if (stopping) {
+      // A signal can start cleanup while the supervised shell is closing. Keep
+      // the top-level module alive until that cleanup publishes report.json.
+      await stopping;
       return;
     }
     report.code = code;

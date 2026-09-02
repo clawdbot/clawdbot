@@ -34,7 +34,7 @@ import { withExclusiveCodexAppServerThread } from "./thread-ownership.js";
 import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
 
 /** Passive refusal must precede releasing or acquiring any native subscription. */
-export async function assertAdoptedCodexThreadResumeAllowed(
+async function assertAdoptedCodexThreadResumeAllowed(
   params: CodexStartOrResumeThreadParams,
   threadId: string,
   context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
@@ -199,7 +199,7 @@ async function preparePendingCodexThreadResume(
   }
   // Codex can reuse a concurrently resumed child while ignoring overrides.
   // Only an uninterrupted sole client lease makes the unload receipt conclusive.
-  const assertCurrent = captureExclusiveSharedCodexAppServerClient(params.client);
+  const assertCurrent = captureExclusiveSharedCodexAppServerClient(params.client, "native-process");
   const { thread } = await params.client.request(
     "thread/read",
     { threadId: binding.threadId, includeTurns: false },
@@ -244,24 +244,30 @@ async function preparePendingCodexThreadResume(
   }
 }
 
-/** Known supervision keeps its native home; manual adoption's home restrictions stay separate. */
-export function prepareSupervisedCodexThreadResume(
+/** Observe teardown before release; a successful resume alone can acknowledge ignored overrides. */
+export async function prepareCodexThreadResume(
   params: CodexStartOrResumeThreadParams,
   binding: CodexAppServerThreadBinding,
-  thread: CodexThread,
+  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
 ) {
-  assertCodexSupervisionThreadLineage(binding, thread);
   if (isCodexAppServerLiveThreadClaimed(params.client, binding.threadId)) {
     throw new CodexAdoptedThreadActiveError();
   }
-  const assertExclusive = captureExclusiveSharedCodexAppServerClient(params.client);
+  const assertExclusive = captureExclusiveSharedCodexAppServerClient(
+    params.client,
+    binding.connectionScope === "supervision" ? "connection" : "native-process",
+  );
   const assertCurrent = () => {
     params.params.hostCapabilities.assertActive();
     params.signal?.throwIfAborted();
     assertExclusive();
-    assertCodexSupervisionThreadLineage(binding, thread);
   };
   assertCurrent();
+  const thread = await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, context);
+  assertCurrent();
+  // Known supervision keeps its native home; manual adoption's stricter home and catalog
+  // checks remain in preparePendingCodexThreadResume, before this common handoff.
+  assertCodexSupervisionThreadLineage(binding, thread);
   return { ...observeCodexThreadConfiguration(params, thread, assertCurrent), assertCurrent };
 }
 

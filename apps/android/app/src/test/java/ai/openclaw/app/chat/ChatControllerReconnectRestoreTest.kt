@@ -1365,14 +1365,19 @@ class ChatControllerReconnectRestoreTest {
             firstRecoveryStarted.complete(Unit)
             releaseFirstRecovery.await()
           }
-          2 -> history(emptyList())
-          else ->
+
+          2 -> {
+            history(emptyList())
+          }
+
+          else -> {
             history(
               listOf(
                 ReplayHistoryMessage("user", "ordered recovery", 1_000, idempotencyKey = "$runId:user"),
                 ReplayHistoryMessage("assistant", "done", 2_000),
               ),
             )
+          }
         }
       }
 

@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **macOS releases:** retain signed artifacts and Apple submission IDs so interrupted notarization can resume without rebuilding the app or symbols, while preserving source, hash, signature, and approval checks.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **Developer workflow:** remove the obsolete scoped-commit helper and use standard Git commands in isolated worktrees.
 - Fixed Crabbox hydration on unprivileged cloud sandboxes by falling back to a user-writable pnpm store when the shared `/var/cache/crabbox` cache is unavailable, preserving the hardlink import mode after hydration, and making Docker an explicit routed capability instead of an implicit install requirement.

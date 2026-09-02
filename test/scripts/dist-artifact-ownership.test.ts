@@ -11,6 +11,7 @@ import {
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
+import { createFixture as createDeclarationFixture } from "./tsdown-declaration-fixture.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
@@ -292,29 +293,40 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     "retains nested $script cleanup metadata (staging cleanup failure=$failStagingCleanup)",
     async ({ script, failStagingCleanup }, { signal }) => {
       await withProcesses(async ({ start }) => {
-        const root = createCheckout();
-        installScripts(root, [script, "run-tsgo.mts", "tsdown-build.mts", "pnpm-runner.mts"]);
-        write(root, "tsconfig.json", '{"extends":"./tsconfig.plugin-sdk.dts.json"}');
-        fs.mkdirSync(path.join(root, "packages"), { recursive: true });
-        fs.symlinkSync(
-          path.join(sourceRoot, "packages/normalization-core"),
-          path.join(root, "packages/normalization-core"),
-        );
+        const groups =
+          script === "write-plugin-sdk-entry-dts.ts"
+            ? TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS
+            : script === "write-unified-entry-dts.ts"
+              ? TSDOWN_NON_SDK_DTS_CONFIG_GROUPS
+              : undefined;
+        // Declaration writers need their real generator graph; this lifetime still
+        // owns the root so timed-out children are joined before inputs are removed.
+        const root = groups
+          ? createDeclarationFixture(
+              groups,
+              path.join(fs.realpathSync(fixture.createTempDir("openclaw-dist-owner-")), "Project"),
+            ).root
+          : createCheckout();
+        if (!groups) {
+          installScripts(root, [script, "run-tsgo.mts", "tsdown-build.mts", "pnpm-runner.mts"]);
+          write(root, "tsconfig.json", '{"extends":"./tsconfig.plugin-sdk.dts.json"}');
+          fs.mkdirSync(path.join(root, "packages"), { recursive: true });
+          fs.symlinkSync(
+            path.join(sourceRoot, "packages/normalization-core"),
+            path.join(root, "packages/normalization-core"),
+          );
+        }
+        const moduleRoot = groups ? root : sourceRoot;
         const scriptUrl = pathToFileURL(path.join(root, "scripts", script)).href;
         const moduleUrl = (name: string) =>
-          pathToFileURL(path.join(sourceRoot, "scripts/lib", name)).href;
-        write(
-          root,
-          "tsdown.config.ts",
-          `export default ${JSON.stringify([...TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS, ...TSDOWN_NON_SDK_DTS_CONFIG_GROUPS])}.map(name => ({ name, dts: { entry: ['fixture.ts'] }, entry: { 'plugin-sdk/fixture': 'fixture.ts' } }));`,
-        );
+          pathToFileURL(path.join(moduleRoot, "scripts/lib", name)).href;
         const failure = `throw new AggregateError([new Error('child failed', { cause: Object.assign(new Error('cleanup unverified'), { processTreeState: 'indeterminate' }) })], 'fixture failure');`;
         const replacements = {
           [scriptUrl]: {
             "./lib/extension-boundary-inputs.mts": `export * from ${JSON.stringify(moduleUrl("extension-boundary-inputs.mts"))}; export class BoundaryInputSnapshot { constructor() { ${failure} } }`,
           },
           [moduleUrl("tsdown-declaration-writer.mts")]: {
-            "../tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
+            "../tsdown-build.mts": `export * from ${JSON.stringify(pathToFileURL(path.join(moduleRoot, "scripts/tsdown-build.mts")).href)}; export const prepareTsdownBuildExecution = () => ({});`,
             "./declaration-stage.mts": `export async function publishStagedDeclarations() { ${failure} }`,
           },
         };
@@ -370,7 +382,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           fs
             .readdirSync(path.join(root, ".artifacts"))
             .filter((name) => name.startsWith("plugin-sdk-staging-")),
-        ).toHaveLength(failStagingCleanup ? 1 : 0);
+        ).toHaveLength(failStagingCleanup ? (groups?.length ?? 0) + 1 : 0);
       }, signal);
     },
   );

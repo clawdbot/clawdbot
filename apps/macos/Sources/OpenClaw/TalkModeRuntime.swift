@@ -1183,7 +1183,7 @@ extension TalkModeRuntime {
                     TalkMLXSpeechSynthesizer.SynthesizeError.timedOut
                 },
                 operation: { [self] in
-                    return try await self.streamMLXVoice(
+                    try await self.streamMLXVoice(
                         text: input.cleanedText,
                         modelRepo: modelRepo,
                         language: input.language,

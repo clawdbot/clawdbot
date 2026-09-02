@@ -702,6 +702,14 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 ];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  [
+    "scripts/prepare-apple-mermaid.mjs",
+    [
+      "test/scripts/build-and-run-mac.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ],
+  ],
   ["packages/mermaid-renderer/package.json", MERMAID_RENDERER_TEST_TARGETS],
   ["packages/mermaid-renderer/vite.config.ts", MERMAID_RENDERER_TEST_TARGETS],
   ["packages/mermaid-renderer/native/index.html", MERMAID_RENDERER_TEST_TARGETS],
@@ -2220,9 +2228,12 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "android-version",
       "android-pin-version",
       "docker-release-policy",
+      "docker-release-artifacts",
+      "full-release-validation-at-sha",
       "ios-version",
       "openclaw-npm-extended-stable-release",
       "openclaw-npm-publish",
+      "npm-prepared-bundle",
       "release-preflight",
       "release-prepare",
       "release-upgrade-baseline",
@@ -2230,6 +2241,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "upgrade-survivor-baselines",
       "upgrade-survivor-config-recipe",
     ],
+  ],
+  [
+    "scripts/lib/release-context.mjs",
+    ["full-release-validation-at-sha", "release-candidate-checklist", packageAcceptance],
   ],
   [
     "scripts/lib/clawhub-bootstrap-artifact.mjs",
@@ -2418,8 +2433,13 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
   ],
   [
-    /^\.github\/workflows\/docker-release\.yml$/u,
-    ["src/dockerfile.test.ts", "docker-channel-promote", "vercel-container-registry-publish"],
+    /^\.github\/workflows\/docker-release(?:-prepare)?\.yml$/u,
+    [
+      "src/dockerfile.test.ts",
+      "docker-channel-promote",
+      "docker-release-artifacts",
+      "vercel-container-registry-publish",
+    ],
   ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
   [
@@ -2443,7 +2463,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/openclaw-release-publish\.yml$/u,
-    [packageAcceptance, "vercel-container-registry-publish"],
+    [packageAcceptance, "docker-release-artifacts", "vercel-container-registry-publish"],
   ],
   [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
   [
@@ -2892,11 +2912,9 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/agents/agent-bundle-mcp-tools.materialize.test.ts",
     ],
   ],
-  [/^scripts\/e2e\/system-agent-(?:first-run|rescue)-docker\.sh$/u, ["docker-e2e-system-agent"]],
   [
     /^test\/e2e\/qa-lab\/runtime\/system-agent-first-run-docker-client\.ts$/u,
     [
-      "docker-e2e-system-agent",
       "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
@@ -2912,16 +2930,11 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^scripts\/e2e\/system-agent-first-run-spec\.json$/u,
-    [
-      "docker-e2e-system-agent",
-      "src/system-agent/operations.test.ts",
-      "src/system-agent/audit.test.ts",
-    ],
+    ["src/system-agent/operations.test.ts", "src/system-agent/audit.test.ts"],
   ],
   [
     /^scripts\/e2e\/system-agent-rescue-docker-client\.ts$/u,
     [
-      "docker-e2e-system-agent",
       "src/system-agent/rescue-policy.test.ts",
       "src/system-agent/rescue-message.test.ts",
       "src/system-agent/operations.test.ts",

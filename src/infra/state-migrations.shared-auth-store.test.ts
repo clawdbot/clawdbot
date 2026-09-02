@@ -2,9 +2,29 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as ownership from "../agents/auth-profiles/path-resolve.js";
+import * as persisted from "../agents/auth-profiles/persisted.js";
+import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
+import * as paths from "../agents/auth-profiles/shared-main-dir.js";
+import * as sqlite from "../agents/auth-profiles/sqlite.js";
+import * as authState from "../agents/auth-profiles/state.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../agents/auth-profiles/store.js";
+import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
+import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import * as stateDb from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import * as doctor from "./state-migrations.doctor.js";
+import * as migration from "./state-migrations.shared-auth-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const ownerStates: OpenClawTestState[] = [];
@@ -19,23 +39,11 @@ function makeStore(profileId: string, key: string) {
 }
 
 describe("shared auth store relocation", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
   afterEach(async () => {
-    const [
-      { closeAuthProfileReadPool },
-      { closeOpenClawAgentDatabasesForTest },
-      { closeOpenClawStateDatabaseForTest },
-    ] = await Promise.all([
-      import("../agents/auth-profiles/sqlite.js"),
-      import("../state/openclaw-agent-db.js"),
-      import("../state/openclaw-state-db.js"),
-    ]);
-    closeAuthProfileReadPool();
+    vi.restoreAllMocks();
+    sqlite.closeAuthProfileReadPool();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    stateDb.closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     for (const state of ownerStates.splice(0).toReversed()) {
       await state.cleanup();
@@ -48,17 +56,6 @@ describe("shared auth store relocation", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", "");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
-    const [paths, ownership, sqlite, storeModule, persisted, authState, migration, stateDb] =
-      await Promise.all([
-        import("../agents/auth-profiles/shared-main-dir.js"),
-        import("../agents/auth-profiles/path-resolve.js"),
-        import("../agents/auth-profiles/sqlite.js"),
-        import("../agents/auth-profiles/store.js"),
-        import("../agents/auth-profiles/persisted.js"),
-        import("../agents/auth-profiles/state.js"),
-        import("./state-migrations.shared-auth-store.js"),
-        import("../state/openclaw-state-db.js"),
-      ]);
     const mainAgentDir = paths.resolveSharedMainAuthAgentDir(env);
     const opsAgentDir = path.join(stateDir, "agents", "ops", "agent");
     const sharedStore = makeStore("openai:shared", "shared-key");
@@ -80,9 +77,6 @@ describe("shared auth store relocation", () => {
       sharedState,
       ownership,
       sqlite,
-      storeModule,
-      persisted,
-      authState,
       migration,
       stateDb,
     };
@@ -93,12 +87,6 @@ describe("shared auth store relocation", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", "");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
-    const [paths, ownership, sqlite, migration] = await Promise.all([
-      import("../agents/auth-profiles/shared-main-dir.js"),
-      import("../agents/auth-profiles/path-resolve.js"),
-      import("../agents/auth-profiles/sqlite.js"),
-      import("./state-migrations.shared-auth-store.js"),
-    ]);
     const mainAgentDir = paths.resolveSharedMainAuthAgentDir(env);
     const sourcePath = sqlite.resolveAuthProfileDatabasePath(mainAgentDir);
     if (createSourceDatabase) {
@@ -134,10 +122,10 @@ describe("shared auth store relocation", () => {
   it("moves exact rows, preserves every effective agent store, and records receipts", async () => {
     const fixture = await createFixture();
     const effectiveBytes = (agentDir: string) => {
-      const effective = fixture.storeModule.loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+      const effective = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
       return JSON.stringify({
-        credentials: fixture.persisted.buildPersistedAuthProfileSecretsStore(effective),
-        state: fixture.authState.buildPersistedAuthProfileState(effective),
+        credentials: persisted.buildPersistedAuthProfileSecretsStore(effective),
+        state: authState.buildPersistedAuthProfileState(effective),
       });
     };
     const before = {
@@ -193,10 +181,6 @@ describe("shared auth store relocation", () => {
     const fixture = await createEmptyFixture(false);
     const mainAgentDir = path.dirname(fixture.sourcePath);
     const profileId = "openai:shared";
-    const [{ upsertAuthProfileWithLockOrThrow }, { setAuthProfileOrder }] = await Promise.all([
-      import("../agents/auth-profiles/upsert-with-lock.js"),
-      import("../agents/auth-profiles/profiles.js"),
-    ]);
     await upsertAuthProfileWithLockOrThrow({
       profileId,
       credential: {
@@ -252,120 +236,193 @@ describe("shared auth store relocation", () => {
     "source-only profile",
     "malformed source",
     "malformed target",
+    "malformed target profile",
     "changed metadata",
     "changed state",
   ])("verifies a richer target against a %s before cleanup", async (scenario) => {
     const fixture = await createFixture();
     const sourcePath = fixture.sqlite.resolveAuthProfileDatabasePath(fixture.mainAgentDir);
     const source = new DatabaseSync(sourcePath);
-    const target = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
-    const sourceStore =
-      scenario === "empty subset" ? { version: 1, profiles: {} } : fixture.sharedStore;
-    const sourceJson =
-      scenario === "malformed source"
-        ? '{"version":1,"profiles":{"bad":null}}'
-        : JSON.stringify(sourceStore);
-    source
-      .prepare(
-        "UPDATE auth_profile_store SET store_json = ?, updated_at = 100 WHERE store_key = 'primary'",
-      )
-      .run(sourceJson);
-    const sourceRow = source
-      .prepare("SELECT store_json, updated_at FROM auth_profile_store WHERE store_key = 'primary'")
-      .get();
-    const stateRow = source
-      .prepare("SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = 'primary'")
-      .get() as { state_json: string; updated_at: number };
-    const targetStore = {
-      profiles: {
-        ...makeStore("openai:extra", "extra-key").profiles,
-        ...(scenario === "source-only profile"
-          ? {}
-          : makeStore(
-              "openai:shared",
-              scenario === "changed credential" ? "different-key" : "shared-key",
-            ).profiles),
-      },
-      version: 1,
-      ...(scenario === "changed metadata" ? { legacyMetadata: "keep" } : {}),
-    };
-    const targetRow = {
-      value_json:
-        scenario === "malformed target"
-          ? '{"version":1,"profiles":null}'
-          : JSON.stringify(targetStore),
-      updated_at_ms: scenario === "identical subset" ? 100 : 200,
-    };
-    target
-      .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")
-      .run(targetRow.value_json, targetRow.updated_at_ms);
-    target
-      .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.state', ?, ?)")
-      .run(stateRow.state_json, stateRow.updated_at + Number(scenario === "changed state"));
-
-    const detected = fixture.migration.detectSharedAuthStoreMigration({
-      stateDir: fixture.stateDir,
-      doctorOnlyStateMigrations: true,
-    });
-    const result = await fixture.migration.migrateSharedAuthStore({
-      detected,
-      stateDir: fixture.stateDir,
-    });
-    const converges = scenario.endsWith("subset");
-    expect(result.warnings).toEqual(converges ? [] : [expect.stringMatching(/conflict.*Back up/)]);
-    expect(
-      target
-        .prepare(
-          "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'authProfiles.store'",
-        )
-        .get(),
-    ).toEqual(targetRow);
-    expect(
+    try {
+      const target = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
+      const sourceStore =
+        scenario === "empty subset" ? { version: 1, profiles: {} } : fixture.sharedStore;
+      const escapedProfileId = 'a"\nprofile';
+      if (scenario === "changed credential") {
+        Object.assign(sourceStore.profiles, makeStore(escapedProfileId, "shared-key").profiles);
+      }
+      const sourceJson =
+        scenario === "malformed source"
+          ? '{"version":1,"profiles":{"bad":null}}'
+          : JSON.stringify(sourceStore);
       source
+        .prepare(
+          "UPDATE auth_profile_store SET store_json = ?, updated_at = 100 WHERE store_key = 'primary'",
+        )
+        .run(sourceJson);
+      const sourceRow = source
         .prepare(
           "SELECT store_json, updated_at FROM auth_profile_store WHERE store_key = 'primary'",
         )
-        .get(),
-    ).toEqual(converges ? undefined : sourceRow);
-    expect(
-      source
+        .get();
+      const stateRow = source
         .prepare(
           "SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = 'primary'",
         )
-        .get(),
-    ).toEqual(converges ? undefined : stateRow);
-    const receipt = target
-      .prepare(
-        "SELECT source_sha256, source_record_count, status, removed_source FROM migration_sources WHERE target_table = 'auth_profile_stores'",
-      )
-      .get();
-    expect(receipt).toEqual(
-      converges
-        ? {
-            source_sha256: createHash("sha256").update(JSON.stringify(sourceRow)).digest("hex"),
-            source_record_count: 1,
-            status: "completed",
-            removed_source: 1,
-          }
-        : undefined,
-    );
-    expect(
-      fixture.migration.detectSharedAuthStoreMigration({
+        .get() as { state_json: string; updated_at: number };
+      const targetStore = {
+        profiles: {
+          ...makeStore("openai:extra", "extra-key").profiles,
+          ...(scenario === "malformed target profile" ? { bad: null } : {}),
+          ...(scenario === "source-only profile"
+            ? {}
+            : makeStore(
+                "openai:shared",
+                scenario === "changed credential" ? "different-key" : "shared-key",
+              ).profiles),
+        },
+        version: 1,
+        ...(scenario === "changed metadata" ? { legacyMetadata: "keep" } : {}),
+      };
+      const targetRow = {
+        value_json:
+          scenario === "malformed target"
+            ? '{"version":1,"profiles":null}'
+            : JSON.stringify(targetStore),
+        updated_at_ms: scenario === "identical subset" ? 100 : 200,
+      };
+      target
+        .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")
+        .run(targetRow.value_json, targetRow.updated_at_ms);
+      target
+        .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.state', ?, ?)")
+        .run(
+          stateRow.state_json,
+          stateRow.updated_at + Number(["changed state", "changed credential"].includes(scenario)),
+        );
+
+      const detected = fixture.migration.detectSharedAuthStoreMigration({
         stateDir: fixture.stateDir,
         doctorOnlyStateMigrations: true,
-      }).hasLegacy,
-    ).toBe(!converges);
-    source.close();
+      });
+      const result = await fixture.migration.migrateSharedAuthStore({
+        detected,
+        stateDir: fixture.stateDir,
+      });
+      const converges = scenario.endsWith("subset");
+      expect(result.warnings).toEqual(
+        converges ? [] : [expect.stringMatching(/conflict.*Back up/)],
+      );
+      const conflictDetails: Record<string, string> = {
+        "changed credential": '"openai:shared": credential differs',
+        "source-only profile": '"openai:shared": missing from target',
+        "malformed source": '"bad": malformed credential',
+        "malformed target": "invalid credential payload",
+        "malformed target profile": '"bad": malformed credential',
+        "changed metadata": "store metadata differs",
+        "changed state": "auth_profile_state[primary] -> config_machine_state[authProfiles.state]",
+      };
+      if (!converges) {
+        expect(result.warnings[0]).toContain(conflictDetails[scenario]);
+        expect(result.warnings[0]).toContain("openclaw doctor --fix");
+        expect(result.warnings[0]).toContain(JSON.stringify(sourcePath));
+        expect(result.warnings[0]).toContain(
+          JSON.stringify(path.join(fixture.stateDir, "state", "openclaw.sqlite")),
+        );
+        expect(result.warnings[0]).not.toMatch(/shared-key|extra-key|different-key|legacyMetadata/);
+      }
+      expect(
+        target
+          .prepare(
+            "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+          )
+          .get(),
+      ).toEqual(targetRow);
+      expect(
+        source
+          .prepare(
+            "SELECT store_json, updated_at FROM auth_profile_store WHERE store_key = 'primary'",
+          )
+          .get(),
+      ).toEqual(converges ? undefined : sourceRow);
+      expect(
+        source
+          .prepare(
+            "SELECT state_json, updated_at FROM auth_profile_state WHERE state_key = 'primary'",
+          )
+          .get(),
+      ).toEqual(converges ? undefined : stateRow);
+      const receipt = target
+        .prepare(
+          "SELECT source_sha256, source_record_count, status, removed_source FROM migration_sources WHERE target_table = 'auth_profile_stores'",
+        )
+        .get();
+      expect(receipt).toEqual(
+        converges
+          ? {
+              source_sha256: createHash("sha256").update(JSON.stringify(sourceRow)).digest("hex"),
+              source_record_count: 1,
+              status: "completed",
+              removed_source: 1,
+            }
+          : undefined,
+      );
+      expect(
+        fixture.migration.detectSharedAuthStoreMigration({
+          stateDir: fixture.stateDir,
+          doctorOnlyStateMigrations: true,
+        }).hasLegacy,
+      ).toBe(!converges);
+      if (scenario === "changed credential") {
+        const warning = result.warnings[0]!;
+        expect(warning).toContain(`${JSON.stringify(escapedProfileId)}: missing from target`);
+        expect(warning.indexOf(JSON.stringify(escapedProfileId))).toBeLessThan(
+          warning.indexOf('"openai:shared"'),
+        );
+        expect(warning).toContain(conflictDetails["changed state"]);
+        expect(warning).not.toContain("\n");
+        // Follow the diagnostic: retain target-only profiles and reconcile both conflicting rows.
+        target
+          .prepare(
+            "UPDATE config_machine_state SET value_json = ? WHERE state_key = 'authProfiles.store'",
+          )
+          .run(
+            JSON.stringify({
+              ...targetStore,
+              profiles: { ...targetStore.profiles, ...sourceStore.profiles },
+            }),
+          );
+        target
+          .prepare(
+            "UPDATE config_machine_state SET updated_at_ms = ? WHERE state_key = 'authProfiles.state'",
+          )
+          .run(stateRow.updated_at);
+        expect(
+          await fixture.migration.migrateSharedAuthStore({ detected, stateDir: fixture.stateDir }),
+        ).toMatchObject({
+          warnings: [],
+          changes: [expect.stringContaining("Relocated shared auth")],
+        });
+        expect(fixture.sqlite.readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual({
+          ...targetStore,
+          profiles: { ...targetStore.profiles, ...sourceStore.profiles },
+        });
+        expect(
+          fixture.migration.detectSharedAuthStoreMigration({
+            stateDir: fixture.stateDir,
+            doctorOnlyStateMigrations: true,
+          }).hasLegacy,
+        ).toBe(false);
+      }
+    } finally {
+      source.close();
+    }
   });
 
   it("preserves post-relocation main-agent credential overrides without a receipt", async () => {
     const fixture = await createEmptyFixture(false);
     const mainAgentDir = path.dirname(fixture.sourcePath);
     const profileId = "openai:shared";
-    const [{ upsertAuthProfileWithLockOrThrow }, { saveAuthProfileStore }] = await Promise.all([
-      import("../agents/auth-profiles/upsert-with-lock.js"),
-      import("../agents/auth-profiles/store.js"),
-    ]);
     await upsertAuthProfileWithLockOrThrow({
       profileId,
       credential: { type: "api_key", provider: "openai", key: "shared-key" },
@@ -400,7 +457,6 @@ describe("shared auth store relocation", () => {
   it.each(["absolute", "tilde"] as const)(
     "detects and relocates only the selected env's %s shared auth source",
     async (pathStyle) => {
-      const { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
       const createOwner = async () => {
         const owner = await createOpenClawTestState({
           prefix: "openclaw-shared-auth-source-owner-",
@@ -429,14 +485,6 @@ describe("shared auth store relocation", () => {
       };
       ambient.applyEnv();
       vi.stubEnv("OPENCLAW_AGENT_DIR", ambientEnv.OPENCLAW_AGENT_DIR);
-      const [sqlite, migration, doctor, stateDb, { EMPTY_LEGACY_SESSION_SURFACES }] =
-        await Promise.all([
-          import("../agents/auth-profiles/sqlite.js"),
-          import("./state-migrations.shared-auth-store.js"),
-          import("./state-migrations.doctor.js"),
-          import("../state/openclaw-state-db.js"),
-          import("../plugins/legacy-session-surfaces.types.js"),
-        ]);
       const profileId = "openai:source";
       const selectedStore = makeStore(profileId, `fake-selected-${randomUUID()}`);
       const ambientStore = makeStore(profileId, `fake-ambient-${randomUUID()}`);
@@ -507,12 +555,6 @@ describe("shared auth store relocation", () => {
 
   it("defers shared auth inspection while the selected state schema needs repair", async () => {
     const fixture = await createEmptyFixture(false);
-    const [doctor, { EMPTY_LEGACY_SESSION_SURFACES }, { resolveOpenClawStateSqlitePath }] =
-      await Promise.all([
-        import("./state-migrations.doctor.js"),
-        import("../plugins/legacy-session-surfaces.types.js"),
-        import("../state/openclaw-state-db.paths.js"),
-      ]);
     const stateDatabasePath = resolveOpenClawStateSqlitePath(fixture.env);
     fs.mkdirSync(path.dirname(stateDatabasePath), { recursive: true });
     const legacyDatabase = new DatabaseSync(stateDatabasePath);
@@ -717,7 +759,6 @@ describe("shared auth store relocation", () => {
   it("fails closed when the legacy source is a dangling symlink", async () => {
     const fixture = await createFixture();
     const sourcePath = fixture.sqlite.resolveAuthProfileDatabasePath(fixture.mainAgentDir);
-    const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
     closeOpenClawAgentDatabasesForTest();
     fs.unlinkSync(sourcePath);
     fs.symlinkSync(`${sourcePath}.missing`, sourcePath);

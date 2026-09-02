@@ -287,6 +287,16 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes Apple Mermaid preparation to its build and packaging proof", () => {
+    const plan = resolveChangedTestTargetPlan(["scripts/prepare-apple-mermaid.mjs"]);
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toEqual([
+      "test/scripts/build-and-run-mac.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ]);
+  });
+
   it("bounds extensionless prefix probes while excluding deleted cached matches", () => {
     const target = "src/selector/topic";
     const rejectedFiles = [
@@ -857,9 +867,12 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/changed-path-facts.test.ts",
         "test/scripts/ci-changed-node-test-plan.test.ts",
+        "test/scripts/docker-release-artifacts.test.ts",
         "test/scripts/full-release-validation-state.test.ts",
         "test/scripts/ios-lifecycle-workflow.test.ts",
         "test/scripts/macos-native-test-launch.test.ts",
+        "test/scripts/npm-prepared-bundle.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-release.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
@@ -884,12 +897,16 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/check-workflows.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/docker-release-artifacts.test.ts",
         "test/scripts/frv-proof-broker.test.ts",
         "test/scripts/frv.test.ts",
         "test/scripts/full-release-artifact-contract.test.ts",
         "test/scripts/full-release-validation-continuation-workflow.test.ts",
+        "test/scripts/npm-prepared-bundle.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-release.test.ts",
         "test/scripts/openclaw-performance-workflow.test.ts",
         "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/release-tooling-identity.test.ts",
         "test/scripts/validate-full-release-validation-evidence.test.ts",
       ],
     );
@@ -1028,12 +1045,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
-        "test/scripts/ci-workflow-guards.test.ts",
         "test/scripts/openclaw-npm-resume-run.test.ts",
-        "test/scripts/package-source-preflight.test.ts",
         "test/scripts/release-candidate-checklist.test.ts",
-        "test/scripts/release-check.test.ts",
-        "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
       ],
     );
   });
@@ -1044,6 +1058,7 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: [
         "src/dockerfile.test.ts",
         "test/scripts/docker-channel-promote.test.ts",
+        "test/scripts/docker-release-artifacts.test.ts",
         "test/scripts/vercel-container-registry-publish.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
@@ -1055,6 +1070,7 @@ describe("scripts/test-projects changed-target routing", () => {
       workflowPath: ".github/workflows/openclaw-release-publish.yml",
       targets: [
         "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/docker-release-artifacts.test.ts",
         "test/scripts/vercel-container-registry-publish.test.ts",
         "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/clawhub-parent-authorization.test.ts",
@@ -1081,6 +1097,19 @@ describe("scripts/test-projects changed-target routing", () => {
       expectChangedTargets([workflowPath], targets);
     },
   );
+
+  it("selects OCI publication proof for read-only Docker preparation changes", () => {
+    const plan = resolveChangedTestTargetPlan([".github/workflows/docker-release-prepare.yml"]);
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toEqual(
+      expect.arrayContaining([
+        "src/dockerfile.test.ts",
+        "test/scripts/docker-release-artifacts.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+      ]),
+    );
+  });
 
   it("keeps generated locale publisher and inventory edits on workflow guards", () => {
     for (const actionPath of [
@@ -2127,7 +2156,6 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets(targets, [
       "test/scripts/docker-build-helper.test.ts",
       "test/scripts/docker-e2e-plan.test.ts",
-      "test/scripts/docker-e2e-system-agent.test.ts",
       "src/cli/program/register.onboard.test.ts",
       "src/cli/run-main.test.ts",
       "src/cli/run-main.exit.test.ts",
@@ -2162,6 +2190,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/android-version.test.ts",
           "test/scripts/ci-git-prerequisites.test.ts",
           "test/scripts/ios-release-plan.test.ts",
+          "test/scripts/mac-native-fixtures.test.ts",
         ],
         watchMode: false,
       },
@@ -4234,16 +4263,25 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("keeps shared Vitest config helpers out of whole-config targets", () => {
     const args = ["test/vitest/vitest.shared.config.ts"];
 
-    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([
-      {
-        target: "test/vitest/vitest.shared.config.ts",
-        reason: "target-matched-no-test-files",
-        includePattern: "test/vitest/**/*.test.ts",
-      },
-    ]);
+    expect(findUnmatchedExplicitTestTargets(args, process.cwd())).toEqual([]);
     expectSingleVitestRunPlan(buildVitestRunPlans(args, process.cwd()), {
       config: "test/vitest/vitest.tooling.config.ts",
       includePatterns: ["test/vitest/**/*.test.ts"],
+    });
+
+    withTinyFileTree({ "test/vitest/vitest.helper.config.ts": "export default {};\n" }, (cwd) => {
+      const helperArgs = ["test/vitest/vitest.helper.config.ts"];
+      expect(findUnmatchedExplicitTestTargets(helperArgs, cwd)).toEqual([
+        {
+          target: "test/vitest/vitest.helper.config.ts",
+          reason: "target-matched-no-test-files",
+          includePattern: "test/vitest/**/*.test.ts",
+        },
+      ]);
+      expectSingleVitestRunPlan(buildVitestRunPlans(helperArgs, cwd), {
+        config: "test/vitest/vitest.tooling.config.ts",
+        includePatterns: ["test/vitest/**/*.test.ts"],
+      });
     });
   });
 

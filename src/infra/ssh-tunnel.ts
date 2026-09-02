@@ -207,24 +207,22 @@ export async function startSshPortForward(opts: {
     stderr.push(...lines);
   });
 
-  const stop = async () => {
-    if (child.killed || !child.kill("SIGTERM")) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } finally {
-          resolve();
-        }
-      }, 1500);
-      child.once("exit", () => {
-        clearTimeout(t);
-        resolve();
-      });
-    });
-  };
+  const exited = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    child.once("close", () => resolve());
+  });
+  let stopping: Promise<void> | undefined;
+  const stop = () =>
+    (stopping ??= (async () => {
+      // Sending a signal is not exit; every caller must await the same child lifetime.
+      const timer = setTimeout(() => child.kill("SIGKILL"), 1500);
+      try {
+        child.kill("SIGTERM");
+        await exited;
+      } finally {
+        clearTimeout(timer);
+      }
+    })());
 
   try {
     await Promise.race([

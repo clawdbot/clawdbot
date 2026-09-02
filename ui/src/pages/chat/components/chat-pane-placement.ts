@@ -1,16 +1,16 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import { icons } from "../../../components/icons.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { t } from "../../../i18n/index.ts";
-import { registerSessionPlacementEnglish } from "../../../i18n/locales/en-session-placement.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-
-registerSessionPlacementEnglish();
+import { resolveChatPaneWorkerPresentation } from "../chat-pane-placement.ts";
 
 export function renderChatPanePlacement(props: {
   session: GatewaySessionRow | undefined;
+  placementStartupStatus?: Pick<ApplicationPlacementStartupStatus, "phase" | "targetKind"> | null;
   placementMoving?: boolean;
   placementRestarting?: boolean;
   placementMoveDisabledReason?: string;
@@ -37,6 +37,7 @@ export function renderChatPanePlacement(props: {
   const runner = placement?.state === "active" ? placement.runner : undefined;
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
   const restartable = placement?.state === "failed" && placement.recoveryAction === "restart";
+  const worker = resolveChatPaneWorkerPresentation(placement, props.placementStartupStatus);
   const moveTarget =
     placementMove?.target.kind === "gateway"
       ? t("sessionsView.moveSessionGatewayTarget")
@@ -55,11 +56,7 @@ export function renderChatPanePlacement(props: {
           ? t("sessionsView.movingSessionGeneric")
           : deviceOffline
             ? t("sessionsView.deviceOffline")
-            : runner?.kind === "device"
-              ? t("sessionsView.runsOnDevice")
-              : providerId && profileId
-                ? `${providerId} · ${profileId}`
-                : t("newSession.runsOn", { place: t("newSession.cloud") });
+            : worker.label;
   const moveDisabledReason = props.placementMoveDisabledReason;
   const reclaimDisabledReason = props.placementReclaimDisabledReason;
   const restartDisabledReason = props.placementRestartDisabledReason;
@@ -147,11 +144,7 @@ export function renderChatPanePlacement(props: {
               @click=${() => !reclaimDisabledReason && props.onPlacementReclaim?.()}
             >
               <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.stop}</span>
-              <span class="session-menu__text"
-                >${runner?.kind === "device"
-                  ? t("sessionsView.stopDeviceWorker")
-                  : t("sessionsView.stopCloudWorker")}</span
-              >
+              <span class="session-menu__text">${t(worker.stopKey)}</span>
             </wa-dropdown-item>`}
       </wa-dropdown>
       ${deviceOffline

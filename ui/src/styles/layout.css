@@ -1614,6 +1614,11 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
+.sidebar-session-group-toggle > .sidebar-recent-sessions__label-text {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
@@ -2692,6 +2697,11 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   color: var(--muted);
 }
 
+.session-menu__icon .viewer-avatar {
+  width: 14px;
+  height: 14px;
+}
+
 .session-menu__icon svg,
 .session-menu__check svg {
   width: 14px;
@@ -2806,6 +2816,11 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 .session-menu__icon-picker {
   padding: 2px;
+}
+
+.session-menu__colors + .session-menu__icon-picker,
+.session-menu__icon-grid + .session-menu__icon-section-label {
+  margin-top: var(--space-1);
 }
 
 .session-menu__icon-options {

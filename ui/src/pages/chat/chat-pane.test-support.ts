@@ -319,7 +319,7 @@ export function createSessionContext(
     chatSubmissions: createChatSubmissions(),
     chatAttachmentHandoff: createChatAttachmentHandoff(),
     nativeChatDrafts: { subscribe: () => () => undefined },
-    placementStartup: { pause: vi.fn() },
+    placementStartup: { get: vi.fn(() => null), pause: vi.fn() },
     sessions,
   } as unknown as ApplicationContext;
 }
@@ -396,6 +396,42 @@ export function createTestChatPane(params: {
         }
       ).emitTestEvent;
       emit({ type: "event", event, payload, seq: 1 });
+    },
+  };
+}
+
+type ActivePlacement = Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>;
+
+export function activePlacementSession(
+  key = "agent:main:cloud",
+): GatewaySessionRow & { placement: ActivePlacement } {
+  return {
+    key,
+    kind: "direct",
+    updatedAt: 0,
+    placement: {
+      state: "active",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: "worker:one",
+      activeOwnerEpoch: 1,
+      workerBundleHash: "a".repeat(64),
+      workspaceBaseManifestRef: "base-manifest",
+      remoteWorkspaceDir: "/worker/repo",
+    },
+  };
+}
+
+export function offlineDeviceSession(): GatewaySessionRow & { placement: ActivePlacement } {
+  const session = activePlacementSession("agent:main:offline-device");
+  return {
+    ...session,
+    hasActiveRun: true,
+    placement: {
+      ...session.placement,
+      runner: { kind: "device", status: "offline" },
     },
   };
 }

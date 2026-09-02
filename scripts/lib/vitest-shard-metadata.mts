@@ -186,6 +186,20 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/worktrees/service.remove-lease.test.ts", 16],
   ["src/agents/sessions/agent-session-code-mode-source.test.ts", 28],
   ["src/agents/worktrees/run-lease.test.ts", 13],
+  // Main runs 33537556582/33537739443/33543106647: median case-body sums.
+  // Relative weights distribute files; complete generation spans own admission.
+  ["src/agents/cli-runner/prepare.test.ts", 42],
+  ["src/agents/command/attempt-execution.cli.test.ts", 14],
+  ["src/agents/harness/selection.test.ts", 10],
+  ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", 17],
+  ["src/agents/runtime-plan/prepare-auth.test.ts", 11],
+  ["src/agents/subagents/registry/subagent-control.retirement.test.ts", 10],
+  ["src/agents/subagents/spawn/subagent-spawn.authority.test.ts", 10],
+  ["src/agents/worktrees/service.capacity.test.ts", 19],
+  ["src/agents/worktrees/service.diagnostics.test.ts", 18],
+  ["src/agents/worktrees/service.naming.test.ts", 10],
+  ["src/agents/worktrees/service.provisioned.test.ts", 24],
+  ["src/agents/worktrees/service.run-end-cleanup.test.ts", 11],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).
@@ -205,8 +219,9 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
   ["test/scripts/ci-git-owner.test.ts", 187],
-  // Successful hosted run 33388762505: retain the newer lifecycle measurements.
-  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 305],
+  // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
+  // spans; canonical push plans omit this tooling workload.
+  ["test/scripts/openclaw-performance-git-lifecycle.test.ts", 136],
   ["test/scripts/ci-linux-git.test.ts", 204],
   ["test/scripts/pr-merge-outcome.test.ts", 159],
   ["test/scripts/ci-workflow-guards.test.ts", 38],

@@ -12,7 +12,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
-import { installManagedPluginSource } from "../plugins/management-service.js";
+import {
+  installManagedPluginSource,
+  type ManagedPluginSourceInstallRequest,
+} from "../plugins/management-service.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { persistHookPackInstall } from "./hook-install-persistence.js";
@@ -214,7 +217,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   expectedPluginId?: string;
   expectedIntegrity?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
-  official?: boolean;
+  officialRequest?: Extract<ManagedPluginSourceInstallRequest, { source: "official" }>;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
@@ -265,26 +268,17 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   }
 
   const result = await installManagedPluginSource({
-    request: params.official
-      ? {
-          source: "official",
-          spec: params.spec,
-          pluginId: params.expectedPluginId ?? params.spec,
-          mode: params.installMode,
-          pin: params.pin,
-          ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-        }
-      : {
-          source: "npm",
-          spec: params.spec,
-          mode: params.installMode,
-          pin: params.pin,
-          ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
-          ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
-          ...(params.trustedSourceLinkedOfficialInstall
-            ? { trustedSourceLinkedOfficialInstall: true }
-            : {}),
-        },
+    request: params.officialRequest ?? {
+      source: "npm",
+      spec: params.spec,
+      mode: params.installMode,
+      pin: params.pin,
+      ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
+      ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
+      ...(params.trustedSourceLinkedOfficialInstall
+        ? { trustedSourceLinkedOfficialInstall: true }
+        : {}),
+    },
     snapshot: params.snapshot,
     ...params.capabilityConsent,
     safetyOverrides: params.safetyOverrides,
@@ -293,7 +287,14 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     runtime: params.runtime,
   });
   if (!result.ok) {
-    if (isTerminalPluginInstallFailure(result.code)) {
+    // A declared secondary may have been selected by the install owner. Hook-pack
+    // probing belongs only to the npm artifact, never a failed ClawHub attempt.
+    if (
+      result.installSource?.source === "clawhub" ||
+      (params.officialRequest &&
+        result.code !== PLUGIN_INSTALL_ERROR_CODE.MISSING_OPENCLAW_EXTENSIONS) ||
+      isTerminalPluginInstallFailure(result.code)
+    ) {
       runtime.error(result.error);
       return { ok: false };
     }

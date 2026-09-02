@@ -15,7 +15,6 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
-import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
@@ -54,6 +53,7 @@ import {
   resolveCodexAppServerThreadModelSelection,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
 
 type CodexThreadLifecycleTimingLogger = NonNullable<
@@ -2783,7 +2783,7 @@ describe("Codex plugin binding recovery", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createThreadLifecycleParams(sessionFile, workspaceDir);
-    const request = vi.fn(async (method: string) => {
+    const respond = vi.fn(async (method: string) => {
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-settled");
       }
@@ -2805,8 +2805,14 @@ describe("Codex plugin binding recovery", () => {
       policyContext: { fingerprint: "plugin-policy-settled", apps: {}, pluginAppIds: {} },
       diagnostics: [],
     }));
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const { client, request } = fixture;
     const common = {
-      client: { request } as never,
+      client,
+      signal: new AbortController().signal,
       params,
       cwd: workspaceDir,
       dynamicTools: [],
@@ -2823,6 +2829,7 @@ describe("Codex plugin binding recovery", () => {
         build,
       },
     });
+    await fixture.endTurn("thread-settled");
     await startOrResumeThread({
       ...common,
       pluginThreadConfig: {
@@ -2835,19 +2842,22 @@ describe("Codex plugin binding recovery", () => {
     });
 
     expect(build).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/unsubscribe",
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
   });
 
   it("rebuilds once when a settled negative binding still enables the plugin", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createThreadLifecycleParams(sessionFile, workspaceDir);
-    const request = vi.fn(async (method: string) => {
+    const respond = vi.fn(async (method: string) => {
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-settled-transition");
-      }
-      if (method === "thread/unsubscribe") {
-        return { status: "unsubscribed" };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -2881,8 +2891,14 @@ describe("Codex plugin binding recovery", () => {
         policyContext: { fingerprint: "plugin-policy-settled", apps: {}, pluginAppIds: {} },
         diagnostics: [],
       });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const { client, request } = fixture;
     const common = {
-      client: { request } as never,
+      client,
+      signal: new AbortController().signal,
       params,
       cwd: workspaceDir,
       dynamicTools: [],
@@ -2899,6 +2915,7 @@ describe("Codex plugin binding recovery", () => {
         build,
       },
     });
+    await fixture.endTurn("thread-settled-transition");
     const settledProvider = {
       enabled: true,
       inputFingerprint: "plugin-input-settled",
@@ -2907,15 +2924,21 @@ describe("Codex plugin binding recovery", () => {
       build,
     };
     await startOrResumeThread({ ...common, pluginThreadConfig: settledProvider });
+    await fixture.endTurn("thread-settled-transition");
     await startOrResumeThread({ ...common, pluginThreadConfig: settledProvider });
 
     expect(build).toHaveBeenCalledTimes(2);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
+      "thread/unsubscribe",
+      "thread/read",
       "thread/resume",
       "thread/unsubscribe",
       "thread/start",
+      "thread/unsubscribe",
+      "thread/read",
       "thread/resume",
+      "thread/inject_items",
     ]);
   });
 
@@ -2927,7 +2950,7 @@ describe("Codex plugin binding recovery", () => {
     let bindingStore = createCodexAppServerBindingStore(stateStore);
     let threadSequence = 0;
     const threadStarts: Array<Record<string, unknown>> = [];
-    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+    const respond = vi.fn(async (method: string, requestParams?: unknown) => {
       if (method === "thread/start") {
         threadSequence += 1;
         threadStarts.push(requestParams as Record<string, unknown>);
@@ -2974,8 +2997,14 @@ describe("Codex plugin binding recovery", () => {
         }),
       };
     };
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const { client, request } = fixture;
     const common = {
-      client: { request } as never,
+      client,
+      signal: new AbortController().signal,
       params,
       cwd: workspaceDir,
       dynamicTools: [],
@@ -2987,6 +3016,7 @@ describe("Codex plugin binding recovery", () => {
       bindingStore,
       pluginThreadConfig: provider("unrestricted", true),
     });
+    await fixture.endTurn("thread-authority-1");
     const revokedProvider = provider("unrestricted", true);
     revokedProvider.build.mockRejectedValueOnce(new Error("calendar revoked by current policy"));
     await expect(
@@ -3001,11 +3031,13 @@ describe("Codex plugin binding recovery", () => {
       bindingStore,
       pluginThreadConfig: provider("scheduled-cap-1", false),
     });
+    await fixture.endTurn("thread-authority-2");
     await startOrResumeThreadImpl({
       ...common,
       bindingStore,
       pluginThreadConfig: provider("unrestricted", true),
     });
+    await fixture.endTurn("thread-authority-3");
     bindingStore = createCodexAppServerBindingStore(stateStore);
     await startOrResumeThreadImpl({
       ...common,
@@ -3016,12 +3048,18 @@ describe("Codex plugin binding recovery", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
       "app/installed",
+      "thread/unsubscribe",
+      "thread/read",
       "thread/start",
       "app/installed",
+      "thread/unsubscribe",
       "thread/start",
       "app/installed",
+      "thread/unsubscribe",
+      "thread/read",
       "thread/resume",
       "app/installed",
+      "thread/inject_items",
     ]);
     expect(threadStarts).toHaveLength(3);
     expect(threadStarts[1]?.config).toMatchObject({
@@ -3459,10 +3497,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
     const params = createThreadLifecycleParams(sessionFile, workspaceDir);
     const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
     let resumeCount = 0;
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/read") {
-        return { thread: threadStartResult(threadId).thread };
-      }
+    const respond = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/resume") {
         resumeCount += 1;
         return {
@@ -3474,28 +3509,39 @@ describe("Codex app-server adopted thread lifecycle", () => {
       throw new Error(`unexpected method: ${method}`);
     });
 
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+      persistedThreads: [threadId],
+    });
+    const { client, request } = fixture;
     const commonParams = {
-      client: { request } as never,
+      client,
+      signal: new AbortController().signal,
       params,
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
     };
     const firstBinding = await startOrResumeThread(commonParams);
+    await fixture.endTurn(threadId);
     const secondBinding = await startOrResumeThread(commonParams);
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/read",
       "thread/resume",
+      "thread/inject_items",
+      "thread/unsubscribe",
       "thread/read",
       "thread/resume",
+      "thread/inject_items",
     ]);
     expect(request.mock.calls[0]?.[1]).toEqual({ threadId, includeTurns: false });
-    expect(request.mock.calls[2]?.[1]).toEqual({ threadId, includeTurns: false });
+    expect(request.mock.calls[4]?.[1]).toEqual({ threadId, includeTurns: false });
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("model");
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("modelProvider");
-    expect(request.mock.calls[3]?.[1]).not.toHaveProperty("model");
-    expect(request.mock.calls[3]?.[1]).not.toHaveProperty("modelProvider");
+    expect(request.mock.calls[5]?.[1]).not.toHaveProperty("model");
+    expect(request.mock.calls[5]?.[1]).not.toHaveProperty("modelProvider");
     expect(firstBinding).toMatchObject({
       model: "native-model-1",
       modelProvider: "lmstudio",
@@ -3525,21 +3571,23 @@ describe("Codex app-server adopted thread lifecycle", () => {
       const workspaceDir = path.join(tempDir, "workspace");
       const params = createThreadLifecycleParams(sessionFile, workspaceDir);
       const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
-      const harness = createFakeCodexAppServerClient(async (method: string) => {
-        if (method === "thread/read") {
-          return {
-            thread: {
-              ...threadStartResult(threadId).thread,
-              status: { type: status },
-              canAcceptDirectInput,
-            },
-          };
-        }
-        if (method === "thread/unsubscribe") {
-          return { status: "unsubscribed" };
-        }
-        throw new Error(`unexpected method: ${method}`);
+      const harness = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: (method) => {
+          throw new Error(`unexpected method: ${method}`);
+        },
       });
+      harness.seed(
+        {
+          ...threadStartResult(threadId),
+          thread: {
+            ...(threadStartResult(threadId).thread as object),
+            status: { type: status },
+            canAcceptDirectInput,
+          },
+        },
+        { loaded: true, subscribed: true },
+      );
       ensureCodexAppServerClientRuntime(harness.client, { agentDir: workspaceDir });
       await testCodexAppServerBindingStore.mutate(identity, {
         kind: "patch",
@@ -3567,7 +3615,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
         expect(await testCodexAppServerBindingStore.read(identity)).toEqual(before);
         expect(reserveResumeThread).not.toHaveBeenCalled();
       } finally {
-        harness.close();
+        harness.client.close();
       }
     },
   );
@@ -5687,7 +5735,7 @@ describe("Codex app-server thread lifecycle timing", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     let nowMs = 0;
     const log = createTimingLogger(true);
-    const request = vi.fn(async (method: string) => {
+    const respond = vi.fn(async (method: string) => {
       if (method === "thread/start") {
         return threadStartResult("thread-existing");
       }
@@ -5697,8 +5745,14 @@ describe("Codex app-server thread lifecycle timing", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const { client } = fixture;
     const commonParams = {
-      client: { request } as never,
+      client,
+      signal: new AbortController().signal,
       params: createThreadLifecycleParams(sessionFile, workspaceDir),
       cwd: workspaceDir,
       dynamicTools: [],
@@ -5713,6 +5767,7 @@ describe("Codex app-server thread lifecycle timing", () => {
         log: createTimingLogger(false),
       },
     });
+    await fixture.endTurn("thread-existing");
     await startOrResumeThread({
       ...commonParams,
       timing: {

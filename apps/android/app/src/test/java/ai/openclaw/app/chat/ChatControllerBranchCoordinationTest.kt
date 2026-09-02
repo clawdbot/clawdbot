@@ -3,7 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
-import androidx.room.Room
+import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -178,7 +178,10 @@ class ChatControllerBranchCoordinationTest {
       gateway.respond("sessions.rewind") { throw GatewayRequestOutcomeUnknown("response lost") }
       gateway.respond("chat.history") {
         when (historyCalls.incrementAndGet()) {
-          1, 2 -> throw IllegalStateException("history temporarily unavailable")
+          1, 2 -> {
+            throw IllegalStateException("history temporarily unavailable")
+          }
+
           else -> {
             retryHistoryStarted.complete(Unit)
             releaseRetryHistory.await()
@@ -578,13 +581,22 @@ class ChatControllerBranchCoordinationTest {
     val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
     holdBranches = true
     when (lane) {
-      DispatchGateLane.Refresh -> controller.refresh()
-      DispatchGateLane.RemoteEvent -> controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      DispatchGateLane.Refresh -> {
+        controller.refresh()
+      }
+
+      DispatchGateLane.RemoteEvent -> {
+        controller.handleGatewayEvent("sessions.changed", """{"reason":"branch-switch","sessionKey":"$key","agentId":"main"}""")
+      }
+
       DispatchGateLane.Reconnect -> {
         controller.onDisconnected("Reconnecting")
         controller.onGatewayConnected()
       }
-      else -> controller.handleGatewayEvent("health", null)
+
+      else -> {
+        controller.handleGatewayEvent("health", null)
+      }
     }
     awaitBranchProgress { heldListings.isNotEmpty() }
     // The gateway changes branches after the history snapshot, without a mutation event.
@@ -732,7 +744,7 @@ class ChatControllerBranchCoordinationTest {
     assertEquals(admitted.id, retained.id)
     assertEquals(admitted.branchEpoch, retained.branchEpoch)
     assertEquals(admitted.attemptVersion, retained.attemptVersion)
-    assertEquals(if (independentListing || olderFirst && branchSwitch) ChatOutboxStatus.Failed else ChatOutboxStatus.Queued, retained.status)
+    assertEquals(if (independentListing || (olderFirst && branchSwitch)) ChatOutboxStatus.Failed else ChatOutboxStatus.Queued, retained.status)
     assertEquals(3, gateway.callCount("chat.history"))
     assertEquals(0, gateway.callCount("chat.send"))
   }
@@ -1221,11 +1233,13 @@ class ChatControllerBranchCoordinationTest {
               messages = listOf(ReplayHistoryMessage("user", "local", 1, entryId = "leaf-local")),
             )
           }
-          else ->
+
+          else -> {
             historyResponse(
               sessionId = "session-main",
               messages = listOf(ReplayHistoryMessage("user", "winner", 2, entryId = "leaf-winner")),
             )
+          }
         }
       }
       gateway.respond("sessions.branches.list") {
@@ -1387,11 +1401,15 @@ class ChatControllerBranchCoordinationTest {
       runCurrent()
       controller.awaitOutboxRestore()
 
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      val previousJobs = ownerJob.children.toSet()
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"reason":"branch-switch","sessionKey":"$backgroundKey","agentId":"main"}""",
       )
-      runCurrent()
+      // Completing this event's work, not draining the test dispatcher, joins Room's IO.
+      val eventJobs = ownerJob.children.filterNot { it in previousJobs }.toList()
+      eventJobs.forEach { it.join() }
       assertTrue(outbox.branchState("gateway-a", backgroundScope)?.needsReconciliation == true)
     }
 

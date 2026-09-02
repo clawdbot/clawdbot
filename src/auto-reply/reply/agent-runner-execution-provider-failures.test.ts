@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { ProviderAuthError } from "../../agents/model-auth.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -75,6 +76,122 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  it.each(
+    [
+      "Handoff refused after 529 OVERLOADED; reconnect before continuing.",
+      "503 service unavailable; reconnect before continuing.",
+    ].flatMap((message) =>
+      [
+        "direct",
+        "verbose",
+        "verbose full",
+        "group",
+        "channel",
+        "verbose group",
+        "verbose channel",
+        "partial",
+        "disallow",
+        "control UI",
+      ].map((surface) => ({ message, surface })),
+    ),
+  )(
+    "settles preflight diagnostics without replay: $surface / $message",
+    async ({ message, surface }) => {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      vi.useFakeTimers();
+      const error = new AgentHarnessPreflightError(
+        `${message} diagnostic-canary ${"x".repeat(1500)}`,
+        {
+          cause: { status: 529, code: "OVERLOADED" },
+        },
+      );
+      const { replyOperation, failMock } = createMockReplyOperation();
+      const onBlockReply = vi.fn();
+      let partialAccepted = false;
+      const resolveVisibleReplyDelivery = vi.fn(async () => {
+        await Promise.resolve();
+        expect(failMock).not.toHaveBeenCalled();
+        return partialAccepted;
+      });
+      const silentGroup = ["group", "channel", "verbose group", "verbose channel"].includes(
+        surface,
+      );
+      const group = silentGroup || surface === "partial" || surface === "disallow";
+      state.isInternalMessageChannelMock.mockReturnValue(surface === "control UI");
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        await params.onPartialReply?.({ text: "accepted partial" });
+        throw error;
+      });
+      state.runWithModelFallbackMock
+        .mockImplementationOnce(async (params: FallbackRunnerParams) => {
+          if (surface === "partial") {
+            return await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
+          }
+          throw error;
+        })
+        .mockResolvedValueOnce({
+          result: { payloads: [{ text: "unexpected retry" }], meta: {} },
+          provider: "fixture",
+          model: "fixture",
+          attempts: [],
+        });
+      const followupRun = createFollowupRun();
+      if (surface === "disallow") {
+        followupRun.run.config = { agents: { defaults: { silentReply: { group: "disallow" } } } };
+      }
+      const pending = executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({
+          replyOperation,
+          opts: {
+            onBlockReply,
+            onPartialReply: () => {
+              partialAccepted = true;
+              return true;
+            },
+          },
+          sessionCtx: group
+            ? createNonDirectFailureSessionCtx(
+                NON_DIRECT_FAILURE_SURFACE_CASES[surface.includes("channel") ? 1 : 0],
+              )
+            : createDirectFailureSessionCtx(),
+          followupRun,
+        }),
+        resolvedVerboseLevel:
+          surface === "verbose full"
+            ? "full"
+            : surface.startsWith("verbose") || surface === "partial" || surface === "disallow"
+              ? "on"
+              : "off",
+        resolveVisibleReplyDelivery,
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      const result = await pending;
+      expect(state.runWithModelFallbackMock).toHaveBeenCalledOnce();
+      expect(failMock).toHaveBeenCalledWith("run_failed", error);
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        if (silentGroup) {
+          expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+          expect(result.payload.isError).toBeUndefined();
+        } else if (surface === "direct") {
+          expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+          expect(result.payload.text).not.toContain("diagnostic-canary");
+        } else {
+          expect(result.payload.isError).toBe(true);
+          expect(result.payload.text).toContain("Agent failed before reply:");
+          expect(result.payload.text).toContain("reconnect before continuing");
+          if (surface === "control UI") {
+            expect(result.payload.text).toContain("openclaw logs --follow");
+          } else {
+            expect(result.payload.text!.length).toBeLessThanOrEqual(1020);
+          }
+        }
+      }
+      expect(partialAccepted).toBe(surface === "partial");
+      expect(resolveVisibleReplyDelivery).toHaveBeenCalledOnce();
+      expect(onBlockReply).not.toHaveBeenCalled();
+    },
+  );
   it("reports the terminal provider failure to the dispatch owner", async () => {
     const onAgentRunTerminalOutcome = vi.fn();
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("provider returned HTTP 500"));
@@ -85,24 +202,6 @@ describe("executeAgentTurn: provider failures", () => {
     expect(onAgentRunTerminalOutcome).toHaveBeenCalledOnce();
     expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
   });
-
-  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
-    "keeps raw runner failure boilerplate out of $label chats",
-    async (testCase) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-      );
-
-      const result = await executeTestTurn({
-        sessionCtx: createNonDirectFailureSessionCtx(testCase),
-      });
-
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
-      }
-    },
-  );
 
   it.each(
     NON_DIRECT_FAILURE_SURFACE_CASES.flatMap((surface) =>
@@ -145,79 +244,6 @@ describe("executeAgentTurn: provider failures", () => {
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(failure === "provider" ? 1 : 3);
     },
   );
-
-  it.each(["group", "channel"] as const)(
-    "surfaces raw runner failure copy in Discord %s chats when silentReply.group is set to disallow",
-    async (chatType) => {
-      state.runEmbeddedAgentMock.mockRejectedValueOnce(
-        new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-      );
-
-      const followupRun = createFollowupRun();
-      followupRun.run.config = {
-        agents: {
-          defaults: {
-            silentReply: { group: "disallow" },
-          },
-        },
-      };
-
-      const result = await executeTestTurn({
-        followupRun,
-        sessionCtx: {
-          Provider: "discord",
-          Surface: "discord",
-          ChatType: chatType,
-          GroupSubject: "agent group",
-          GroupChannel: "#general",
-          MessageSid: "msg",
-        } as unknown as TemplateContext,
-      });
-
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-        expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
-      }
-    },
-  );
-
-  it("surfaces raw runner failure copy when per-surface silentReply.group is set to disallow", async () => {
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
-    );
-
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          silentReply: { group: "allow" },
-        },
-      },
-      surfaces: {
-        discord: {
-          silentReply: { group: "disallow" },
-        },
-      },
-    };
-
-    const result = await executeTestTurn({
-      followupRun,
-      sessionCtx: {
-        Provider: "discord",
-        Surface: "discord",
-        ChatType: "group",
-        GroupSubject: "agent group",
-        GroupChannel: "#general",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-    });
-
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
-    }
-  });
 
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "keeps default silent behavior in $label chats when silentReply policy is unset",

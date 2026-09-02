@@ -384,7 +384,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/config/updates.ts",
-      "text": "openclaw triage openclaw update status --json openclaw update"
+      "text": "openclaw triage"
     },
     {
       "count": 1,

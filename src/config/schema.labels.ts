@@ -76,6 +76,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.enabled": "Cache Trace Enabled",
   "agents.entries.*.identity.avatar": "Identity Avatar",
   "agents.entries.*.skills": "Agent Skill Filter",
+  "agents.entries.*.cwd": "Agent Working Directory",
   "agents.entries.*.runtime": "Agent Runtime",
   "agents.entries.*.runtime.type": "Agent Runtime Type",
   "agents.entries.*.runtime.acp": "Agent ACP Runtime",
@@ -469,6 +470,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.defaults.workspace": "Workspace",
+  "agents.defaults.cwd": "Working Directory",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.skipOptionalBootstrapFiles": "Skipped Optional Bootstrap Files",
   "agents.defaults.contextInjection": "Context Injection",
@@ -793,6 +795,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
   cron: "Automations",
   "cron.enabled": "Automations Enabled",
+  "cron.skipMissedJobs": "Skip Missed Recurring Automations",
   "cron.webhookToken": "Automations Webhook Bearer Token",
   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
   "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":

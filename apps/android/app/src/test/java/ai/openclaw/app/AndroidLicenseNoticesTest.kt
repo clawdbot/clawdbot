@@ -36,11 +36,16 @@ class AndroidLicenseNoticesTest {
 
     assertEquals(
       listOf(
+        "Accompanist Drawable Painter",
+        "AndroidSVG",
+        "AndroidX CameraX",
         "AndroidX Compose",
         "AndroidX Media3",
         "AndroidX Room",
+        "AndroidX SQLite",
         "AndroidX Wear",
         "Bouncy Castle Provider",
+        "CodexBar",
         "Coil",
         "CommonMark Java",
         "cose-base",
@@ -94,6 +99,8 @@ class AndroidLicenseNoticesTest {
         "khroma",
         "Kotlin Libraries",
         "layout-base",
+        "llama.cpp",
+        "Lobe Icons",
         "lodash-es",
         "Manrope",
         "Markdown",
@@ -122,5 +129,8 @@ class AndroidLicenseNoticesTest {
     assertTrue(licenses.any { license -> license.text.contains("MIT License") })
     assertTrue(licenses.any { license -> license.text.contains("Bouncy Castle Licence") })
     assertTrue(licenses.any { license -> license.title == "Coil" && license.text.contains("Coil Contributors") })
+    assertTrue(licenses.any { license -> license.title == "CodexBar" && license.text.contains("Peter Steinberger") })
+    assertTrue(licenses.any { license -> license.title == "Lobe Icons" && license.text.contains("LobeHub") })
+    assertTrue(licenses.any { license -> license.title == "llama.cpp" && license.text.contains("ggml authors") })
   }
 }

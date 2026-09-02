@@ -50,6 +50,7 @@ import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/sessio
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
+  inheritSessionCreationPolicy,
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
@@ -798,6 +799,11 @@ export async function createGatewaySession(params: {
   let createdNewEntry = false;
   let preparedLifecycle: PreparedGatewaySessionLifecycle | undefined;
   let lifecyclePreparationCommitted = false;
+  const holdParentLifecycle =
+    params.creation?.via === "spawn" ||
+    params.emitCommandHooks === true ||
+    params.fork === true ||
+    params.authorizedPluginId !== undefined;
   const spawnToolPolicy =
     params.spawnToolPolicy && canonicalParentSessionKey
       ? {
@@ -812,13 +818,7 @@ export async function createGatewaySession(params: {
   const createChildSession = async (): Promise<GatewaySessionCommitResult> => {
     params.commitGuard?.();
     let currentParentSessionEntry = parentSessionEntry;
-    if (
-      canonicalParentSessionKey &&
-      parentSessionTarget &&
-      (params.emitCommandHooks === true ||
-        params.fork === true ||
-        params.authorizedPluginId !== undefined)
-    ) {
+    if (canonicalParentSessionKey && parentSessionTarget && holdParentLifecycle) {
       const currentParent = loadGatewaySessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
@@ -826,13 +826,14 @@ export async function createGatewaySession(params: {
       const currentParentEntry = currentParent.entry;
       if (
         !currentParentEntry?.sessionId ||
-        currentParentEntry.sessionId !== parentSessionEntry?.sessionId
+        currentParentEntry.sessionId !== parentSessionEntry?.sessionId ||
+        currentParentEntry.lifecycleRevision !== parentSessionEntry?.lifecycleRevision
       ) {
         return {
           ok: false,
           error: errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `Parent session ${parentSessionKey} changed before ${params.fork === true ? "fork" : "/new"}; retry.`,
+            `Parent session ${parentSessionKey} changed before child creation; retry.`,
           ),
         };
       }
@@ -906,6 +907,21 @@ export async function createGatewaySession(params: {
       });
     }
 
+    // The locked parent owns delegated isolation, including signed remote callers whose
+    // transport context carries only agent identity and cannot carry creator authority.
+    const creation =
+      params.creation?.via === "spawn"
+        ? {
+            ...params.creation,
+            ...inheritSessionCreationPolicy(
+              {
+                sandbox: currentParentSessionEntry?.sandbox,
+                createdActor: currentParentSessionEntry?.createdActor,
+              },
+              params.creation.actor,
+            ),
+          }
+        : params.creation;
     const target = creationTarget;
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
@@ -1199,12 +1215,11 @@ export async function createGatewaySession(params: {
           // Stamp provenance only for genuinely new rows: adopting an existing key
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
-          ...(params.creation && createdNewEntry
+          ...(creation && createdNewEntry
             ? buildSessionCreationStamp({
-                ...params.creation,
+                ...creation,
                 // Delegated isolation survives changes to the creator's current role.
-                sandbox:
-                  params.creation.sandbox ?? resolveCreatorSandbox(params.cfg, params.creation),
+                sandbox: creation.sandbox ?? resolveCreatorSandbox(params.cfg, creation),
               })
             : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
@@ -1487,9 +1502,7 @@ export async function createGatewaySession(params: {
     canonicalParentSessionKey &&
     parentSessionEntry?.sessionId &&
     parentSessionTarget &&
-    (params.emitCommandHooks === true ||
-      params.fork === true ||
-      params.authorizedPluginId !== undefined)
+    holdParentLifecycle
   ) {
     lifecycleTargets.push({
       scope: parentSessionTarget.storePath,

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { isBuiltin } from "node:module";
 import path from "node:path";
-import type { UserConfig } from "tsdown";
+import type { DtsOptions, UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   collectChannelConfigDoctorBuildEntries,
@@ -712,6 +712,11 @@ const unifiedDeps = {
   dts: { neverBundle: shouldNeverBundleDeclarationDependency },
 };
 
+// TypeScript supports this hidden flag before get-tsconfig's option type does.
+const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions"]> & {
+  stableTypeOrdering: true;
+} = { stableTypeOrdering: true };
+
 const configs = [
   nodeBuildConfig({
     name: TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -792,7 +797,11 @@ const configs = [
             deps: unifiedDeps,
             hooks: { "build:done": createDeclarationInputCapture(name) },
           },
-          { emitDtsOnly: true, entry: sources },
+          {
+            emitDtsOnly: true,
+            entry: sources,
+            compilerOptions: unifiedDeclarationCompilerOptions,
+          },
         ),
       )
     : []),

@@ -721,7 +721,15 @@ describe("run-oxlint", () => {
     ).toThrow("--core-stripe requires a non-empty core-only shard selection");
   });
 
-  it("partitions constrained extension programs exactly once without aggregating them", () => {
+  it.each([
+    { name: "constrained CI", hostResources: CONSTRAINED_HOST, env: { CI: "true" } },
+    { name: "roomy CI", hostResources: ROOMY_HOST, env: { CI: "true" } },
+    {
+      name: "explicit parallel",
+      hostResources: CONSTRAINED_HOST,
+      env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" },
+    },
+  ])("partitions explicit extension stripes on $name", ({ hostResources, env }) => {
     const entries = [
       { name: "root.test.ts", isDirectory: () => false, isFile: () => true },
       ...Array.from({ length: 55 }, (_, index) => ({
@@ -730,20 +738,17 @@ describe("run-oxlint", () => {
         isFile: () => false,
       })),
     ] as never;
-    const shards = createExtensionOxlintShards({
-      cwd: "/repo",
-      platform: "linux",
-      readDir: () => entries,
-    });
-    const explicitStripeShards = createOxlintShards({
-      cwd: "/repo",
-      env: { CI: "true" },
-      hostResources: { logicalCpuCount: 8, totalMemoryBytes: 31 * 1024 ** 3 },
-      platform: "linux",
-      readDir: () => entries,
-      splitExtensions: true,
-    }).filter((shard) => shard.name.startsWith("extensions"));
-    expect(explicitStripeShards).toEqual(shards);
+    const shards = filterOxlintShards(
+      createOxlintShards({
+        cwd: "/repo",
+        env,
+        hostResources,
+        platform: "linux",
+        readDir: () => entries,
+        splitExtensions: true,
+      }),
+      new Set(["extensions"]),
+    );
     const stripes = Array.from({ length: 6 }, (_, index) =>
       selectExtensionOxlintStripe(shards, { index: index + 1, total: 6 }),
     );
@@ -762,6 +767,63 @@ describe("run-oxlint", () => {
       }),
     ).toThrow("--extension-stripe requires an extension-only shard selection");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "partitions explicit extension stripes through the CLI on nonserial hosts",
+    () => {
+      const cwd = createTempDir("openclaw-oxlint-cli-stripes-");
+      const receivedArgsPath = join(cwd, "received-args.jsonl");
+      for (const directory of PLUGIN_FIXTURE_DIRECTORIES) {
+        mkdirSync(join(cwd, "extensions", directory), { recursive: true });
+      }
+      writeFileSync(join(cwd, "extensions", "root.test.ts"), "");
+      mkdirSync(join(cwd, "scripts"));
+      writeModule(join(cwd, "scripts", "run-oxlint.mts"), [
+        "import { appendFileSync } from 'node:fs';",
+        `appendFileSync(${JSON.stringify(receivedArgsPath)}, JSON.stringify(process.argv.slice(2)) + '\\n');`,
+      ]);
+
+      for (let stripe = 1; stripe <= 6; stripe += 1) {
+        const result = spawnSync(
+          process.execPath,
+          [
+            fileURLToPath(RUN_OXLINT_SHARDS_URL),
+            "--only=extensions",
+            `--extension-stripe=${stripe}/6`,
+            "--threads=1",
+            "--help",
+          ],
+          {
+            cwd,
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              OPENCLAW_LOCAL_CHECK: "0",
+              OPENCLAW_OXLINT_SHARDS_SERIAL: "0",
+            },
+            timeout: 5_000,
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+      }
+
+      const receivedArgs = readFileSync(receivedArgsPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      const targets = receivedArgs.flatMap((args) => {
+        expect(args.slice(0, 2)).toEqual(["--tsconfig", "extensions/tsconfig.json"]);
+        expect(args.slice(-2)).toEqual(["--threads=1", "--help"]);
+        return args.slice(2, -2);
+      });
+      expect(targets.toSorted()).toEqual(
+        [
+          "extensions/root.test.ts",
+          ...PLUGIN_FIXTURE_DIRECTORIES.map((directory) => `extensions/${directory}`),
+        ].toSorted(),
+      );
+    },
+  );
 
   it.each([
     ["--core-stripe=0/3"],

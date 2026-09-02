@@ -4,6 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
+source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 
 read_positive_int_env() {
   local name="${1:?missing environment variable name}"
@@ -26,6 +27,8 @@ PACKAGE_TGZ="${OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:-}"
 COMMAND_TIMEOUT_MS="$(read_positive_int_env OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS 180000)"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 AI_PACKAGE_TGZ=""
+REGISTRY_PID=""
+REQUIRED_REGISTRY_PACKAGES='[]'
 SMOKE_DIR=""
 PACK_DIR=""
 MOCK_PID=""
@@ -44,6 +47,7 @@ GATEWAY_AGENT_LOG=""
 cleanup() {
   openclaw_e2e_stop_process "${GATEWAY_PID:-}"
   openclaw_e2e_stop_process "${MOCK_PID:-}"
+  openclaw_e2e_stop_process "${REGISTRY_PID:-}"
   if [ -n "${SMOKE_DIR:-}" ]; then
     rm -rf "$SMOKE_DIR"
   fi
@@ -84,8 +88,13 @@ prepare_ai_candidate() {
 const manifest = require(process.argv[1]);
 process.exit(manifest.dependencies?.["@openclaw/ai"] ? 0 : 1);
 ' "$root_manifest"; then
-      echo "OpenClaw tarball declares @openclaw/ai but does not bundle it" >&2
-      exit 1
+      if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+        echo "OpenClaw tarball requires a verified candidate registry for unbundled @openclaw/ai" >&2
+        exit 1
+      fi
+      REQUIRED_REGISTRY_PACKAGES='["@openclaw/ai"]'
+      echo "==> Resolve candidate @openclaw/ai from the prepared package registry"
+      return
     fi
     echo "==> Candidate has no bundled @openclaw/ai dependency"
     return
@@ -228,6 +237,8 @@ main() {
 
   resolve_package_tgz
   prepare_ai_candidate
+  openclaw_prepublish_plugin_registry_start_mounted \
+    "$PACK_DIR/registry" REGISTRY_PID "$REQUIRED_REGISTRY_PACKAGES"
 
   local bun_path
   local bun_version
@@ -260,9 +271,8 @@ main() {
     "$XDG_CACHE_HOME" \
     "$OPENCLAW_STATE_DIR"
   export PATH="$BUN_INSTALL/bin:$(dirname "$(command -v node)"):$PATH"
-  # Current root tarballs bundle @openclaw/ai, while older release tarballs do
-  # not declare it. Pin only the bundled dependency; inventing an override for
-  # the older package changes the artifact under test.
+  # Source-export tarballs bundle AI; publication tarballs resolve it from the
+  # prepared registry. Only bundled bytes need Bun's local dependency override.
   if [ -n "$AI_PACKAGE_TGZ" ]; then
     node --input-type=module - \
       "$BUN_INSTALL/install/global/package.json" \

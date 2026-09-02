@@ -690,11 +690,6 @@ def normalize_message(message, users=None):
     sender_id = sender.get("user_id") or sender.get("chat_id")
     sender_user = users.get(int(sender_id or 0), {}) if sender_id else {}
     content = message.get("content") or {}
-    text = ""
-    if content.get("@type") == "messageText":
-        text = (content.get("text") or {}).get("text", "")
-    elif "caption" in content:
-        text = (content.get("caption") or {}).get("text", "")
     reply_to_message_id = message.get("reply_to_message_id") or (message.get("reply_to") or {}).get("message_id")
     return {
         "messageId": message.get("id"),
@@ -704,7 +699,7 @@ def normalize_message(message, users=None):
         "date": message.get("date"),
         "replyToMessageId": reply_to_message_id,
         "threadId": message.get("message_thread_id"),
-        "text": text,
+        **message_content(content),
         "contentType": content.get("@type"),
         "raw": message,
     }
@@ -999,7 +994,8 @@ def serve_message(message, users):
         "senderUsername": normalized.get("senderUsername"),
         "replyToMessageId": normalized.get("replyToMessageId"),
         "timestamp": int(message.get("date") or 0) * 1000,
-        "text": normalized.get("text", ""),
+        "text": normalized["text"],
+        "entities": normalized["entities"],
     }
 
 
@@ -1018,17 +1014,17 @@ def serve_update(update, users, known_messages):
     if not known:
         return None
     content = update.get("new_content") or {}
-    normalized = {**known, "text": message_content_text(content)}
+    normalized = {**known, **message_content(content)}
     known_messages[message_id] = normalized
     return {"kind": "edit", **normalized}
 
 
-def message_content_text(content):
-    for key in ("text", "caption"):
-        formatted = content.get(key)
-        if isinstance(formatted, dict) and isinstance(formatted.get("text"), str):
-            return formatted["text"]
-    return ""
+def message_content(content):
+    key = "text" if content.get("@type") == "messageText" else "caption"
+    formatted = content.get(key)
+    if isinstance(formatted, dict) and isinstance(formatted.get("text"), str):
+        return {"text": formatted["text"], "entities": formatted["entities"]}
+    return {"text": "", "entities": []}
 
 
 def write_ndjson(payload):
