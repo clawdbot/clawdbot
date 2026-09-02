@@ -7,14 +7,12 @@ import {
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import type { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import {
   terminalHealthFor,
   type SessionActivityNoteState,
 } from "../agents/session-activity-notes.js";
-import type {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
-} from "../agents/simple-completion-runtime.js";
+import type { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
   loadSessionEntryReadOnly,
@@ -46,8 +44,8 @@ export function sessionObserverScopeKey(sessionKey: string, agentId: string): st
     ? sessionKey
     : `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
 }
-type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
-type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
+type PrepareModel = typeof prepareUtilityCompletionForAgent;
+type CompleteModel = typeof runIsolatedCompletion;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 export type SessionObserverState = SessionActivityNoteState & {
@@ -211,21 +209,14 @@ export type SessionObserverDeps = {
   clearTimeoutFn?: typeof clearTimeout;
 };
 
-let completionRuntimePromise:
-  | Promise<typeof import("../agents/simple-completion-runtime.js")>
-  | undefined;
-
-function loadCompletionRuntime() {
-  completionRuntimePromise ??= import("../agents/simple-completion-runtime.js");
-  return completionRuntimePromise;
-}
-
 export async function defaultPrepareModel(params: Parameters<PrepareModel>[0]) {
-  return await (await loadCompletionRuntime()).prepareSimpleCompletionModelForAgent(params);
+  const { prepareUtilityCompletionForAgent } = await import("../agents/utility-completion.js");
+  return await prepareUtilityCompletionForAgent(params);
 }
 
 export async function defaultCompleteModel(params: Parameters<CompleteModel>[0]) {
-  return await (await loadCompletionRuntime()).completeWithPreparedSimpleCompletionModel(params);
+  const { runIsolatedCompletion } = await import("../agents/isolated-completion.js");
+  return await runIsolatedCompletion(params);
 }
 
 export const SESSION_OBSERVER_SYSTEM_PROMPT = [

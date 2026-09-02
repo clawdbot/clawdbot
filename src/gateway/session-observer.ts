@@ -12,6 +12,7 @@ import {
 } from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createSessionObserverAudience,
@@ -260,7 +261,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getConfig: deps.getConfig,
     prepareModel,
     completeModel,
-    now,
     setTimeoutFn,
     clearTimeoutFn,
     isCurrent: modelStateIsCurrent,
@@ -417,7 +417,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
           observerLog.warn("session observer disabled after consecutive failures", {
             sessionKey: state.sessionKey,
             runId: state.runId,
-            error,
+            error: formatErrorMessage(error),
           });
           if (final || state.finalPending || state.terminalHealth) {
             retireTerminalState(state);

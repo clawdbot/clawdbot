@@ -38,6 +38,8 @@ mechanics in `openclaw.json`.
 OpenClaw auto-loads an owning bundled plugin when model selection or a
 model-scoped `agentRuntime.id` references its backend.
 
+Utility completions for session digests, progress narration, and tool-call titles use the selected model's runtime too: Claude CLI runs a fresh, tool-free completion with its own authentication, including canonical `anthropic/*` refs configured with `agentRuntime.id: "claude-cli"`.
+
 ## Using it as a fallback
 
 Add the CLI backend to your fallback list so it only runs when primary models fail:
