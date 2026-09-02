@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
+import { isTrustedOfficialPluginInstallRecord } from "../../src/plugins/official-external-install-records.js";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
@@ -708,6 +710,34 @@ function assertCompanionPluginRecords(
     });
     mkdirSync(join(stateDir, "plugins"), { recursive: true });
     writeJson(join(stateDir, "plugins", "installs.json"), { installRecords: records });
+    const inspectionsPath = join(root, "plugin-inspections.json");
+    const officialNpmCompanions = [
+      ["discord", "@openclaw/discord"],
+      ["codex", "@openclaw/codex"],
+    ] as const;
+    writeJson(
+      inspectionsPath,
+      Object.fromEntries(
+        officialNpmCompanions.map(
+          ([pluginId, packageName]) =>
+            [
+              pluginId,
+              {
+                plugin: {
+                  id: pluginId,
+                  packageName,
+                  trustedOfficialInstall: isTrustedOfficialPluginInstallRecord({
+                    pluginId,
+                    packageName,
+                    record: records[pluginId]! as PluginInstallRecord,
+                  }),
+                },
+                install: records[pluginId],
+              },
+            ] as const,
+        ),
+      ),
+    );
     const updateFile = join(root, "update.json");
     if (recoveryPluginIds) {
       writeJson(updateFile, {
@@ -735,6 +765,7 @@ function assertCompanionPluginRecords(
         env: {
           ...process.env,
           OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_UPGRADE_SURVIVOR_TEST_PLUGIN_INSPECTIONS: inspectionsPath,
         },
         stdio: "pipe",
       },
