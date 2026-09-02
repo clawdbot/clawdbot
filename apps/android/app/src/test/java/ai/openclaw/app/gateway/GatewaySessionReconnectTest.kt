@@ -2115,6 +2115,46 @@ class GatewaySessionReconnectTest {
       }
     }
 
+  @Test
+  fun networkRestoreDoesNotDisconnectAnAlreadyReadyConnection() =
+    runBlocking {
+      // Regression for the P2 finding on #127873: the network-restore fan-out reaches every
+      // session, including one that is already connected over a different route (e.g. cellular
+      // kept a secondary alive while its own Wi-Fi was down) — forcing that connection closed
+      // would interrupt real in-flight work for no benefit.
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val disconnectedReasons = ConcurrentLinkedQueue<String>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") webSocket.send(connectResponseFrame(id))
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = { connected.complete(Unit) },
+          onDisconnected = { disconnectedReasons += it },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        // The initial "Connecting…" announcement from before this connection was ready is
+        // expected noise; only reasons emitted after readiness are this test's concern.
+        disconnectedReasons.clear()
+        val wakesBefore: Long = readField(harness.session, "reconnectWakeCount")
+
+        harness.session.retryAfterNetworkRestore()
+        delay(SETTLE_INTO_BACKOFF_MS)
+
+        assertEquals("a ready connection must not be reopened", 1, server.requestCount)
+        assertEquals(emptyList<String>(), disconnectedReasons.toList())
+        val wakesAfter: Long = readField(harness.session, "reconnectWakeCount")
+        assertEquals("an already-ready session must not be woken", wakesBefore, wakesAfter)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
   // --- reconnect wake semantics -------------------------------------------------------------
 
   @Test

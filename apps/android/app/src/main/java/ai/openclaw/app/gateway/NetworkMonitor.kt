@@ -88,18 +88,27 @@ internal class ValidatedNetworkState<T>(
 ) {
   private val validatedNetworks = initialValidatedNetworks.toMutableSet()
 
+  /**
+   * Records [network]'s current validated state and reports whether it just became reachable.
+   *
+   * Signals on this network's own offline->online edge, not on the aggregate "is anything
+   * online" state: a saved Gateway can be reachable over one specific route only, so cellular
+   * staying validated the whole time must not swallow a returning Wi-Fi/LAN network's own
+   * restore. A network already known validated still reports no change, which is what keeps
+   * capability churn (e.g. signal-strength updates) from re-firing.
+   */
   @Synchronized
   fun update(
     network: T,
     isValidated: Boolean,
   ): Boolean {
-    val wasOnline = validatedNetworks.isNotEmpty()
+    val wasValidated = validatedNetworks.contains(network)
     if (isValidated) {
       validatedNetworks.add(network)
     } else {
       validatedNetworks.remove(network)
     }
-    return !wasOnline && validatedNetworks.isNotEmpty()
+    return isValidated && !wasValidated
   }
 }
 

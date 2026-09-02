@@ -503,8 +503,16 @@ class GatewaySession(
     signalReconnect(resumeAuthPaused = true)
   }
 
-  /** Wakes transport backoff without overriding a deliberate auth-failure pause. */
+  /**
+   * Wakes transport backoff without overriding a deliberate auth-failure pause.
+   *
+   * A network-restore fan-out reaches every session, including ones that are already connected
+   * over a different route (e.g. cellular kept a secondary alive while its own Wi-Fi was down).
+   * Forcing that connection closed would interrupt real in-flight work for no benefit, so a ready
+   * session is left alone here; [reconnect] still overrides it for a deliberate manual retry.
+   */
   internal fun retryAfterNetworkRestore() {
+    if (isReady()) return
     signalReconnect(resumeAuthPaused = false)
   }
 
