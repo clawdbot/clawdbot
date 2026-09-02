@@ -1,4 +1,4 @@
-// Owns delegated system-agent approval registration and detached completion.
+// Owns delegated system-agent authorization and exact-proposal completion.
 import { randomUUID } from "node:crypto";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
@@ -45,7 +45,30 @@ function sameApprovalAuthority(
     : true;
 }
 
-export function queueDelegatedApproval(params: {
+export async function reconcileSystemAgentApproval(
+  session: GatewaySystemAgentSession,
+  manager: GatewayRequestContext["systemAgentApprovalManager"],
+): Promise<void> {
+  const pending = session.pendingApproval;
+  if (!pending) {
+    return;
+  }
+  const closed = manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+  const snapshot = manager?.getSnapshot(pending.id);
+  if (
+    !closed &&
+    snapshot &&
+    (snapshot.resolvedAtMs === undefined || snapshot.decision === "allow-once")
+  ) {
+    return;
+  }
+  // Terminal approvals cannot survive as executable proposals. Reconcile before
+  // routing so a later Full Access request cannot apply an old cancelled change.
+  session.pendingApproval = undefined;
+  await session.engine.resolveOperatorApproval(null, pending.proposalHash);
+}
+
+export async function resolveDelegatedSystemAgentProposal(params: {
   context: GatewayRequestContext;
   sessions: Map<string, GatewaySystemAgentSession>;
   session: GatewaySystemAgentSession;
@@ -61,11 +84,15 @@ export function queueDelegatedApproval(params: {
   proposal: NonNullable<
     ReturnType<GatewaySystemAgentSession["engine"]["getPendingOperatorProposal"]>
   >;
-}): string {
-  const manager = params.context.systemAgentApprovalManager;
-  if (!manager) {
-    throw new Error("OpenClaw approval registry unavailable");
-  }
+}): Promise<
+  | { kind: "approval"; id: string }
+  | {
+      kind: "completed";
+      reply: NonNullable<
+        Awaited<ReturnType<GatewaySystemAgentSession["engine"]["resolveOperatorApproval"]>>
+      >;
+    }
+> {
   const callerIdentity = getGatewayToolCallerIdentity();
   const approvalAuthority =
     callerIdentity?.approvalAuthority ??
@@ -78,6 +105,65 @@ export function queueDelegatedApproval(params: {
   const runtimeApprovalAuthority: AgentRuntimeDelegatedAuthority = callerIdentity?.workerTurnClaim
     ? { kind: "worker", ...approvalAuthority, turnClaim: callerIdentity.workerTurnClaim }
     : { kind: "local", ...approvalAuthority };
+  const isAuthorityActive = () => {
+    if (
+      !validateAgentRunDelegatedAuthority(approvalAuthority) ||
+      callerIdentity?.approvalAuthorityCheck?.() === false ||
+      callerIdentity?.receiptAuthority?.() === false ||
+      callerIdentity?.approvalSignals?.some((signal) => signal.aborted) ||
+      (callerIdentity?.gatewayContextResolver && !callerIdentity.gatewayContextResolver())
+    ) {
+      return false;
+    }
+    return (
+      runtimeApprovalAuthority.kind === "local" ||
+      (callerIdentity !== undefined &&
+        params.context.validateAgentRuntimeApprovalAuthority?.({
+          kind: "agentRuntime",
+          agentId: callerIdentity.agentId,
+          sessionKey: callerIdentity.sessionKey,
+          operationalRunInstance: runtimeApprovalAuthority.operationalRunInstance,
+          delegatedAuthority: runtimeApprovalAuthority,
+        }) === true)
+    );
+  };
+  const assertLiveApprovalAuthority = () => {
+    if (!isAuthorityActive() || params.sessions.get(params.sessionId) !== params.session) {
+      throw new Error("system-agent approval authority is no longer active");
+    }
+  };
+  const applyDecision = async (decision: ExecApprovalDecision | null) => {
+    try {
+      if (decision && decision !== "deny") {
+        assertLiveApprovalAuthority();
+      }
+      return await params.session.engine.resolveOperatorApproval(
+        decision,
+        params.proposal.hash,
+        assertLiveApprovalAuthority,
+      );
+    } catch (error) {
+      // Authority can close before the executor consumes the proposal.
+      // Invalidate that exact operation instead of leaving it for a later run.
+      if (params.sessions.get(params.sessionId) === params.session) {
+        await params.session.engine.resolveOperatorApproval(null, params.proposal.hash);
+      }
+      throw error;
+    }
+  };
+  // Full Access authorizes this exact proposal, not the model's approval claims.
+  // Use the same one-use executor and late commit fence as a human decision.
+  if (callerIdentity?.fullPermission === true) {
+    const reply = await applyDecision("allow-once");
+    if (!reply) {
+      throw new Error("OpenClaw change is no longer pending. Retry the request.");
+    }
+    return { kind: "completed", reply };
+  }
+  const manager = params.context.systemAgentApprovalManager;
+  if (!manager) {
+    throw new Error("OpenClaw approval registry unavailable");
+  }
   const pendingApproval = params.session.pendingApproval;
   if (pendingApproval && pendingApproval.proposalHash === params.proposal.hash) {
     const closed = manager.forceDenyIfRuntimeAuthorityClosed(pendingApproval.id);
@@ -88,7 +174,7 @@ export function queueDelegatedApproval(params: {
         existing.agentRuntimeDelegatedAuthority &&
         sameApprovalAuthority(existing.agentRuntimeDelegatedAuthority, runtimeApprovalAuthority)
       ) {
-        return pendingApproval.id;
+        return { kind: "approval", id: pendingApproval.id };
       }
     }
     params.session.pendingApproval = undefined;
@@ -114,34 +200,8 @@ export function queueDelegatedApproval(params: {
     SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
     `system-agent:${randomUUID()}`,
   );
-  if (callerIdentity?.approvalAuthorityCheck) {
-    record.approvalAuthority = callerIdentity.approvalAuthorityCheck;
-  }
   record.agentRuntimeDelegatedAuthority = runtimeApprovalAuthority;
-  const approvalAuthorityCheck = record.approvalAuthority;
-  record.approvalAuthority = () => {
-    if (
-      !validateAgentRunDelegatedAuthority(approvalAuthority) ||
-      approvalAuthorityCheck?.() === false
-    ) {
-      return false;
-    }
-    if (runtimeApprovalAuthority.kind === "local") {
-      return true;
-    }
-    if (!callerIdentity) {
-      return false;
-    }
-    return (
-      params.context.validateAgentRuntimeApprovalAuthority?.({
-        kind: "agentRuntime",
-        agentId: callerIdentity.agentId,
-        sessionKey: callerIdentity.sessionKey,
-        operationalRunInstance: runtimeApprovalAuthority.operationalRunInstance,
-        delegatedAuthority: runtimeApprovalAuthority,
-      }) === true
-    );
-  };
+  record.approvalAuthority = isAuthorityActive;
   if (callerIdentity?.approvalSignals?.length) {
     record.approvalSignals = callerIdentity.approvalSignals;
   }
@@ -182,45 +242,34 @@ export function queueDelegatedApproval(params: {
     keepPendingWithoutRoute: true,
     requireDeliveryRoute: false,
     afterDecision: async (decision) => {
-      if (!decision) {
-        return;
-      }
       try {
         const reply = await runWithGatewayIndependentRootWorkContinuation(
           () =>
             runSystemAgentGatewayTask(async () => {
-              const assertLiveApprovalAuthority = () => {
-                if (
-                  decision !== "deny" &&
-                  (!record.approvalAuthority || record.approvalAuthority() === false)
-                ) {
-                  throw new Error("system-agent approval authority is no longer active");
-                }
-              };
-              assertLiveApprovalAuthority();
-              if (params.sessions.get(params.sessionId) !== params.session) {
+              if (
+                params.sessions.get(params.sessionId) !== params.session ||
+                params.session.pendingApproval?.id !== record.id
+              ) {
                 return null;
               }
-              if (params.session.pendingApproval?.id === record.id) {
-                params.session.pendingApproval = undefined;
-              }
-              return await params.session.engine.resolveOperatorApproval(
-                decision,
-                params.proposal.hash,
-                assertLiveApprovalAuthority,
-              );
+              params.session.pendingApproval = undefined;
+              return await applyDecision(decision);
             }),
           "system-agent:task",
         );
-        publishApplicationResult(decision, reply?.applied === true ? "applied" : "not-applied");
+        if (decision) {
+          publishApplicationResult(decision, reply?.applied === true ? "applied" : "not-applied");
+        }
       } catch (error) {
-        publishApplicationResult(decision, "not-applied");
+        if (decision) {
+          publishApplicationResult(decision, "not-applied");
+        }
         throw error;
       }
     },
     afterDecisionErrorLabel: "OpenClaw approval apply failed",
   });
-  return record.id;
+  return { kind: "approval", id: record.id };
 }
 
 const systemAgentSessionQueues = new WeakMap<

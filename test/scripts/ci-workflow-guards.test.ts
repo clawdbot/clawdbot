@@ -11219,6 +11219,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "--",
         ":(glob)ui/src/**/*.e2e.test.ts",
         "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+        "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
       ],
       { encoding: "utf8" },
     )
@@ -11302,6 +11303,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(config.test?.include).toEqual([
       "ui/src/**/*.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+      "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
     ]);
     expect(projects.map((project) => project.test.name)).toEqual([
       "ui-e2e-bundled",
@@ -11833,6 +11835,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const proofUpload = uiE2eRealGateway.steps[proofUploadIndex];
     const realGatewayIndex = uiE2eRealGateway.steps.indexOf(realGatewayStep);
+    const realGatewayBuild = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Build Control UI bundle for real-Gateway tests",
+      ),
+      "real-Gateway runtime and Control UI build",
+    );
+    expect(realGatewayBuild.run.trim().split("\n")).toEqual([
+      "pnpm build qaRuntime",
+      "pnpm ui:build",
+    ]);
+    expect(realGatewayBuild.if).toBeUndefined();
+    expect(realGatewayBuild["continue-on-error"]).toBeUndefined();
+    expect(uiE2eRealGateway.steps.indexOf(realGatewayBuild)).toBeLessThan(realGatewayIndex);
     expect(realGatewayStep.env).toEqual({
       OPENCLAW_CAPTURE_UI_PROOF:
         "${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}",

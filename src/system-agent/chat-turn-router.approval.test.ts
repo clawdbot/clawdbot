@@ -1032,8 +1032,9 @@ describe("SystemAgentChatEngine approval", () => {
 
     expect(runAgentTurn).toHaveBeenCalledOnce();
     expect(planner).not.toHaveBeenCalled();
-    expect(reply.text).toContain("OpenClaw operator UI");
-    expect(reply.text).toContain("cannot be applied from this chat");
+    expect(reply.text).toContain("requesting session's permission policy");
+    expect(reply.text).toContain("returns the final outcome");
+    expect(reply.text).not.toContain("OpenClaw operator UI");
     expect(reply.text).not.toContain("ask the user to reply yes");
     expect(reply.action).toBe("none");
     expect(engine.getPendingOperatorProposal()?.operation).toEqual({
@@ -1043,7 +1044,7 @@ describe("SystemAgentChatEngine approval", () => {
     });
   });
 
-  it("tells delegated messaging users an approval can't be applied from chat", async () => {
+  it("leaves delegated planner proposals for the host permission policy", async () => {
     const planner = vi.fn(async () => ({
       reply: "Let's point your agent at gpt-5.5.",
       command: "set default model openai/gpt-5.5",
@@ -1058,10 +1059,10 @@ describe("SystemAgentChatEngine approval", () => {
 
     const reply = await engine.handle("actually use an openai model");
 
-    expect(reply.text).toContain("cannot be applied from this chat");
-    expect(reply.text).toContain("OpenClaw operator UI");
-    expect(reply.text).toContain("Refused:");
-    expect(reply.text).toContain("was not applied from this chat");
+    expect(reply.text).toContain("requesting session's permission policy");
+    expect(reply.text).toContain("returns the final outcome");
+    expect(reply.text).toContain("Proposed:");
+    expect(reply.text).not.toContain("OpenClaw operator UI");
     expect(reply.text).not.toContain("Say yes to apply");
     expect(engine.getPendingOperatorProposal()?.operation).toEqual({
       kind: "set-default-model",

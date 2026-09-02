@@ -46,7 +46,11 @@ import {
   SetupAdmissionBusyError,
 } from "./setup-admission.js";
 import type { GatewaySystemAgentSession as SystemAgentChatSession } from "./shared-types.js";
-import { getSystemAgentSessionQueue, queueDelegatedApproval } from "./system-agent-approval.js";
+import {
+  getSystemAgentSessionQueue,
+  reconcileSystemAgentApproval,
+  resolveDelegatedSystemAgentProposal,
+} from "./system-agent-approval.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import {
   buildDelegatedApprovalPendingReply,
@@ -581,6 +585,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
         try {
+          if (params.delegation) {
+            await reconcileSystemAgentApproval(session, context.systemAgentApprovalManager);
+          }
           const turnReply = await runSystemAgentChatInput({
             engine: session.engine,
             input: params,
@@ -624,13 +631,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        persistEngineHistory(session.engine, historyStart);
         const delegation = params.delegation;
         let proposalId: string | undefined;
         if (delegation) {
           const proposal = session.engine.getPendingOperatorProposal();
           if (proposal) {
-            proposalId = queueDelegatedApproval({
+            const resolution = await resolveDelegatedSystemAgentProposal({
               context,
               sessions,
               session,
@@ -638,8 +644,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               delegation,
               proposal,
             });
+            if (resolution.kind === "completed") {
+              reply = resolution.reply;
+            } else {
+              proposalId = resolution.id;
+            }
           }
         }
+        persistEngineHistory(session.engine, historyStart);
         const pendingReply = proposalId
           ? buildDelegatedApprovalPendingReply({
               cfg: context.getRuntimeConfig?.() ?? {},

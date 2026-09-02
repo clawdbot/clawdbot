@@ -2501,7 +2501,9 @@ jobs:
       - *install_playwright_chromium
 
       - name: Build Control UI bundle for real-Gateway tests
-        run: pnpm ui:build
+        run: |
+          pnpm build qaRuntime
+          pnpm ui:build
 
       - name: Test Control UI suites with a real Gateway
         env:
@@ -2518,6 +2520,7 @@ jobs:
           ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
           ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
+          extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
