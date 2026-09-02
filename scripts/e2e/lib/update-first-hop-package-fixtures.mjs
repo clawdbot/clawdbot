@@ -52,6 +52,7 @@ export function removeLegacyUpdateCompatChunks(packageRoot) {
 }
 
 export function markFutureUpdateFixture(packageRoot) {
+  removeLegacyUpdateCompatChunks(packageRoot);
   const paths = resolveFixturePaths(packageRoot);
   const packageJson = readJson(paths.packageJson);
   const buildInfo = readJson(paths.buildInfo);

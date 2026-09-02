@@ -53,7 +53,7 @@ describe("first-hop package fixtures", () => {
     expect(fs.readFileSync(path.join(root, "dist", "index.js"), "utf8")).toBe("export {};\n");
   });
 
-  it("marks a distinct future package without removing the retained closure", () => {
+  it("marks a distinct future package after the compatibility window closes", () => {
     const root = makePackageFixture();
     markFutureUpdateFixture(root);
 
@@ -64,8 +64,12 @@ describe("first-hop package fixtures", () => {
     expect(packageJson.version).toBe(FUTURE_FIXTURE_VERSION);
     expect(buildInfo.version).toBe(FUTURE_FIXTURE_VERSION);
     expect(buildInfo.buildId).toContain("future-fixture");
+    const inventory = JSON.parse(
+      fs.readFileSync(path.join(root, "dist", "postinstall-inventory.json"), "utf8"),
+    ) as string[];
+    expect(inventory).toEqual(["dist/build-info.json", "dist/index.js"]);
     for (const name of LEGACY_UPDATE_COMPAT_CHUNKS) {
-      expect(fs.existsSync(path.join(root, "dist", name))).toBe(true);
+      expect(fs.existsSync(path.join(root, "dist", name))).toBe(false);
     }
   });
 });
