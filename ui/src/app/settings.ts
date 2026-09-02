@@ -785,7 +785,12 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     }
     const profile = createGatewayProfile({ url: next.gatewayUrl });
     if (profile) {
-      upsertGatewayProfile(profile, { select: options.selectGateway === true });
+      const existingProfile = loadGatewayRegistry({ url: next.gatewayUrl }).gateways.find(
+        (gateway) => gateway.id === profile.id,
+      );
+      upsertGatewayProfile(existingProfile ? { ...profile, name: existingProfile.name } : profile, {
+        select: options.selectGateway === true,
+      });
     }
     storage?.removeItem(LEGACY_SETTINGS_KEY);
     if (storage) {

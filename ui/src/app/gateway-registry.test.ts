@@ -96,4 +96,18 @@ describe("gateway registry", () => {
       gateways: [{ url: teamUrl }],
     });
   });
+
+  it("preserves a saved gateway name when its connection settings are saved", () => {
+    setTestLocation({ protocol: "https:", host: "control.example", pathname: "/" });
+    const team = createGatewayProfile({ name: "Classmates", url: "wss://team.example/" });
+    expect(team).not.toBeNull();
+    if (!team) {
+      throw new Error("test fixture must produce a gateway profile");
+    }
+
+    upsertGatewayProfile(team, { select: true });
+    saveSettings({ ...loadSettings(), gatewayUrl: team.url });
+
+    expect(loadGatewayRegistry().gateways).toEqual([team]);
+  });
 });
