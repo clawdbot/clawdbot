@@ -34,6 +34,7 @@ import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
+import { readSystemDisks } from "../../infra/system-disks.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
@@ -64,7 +65,10 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const disk = tryReadDiskSpace(stateDir);
   const config = context.getRuntimeConfig();
   const port = resolveGatewayPort(config);
-  const lanAddress = (await resolveCachedAdvertisedLanHost()) ?? undefined;
+  const [lanAddress, disks] = await Promise.all([
+    resolveCachedAdvertisedLanHost(),
+    readSystemDisks(),
+  ]);
   const soleAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const defaultAgentUtilityModel = soleAgentId
     ? (() => {
@@ -98,6 +102,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     ...(loadAverage.some((value) => value !== 0) ? { loadAverage } : {}),
     memoryTotalBytes: os.totalmem(),
     memoryFreeBytes: os.freemem(),
+    ...(disks ? { disks } : {}),
     ...(disk?.totalBytes != null
       ? {
           diskTotalBytes: disk.totalBytes,
