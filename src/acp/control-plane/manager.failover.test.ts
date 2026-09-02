@@ -205,6 +205,9 @@ describe("AcpSessionManager backend failover", () => {
       agentSessionId: "fallback-agent-session",
     }));
     harness.primaryRuntime.runTurn.mockImplementation(async function* () {
+      if (Date.now() < 0) {
+        yield { type: "done" as const };
+      }
       throw new AcpRuntimeError("ACP_TURN_FAILED", "backend unavailable");
     });
     const manager = new AcpSessionManager();
