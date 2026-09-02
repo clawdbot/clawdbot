@@ -23,6 +23,7 @@ import {
 } from "./inspect-shape.js";
 import { loadPluginRegistryHandle, resolveCompatibleRuntimePluginRegistry } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
+import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import {
   loadPluginMetadataSnapshot,
@@ -325,14 +326,18 @@ function buildPluginReport(
         version: resolveReportedPluginVersion(plugin, params?.env),
         dependencyStatus:
           plugin.dependencyStatus ??
-          (plugin.origin === "bundled"
-            ? undefined
-            : buildPluginDependencyStatus({
+          (tracksPluginDependencyStatus({
+            origin: plugin.origin,
+            pluginId: plugin.id,
+            packageName: plugin.packageName ?? manifestByPluginId.get(plugin.id)?.packageName,
+          })
+            ? buildPluginDependencyStatus({
                 rootDir: plugin.rootDir,
                 dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
                 optionalDependencies: manifestByPluginId.get(plugin.id)
                   ?.packageOptionalDependencies,
-              })),
+              })
+            : undefined),
       }),
     ),
   });

@@ -139,6 +139,15 @@ describe("plugin loader records", () => {
       error: new Error("boom"),
       expected: "Error: boom",
     },
+    {
+      name: "survives a throwing cause accessor without rethrowing",
+      error: Object.defineProperty(new Error("hostile"), "cause", {
+        get(): never {
+          throw new Error("cause exploded");
+        },
+      }),
+      expected: "Error: hostile",
+    },
   ])("$name", ({ error, expected }) => {
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({

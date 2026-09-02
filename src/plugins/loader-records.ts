@@ -146,6 +146,15 @@ export function formatAutoEnabledActivationReason(
   return reasons.join("; ");
 }
 
+// A plugin-thrown error may expose a throwing `cause` accessor; diagnostics must not rethrow it.
+function readCauseOrNothing(node: unknown): unknown[] {
+  try {
+    return [readErrorCause(node)];
+  } catch {
+    return [];
+  }
+}
+
 /** Records a loader failure in the registry, diagnostics list, and operator log consistently. */
 export function recordPluginError(params: {
   logger: PluginLogger;
@@ -175,7 +184,7 @@ export function recordPluginError(params: {
   // Native-require failures rewrap the Node error, so the missing-module code can sit on a cause.
   const missingDependencyHint =
     params.missingDependencyHint &&
-    collectErrorGraphCandidates(params.error, (node) => [readErrorCause(node)]).some((node) => {
+    collectErrorGraphCandidates(params.error, readCauseOrNothing).some((node) => {
       const code = extractErrorCode(node);
       return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
     })

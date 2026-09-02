@@ -27,6 +27,20 @@ type MissingOfficialExternalChannelPluginRepairHint = OfficialExternalPluginRepa
 };
 
 /**
+ * Bundled plugins ship their dependencies inside the root package, so dependency status is
+ * only meaningful for external installs and for externally distributed plugins whose runtime
+ * was compiled into the bundled tree without its plugin-local dependencies.
+ */
+export function tracksPluginDependencyStatus(candidate: {
+  origin: string;
+  pluginId: string;
+  packageName?: string;
+  packageBuild?: { bundledDist?: boolean };
+}): boolean {
+  return candidate.origin !== "bundled" || isExternallyDistributedPlugin(candidate);
+}
+
+/**
  * Names the install path when an externally distributed plugin fails to import its runtime
  * dependencies. Source builds compile these plugins into `dist/extensions/<id>` but their
  * dependencies stay plugin-local, so a moved or pruned checkout leaves the dist link dangling.
