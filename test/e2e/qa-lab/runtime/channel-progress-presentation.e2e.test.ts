@@ -38,6 +38,7 @@ type WireWrite = {
   route: string;
   body: Record<string, unknown>;
   accepted?: { id: string; action: string; text: string };
+  rejected?: string;
 };
 type CrablineAdapter = Awaited<ReturnType<typeof startOpenClawCrablineAdapter>>;
 
@@ -188,6 +189,9 @@ async function startPresentationApi(
       const responseText = await upstream.text();
       if (upstream.ok && method === "POST") {
         const result = parseBody(responseText);
+        if (result.ok === false) {
+          wire.rejected = readStringValue(result.error);
+        }
         if (
           manifest.provider === "discord" &&
           /\/channels\/\d+\/messages$/u.test(route) &&
@@ -433,6 +437,8 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL, observerModel] });
     cleanups.push(() => provider.stop());
     const completions: string[] = [];
+    const tasks: Array<Record<string, unknown>> = [];
+    const inboundMessages: Array<Record<string, unknown>> = [];
     const providerRequests: Array<{ model: unknown; requester: boolean; completion: boolean }> = [];
     let observerRequests = 0;
     let releaseRequester: (() => void) | undefined;
@@ -443,12 +449,44 @@ describe("channel progress presentation through an isolated Gateway", () => {
     const proxy = createServer((request, response) => {
       void (async () => {
         const buffers: Buffer[] = [];
-        for await (const chunk of request) buffers.push(Buffer.from(chunk));
+        for await (const chunk of request) {
+          buffers.push(Buffer.from(chunk));
+        }
         const raw = Buffer.concat(buffers).toString("utf8");
+        const body = parseBody(raw);
+        // Ignore trailing context carriers, but a protected task completion is
+        // itself a new request. Older prompts cannot override a newer user turn.
+        const userTexts = Array.isArray(body.input)
+          ? body.input
+              .map(asRecord)
+              .filter((item) => item.role === "user")
+              .map((item) =>
+                Array.isArray(item.content)
+                  ? item.content
+                      .map((part) => readStringValue(asRecord(part).text) ?? "")
+                      .join("\n")
+                  : (readStringValue(item.content) ?? ""),
+              )
+          : [];
+        const currentText =
+          userTexts.findLast(
+            (text) =>
+              text.trim() &&
+              (text.includes("Internal task completion event") ||
+                !(
+                  text.includes("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>") &&
+                  text.trimEnd().endsWith("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>")
+                )),
+          ) ?? "";
+        const completion =
+          currentText.includes("Internal task completion event") ||
+          currentText.includes(
+            "[Subagent Context] Every subagent spawned from this session has now settled",
+          );
         providerRequests.push({
-          model: parseBody(raw).model,
-          requester: raw.includes("Subagent terminal reply QA check:"),
-          completion: raw.includes("Internal task completion event"),
+          model: body.model,
+          requester: currentText.includes("Subagent terminal reply QA check:"),
+          completion,
         });
         if (String(parseBody(raw).model).endsWith("observer-failure-fixture")) {
           observerRequests += 1;
@@ -460,14 +498,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
           );
           return;
         }
-        if (!requesterHeld && raw.includes("Subagent terminal reply QA check:")) {
+        if (!requesterHeld && currentText.includes("Subagent terminal reply QA check:")) {
           requesterHeld = true;
           await new Promise<void>((resolve) => {
             releaseRequester = resolve;
           });
         }
-        const marker = raw.includes("Internal task completion event")
-          ? [deliveredMarker, cancelledMarker].find((candidate) => raw.includes(candidate))
+        const marker = completion
+          ? [deliveredMarker, cancelledMarker].find((candidate) => currentText.includes(candidate))
           : undefined;
         if (marker) {
           completions.push(marker);
@@ -475,22 +513,37 @@ describe("channel progress presentation through an isolated Gateway", () => {
             type: "message",
             id: `announce-${completions.length}`,
             role: "assistant",
+            phase: "final_answer",
             status: "completed",
             content: [{ type: "output_text", text: marker, annotations: [] }],
+          };
+          const preamble = {
+            ...item,
+            id: `announce-preamble-${completions.length}`,
+            phase: "commentary",
+            content: [
+              { type: "output_text", text: "Checking the delegated result", annotations: [] },
+            ],
           };
           const events = [
             {
               type: "response.output_item.added",
               output_index: 0,
+              item: { ...preamble, status: "in_progress", content: [] },
+            },
+            { type: "response.output_item.done", output_index: 0, item: preamble },
+            {
+              type: "response.output_item.added",
+              output_index: 1,
               item: { ...item, status: "in_progress", content: [] },
             },
-            { type: "response.output_item.done", output_index: 0, item },
+            { type: "response.output_item.done", output_index: 1, item },
             {
               type: "response.completed",
               response: {
                 id: `announce-response-${completions.length}`,
                 status: "completed",
-                output: [item],
+                output: [preamble, item],
                 usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
               },
             },
@@ -503,7 +556,7 @@ describe("channel progress presentation through an isolated Gateway", () => {
           return;
         }
         const requesterCase = [
-          ...raw.matchAll(/Subagent terminal reply QA check: (visible|restart)/g),
+          ...currentText.matchAll(/Subagent terminal reply QA check: (visible|restart)/g),
         ].at(-1)?.[1];
         if (requesterCase && !slowRequesterCases.has(requesterCase)) {
           slowRequesterCases.add(requesterCase);
@@ -522,15 +575,19 @@ describe("channel progress presentation through an isolated Gateway", () => {
         response.end(await upstream.text());
       })().catch(() => response.writeHead(500).end("synthetic provider proxy failed"));
     });
-    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      proxy.listen(0, "127.0.0.1", resolve);
+    });
     cleanups.push(async () => {
       proxy.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        proxy.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        proxy.close((error) => (error ? reject(error) : resolve()));
+      });
     });
     const address = proxy.address();
-    if (!address || typeof address === "string") throw new Error("provider proxy did not bind");
+    if (!address || typeof address === "string") {
+      throw new Error("provider proxy did not bind");
+    }
     const owner = createQaGatewayChild();
     cleanups.push(() => stopQaGatewayFixture(owner));
     const gateway = await owner.start({
@@ -584,12 +641,44 @@ describe("channel progress presentation through an isolated Gateway", () => {
     cleanups.push(async () => {
       const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
       await fs.mkdir(evidenceDir, { recursive: true });
+      const root = inboundMessages[0];
+      const mockThread =
+        root && adapter.manifest.provider === "slack"
+          ? asRecord(
+              await (
+                await fetch(`${adapter.manifest.baseUrl}/api/conversations.replies`, {
+                  method: "POST",
+                  headers: {
+                    "content-type": "application/json",
+                    authorization: `Bearer ${adapter.manifest.botToken}`,
+                  },
+                  body: JSON.stringify({ channel: root.channel, ts: root.ts, limit: 100 }),
+                })
+              ).json(),
+            )
+          : {};
       await fs.writeFile(
         path.join(evidenceDir, "slack-announcement-diagnostics.json"),
         JSON.stringify(
           {
             providerRequests,
             completions,
+            tasks,
+            inboundMessages,
+            mockThreadMessages: Array.isArray(mockThread.messages)
+              ? mockThread.messages
+                  .map(asRecord)
+                  .map(({ channel, ts, thread_ts }) => ({ channel, ts, thread_ts }))
+              : mockThread,
+            slackSends: writes
+              .filter((write) => write.route.endsWith("chat.postMessage"))
+              .map(({ body, accepted, rejected }) => ({
+                channel: body.channel,
+                thread_ts: body.thread_ts,
+                text: body.text,
+                accepted,
+                rejected,
+              })),
             logs: gateway.logs().replaceAll(gateway.token, "[redacted]"),
           },
           null,
@@ -610,17 +699,20 @@ describe("channel progress presentation through an isolated Gateway", () => {
       token: gateway.token,
       scopes: ["operator.admin", "operator.read", "operator.write"],
       onEvent: (event) => {
-        if (event.event === "session.observer") observerEvents.push(asRecord(event.payload));
+        if (event.event === "session.observer") {
+          observerEvents.push(asRecord(event.payload));
+        }
       },
     });
     cleanups.push(() => disconnectGatewayClient(client));
     await client.request("sessions.observer.visibility", { visible: true });
-    const tasks: Array<Record<string, unknown>> = [];
+    let threadId: string | undefined;
     for (const caseName of ["visible", "restart"]) {
       const inbound = adapter.createInbound({
         input: {
           conversation: { id: "C12345678", kind: "group" },
           senderId: "U12345678",
+          threadId,
           text: `Subagent terminal reply QA check: ${caseName}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`,
         },
       });
@@ -630,8 +722,15 @@ describe("channel progress presentation through an isolated Gateway", () => {
         body: JSON.stringify(inbound.providerBody),
       });
       expect(injected.ok).toBe(true);
-      if (adapter.manifest.provider !== "slack") throw new Error("expected Slack fixture");
-      const body = JSON.stringify(asRecord(await injected.json()).event);
+      if (adapter.manifest.provider !== "slack") {
+        throw new Error("expected Slack fixture");
+      }
+      const receipt = asRecord(await injected.json());
+      const event = asRecord(asRecord(receipt.event).event);
+      inboundMessages.push({ channel: event.channel, ts: event.ts, thread_ts: event.thread_ts });
+      threadId ??= readStringValue(asRecord(receipt.message).ts);
+      expect(threadId).toBeTypeOf("string");
+      const body = JSON.stringify(receipt.event);
       const timestamp = String(Math.floor(Date.now() / 1000));
       const signature = createHmac("sha256", adapter.manifest.signingSecret)
         .update(`v0:${timestamp}:${body}`)
@@ -648,9 +747,10 @@ describe("channel progress presentation through an isolated Gateway", () => {
       expect(delivered.ok, await delivered.text()).toBe(true);
       if (caseName === "visible") {
         await waitForFact(() => Boolean(releaseRequester), "requester model admission").catch(
-          (error) => {
+          (error: unknown) => {
             throw new Error(
               `${String(error)}; requests=${JSON.stringify(providerRequests)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
+              { cause: error },
             );
           },
         );
@@ -677,50 +777,78 @@ describe("channel progress presentation through an isolated Gateway", () => {
       } catch (error) {
         throw new Error(
           `${String(error)}; task=${JSON.stringify(terminalTask)}; completions=${JSON.stringify(completions)}; logs=${gateway.logs().slice(-6000)}`,
+          { cause: error },
         );
       }
       tasks.push(terminalTask!);
-      expect(terminalTask?.deliveryStatus).toBe(caseName === "visible" ? "failed" : "delivered");
-      if (caseName === "visible")
+      expect(terminalTask?.deliveryStatus, JSON.stringify(terminalTask)).toBe(
+        caseName === "visible" ? "failed" : "delivered",
+      );
+      if (caseName === "visible") {
         expect(terminalTask?.error, JSON.stringify(terminalTask)).toContain(
           "cancelled_by_message_sending_hook",
         );
+      }
     }
+    expect(tasks[1]?.sessionKey).toBe(tasks[0]?.sessionKey);
     expect(completions.filter((marker) => marker === cancelledMarker)).toHaveLength(1);
     expect(
       writes.filter((write) => JSON.stringify(write.body).includes(cancelledMarker)),
     ).toHaveLength(0);
     expect(
       [...api.messages.values()].filter((message) =>
-        String(message.text ?? "").includes(deliveredMarker),
+        (readStringValue(message.text) ?? "").includes(deliveredMarker),
       ),
     ).toHaveLength(1);
-    const observerFailures = () =>
-      gateway
+    const observerFailures = () => {
+      let attempts = 0;
+      return gateway
         .logs()
         .split("\n")
         .flatMap((line) => {
           try {
             const value = asRecord(JSON.parse(line));
-            return value.message === "session observer disabled after consecutive failures"
-              ? [value]
-              : [];
+            const message = readStringValue(value.message) ?? "";
+            if (
+              value.subsystem === "provider-transport-fetch" &&
+              message.startsWith("[model-fetch] start ") &&
+              message.includes("model=observer-failure-fixture ")
+            ) {
+              attempts += 1;
+            }
+            if (message === "session observer disabled after consecutive failures") {
+              const failure = {
+                message,
+                error: value.error,
+                runId: value.runId,
+                attempts,
+              };
+              attempts = 0;
+              return [failure];
+            }
+            return [];
           } catch {
             return [];
           }
         });
+    };
+    // Both slow requester turns and each completion preamble qualify for a
+    // final digest. Task delivery settles before these observer runs finish.
+    const observerRunCount = slowRequesterCases.size + completions.length;
     await waitForFact(
-      () => observerFailures().length >= 2,
-      "recorded observer failures in later runs",
+      () => new Set(observerFailures().map((failure) => failure.runId)).size === observerRunCount,
+      "recorded failures for every requester and completion observer run",
     );
+    // Isolated completion rejects an error stop reason before observer logging;
+    // its bounded owner error, not the provider's raw body, is the recorded cause.
     expect(
       observerFailures().every((failure) =>
-        String(failure.error).includes("synthetic observer failure"),
+        String(failure.error).includes("Isolated completion failed with stop reason error"),
       ),
     ).toBe(true);
-    expect(new Set(observerFailures().map((failure) => failure.runId)).size).toBeGreaterThanOrEqual(
-      2,
-    );
+    // A failed connection can precede the proxy's HTTP receipt. Count starts at
+    // the transport owner so those failures cannot hide an unbounded retry.
+    expect(observerFailures().every((failure) => failure.attempts === 2)).toBe(true);
     expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
     const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
     await fs.mkdir(evidenceDir, { recursive: true });
@@ -741,10 +869,11 @@ describe("channel progress presentation through an isolated Gateway", () => {
           suppressedSlackWrites: 0,
           deliveredSlackMessages: 1,
           observerRequests,
-          observerFailures: observerFailures().map(({ message, error, runId }) => ({
+          observerFailures: observerFailures().map(({ message, error, runId, attempts }) => ({
             message,
             error,
             runId,
+            attempts,
           })),
           observedRuns: new Set(observerEvents.map((event) => event.runId)).size,
         },
