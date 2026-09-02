@@ -23,15 +23,16 @@ import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
 } from "./tailscale-route-owner-protocol.js";
-import {
-  TailscaleRouteOwnershipConflictError,
-  isTailscaleRouteOwnershipConflictError,
-} from "./tailscale-route-ownership-error.js";
+import { TailscaleRouteOwnershipConflictError } from "./tailscale-route-ownership-error.js";
 
 const TAILSCALE_STATUS_ATTEMPTS = 3;
 const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
 const TAILSCALE_ROUTE_START_TIMEOUT_MS = 15_000;
 const TAILSCALE_ROUTE_STOP_TIMEOUT_MS = 4_000;
+// Sudo versions phrase `-n` credential failures differently. Require its prefix
+// so an authorized Tailscale retry keeps ownership of every operational error.
+const SUDO_NONINTERACTIVE_AUTH_ERROR =
+  /^sudo: (?:a password is required|no password was provided|a terminal is required|no tty present|no askpass program specified)/im;
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -384,13 +385,6 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
   }
 }
 
-function describeError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
-}
-
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
   target: number,
@@ -422,22 +416,14 @@ export async function claimTailscaleRoute(
     try {
       claim = await start("sudo", ["-n", tailscaleBin]);
     } catch (sudoError) {
-      // Ownership conflicts carry their own recovery instructions and must
-      // pass through untouched.
-      if (isTailscaleRouteOwnershipConflictError(sudoError)) {
+      const { stderr, message } = extractExecErrorText(sudoError);
+      const detail = stderr.trim() || message.trim();
+      if (!SUDO_NONINTERACTIVE_AUTH_ERROR.test(detail)) {
         throw sudoError;
       }
-      // Under a systemd user service there is no TTY and OpenClaw installs no
-      // NOPASSWD sudoers rule, so `sudo -n` can only fail there. Name the
-      // supported fix instead of surfacing a bare "a password is required".
-      // The operator grant itself crosses the same privilege boundary (the
-      // linked recovery used `sudo tailscale set --operator=...`), so the
-      // instruction must carry the elevation or it just produces another
-      // permission error.
       throw new Error(
-        `Tailscale ${mode} needs elevated access and the sudo fallback failed: ${describeError(sudoError)}. ` +
-          `Run \`sudo tailscale set --operator=${process.env.USER || "$USER"}\` once so the unprivileged path succeeds, ` +
-          "or install a NOPASSWD sudoers rule for the tailscale binary.",
+        `Tailscale ${mode} needs elevated access and non-interactive sudo failed: ${detail}. ` +
+          "Run `sudo tailscale set --operator=$USER` once so the unprivileged path succeeds.",
         { cause: sudoError },
       );
     }
