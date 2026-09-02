@@ -148,10 +148,6 @@ suite.define(() => {
         .poll(() => floatingInbox.locator(".sidebar-issues-button__count").textContent())
         .toBe("2");
 
-      for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
-        await gateway.deferNext(method);
-        await gateway.deferNext(method);
-      }
       await page.keyboard.press("Control+Shift+,");
       await waitForControlUiSettingsTakeover(page);
       expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
@@ -162,16 +158,6 @@ suite.define(() => {
       await restoredInbox.waitFor({ state: "visible" });
       expect(await restoredInbox.locator(".sidebar-issues-button__count").textContent()).toBe("2");
 
-      for (let presenter = 0; presenter < 2; presenter += 1) {
-        await gateway.resolveDeferred("cron.list", FAILED_CRON_RESPONSE);
-        await gateway.resolveDeferred("cron.status", {
-          enabled: true,
-          triggersEnabled: true,
-          jobs: 1,
-        });
-        await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
-      }
-
       await gateway.setMethodResponse("cron.list", {
         ...FAILED_CRON_RESPONSE,
         jobs: [],
@@ -179,7 +165,6 @@ suite.define(() => {
       });
       await gateway.setMethodResponse("models.authStatus", { ts: 2, providers: [] });
       for (const method of ["cron.list", "cron.status", "models.authStatus"]) {
-        await gateway.deferNext(method);
         await gateway.deferNext(method);
       }
       await page.keyboard.press("Control+Shift+,");
@@ -203,6 +188,60 @@ suite.define(() => {
       expect(
         await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").count(),
       ).toBe(0);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("keeps one attention badge across expanded and collapsed presenters", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.list": { ...FAILED_CRON_RESPONSE, jobs: [], total: 0 },
+        "models.authStatus": { ts: 1, providers: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("cron.list");
+      await expect
+        .poll(() => page.locator("openclaw-app-sidebar .sidebar-issues-button__count").count())
+        .toBe(0);
+
+      await page.locator(".sidebar-brand__collapse").click();
+      await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator("openclaw-app-sidebar .sidebar-issues-button").waitFor();
+
+      await gateway.setMethodResponse("cron.list", FAILED_CRON_RESPONSE);
+      await gateway.emitGatewayEvent("cron", {
+        action: "finished",
+        completionStatus: "failed",
+        error: "Provider request failed",
+        jobId: "failed-settings-transition",
+        status: "error",
+      });
+      await expect
+        .poll(() =>
+          page.locator("openclaw-app-sidebar .sidebar-issues-button__count").textContent(),
+        )
+        .toBe("1");
+
+      await gateway.deferNext("cron.list");
+      await gateway.deferNext("cron.status");
+      await gateway.deferNext("models.authStatus");
+      await page.locator(".sidebar-brand__collapse").click();
+      await expect
+        .poll(() =>
+          page.locator(".sidebar-attention--floating .sidebar-issues-button__count").textContent(),
+        )
+        .toBe("1");
     } finally {
       await suite.closeBrowserContext(context);
     }

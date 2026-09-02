@@ -65,7 +65,6 @@ import {
   EXEC_APPROVAL_ELEMENT,
   LazyCustomElementRequestController,
   type OptionalCustomElement,
-  SIDEBAR_ATTENTION_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
@@ -160,16 +159,6 @@ class OpenClawShell
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
   readonly navigationSidebar = document.createElement(APP_SIDEBAR_TAG);
-  // Settings disconnects this presenter; retaining its identity keeps loaded
-  // health attention visible when collapsed workspace chrome returns.
-  readonly floatingSidebarAttention = Object.assign(
-    document.createElement(SIDEBAR_ATTENTION_ELEMENT.tagName),
-    {
-      className: "sidebar-attention--floating",
-      onNavigate: (routeId: string) => this.navigate(routeId),
-      onOpenApprovals: () => this.openApprovals(),
-    },
-  );
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;

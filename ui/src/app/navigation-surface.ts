@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { NavigationRouteId } from "../app-navigation.ts";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import {
@@ -129,7 +130,6 @@ export function floatingSidebarAttentionVisible(params: {
 }
 
 export function renderFloatingUpdateCard(params: {
-  attentionElement: HTMLElement;
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;
   onboarding: boolean;
@@ -147,13 +147,21 @@ export function renderFloatingUpdateCard(params: {
   onRefresh: () => void;
   onHoldUpdate?: () => Promise<boolean>;
   onReviewUpdate?: () => void;
+  onNavigate?: (routeId: NavigationRouteId) => void;
+  onOpenApprovals?: () => void;
 }) {
   const showAttention = floatingSidebarAttentionVisible(params);
   const showUpdateCard = !params.compact && params.refreshRequired;
   if (!showAttention && !showUpdateCard) {
     return nothing;
   }
-  return html`${showAttention ? params.attentionElement : nothing}${showUpdateCard
+  return html`${showAttention
+    ? html`<openclaw-sidebar-attention
+        class="sidebar-attention--floating"
+        .onNavigate=${params.onNavigate}
+        .onOpenApprovals=${params.onOpenApprovals}
+      ></openclaw-sidebar-attention>`
+    : nothing}${showUpdateCard
     ? html`<openclaw-sidebar-update-card
         class="sidebar-update-card--floating"
         .updateAvailable=${params.updateAvailable}

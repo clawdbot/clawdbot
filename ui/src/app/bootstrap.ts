@@ -65,6 +65,7 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { createSidebarAttentionStore } from "./sidebar-attention-store.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import {
   normalizeLegacyTerminalViewLocation,
@@ -294,6 +295,13 @@ export function bootstrapApplication(
     onUpdateFailure: (failure, admission) =>
       void openUpdateFailureTriage(context, failure, admission),
   });
+  const sidebarAttention = createSidebarAttentionStore({
+    gateway,
+    agentSelection,
+    agents,
+    overlays,
+    scopeUpgrade,
+  });
   // App-updater interlock: writing config (or restarting the gateway) while
   // the updater runs can corrupt the install; pause config writes until the
   // update settles. Wired app-lifetime so page unmounts cannot strand it.
@@ -464,6 +472,7 @@ export function bootstrapApplication(
     channels,
     config,
     scopeUpgrade,
+    sidebarAttention,
     runtimeConfig,
     sessions,
     placementStartup,
@@ -585,6 +594,7 @@ export function bootstrapApplication(
       agents.dispose();
       channels.dispose();
       scopeUpgrade.dispose();
+      sidebarAttention.dispose();
       placementStartup.dispose();
       sessions.dispose();
       workboard.dispose();

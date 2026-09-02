@@ -5,11 +5,9 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/github-link-hovercard-registration.ts";
 import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.runtime.ts";
 import "../components/modal-dialog.ts";
-import {
-  NATIVE_UPDATE_DECLINED_EVENT,
-  postNativeUpdate,
-  startNativeLinkRouting,
-} from "./native-link-routing.ts";
+import { postNativeUpdate, startNativeLinkRouting } from "./native-link-routing.ts";
+
+const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 
 type NativeLinkRouting = ReturnType<typeof startNativeLinkRouting>;
 
