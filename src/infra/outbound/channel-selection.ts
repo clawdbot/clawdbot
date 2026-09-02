@@ -27,15 +27,12 @@ import {
 /** Source that explains how message channel selection chose its result. */
 type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
 
-function resolveAvailableKnownChannel(params: {
+function resolveAvailableChannel(params: {
   cfg: OpenClawConfig;
   value?: string | null;
   agentId?: string;
 }): { channel: string; plugin: ChannelPlugin } | undefined {
-  // Explicit ids normalize without a process-root deliverability prefilter:
-  // request-scoped registries (e.g. the message CLI's registry handle) own
-  // channel ids the process-root view has never registered, so availability
-  // is proven by the scoped resolution below instead.
+  // Availability belongs to the scoped resolver, not the process-root channel list.
   const normalized = normalizeMessageChannel(params.value);
   if (!normalized) {
     return undefined;
@@ -55,7 +52,7 @@ function resolveAvailableKnownChannel(params: {
     agentId: params.agentId,
     allowBootstrap: true,
   });
-  return plugin ? { channel: normalized, plugin } : undefined;
+  return plugin ? { channel: plugin.id, plugin } : undefined;
 }
 
 /** Checks whether a channel has a non-disabled config entry. */
@@ -200,9 +197,9 @@ async function listConfiguredMessageChannelPlugins(
 ): Promise<ChannelPlugin[]> {
   const plugins: ChannelPlugin[] = [];
   for (const plugin of listRuntimeVisibleChannelPlugins()) {
-    // The runtime-visible list already owns scope-aware channel visibility; a
-    // process-root deliverability re-check here would drop registry-scoped
-    // channel ids the root view has never registered.
+    if (!resolveOutboundChannelPlugin({ channel: plugin.id, cfg })) {
+      continue;
+    }
     if (await isPluginConfigured(plugin, cfg, accountResolution)) {
       plugins.push(plugin);
     }
@@ -232,13 +229,13 @@ export async function resolveMessageChannelSelection(params: {
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   if (normalized) {
-    const availableExplicit = resolveAvailableKnownChannel({
+    const availableExplicit = resolveAvailableChannel({
       cfg: params.cfg,
       value: params.channel,
       agentId: params.agentId,
     });
     if (!availableExplicit) {
-      const fallback = resolveAvailableKnownChannel({
+      const fallback = resolveAvailableChannel({
         cfg: params.cfg,
         value: params.fallbackChannel,
         agentId: params.agentId,
@@ -251,9 +248,6 @@ export async function resolveMessageChannelSelection(params: {
           source: "tool-context-fallback",
         };
       }
-      // A scoped registry can know a channel the process-root view does not,
-      // so only ids no runtime view can see are "unknown"; the rest are
-      // known-but-unavailable and must report the repairable failure.
       if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
         throw new Error(formatUnknownChannelMessage({ channel: normalized }));
       }
@@ -276,7 +270,7 @@ export async function resolveMessageChannelSelection(params: {
     };
   }
 
-  const fallback = resolveAvailableKnownChannel({
+  const fallback = resolveAvailableChannel({
     cfg: params.cfg,
     value: params.fallbackChannel,
     agentId: params.agentId,
