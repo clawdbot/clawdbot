@@ -1,0 +1,77 @@
+{
+  "id": "openzoo",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["openzoo"],
+  "modelPricing": {
+    "providers": {
+      "openzoo": {
+        "openRouter": {
+          "passthroughProviderModel": true
+        },
+        "liteLLM": {
+          "passthroughProviderModel": true
+        }
+      }
+    }
+  },
+  "nonSecretAuthMarkers": ["sk-openzoo"],
+  "syntheticAuthRefs": ["openzoo"],
+  "setup": {
+    "providers": [
+      {
+        "id": "openzoo",
+        "authMethods": ["custom"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "openzoo",
+      "method": "custom",
+      "choiceId": "openzoo",
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Connect proxy",
+      "choiceLabel": "openzoo",
+      "choiceHint": "Pay per call over x402 through a local openzoo proxy (no account, no API key)",
+      "website": "https://openzoo.fun",
+      "groupId": "openzoo",
+      "groupLabel": "openzoo",
+      "groupHint": "Pay-per-call inference over x402, no account or API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "openzoo": {
+        "baseUrl": "http://localhost:8402/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "auto",
+            "name": "auto",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0.1,
+              "output": 0.2,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "openzoo": "refreshable"
+    }
+  }
+}

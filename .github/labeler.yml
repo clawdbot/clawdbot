@@ -817,6 +817,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openshell/**"
+"extensions: openzoo":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openzoo/**"
 "extensions: parallel":
   - changed-files:
       - any-glob-to-any-file:

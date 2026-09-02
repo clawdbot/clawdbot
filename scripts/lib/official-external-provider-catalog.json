@@ -1188,6 +1188,45 @@
       }
     },
     {
+      "name": "@openclaw/openzoo-provider",
+      "description": "OpenClaw openzoo provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "openzoo",
+          "label": "openzoo"
+        },
+        "providers": [
+          {
+            "id": "openzoo",
+            "name": "openzoo",
+            "docs": "/providers/openzoo",
+            "categories": ["local", "llm"],
+            "envVars": [],
+            "authChoices": [
+              {
+                "method": "custom",
+                "choiceId": "openzoo",
+                "choiceLabel": "openzoo",
+                "choiceHint": "Pay per call over x402 through a local openzoo proxy (no account, no API key)",
+                "groupId": "openzoo",
+                "groupLabel": "openzoo",
+                "groupHint": "Pay-per-call inference over x402, no account or API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/openzoo-provider",
+          "npmSpec": "@openclaw/openzoo-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/opencode-go-provider",
       "description": "OpenClaw OpenCode Go provider plugin",
       "source": "official",

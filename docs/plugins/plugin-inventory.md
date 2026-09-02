@@ -174,7 +174,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-90 plugins
+91 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -266,7 +266,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[longcat](/plugins/reference/longcat)** (`@openclaw/longcat-provider`) - npm; ClawHub: `clawhub:@openclaw/longcat-provider`. OpenClaw LongCat provider plugin.
 
-- **[matrix](/plugins/reference/matrix)** (`@openclaw/matrix`) - ClawHub: `clawhub:@openclaw/matrix`; npm. OpenClaw Matrix channel plugin for rooms and direct messages.
+- **[matrix](/plugins/reference/matrix)** (`@openclaw/matrix`) - npm; ClawHub: `clawhub:@openclaw/matrix`. OpenClaw Matrix channel plugin for rooms and direct messages.
 
 - **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - npm; ClawHub: `clawhub:@openclaw/mattermost`. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
 
@@ -291,6 +291,8 @@ Each entry lists the package, distribution route, and description.
 - **[opencode](/plugins/reference/opencode)** (`@openclaw/opencode-provider`) - npm; ClawHub: `clawhub:@openclaw/opencode-provider`. Adds OpenCode model provider support to OpenClaw.
 
 - **[openshell](/plugins/reference/openshell)** (`@openclaw/openshell-sandbox`) - npm; ClawHub. OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.
+
+- **[openzoo](/plugins/reference/openzoo)** (`@openclaw/openzoo-provider`) - npm; ClawHub: `clawhub:@openclaw/openzoo-provider`. Adds Openzoo model provider support to OpenClaw.
 
 - **[parallel](/tools/parallel-search)** (`@openclaw/parallel-plugin`) - npm; ClawHub: `clawhub:@openclaw/parallel-plugin`. Adds web search provider support.
 
@@ -344,7 +346,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[vydra](/plugins/reference/vydra)** (`@openclaw/vydra-provider`) - npm; ClawHub: `clawhub:@openclaw/vydra-provider`. Adds Vydra model provider support to OpenClaw.
 
-- **[whatsapp](/plugins/reference/whatsapp)** (`@openclaw/whatsapp`) - ClawHub: `clawhub:@openclaw/whatsapp`; npm. OpenClaw WhatsApp channel plugin for WhatsApp Web chats.
+- **[whatsapp](/plugins/reference/whatsapp)** (`@openclaw/whatsapp`) - npm; ClawHub: `clawhub:@openclaw/whatsapp`. OpenClaw WhatsApp channel plugin for WhatsApp Web chats.
 
 - **[xiaomi](/plugins/reference/xiaomi)** (`@openclaw/xiaomi-provider`) - npm; ClawHub: `clawhub:@openclaw/xiaomi-provider`. Adds Xiaomi, Xiaomi Token Plan model provider support to OpenClaw.
 

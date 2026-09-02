@@ -327,6 +327,7 @@
     "!dist/extensions/qa-channel/**",
     "!dist/extensions/qa-lab/**",
     "!dist/extensions/openshell/**",
+    "!dist/extensions/openzoo/**",
     "!dist/extensions/qwen/**",
     "!dist/extensions/searxng/**",
     "!dist/extensions/signal/**",

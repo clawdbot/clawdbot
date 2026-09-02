@@ -15,6 +15,7 @@ export const miscExtensionTestRoots = [
   "extensions/opencode",
   "extensions/opencode-go",
   "extensions/openshell",
+  "extensions/openzoo",
   "extensions/parallel",
   "extensions/perplexity",
   "extensions/searxng",

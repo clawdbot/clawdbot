@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **openzoo provider:** add the bundled `openzoo` provider plugin for pay-per-call inference over x402 through a local proxy: keyless like LM Studio, with live per-token pricing discovery like Kilo Gateway, app-guided proxy detection, and a `/providers/openzoo` docs page.
 - **macOS releases:** retain signed artifacts and Apple submission IDs so interrupted notarization can resume without rebuilding the app or symbols, while preserving source, hash, signature, and approval checks.
 - **Release validation:** defer beta candidate Parallels smoke to postpublish `release:beta-smoke` by default, keep stable/full prepublish coverage, and bound nested release workflow monitors with explicit job timeouts.
 - **Developer workflow:** remove the obsolete scoped-commit helper and use standard Git commands in isolated worktrees.

@@ -1695,6 +1695,7 @@
                   "providers/opencode",
                   "providers/opencode-go",
                   "providers/openrouter",
+                  "providers/openzoo",
                   "providers/perplexity-provider",
                   "providers/pixverse",
                   "providers/qianfan",

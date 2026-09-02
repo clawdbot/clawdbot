@@ -833,6 +833,7 @@ const config = {
       "models.ts!",
       "oauth.ts!",
     ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openzoo`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/pixverse`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qianfan`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/qwen`]: bundledPluginWorkspace(),

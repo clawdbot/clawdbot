@@ -1997,6 +1997,7 @@ describe("official external plugin catalog", () => {
       ["longcat", "@openclaw/longcat-provider"],
       ["kilocode", "@openclaw/kilocode-provider"],
       ["kimi", "@openclaw/kimi-provider"],
+      ["openzoo", "@openclaw/openzoo-provider"],
       ["qianfan", "@openclaw/qianfan-provider"],
       ["qwen", "@openclaw/qwen-provider"],
     ] as const;
