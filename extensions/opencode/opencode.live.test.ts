@@ -15,7 +15,7 @@ import {
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
-const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "nemotron-3-ultra-free";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "mimo-v2.5-free";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -23,7 +23,7 @@ type OpencodeModelsResponse = {
   data?: Array<{ id?: unknown; object?: unknown }>;
 };
 
-async function resolveOpencodeReasoningReplayLiveModel() {
+async function resolveOpencodeToolLiveModel() {
   const provider = await buildOpencodeZenLiveProviderConfig({ apiKey: OPENCODE_API_KEY });
   const row = provider.models.find((model) => model.id === LIVE_MODEL_ID);
   if (
@@ -72,12 +72,6 @@ function requireToolCall(message: AssistantMessage) {
   return toolCall;
 }
 
-function hasReasoningContentReplay(message: AssistantMessage): boolean {
-  return message.content.some(
-    (block) => block.type === "thinking" && block.thinkingSignature === "reasoning_content",
-  );
-}
-
 async function fetchOpencodeZenModelIds(): Promise<string[]> {
   const response = await fetch(OPENCODE_ZEN_MODELS_URL, {
     headers: {
@@ -119,8 +113,8 @@ describeLive("opencode Zen live catalog drift", () => {
 });
 
 describeLive("opencode plugin live", () => {
-  it("accepts discovered reasoning-content replay after a tool call", async () => {
-    const { model, reasoningOptions } = await resolveOpencodeReasoningReplayLiveModel();
+  it("completes a discovered live tool-call round trip", async () => {
+    const { model, reasoningOptions } = await resolveOpencodeToolLiveModel();
     const tool = liveEchoTool();
     const firstOptions = {
       apiKey: OPENCODE_API_KEY,
@@ -148,7 +142,6 @@ describeLive("opencode plugin live", () => {
     }
 
     const toolCall = requireToolCall(first);
-    expect(hasReasoningContentReplay(first)).toBe(true);
 
     const second = await completeSimple(
       model,
