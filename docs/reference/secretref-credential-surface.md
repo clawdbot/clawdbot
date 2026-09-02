@@ -137,7 +137,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `tts.personas.*.providers.*.apiKey`
 - `tts.providers.*.apiKey`
 
-### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
+### SQLite auth-profile targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
 - `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 - `profiles.*.tokenRef` (`type: "token"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)

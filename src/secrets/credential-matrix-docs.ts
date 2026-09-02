@@ -69,7 +69,7 @@ function formatSupportedLines(matrix: SecretRefCredentialMatrixDocument): string
   if (authProfileLines.length > 0) {
     lines.push(
       "",
-      "### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)",
+      "### SQLite auth-profile targets (`secrets configure` + `secrets apply` + `secrets audit`)",
       "",
       ...authProfileLines,
     );

@@ -84,7 +84,7 @@ describe("SecretRef credential matrix docs", () => {
         "- `a.secret`",
         "- `z.secret`",
         "",
-        "### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)",
+        "### SQLite auth-profile targets (`secrets configure` + `secrets apply` + `secrets audit`)",
         "",
         '- `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)',
         "",
