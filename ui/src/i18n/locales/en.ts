@@ -5116,7 +5116,8 @@ export const en: TranslationMap & {
   },
   chat: {
     cloudWorkerFailed: "Runner failed: {error}",
-    errorDetails: "Details",
+    errorDetails: "Error details",
+    details: "Details",
     copyError: "Copy error",
     diskSpace: {
       warningTitle: "Cloud session disk space is low",

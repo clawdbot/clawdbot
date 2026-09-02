@@ -496,7 +496,9 @@ suite.define(() => {
         await summary.focus();
         await page.keyboard.press("Enter");
         await alert.locator("pre").waitFor({ timeout: 10_000 });
-        expect(await alert.locator("pre").textContent()).toBe(errorText);
+        const diagnostic = alert.getByLabel("Error details", { exact: true });
+        expect(await diagnostic.count()).toBe(1);
+        expect(await diagnostic.textContent()).toBe(errorText);
         expect(await summary.getByText("Details", { exact: true }).count()).toBe(1);
         if (artifactDir) {
           await page.screenshot({ path: path.join(artifactDir, `terminal-details-${label}.png`) });

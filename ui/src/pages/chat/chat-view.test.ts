@@ -1151,9 +1151,9 @@ describe("chat run error", () => {
       expect(alert.getAttribute("role")).toBe("alert");
       const details = requireElement(alert, "details", "error disclosure");
       expect(details.hasAttribute("open")).toBe(false);
-      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(
-        renderedDiagnostic,
-      );
+      const fullDiagnostic = requireElement(details, "pre", "full diagnostic");
+      expect(fullDiagnostic.textContent).toBe(renderedDiagnostic);
+      expect(fullDiagnostic.getAttribute("aria-label")).toBe("Error details");
       expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
       expect(alert.textContent).toContain("🧭");
       expect(alert.querySelector("img")).toBeNull();
@@ -1217,6 +1217,10 @@ describe("chat run error", () => {
     );
     expect(alert.textContent).not.toContain("⚠");
     const details = requireElement(alert, "details", "startup disclosure");
+    expect(requireElement(details, "summary", "startup header").textContent).toContain("Details");
+    expect(requireElement(details, "pre", "startup diagnostic").getAttribute("aria-label")).toBe(
+      "Error details",
+    );
     const copy = details.querySelector<HTMLButtonElement>('summary [aria-label="Copy error"]');
     expect(copy).not.toBeNull();
     copy?.click();
