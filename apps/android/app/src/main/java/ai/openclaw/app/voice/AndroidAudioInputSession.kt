@@ -368,11 +368,16 @@ internal class AndroidAudioInputSession private constructor(
    * simply always there -- telephony on a handset, a bus on Automotive -- and treating "anything
    * that is not the built-in pair" as a deliberate choice would silently leave hands-free Talk on
    * the earpiece for a whole class of devices, with nothing to distinguish it from working.
+   *
+   * Covers every wired, USB, Bluetooth, dock, HDMI and line-level sink the platform admits as a
+   * communication device, so a plugged-in line output is never overridden by the loudspeaker.
    */
   private fun isDeliberateExternalOutput(type: Int): Boolean =
     when (type) {
       AudioDeviceInfo.TYPE_WIRED_HEADSET,
       AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+      AudioDeviceInfo.TYPE_LINE_ANALOG,
+      AudioDeviceInfo.TYPE_AUX_LINE,
       AudioDeviceInfo.TYPE_USB_HEADSET,
       AudioDeviceInfo.TYPE_USB_DEVICE,
       AudioDeviceInfo.TYPE_USB_ACCESSORY,

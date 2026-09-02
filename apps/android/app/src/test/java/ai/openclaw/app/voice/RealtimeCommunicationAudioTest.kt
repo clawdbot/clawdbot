@@ -744,6 +744,23 @@ class RealtimeCommunicationAudioTest {
   }
 
   @Test
+  fun aLineLevelCommunicationOutputIsNotStolenEither() {
+    // The platform admits analog line-out and AUX line sinks as communication devices. A person
+    // who plugged one in chose it over the handset just as surely as a headset wearer did.
+    for (lineType in listOf(AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_AUX_LINE)) {
+      setAvailableCommunicationDevices(
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+        lineType,
+      )
+
+      openCommunicationCapture().use { session ->
+        assertNull("line output type=$lineType must not be overridden", session.appliedCommunicationDeviceType)
+      }
+    }
+  }
+
+  @Test
   fun recognitionCaptureNeverTakesTheCommunicationOutput() {
     setAvailableCommunicationDevices(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_BUILTIN_EARPIECE)
 
