@@ -173,11 +173,12 @@ struct RootSidebarDrawer<Sidebar: View, Detail: View>: View {
         latchedDisposition: DragDisposition?) -> DragDisposition?
     {
         if let latchedDisposition { return latchedDisposition }
-        if !isPresented, !canOpenFromEdge ||
-            startLocation.x > RootSidebarDrawerMetric.edgeGestureWidth ||
-            startLocation.y <= RootSidebarDrawerMetric.topGestureExclusion
-        {
-            return .rejected
+        if !isPresented {
+            // Opening is an edge gesture; closing may start anywhere on the content card.
+            guard canOpenFromEdge,
+                  startLocation.x <= RootSidebarDrawerMetric.edgeGestureWidth,
+                  startLocation.y > RootSidebarDrawerMetric.topGestureExclusion
+            else { return .rejected }
         }
         let horizontal = isPresented ? -translation.width : translation.width
         let vertical = abs(translation.height)

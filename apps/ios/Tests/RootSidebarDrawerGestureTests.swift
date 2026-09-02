@@ -40,6 +40,8 @@ struct RootSidebarDrawerGestureTests {
             (CGPoint(x: 45, y: 100), true, .rejected),
             (CGPoint(x: 20, y: 44), true, .rejected),
             (CGPoint(x: 20, y: 100), false, .rejected),
+            // Content-card start on a presented drawer: closing must still work.
+            (CGPoint(x: 300, y: 400), false, .rejected),
         ]
         for (startLocation, canOpenFromEdge, expected) in cases {
             #expect(Drawer.dragDisposition(
