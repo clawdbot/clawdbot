@@ -949,7 +949,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
     const cached = this.managedToolsSessionDelegates.get(normalizedSessionKey);
     if (cached) {
       const cachedModel = this.managedToolsSessionModelRefs.get(normalizedSessionKey);
-      if (target.model !== undefined && target.model !== cachedModel) {
+      if (
+        this.pluginToolsMcpBridgeEnabled &&
+        target.model !== undefined &&
+        target.model !== cachedModel
+      ) {
         throw new AcpRuntimeError(
           "ACP_BACKEND_UNSUPPORTED_CONTROL",
           "Changing the model would leave the managed plugin-tool policy stale. Start a fresh ACP session with the desired model instead.",
@@ -975,7 +979,9 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       this.delegateTestOptions,
     );
     this.managedToolsSessionDelegates.set(normalizedSessionKey, delegate);
-    this.managedToolsSessionModelRefs.set(normalizedSessionKey, target.model);
+    if (this.pluginToolsMcpBridgeEnabled) {
+      this.managedToolsSessionModelRefs.set(normalizedSessionKey, target.model);
+    }
     return delegate;
   }
 

@@ -419,6 +419,60 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ]);
   });
 
+  it("allows model changes when only the OpenClaw-tools bridge is enabled", async () => {
+    const claudeCommand = "npx @agentclientprotocol/claude-agent-acp@0.70.0";
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "claude" ? claudeCommand : agentName),
+        list: () => ["claude"],
+      },
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const managedDelegate = (
+      runtime as unknown as {
+        resolveManagedToolsDelegateForSession(target: { sessionKey: string; model?: string }): {
+          ensureSession: AcpRuntime["ensureSession"];
+        };
+      }
+    ).resolveManagedToolsDelegateForSession({
+      sessionKey: "agent:claude:main",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    vi.spyOn(managedDelegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:main",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:claude:main",
+      agent: "claude",
+      mode: "persistent",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:claude:main",
+        agent: "claude",
+        mode: "persistent",
+        model: "anthropic/claude-opus-4-6",
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
