@@ -60,6 +60,78 @@ struct ControlChannelStateDebouncerTests {
     }
 }
 
+struct ControlChannelCompatibilityAlertTests {
+    private func mismatch() throws -> GatewayCompatibilityIssue {
+        try #require(GatewayCompatibilityIssue(error: GatewayConnectAuthError(
+            message: "protocol mismatch",
+            detailCode: "INVALID_REQUEST",
+            canRetryWithDeviceToken: false,
+            expectedProtocol: 3)))
+    }
+
+    @Test func `same route retries deduplicate but a second incompatible route alerts`() throws {
+        let issue = try self.mismatch()
+        var alerts = ControlChannelCompatibilityAlerts()
+        let firstRoute = alerts.routeGeneration
+        let first = alerts.prepare(issue, generation: firstRoute)
+        #expect(first != nil)
+        let retry = alerts.prepare(issue, generation: firstRoute)
+        #expect(retry == nil)
+
+        alerts.routeChanged()
+        let second = alerts.prepare(issue, generation: alerts.routeGeneration)
+        #expect(second != nil)
+        #expect(alerts.presentation != first)
+        let secondRetry = alerts.prepare(issue, generation: alerts.routeGeneration)
+        #expect(secondRetry == nil)
+    }
+
+    @Test func `an old route failure cannot reserve the new route alert`() throws {
+        let issue = try self.mismatch()
+        var alerts = ControlChannelCompatibilityAlerts()
+        let oldRoute = alerts.routeGeneration
+        alerts.routeChanged()
+
+        let stale = alerts.prepare(issue, generation: oldRoute)
+        #expect(stale == nil)
+        #expect(alerts.presentation == nil)
+        let current = alerts.prepare(issue, generation: alerts.routeGeneration)
+        #expect(current != nil)
+    }
+
+    @Test func `an old route success cannot clear a newer route presentation`() throws {
+        let issue = try self.mismatch()
+        var alerts = ControlChannelCompatibilityAlerts()
+        let oldRoute = alerts.routeGeneration
+        alerts.routeChanged()
+        let current = alerts.prepare(issue, generation: alerts.routeGeneration)
+        #expect(current != nil)
+
+        let accepted = alerts.updateConnection(generation: oldRoute, connected: true)
+        #expect(!accepted)
+        #expect(alerts.presentation == current)
+    }
+
+    @Test func `success and disconnect retire queued claims even for an identical next failure`() throws {
+        let issue = try self.mismatch()
+        for disconnect in [false, true] {
+            var alerts = ControlChannelCompatibilityAlerts()
+            let first = alerts.prepare(issue, generation: alerts.routeGeneration)
+            #expect(first != nil)
+            if disconnect {
+                alerts.routeChanged()
+            } else {
+                _ = alerts.updateConnection(generation: alerts.routeGeneration, connected: true)
+            }
+            #expect(alerts.presentation == nil)
+
+            let next = alerts.prepare(issue, generation: alerts.routeGeneration)
+            #expect(next != nil)
+            #expect(alerts.presentation != first)
+        }
+    }
+}
+
 @MainActor
 struct ControlChannelGatewayMessageTests {
     @Test func `compatibility copy identifies the known app release without inventing the gateway release`() throws {

@@ -115,7 +115,7 @@ final class GatewayConnectivityCoordinator {
             if routeChanged {
                 self.lastResolvedURL = url
                 self.lastRouteRevision = routeRevision
-                Task { await ControlChannel.shared.refreshEndpoint(reason: "endpoint changed") }
+                ControlChannel.shared.endpointDidChange()
             }
         case let .connecting(mode, _):
             self.resolvedMode = mode
