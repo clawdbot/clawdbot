@@ -15,13 +15,13 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { isNextcloudTalkAccountConfigured, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
-import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
+import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import {
   nextcloudTalkConfigAdapter,
   nextcloudTalkPairingTextAdapter,
   nextcloudTalkSecurityAdapter,
 } from "./channel.adapters.js";
-import { NextcloudTalkConfigSchema } from "./config-schema.js";
+import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { nextcloudTalkGatewayAdapter } from "./gateway.js";
 import { nextcloudTalkMessageActions } from "./message-actions.js";
@@ -95,7 +95,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         blockStreaming: true,
       },
       reload: { configPrefixes: ["channels.nextcloud-talk"] },
-      configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
+      configSchema: NextcloudTalkChannelConfigSchema,
       config: {
         ...nextcloudTalkConfigAdapter,
         isConfigured: isNextcloudTalkAccountConfigured,

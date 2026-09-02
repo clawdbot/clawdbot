@@ -37,6 +37,36 @@ describe("Nextcloud Talk account resolution", () => {
     });
   });
 
+  it("inherits and overrides inbound media config through normal account resolution", () => {
+    const cfg = {
+      channels: {
+        "nextcloud-talk": {
+          baseUrl: "https://cloud.example.com",
+          botSecret: "shared-secret",
+          mediaAllowFrom: ["nextcloud-talk:alice"],
+          mediaMaxMb: 20,
+          accounts: {
+            inherited: {},
+            restricted: { mediaAllowFrom: ["*"], mediaMaxMb: 5 },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveNextcloudTalkAccount({ cfg }).config.mediaAllowFrom).toEqual([
+      "nextcloud-talk:alice",
+    ]);
+    expect(
+      resolveNextcloudTalkAccount({ cfg, accountId: "inherited" }).config.mediaAllowFrom,
+    ).toEqual(["nextcloud-talk:alice"]);
+    expect(
+      resolveNextcloudTalkAccount({ cfg, accountId: "restricted" }).config.mediaAllowFrom,
+    ).toEqual(["*"]);
+    expect(resolveNextcloudTalkAccount({ cfg }).config.mediaMaxMb).toBe(20);
+    expect(resolveNextcloudTalkAccount({ cfg, accountId: "inherited" }).config.mediaMaxMb).toBe(20);
+    expect(resolveNextcloudTalkAccount({ cfg, accountId: "restricted" }).config.mediaMaxMb).toBe(5);
+  });
+
   it("isolates unavailable default and named account SecretRefs from ambient credentials", () => {
     vi.stubEnv("NEXTCLOUD_TALK_BOT_SECRET", "ambient-secret");
     const unavailableSecret = {
