@@ -340,6 +340,25 @@ suite.define(() => {
               .trim(),
           )
           .toBe("Ada King & 4 others");
+        const attribution = card.locator(".session-hovercard__attribution");
+        const attributionName = attribution.locator("a.session-hovercard__attribution-name");
+        expect(await attributionName.getAttribute("href")).toBe("/activity?person=profile-ada");
+        const linkedAvatars = attribution.locator(".person-activity-avatar-link .viewer-avatar");
+        await expect.poll(() => linkedAvatars.count()).toBe(3);
+        const collapsedSpread = await linkedAvatars.evaluateAll((avatars) => {
+          const left = avatars.map((avatar) => avatar.getBoundingClientRect().left);
+          return left.at(-1)! - left[0]!;
+        });
+        await attributionName.hover();
+        await expect
+          .poll(async () => {
+            const left = await linkedAvatars.evaluateAll((avatars) =>
+              avatars.map((avatar) => avatar.getBoundingClientRect().left),
+            );
+            return left.at(-1)! - left[0]!;
+          })
+          .toBeGreaterThan(collapsedSpread + 5);
+        await captureProof(page, "sidebar-row-hovercard-attribution-expanded.png");
         expect(await card.locator(".session-hovercard__attribution").textContent()).not.toContain(
           "You",
         );
