@@ -301,6 +301,11 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         builtinToolNames: new Set(),
         replaySafeToolNames: new Set(),
       });
+      const emitAssistantEnd = (message: ReturnType<typeof makeAssistantMessageFixture>) => {
+        native.emit({ type: "message_start", message });
+        native.emit({ type: "message_end", message });
+        native.emit({ type: "agent_end", messages: [message], willRetry: false });
+      };
       try {
         native.emit({ type: "agent_start" });
         if (first || outcome === "failure") {
@@ -309,17 +314,14 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             await releaseFirst.promise;
           }
           const incomplete = outcome === "cli-exhausted-result";
-          native.emit({
-            type: "message_update",
-            message: makeAssistantMessageFixture({
-              provider,
-              model,
-              stopReason: incomplete ? "stop" : "error",
-              errorMessage: incomplete ? undefined : "429 rate limit",
-              content: incomplete ? [{ type: "thinking", thinking: "Still reasoning" }] : [],
-            }),
+          const assistantMessage = makeAssistantMessageFixture({
+            provider,
+            model,
+            stopReason: incomplete ? "stop" : "error",
+            errorMessage: incomplete ? undefined : "429 rate limit",
+            content: incomplete ? [{ type: "thinking", thinking: "Still reasoning" }] : [],
           });
-          native.emit({ type: "agent_end" });
+          emitAssistantEnd(assistantMessage);
           if (incomplete) {
             // Native terminal resolution preserves a safe incomplete reply after
             // its internal retries; the later CLI candidate supplies no liveness.
@@ -340,17 +342,14 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           throw new FailoverError("429 rate limit", { reason: "rate_limit", provider, model });
         }
         if (outcome === "cancelled") {
-          native.emit({
-            type: "message_update",
-            message: makeAssistantMessageFixture({
-              provider,
-              model,
-              stopReason: "aborted",
-              errorMessage: undefined,
-              content: [],
-            }),
+          const assistantMessage = makeAssistantMessageFixture({
+            provider,
+            model,
+            stopReason: "aborted",
+            errorMessage: undefined,
+            content: [],
           });
-          native.emit({ type: "agent_end" });
+          emitAssistantEnd(assistantMessage);
           return { payloads: [], meta: { aborted: true, stopReason: "aborted", agentMeta: {} } };
         }
         const text = retriesInterimAck ? "On it." : "Final report";
@@ -362,9 +361,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           content: [{ type: "text", text }],
           timestamp: Date.now(),
         });
-        native.emit({ type: "message_start", message: assistantMessage });
-        native.emit({ type: "message_end", message: assistantMessage });
-        native.emit({ type: "agent_end" });
+        emitAssistantEnd(assistantMessage);
         if (usesContinuation) {
           expect(runParams.sessionKey).toContain(":run:");
           completedContinuationSessionKey = runParams.sessionKey;
