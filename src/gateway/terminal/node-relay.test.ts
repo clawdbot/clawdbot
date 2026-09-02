@@ -43,6 +43,7 @@ describe("createNodeRelayBackend", () => {
 
     const opening = createNodeRelayBackend({
       registry,
+      isDispatchAuthorized: () => true,
       nodeId: "node-validated",
       expectedConnId: "conn-validated",
       expectedPairingGeneration: "generation-a",
@@ -98,6 +99,7 @@ describe("createNodeRelayBackend", () => {
     } as unknown as NodeRegistry;
     const backend = await createNodeRelayBackend({
       registry,
+      isDispatchAuthorized: () => true,
       nodeId: "node-1",
       expectedConnId: "conn-1",
       command,
@@ -145,6 +147,7 @@ describe("createNodeRelayBackend", () => {
     } as unknown as NodeRegistry;
     const backend = await createNodeRelayBackend({
       registry,
+      isDispatchAuthorized: () => true,
       nodeId: "node-1",
       expectedConnId: "conn-1",
       command: "anthropic.claude.terminal.resume.v1",
@@ -168,6 +171,7 @@ describe("createNodeRelayBackend", () => {
     const registry = { invoke, sendInvokeInput: vi.fn() } as unknown as NodeRegistry;
     const backend = await createNodeRelayBackend({
       registry,
+      isDispatchAuthorized: () => true,
       nodeId: "node-1",
       expectedConnId: "conn-authorized",
       expectedPairingGeneration: "generation-authorized",
@@ -208,6 +212,7 @@ describe("createNodeRelayBackend", () => {
     } as unknown as NodeRegistry;
     const backend = await createNodeRelayBackend({
       registry,
+      isDispatchAuthorized: () => true,
       nodeId: "node-1",
       expectedConnId: "conn-1",
       command: "codex.terminal.resume.v1",
@@ -228,6 +233,7 @@ describe("createNodeRelayBackend", () => {
 
     const surrogateBackend = await createNodeRelayBackend({
       registry,
+      isDispatchAuthorized: () => true,
       nodeId: "node-1",
       expectedConnId: "conn-1",
       command: "codex.terminal.resume.v1",
@@ -253,6 +259,7 @@ describe("createNodeRelayBackend", () => {
     } as unknown as NodeRegistry;
     const backend = await createNodeRelayBackend({
       registry,
+      isDispatchAuthorized: () => true,
       nodeId: "node-1",
       expectedConnId: "conn-1",
       command: "codex.terminal.resume.v1",

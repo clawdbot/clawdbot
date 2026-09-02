@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import {
   decodeNodePtyResumeParams,
@@ -16,6 +16,7 @@ vi.mock("@lydell/node-pty", () => ({ spawn: nodePtySpawn }));
 type TerminalPtyHandle = Awaited<ReturnType<NonNullable<Parameters<typeof runNodePtyCommand>[2]>>>;
 
 describe("node PTY command", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
     nodePtySpawn.mockReset();
   });
@@ -57,7 +58,7 @@ describe("node PTY command", () => {
   });
 
   it("refuses a selected node directory removed after decoding instead of falling home", async () => {
-    const cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "native-start-")));
+    const cwd = tempDirs.make("native-start-");
     const params = decodeNodePtyStartParams(
       JSON.stringify({ cwd, initialMessage: "--help", cols: 100, rows: 30 }),
     );
