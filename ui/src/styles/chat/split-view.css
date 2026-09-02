@@ -200,7 +200,13 @@ openclaw-chat-pane {
 /* Equal outer tracks keep the face switch on the pane centerline even when
    either chrome cluster grows; the identity trail owns the shrinkable text. */
 .chat-pane__header-center {
+  position: relative;
   justify-self: center;
+}
+
+.chat-pane__header-center:has(.chat-pane__face-switch) {
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
 .chat-pane__header-trailing {
@@ -707,6 +713,26 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__header-center .chat-pane__sharing-menu,
+.chat-pane__header-center .chat-pane__draft-indicator {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 100%;
+  display: inline-flex;
+  transform: translateY(-50%);
+}
+
+.chat-pane__header-center .chat-pane__sharing-trigger {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+}
+
 .chat-pane__sharing-menu::part(menu) {
   width: 260px;
   min-width: min(260px, calc(100vw - 24px));
@@ -776,6 +802,16 @@ openclaw-chat-pane {
 
 .chat-pane__draft-indicator {
   font-size: 13px;
+}
+
+.chat-pane__header-center .chat-pane__draft-indicator {
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
 /* A full split header measures 793px including insets, so secondary controls

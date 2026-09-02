@@ -450,10 +450,12 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         ${props.placementControl ?? nothing} ${props.presence ?? nothing}
       </div>
       ${hasFaceControl
-        ? html`<div class="chat-pane__header-center">${props.faceControl}</div>`
+        ? html`<div class="chat-pane__header-center">
+            ${props.faceControl} ${props.sharingControl ?? nothing}
+          </div>`
         : nothing}
       <div class="chat-pane__header-trailing">
-        ${props.sharingControl ?? nothing}
+        ${hasFaceControl ? nothing : (props.sharingControl ?? nothing)}
         ${!props.catalog && props.branches.length > 1
           ? html`
               <wa-dropdown

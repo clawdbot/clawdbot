@@ -1,4 +1,4 @@
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -405,7 +405,7 @@ describe("chat pane header", () => {
     expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
   });
 
-  it("separates identity, face, and action controls into balanced header regions", () => {
+  it("groups visibility with the face switch inside the centered header region", () => {
     const { container } = mountHeader({
       placementControl: html`<span data-slot="placement"></span>`,
       presence: html`<span data-slot="presence"></span>`,
@@ -420,9 +420,20 @@ describe("chat pane header", () => {
       "chat-pane__header-center",
     );
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
+      "chat-pane__header-center",
+    );
+  });
+
+  it("keeps visibility with trailing actions when the session has no face switch", () => {
+    const { container } = mountHeader({
+      faceControl: nothing,
+      sharingControl: html`<span data-slot="sharing"></span>`,
+    });
+
+    expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
       "chat-pane__header-trailing",
     );
-    expect(container.querySelector(".chat-pane__header--centered")).not.toBeNull();
+    expect(container.querySelector(".chat-pane__header--centered")).toBeNull();
   });
 
   it("uses the full header width when no face switch needs centering", () => {
