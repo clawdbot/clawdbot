@@ -65,6 +65,18 @@ describe("managed Tailscale upgrade", () => {
   it.each([
     ["foreign target", legacyRoute(false, 8096)],
     [
+      "foreign sibling hostname",
+      {
+        ...legacyRoute(false, 8096),
+        Web: {
+          ...legacyRoute(false, 8096).Web,
+          "old.tailnet.ts.net:443": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:18789/" } },
+          },
+        },
+      },
+    ],
+    [
       "foreign sibling path",
       {
         TCP: { "443": { HTTPS: true } },
@@ -87,17 +99,20 @@ describe("managed Tailscale upgrade", () => {
     ]);
     const marker = await installFixture(config, "serve");
     const before = await readFile(marker, "utf8");
+    const exposure = startGatewayTailscaleExposure({
+      tailscaleMode: "serve",
+      port: 18789,
+      backend: { host: "127.0.0.1", port: 19000 },
+      logTailscale: { info: () => undefined, warn: () => undefined },
+    });
     try {
-      await expect(
-        startGatewayTailscaleExposure({
-          tailscaleMode: "serve",
-          port: 18789,
-          backend: { host: "127.0.0.1", port: 19000 },
-          logTailscale: { info: () => undefined, warn: () => undefined },
-        }),
-      ).rejects.toThrow("--https=443 --set-path=/ off");
+      await expect(exposure).rejects.toThrow("--https=443 --set-path=/ off");
       expect(await readFile(marker, "utf8")).toBe(before);
     } finally {
+      await exposure.then(
+        (cleanup) => cleanup?.(),
+        () => undefined,
+      );
       env.restore();
     }
   });

@@ -195,6 +195,28 @@ describe("shared/tailscale-status", () => {
     );
   });
 
+  it.each([
+    [443, 443, false],
+    [8443, 8443, false],
+    [443, 8443, true],
+  ])(
+    "requires HTTPS port %s to be exclusive across hostnames (sibling port %s)",
+    (port, siblingPort, owned) => {
+      const url = `wss://old.tail.ts.net${port === 443 ? "" : `:${port}`}`;
+      const raw = JSON.stringify({
+        TCP: { [port]: { HTTPS: true }, [siblingPort]: { HTTPS: true } },
+        Web: {
+          [`old.tail.ts.net:${port}`]: { Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } } },
+          [`current.tail.ts.net:${siblingPort}`]: {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:8096" } },
+          },
+        },
+      });
+      expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual(owned ? [url] : []);
+      expect(extractTailscaleServeGatewayUrls(raw, 18789)).toEqual([url]);
+    },
+  );
+
   it("distinguishes malformed Serve status from an empty valid configuration", async () => {
     const malformed = vi.fn().mockResolvedValue({ code: 0, stdout: "not-json" });
     const empty = vi.fn().mockResolvedValue({ code: 0, stdout: "{}" });

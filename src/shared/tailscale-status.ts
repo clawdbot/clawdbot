@@ -39,12 +39,9 @@ const TailscaleServeWebServerSchema = z.object({
   ),
 });
 
-const TailscaleServeServiceSchema = z.object({
+const TailscaleServeConfigSchema = z.object({
   TCP: z.record(z.string(), TailscaleServeTcpHandlerSchema).optional(),
   Web: z.record(z.string(), TailscaleServeWebServerSchema).optional(),
-});
-
-const TailscaleServeConfigSchema = TailscaleServeServiceSchema.extend({
   AllowFunnel: z.record(z.string(), z.boolean()).optional(),
 });
 
@@ -106,10 +103,12 @@ export function extractTailscaleServeGatewayUrls(
   if (!config) {
     return null;
   }
-  // Services can load-balance elsewhere; Funnel is not a tailnet discovery URL.
-  // Adoption additionally requires an exclusive root so it can free the port.
+  // Services are not device routes; Funnel is excluded only from discovery.
+  // Renames can leave other hostnames on a port, but the CLI clears the current
+  // hostname. Adoption therefore requires the port's sole root handler.
+  const web = Object.entries(config.Web ?? {});
   const urls = new Set<string>();
-  for (const [hostPort, webServer] of Object.entries(config.Web ?? {})) {
+  for (const [hostPort, webServer] of web) {
     const handler = webServer.Handlers["/"];
     if (
       (!forAdoption && config.AllowFunnel?.[hostPort]) ||
@@ -121,7 +120,10 @@ export function extractTailscaleServeGatewayUrls(
     }
     try {
       const endpoint = new URL(`https://${hostPort}`);
-      if (config.TCP?.[endpoint.port || "443"]?.HTTPS === true) {
+      const exclusive =
+        !forAdoption ||
+        web.filter(([other]) => URL.parse(`https://${other}`)?.port === endpoint.port).length === 1;
+      if (config.TCP?.[endpoint.port || "443"]?.HTTPS === true && exclusive) {
         urls.add(`wss://${endpoint.host}`);
       }
     } catch {
