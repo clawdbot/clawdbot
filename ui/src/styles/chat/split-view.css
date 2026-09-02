@@ -760,11 +760,6 @@ openclaw-chat-pane {
   padding: 6px 12px;
 }
 
-.chat-pane__sharing-visibility-item[disabled] {
-  opacity: 1;
-  color: var(--muted);
-}
-
 .chat-pane__sharing-members-title {
   margin-top: 8px;
 }
