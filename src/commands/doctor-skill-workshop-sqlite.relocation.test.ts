@@ -36,6 +36,46 @@ import {
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
+function seedLegacyV15ProposalRows(
+  env: NodeJS.ProcessEnv,
+  rows: readonly {
+    record: SkillProposalRecord & { appliedAt: string };
+    workspaceDir: string;
+    claimReleasedTime: number | null;
+  }[],
+): void {
+  const databasePath = openOpenClawStateDatabase({ env }).path;
+  closeOpenClawStateDatabaseForTest();
+  const legacy = openNodeSqliteDatabase(databasePath);
+  legacy.exec(`
+    ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
+    ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
+  `);
+  const insertProposal = legacy.prepare(
+    `INSERT INTO skill_workshop_proposals (
+      proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
+      created_at, updated_at, draft_hash, applied_at, claim_released_time
+    ) VALUES (?, ?, 'main', ?, 'create', 'applied', ?, ?, ?, ?, ?)`,
+  );
+  for (const { record, workspaceDir, claimReleasedTime } of rows) {
+    insertProposal.run(
+      record.id,
+      JSON.stringify(record),
+      workspaceDir,
+      record.createdAt,
+      record.updatedAt,
+      record.draftHash,
+      record.appliedAt,
+      claimReleasedTime,
+    );
+  }
+  legacy.exec(`
+    PRAGMA user_version = 15;
+    UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
+  `);
+  legacy.close();
+}
+
 beforeEach(async () => {
   testState = await createOpenClawTestState({
     layout: "state-only",
@@ -187,35 +227,14 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       await fs.writeFile(record.target.skillFile, content, "utf8");
     }
 
-    const databasePath = openOpenClawStateDatabase({ env: testState.env }).path;
-    closeOpenClawStateDatabaseForTest();
-    const legacy = openNodeSqliteDatabase(databasePath);
-    legacy.exec(`
-      ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
-      ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
-    `);
-    const insertProposal = legacy.prepare(
-      `INSERT INTO skill_workshop_proposals (
-        proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
-        created_at, updated_at, draft_hash, applied_at, claim_released_time
-      ) VALUES (?, ?, 'main', ?, 'create', 'applied', ?, ?, ?, ?, NULL)`,
-    );
-    for (const { record, workspaceDir } of records) {
-      insertProposal.run(
-        record.id,
-        JSON.stringify(record),
+    seedLegacyV15ProposalRows(
+      testState.env,
+      records.map(({ record, workspaceDir }) => ({
+        record,
         workspaceDir,
-        now,
-        now,
-        record.draftHash,
-        now,
-      );
-    }
-    legacy.exec(`
-      PRAGMA user_version = 15;
-      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
-    `);
-    legacy.close();
+        claimReleasedTime: null,
+      })),
+    );
 
     const workshopRoot = resolveWorkshopSkillsDir(testState.env);
     const destination = path.join(workshopRoot, skillKey);
@@ -293,35 +312,10 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       await fs.writeFile(record.target.skillFile, content, "utf8");
     }
 
-    const databasePath = openOpenClawStateDatabase({ env: testState.env }).path;
-    closeOpenClawStateDatabaseForTest();
-    const legacy = openNodeSqliteDatabase(databasePath);
-    legacy.exec(`
-      ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
-      ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
-    `);
-    const insertProposal = legacy.prepare(
-      `INSERT INTO skill_workshop_proposals (
-        proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
-        created_at, updated_at, draft_hash, applied_at, claim_released_time
-      ) VALUES (?, ?, 'main', ?, 'create', 'applied', ?, ?, ?, ?, NULL)`,
+    seedLegacyV15ProposalRows(
+      testState.env,
+      records.map((record) => ({ record: record.record, workspaceDir, claimReleasedTime: null })),
     );
-    for (const { record } of records) {
-      insertProposal.run(
-        record.id,
-        JSON.stringify(record),
-        workspaceDir,
-        now,
-        now,
-        record.draftHash,
-        now,
-      );
-    }
-    legacy.exec(`
-      PRAGMA user_version = 15;
-      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
-    `);
-    legacy.close();
 
     const workshopRoot = resolveWorkshopSkillsDir(testState.env);
     const secondSource = records[1]!.record.target.skillDir;
@@ -417,35 +411,10 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       await fs.writeFile(record.target.skillFile, content, "utf8");
     }
 
-    const databasePath = openOpenClawStateDatabase({ env: testState.env }).path;
-    closeOpenClawStateDatabaseForTest();
-    const legacy = openNodeSqliteDatabase(databasePath);
-    legacy.exec(`
-      ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
-      ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
-    `);
-    const insertProposal = legacy.prepare(
-      `INSERT INTO skill_workshop_proposals (
-        proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
-        created_at, updated_at, draft_hash, applied_at, claim_released_time
-      ) VALUES (?, ?, 'main', ?, 'create', 'applied', ?, ?, ?, ?, NULL)`,
+    seedLegacyV15ProposalRows(
+      testState.env,
+      records.map((record) => ({ record: record.record, workspaceDir, claimReleasedTime: null })),
     );
-    for (const { record } of records) {
-      insertProposal.run(
-        record.id,
-        JSON.stringify(record),
-        workspaceDir,
-        now,
-        now,
-        record.draftHash,
-        now,
-      );
-    }
-    legacy.exec(`
-      PRAGMA user_version = 15;
-      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
-    `);
-    legacy.close();
 
     const workshopRoot = resolveWorkshopSkillsDir(testState.env);
     const persistSpy = vi
@@ -773,7 +742,6 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     const workspaceDir = await tempDirs.make("openclaw-workshop-missing-json-");
     const proposalId = "missing-json-workshop-20260829-1234567890";
     const proposalDir = path.join(testState.stateDir, "skill-workshop", "proposals", proposalId);
-    // Leftover review artifact without the required proposal.json / PROPOSAL.md.
     await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
     await fs.writeFile(
       path.join(proposalDir, "references", "proof.md"),
@@ -889,7 +857,6 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
       `Quarantined incomplete Skill Workshop proposal ${proposalId}`,
     );
     await expect(fs.access(proposalDir)).rejects.toThrow();
-    // The metadata JSON sidecar is preserved for manual recovery.
     const recoveryRoot = path.join(testState.stateDir, "skill-workshop", "recovery", "proposals");
     const recoveryDirs = (await fs.readdir(recoveryRoot)).filter((name) =>
       name.startsWith(`${proposalId}-`),

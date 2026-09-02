@@ -19,8 +19,7 @@ import {
 } from "./tsdown-declaration-fixture.js";
 
 const compiler = path.resolve("scripts/run-tsgo.mjs");
-// The fresh-publish case runs the writer end to end several times; Windows runners
-// need ~150s for it, past the 120s lane default (observed on CI, 2026-09).
+// Repeated end-to-end writer runs exceed the default timeout on Windows.
 const WRITER_TEST_TIMEOUT_MS = process.platform === "win32" ? 360_000 : 120_000;
 
 describe("write-plugin-sdk-entry-dts", { timeout: WRITER_TEST_TIMEOUT_MS }, () => {

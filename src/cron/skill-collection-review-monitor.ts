@@ -54,7 +54,7 @@ export function resolveSkillCollectionReviewMonitorSpecs(
           }),
         },
         payload: { kind: "skillCollectionReview" },
-        // Main is the only valid target for a no-turn system-owned payload; the timer invokes the runner directly.
+        // The timer invokes the runner directly because this payload has no turn target.
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
       },

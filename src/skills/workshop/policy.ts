@@ -1,4 +1,3 @@
-// Workshop policy helpers validate generated skill drafts against Workshop policy.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";

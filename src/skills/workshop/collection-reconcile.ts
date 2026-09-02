@@ -376,14 +376,15 @@ export async function restoreLatestSkillCollectionBackup(params: {
           });
         }
       }
-      // affectedSkills keeps manifest order: restored dirs first, then result-only dirs.
       const restoredDirs = new Set(manifest.skillDirs);
-      const skillKeys = (restored: boolean) =>
-        affectedSkills
-          .filter((affectedSkill) => restoredDirs.has(affectedSkill.relativeDir) === restored)
-          .map((affectedSkill) => affectedSkill.skillKey);
+      const restored = affectedSkills
+        .filter((affectedSkill) => restoredDirs.has(affectedSkill.relativeDir))
+        .map((affectedSkill) => affectedSkill.skillKey);
+      const removed = affectedSkills
+        .filter((affectedSkill) => !restoredDirs.has(affectedSkill.relativeDir))
+        .map((affectedSkill) => affectedSkill.skillKey);
       return {
-        result: { backupId, restored: skillKeys(true), removed: skillKeys(false) },
+        result: { backupId, restored, removed },
         changes,
       };
     },

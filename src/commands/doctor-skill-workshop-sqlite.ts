@@ -248,33 +248,38 @@ async function planWorkshopRelocation(
     const source = path.resolve(record.target.skillDir);
     const move = movesBySource.get(source);
     const conflictReason = staleReasons.get(record.id);
-    const updated = move
-      ? retargetWorkshopProposal(record, {
+    if (move) {
+      const sourceUpdates = updatesBySource.get(source) ?? [];
+      sourceUpdates.push(
+        retargetWorkshopProposal(record, {
           skillKey: record.target.skillKey,
           skillDir: move.destination,
           skillFile: path.join(move.destination, "SKILL.md"),
-        })
-      : conflictReason
-        ? staleWorkshopProposal(record, conflictReason)
-        : record.status === "pending" && record.kind === "create"
-          ? retargetWorkshopProposal(
-              record,
-              resolveSkillProposalTarget({ skillName: record.target.skillKey, env }),
-            )
-          : record.status === "pending" && record.kind === "update"
-            ? staleWorkshopProposal(
-                record,
-                "Skill Workshop no longer edits skills outside its own directory.",
-              )
-            : undefined;
-    if (updated) {
-      if (move) {
-        const sourceUpdates = updatesBySource.get(source) ?? [];
-        sourceUpdates.push(updated);
-        updatesBySource.set(source, sourceUpdates);
-      } else {
-        updates.push(updated);
-      }
+        }),
+      );
+      updatesBySource.set(source, sourceUpdates);
+      continue;
+    }
+    if (conflictReason) {
+      updates.push(staleWorkshopProposal(record, conflictReason));
+      continue;
+    }
+    if (record.status === "pending" && record.kind === "create") {
+      updates.push(
+        retargetWorkshopProposal(
+          record,
+          resolveSkillProposalTarget({ skillName: record.target.skillKey, env }),
+        ),
+      );
+      continue;
+    }
+    if (record.status === "pending" && record.kind === "update") {
+      updates.push(
+        staleWorkshopProposal(
+          record,
+          "Skill Workshop no longer edits skills outside its own directory.",
+        ),
+      );
     }
   }
   return {
