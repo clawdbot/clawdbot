@@ -14336,17 +14336,20 @@ public struct ChannelsLogoutParams: Codable, Sendable {
 }
 
 public struct WebLoginStartParams: Codable, Sendable {
+    public let channel: String?
     public let force: Bool?
     public let timeoutms: Int?
     public let verbose: Bool?
     public let accountid: String?
 
     public init(
+        channel: String? = nil,
         force: Bool? = nil,
         timeoutms: Int? = nil,
         verbose: Bool? = nil,
         accountid: String? = nil)
     {
+        self.channel = channel
         self.force = force
         self.timeoutms = timeoutms
         self.verbose = verbose
@@ -14354,6 +14357,7 @@ public struct WebLoginStartParams: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case channel
         case force
         case timeoutms = "timeoutMs"
         case verbose
@@ -14362,21 +14366,29 @@ public struct WebLoginStartParams: Codable, Sendable {
 }
 
 public struct WebLoginWaitParams: Codable, Sendable {
+    public let channel: String?
+    public let sessionkey: String?
     public let timeoutms: Int?
     public let accountid: String?
     public let currentqrdataurl: String?
 
     public init(
+        channel: String? = nil,
+        sessionkey: String? = nil,
         timeoutms: Int? = nil,
         accountid: String? = nil,
         currentqrdataurl: String? = nil)
     {
+        self.channel = channel
+        self.sessionkey = sessionkey
         self.timeoutms = timeoutms
         self.accountid = accountid
         self.currentqrdataurl = currentqrdataurl
     }
 
     private enum CodingKeys: String, CodingKey {
+        case channel
+        case sessionkey = "sessionKey"
         case timeoutms = "timeoutMs"
         case accountid = "accountId"
         case currentqrdataurl = "currentQrDataUrl"

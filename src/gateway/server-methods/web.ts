@@ -43,9 +43,11 @@ function resolveAccountId(params: unknown): string | undefined {
 }
 
 function resolveChannelId(params: unknown): string | undefined {
-  return typeof (params as { channel?: unknown }).channel === "string"
-    ? (params as { channel?: string }).channel
-    : undefined;
+  if (!params || typeof params !== "object") {
+    return undefined;
+  }
+  const channel = Reflect.get(params, "channel");
+  return typeof channel === "string" ? channel : undefined;
 }
 
 function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): string | null {
