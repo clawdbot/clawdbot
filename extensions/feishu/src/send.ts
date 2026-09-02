@@ -7,7 +7,6 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
-import { parseMergeForwardContent } from "./bot-content.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
@@ -20,6 +19,7 @@ import {
 } from "./markdown.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
+import { parseMergeForwardContent } from "./merge-forward.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import { parsePostContent } from "./post.js";
 import { resolveFeishuReceiptKind, toFeishuSendResult } from "./send-result.js";
