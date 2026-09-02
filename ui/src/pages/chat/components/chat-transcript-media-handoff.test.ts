@@ -23,18 +23,30 @@ function expectSameImageNodes(actual: HTMLImageElement[], expected: HTMLImageEle
   }
 }
 
-function mediaMetadataResponse(available = true, mediaTicket?: string): Response {
-  return {
-    ok: true,
-    json: async () => ({
-      available,
-      reason: available ? undefined : "Attachment removed",
-      retryable: false,
-      ...(mediaTicket
-        ? { mediaTicket, mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString() }
-        : {}),
+function mediaMetadataResponse(
+  available = true,
+  mediaTicket?: string,
+  retryable = false,
+): Response {
+  return Response.json({
+    available,
+    reason: available ? undefined : "Attachment removed",
+    retryable,
+    ...(mediaTicket
+      ? { mediaTicket, mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString() }
+      : {}),
+  });
+}
+
+function unreadableMetadataResponse(status = 200): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.error(new TypeError("Connection closed while reading metadata"));
+      },
     }),
-  } as Response;
+    { status },
+  );
 }
 
 function mountTranscriptPane(props: Parameters<typeof renderChatThread>[0]) {
@@ -467,9 +479,30 @@ describe("canonical image presentation handoff", () => {
     },
   );
 
-  it.each(["renewal", "denial"] as const)(
-    "updates native image presentation after metadata ticket %s",
-    async (change) => {
+  it.each([
+    {
+      name: "renewal",
+      response: () => mediaMetadataResponse(true, "after-refresh"),
+      reason: undefined,
+    },
+    {
+      name: "denial",
+      response: () => mediaMetadataResponse(false),
+      reason: "Attachment removed",
+    },
+    {
+      name: "retryable denial",
+      response: () => mediaMetadataResponse(false, undefined, true),
+      reason: "Attachment removed",
+    },
+    ...[401, 403].map((status) => ({
+      name: `HTTP ${status} with an unreadable body`,
+      response: () => unreadableMetadataResponse(status),
+      reason: "Unavailable",
+    })),
+  ])(
+    "updates native image presentation after metadata ticket $name",
+    async ({ response, reason }) => {
       vi.useFakeTimers();
       try {
         const fixture = createCanonicalImageTranscript();
@@ -477,19 +510,69 @@ describe("canonical image presentation handoff", () => {
         fixture.requests[0]?.resolve(mediaMetadataResponse(true, "before-refresh"));
         await vi.advanceTimersByTimeAsync(0);
         const displayed = expectDefined(fixture.displayed[0], "displayed image");
+        displayed.dispatchEvent(new Event("load"));
         await vi.advanceTimersByTimeAsync(1_000);
-        fixture.requests[1]?.resolve(mediaMetadataResponse(change === "renewal", "after-refresh"));
+        fixture.requests[1]?.resolve(response());
         await vi.advanceTimersByTimeAsync(0);
-        if (change === "denial") {
+        if (reason) {
           displayed.dispatchEvent(new Event("load"));
-          displayed.dispatchEvent(new Event("error"));
           expect(fixture.images()).toHaveLength(0);
-          expect(fixture.container.textContent).toContain("Attachment removed");
+          expect(fixture.container.textContent).toContain(reason);
+          await vi.advanceTimersByTimeAsync(5_000);
+          expect(fixture.images()).toHaveLength(0);
         } else {
           expectSameImageNodes(fixture.images(), fixture.displayed);
           expect(displayed.getAttribute("src")).toContain("mediaTicket=after-refresh");
           displayed.dispatchEvent(new Event("load"));
         }
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    { presentation: "canonical", failure: "network rejection", responseStatus: null },
+    { presentation: "inline-handoff", failure: "network rejection", responseStatus: null },
+    { presentation: "canonical", failure: "body read rejection", responseStatus: 200 },
+    { presentation: "canonical", failure: "HTTP 408 non-JSON", responseStatus: 408 },
+    { presentation: "canonical", failure: "HTTP 429 non-JSON", responseStatus: 429 },
+    { presentation: "canonical", failure: "HTTP 503 non-JSON", responseStatus: 503 },
+  ])(
+    "keeps a loaded $presentation image through $failure renewal and expiry",
+    async ({ presentation, responseStatus }) => {
+      vi.useFakeTimers();
+      try {
+        const fixture = createCanonicalImageTranscript(
+          undefined,
+          presentation === "canonical" ? [] : undefined,
+        );
+        fixture.publish();
+        fixture.requests[0]?.resolve(mediaMetadataResponse(true, "before-offline"));
+        await vi.advanceTimersByTimeAsync(0);
+        const displayed = expectDefined(fixture.images()[0], "loaded canonical image");
+        expect(displayed.getAttribute("src")).toContain("mediaTicket=before-offline");
+        Object.defineProperty(displayed, "naturalWidth", { value: 1 });
+        displayed.dispatchEvent(new Event("load"));
+        vi.mocked(fetch).mockImplementation(async () => {
+          if (responseStatus === null) {
+            throw new TypeError("Gateway offline");
+          }
+          if (responseStatus === 200) {
+            return unreadableMetadataResponse();
+          }
+          return new Response("Service temporarily unavailable", { status: responseStatus });
+        });
+
+        // Exhaust renewals before the 31-second fixture ticket expires.
+        await vi.advanceTimersByTimeAsync(11_000);
+        expectSameImageNodes(fixture.images(), [displayed]);
+        expect(fixture.container.querySelector(".chat-assistant-attachment-card")).toBeNull();
+
+        await vi.advanceTimersByTimeAsync(20_001);
+        expectSameImageNodes(fixture.images(), [displayed]);
+        expect(fixture.container.querySelector(".chat-assistant-attachment-card")).toBeNull();
       } finally {
         vi.clearAllTimers();
         vi.useRealTimers();

@@ -256,6 +256,10 @@ function buildEvaluatedBindingsByChannel(
       continue;
     }
     const match = normalizeBindingMatch(binding.match);
+    // Unmatchable peers cannot establish routing or account-ownership evidence.
+    if (match.peer.state === "invalid") {
+      continue;
+    }
     const evaluated: EvaluatedBinding = {
       binding,
       match,
@@ -486,6 +490,17 @@ function getEvaluatedBindingIndexForChannelAccount(
   return built;
 }
 
+/** @internal Lists matchable candidates from the canonical channel/account binding index. */
+export function listChannelAccountRouteBindings(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
+) {
+  return getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    normalizeLowercaseStringOrEmpty(input.channel),
+    normalizeAccountId(input.accountId),
+  ).map(({ binding }) => binding);
+}
+
 /** @internal Lists exact DM peers from the canonical channel/account binding index. */
 export function listExactDirectMessageBindingPeerIds(
   input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
@@ -593,9 +608,6 @@ function buildResolvedRouteCacheKey(params: {
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
-  if (match.peer.state === "invalid") {
-    return false;
-  }
   if (match.peer.state === "valid") {
     if (
       !scope.peer ||

@@ -172,10 +172,10 @@ function claimQueuedEntries(): FileLogQueueEntry[] {
   return entries;
 }
 
-function rotateIfNeeded(entry: FileLogQueueEntry, cursor: FileCursor, synchronous: boolean): void {
+function prepareWrite(entry: FileLogQueueEntry, cursor: FileCursor, synchronous: boolean): number {
   const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
   if (cursor.bytes === 0 || cursor.bytes + payloadBytes <= entry.maxFileBytes) {
-    return;
+    return payloadBytes;
   }
   if (rotateLogFile(entry.file)) {
     cursor.bytes = 0;
@@ -183,6 +183,7 @@ function rotateIfNeeded(entry: FileLogQueueEntry, cursor: FileCursor, synchronou
   } else {
     warnAboutRotationFailure(entry, synchronous);
   }
+  return payloadBytes;
 }
 
 async function writeEntries(entries: FileLogQueueEntry[], generation: number): Promise<void> {
@@ -203,8 +204,7 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
       }
       cursors.set(entry.file, cursor);
     }
-    rotateIfNeeded(entry, cursor, false);
-    const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
+    const payloadBytes = prepareWrite(entry, cursor, false);
     activeAppendInFlight = true;
     try {
       await appendFile({ filePath: entry.file, content: entry.payload });
@@ -233,8 +233,7 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
       cursor = { bytes: getCurrentLogFileBytesSync(entry.file) };
       cursors.set(entry.file, cursor);
     }
-    rotateIfNeeded(entry, cursor, true);
-    const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
+    const payloadBytes = prepareWrite(entry, cursor, true);
     try {
       appendRegularFileSync({ filePath: entry.file, content: entry.payload });
       cursor.bytes += payloadBytes;

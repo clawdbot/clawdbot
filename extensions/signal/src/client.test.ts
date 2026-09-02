@@ -402,7 +402,10 @@ describe("streamSignalEvents", () => {
         baseUrl,
         onEvent: () => {},
       }),
-    ).rejects.toThrow("Signal SSE failed (503 Unavailable)");
+    ).rejects.toMatchObject({
+      message: "Signal SSE failed (503 Unavailable)",
+      status: 503,
+    });
   });
 
   it("rejects event streams that do not send headers before the deadline", async () => {

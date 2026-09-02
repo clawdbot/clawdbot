@@ -110,7 +110,7 @@ on:
           - stable
           - full
       use_github_hosted_runners:
-        description: Use GitHub-hosted runners where supported; OpenWebUI always uses a large-disk Blacksmith runner
+        description: Use GitHub-hosted runners where supported, including OpenWebUI
         required: false
         default: false
         type: boolean
@@ -452,7 +452,7 @@ on:
         default: stable
         type: string
       use_github_hosted_runners:
-        description: Use GitHub-hosted runners where supported; OpenWebUI always uses a large-disk Blacksmith runner
+        description: Use GitHub-hosted runners where supported, including OpenWebUI
         required: false
         default: true
         type: boolean
@@ -1975,7 +1975,7 @@ jobs:
     if: inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

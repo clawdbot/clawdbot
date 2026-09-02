@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
+import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
@@ -353,11 +355,20 @@ describe("renderChatComposer controls", () => {
       ],
       issue: null,
     });
-    patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
+    const settings = patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
+    const theme = createApplicationTheme(
+      settings,
+      createGatewayStoreTestStore({ settings }).gateway,
+    );
+    onTestFinished(() => theme.dispose());
     const container = document.createElement("div");
     document.body.append(container);
     const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
-    const draw = () => render(renderChatComposer(composerProps), container);
+    const draw = () => {
+      composerProps.realtimeTalkInputDeviceId = theme.settings.realtimeTalkInputDeviceId;
+      render(renderChatComposer(composerProps), container);
+    };
+    onTestFinished(theme.subscribe(draw));
     composerProps.onRequestUpdate = draw;
     draw();
 
@@ -405,6 +416,11 @@ describe("renderChatComposer controls", () => {
     button(container, t("chat.composer.microphoneInput")).click();
     await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledTimes(2));
     expect(dropdown?.open).toBe(true);
+    expect(
+      [...container.querySelectorAll(".chat-talk-input-picker__item")].map((item) =>
+        item.getAttribute("aria-checked"),
+      ),
+    ).toEqual(["false", "false", "true"]);
   });
 
   it("keeps the controlled hold-to-dictate preference in sync after toggling", async () => {
