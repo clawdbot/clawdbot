@@ -21,20 +21,15 @@ export function resolveMessageVisibleContent(
   message: unknown,
   normalized: NormalizedMessage,
 ): MessageGroup["visibleContent"] {
-  if (
-    normalized.content.some(
-      (block) =>
-        block.type !== "text" &&
-        !isToolCallContentType(block.type) &&
-        !isToolResultContentType(block.type),
-    )
-  ) {
-    return "non-text";
+  let hasText = false;
+  for (const block of normalized.content) {
+    if (block.type === "text") {
+      hasText ||= Boolean(block.text?.trim());
+    } else if (!isToolCallContentType(block.type) && !isToolResultContentType(block.type)) {
+      return "non-text";
+    }
   }
-  return normalized.content.some((block) => block.type === "text" && block.text?.trim()) ||
-    extractTextCached(message)?.trim()
-    ? "text"
-    : "none";
+  return hasText || extractTextCached(message)?.trim() ? "text" : "none";
 }
 
 export function isSilentReplyStream(text: string): boolean {

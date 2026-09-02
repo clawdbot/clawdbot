@@ -5008,14 +5008,23 @@ describe("expansion-state render dependencies", () => {
 
   it("drops render versions with evicted and reset session maps", () => {
     resetChatThreadState();
+    const items = buildCachedChatItems(
+      createProps({
+        sessionKey: "evicted-session",
+        messages: [toolUseMessage("evicted-call", "read", {}, 1)],
+      }),
+    );
+    syncToolCardExpansionState("evicted-session", items, true);
     const evicted = getExpandedToolCards("evicted-session");
-    setExpansionState(evicted, "card", true);
+    expect([...evicted.values()]).toEqual([true]);
     for (let index = 0; index < 20; index += 1) {
       getExpandedToolCards(`other-session-${index}`);
     }
 
     expect(getExpandedToolCards("evicted-session")).not.toBe(evicted);
     expect(getExpansionStateVersion(getExpandedToolCards("evicted-session"))).toBe(0);
+    syncToolCardExpansionState("evicted-session", items, true);
+    expect([...getExpandedToolCards("evicted-session").values()]).toEqual([true]);
 
     setExpansionState(getExpandedUserMessages("reset-session"), "message", true);
     resetChatThreadState();

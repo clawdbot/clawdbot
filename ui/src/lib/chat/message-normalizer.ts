@@ -93,6 +93,17 @@ export function normalizeRoleForGrouping(role: string): string {
   return role;
 }
 
+function hasToolMessageEnvelope(message: Record<string, unknown> | undefined): boolean {
+  return (
+    typeof message?.toolCallId === "string" ||
+    typeof message?.tool_call_id === "string" ||
+    typeof message?.toolUseId === "string" ||
+    typeof message?.tool_use_id === "string" ||
+    typeof message?.toolName === "string" ||
+    typeof message?.tool_name === "string"
+  );
+}
+
 export function resolveMessageRole(message: unknown): string {
   const m = asOptionalRecord(message);
   const content = m?.content;
@@ -102,13 +113,7 @@ export function resolveMessageRole(message: unknown): string {
       const type = asOptionalRecord(value)?.type;
       return isToolResultContentType(type) || isToolCallContentType(type);
     });
-  return hasToolContent ||
-    typeof m?.toolCallId === "string" ||
-    typeof m?.tool_call_id === "string" ||
-    typeof m?.toolUseId === "string" ||
-    typeof m?.tool_use_id === "string" ||
-    typeof m?.toolName === "string" ||
-    typeof m?.tool_name === "string"
+  return hasToolContent || hasToolMessageEnvelope(m)
     ? "toolResult"
     : (readStringField(m, "role") ?? "unknown");
 }
@@ -123,15 +128,7 @@ export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
   // Tool classification needs envelope fields, not parsed content or media.
   const m = asOptionalRecord(message);
   const role = typeof m?.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
-  return (
-    role === "tool" ||
-    typeof m?.toolCallId === "string" ||
-    typeof m?.tool_call_id === "string" ||
-    typeof m?.toolUseId === "string" ||
-    typeof m?.tool_use_id === "string" ||
-    typeof m?.toolName === "string" ||
-    typeof m?.tool_name === "string"
-  );
+  return role === "tool" || hasToolMessageEnvelope(m);
 }
 
 function coerceCanvasPreview(preview: Record<string, unknown>): CanvasPreview | null {

@@ -206,8 +206,23 @@ function collectExtensionHintKeys(
   return keys;
 }
 
-function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): ConfigUiHints {
+function applyMetadataHints(
+  hints: ConfigUiHints,
+  plugins: PluginUiMetadata[],
+  channels: ChannelUiMetadata[],
+): ConfigUiHints {
   const next: ConfigUiHints = { ...hints };
+  const mergeRelativeHints = (basePath: string, uiHints?: ConfigUiHints) => {
+    for (const [relPathRaw, hint] of Object.entries(uiHints ?? {})) {
+      const relPath = relPathRaw.trim().replace(/^\./, "");
+      if (!relPath) {
+        continue;
+      }
+      const key = `${basePath}.${relPath}`;
+      next[key] = { ...next[key], ...hint };
+    }
+  };
+
   for (const plugin of plugins) {
     const id = plugin.id.trim();
     if (!id) {
@@ -233,24 +248,9 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
       help: `Plugin-defined config payload for ${id}.`,
     };
 
-    const uiHints = plugin.configUiHints ?? {};
-    for (const [relPathRaw, hint] of Object.entries(uiHints)) {
-      const relPath = relPathRaw.trim().replace(/^\./, "");
-      if (!relPath) {
-        continue;
-      }
-      const key = `${basePath}.config.${relPath}`;
-      next[key] = {
-        ...next[key],
-        ...hint,
-      };
-    }
+    mergeRelativeHints(`${basePath}.config`, plugin.configUiHints);
   }
-  return next;
-}
 
-function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]): ConfigUiHints {
-  const next: ConfigUiHints = { ...hints };
   for (const channel of channels) {
     const id = channel.id.trim();
     if (!id) {
@@ -266,49 +266,9 @@ function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]):
       ...(help ? { help } : {}),
     };
 
-    const uiHints = channel.configUiHints ?? {};
-    for (const [relPathRaw, hint] of Object.entries(uiHints)) {
-      const relPath = relPathRaw.trim().replace(/^\./, "");
-      if (!relPath) {
-        continue;
-      }
-      const key = `${basePath}.${relPath}`;
-      next[key] = {
-        ...next[key],
-        ...hint,
-      };
-    }
+    mergeRelativeHints(basePath, channel.configUiHints);
   }
-  return next;
-}
 
-function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
-  const seen = new Set<string>();
-  const ordered: string[] = [];
-  for (const id of CHANNEL_IDS) {
-    const normalized = normalizeLowercaseStringOrEmpty(id);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    ordered.push(normalized);
-  }
-  for (const channel of channels) {
-    const normalized = normalizeLowercaseStringOrEmpty(channel.id);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    ordered.push(normalized);
-  }
-  return ordered;
-}
-
-function applyHeartbeatTargetHints(
-  hints: ConfigUiHints,
-  channels: ChannelUiMetadata[],
-): ConfigUiHints {
-  const next: ConfigUiHints = { ...hints };
   const channelList = listHeartbeatTargetChannels(channels);
   const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
   const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
@@ -322,6 +282,20 @@ function applyHeartbeatTargetHints(
     };
   }
   return next;
+}
+
+function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const id of [...CHANNEL_IDS, ...channels.map((channel) => channel.id)]) {
+    const normalized = normalizeLowercaseStringOrEmpty(id);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  return ordered;
 }
 
 /** Mutate a caller-owned schema; cached inputs must be cloned before merging. */
@@ -343,10 +317,7 @@ function mergeExtensionSchemas(
     if (!entriesNode || !plugin.configSchema) {
       continue;
     }
-    const entrySchema = entryBase
-      ? cloneSchema(entryBase)
-      : ({ type: "object" } as JsonSchemaObject);
-    const entryObject = asSchemaObject(entrySchema) ?? ({ type: "object" } as JsonSchemaObject);
+    const entryObject: JsonSchemaObject = entryBase ? cloneSchema(entryBase) : { type: "object" };
     const baseConfigSchema = asSchemaObject(entryObject.properties?.config);
     // The merged response owns plugin fragments independently of manifest metadata.
     const pluginConfigSchema = cloneSchema(plugin.configSchema);
@@ -489,10 +460,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   }
   const generated = computeBaseConfigSchemaResponse();
   const bundledChannels = getBundledChannelSchemaMetadata();
-  const mergedWithoutSensitiveHints = applyHeartbeatTargetHints(
-    applyChannelHints(generated.uiHints, bundledChannels),
-    bundledChannels,
-  );
+  const mergedWithoutSensitiveHints = applyMetadataHints(generated.uiHints, [], bundledChannels);
   const mergedHints = applyDerivedTags(
     applySensitiveHints(
       mergedWithoutSensitiveHints,
@@ -530,10 +498,7 @@ export function buildConfigSchemaCore(params?: {
       return cached;
     }
   }
-  const mergedWithoutSensitiveHints = applyHeartbeatTargetHints(
-    applyChannelHints(applyPluginHints(base.uiHints, plugins), channels),
-    channels,
-  );
+  const mergedWithoutSensitiveHints = applyMetadataHints(base.uiHints, plugins, channels);
   const extensionHintKeys = collectExtensionHintKeys(
     mergedWithoutSensitiveHints,
     plugins,

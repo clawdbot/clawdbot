@@ -108,16 +108,18 @@ describe("message-normalizer", () => {
     });
 
     it("normalizes message with array content", () => {
-      const result = normalizeMessage({
+      const message = {
         role: "assistant",
         content: [
           { type: "text", text: "Here is the result" },
           { type: "tool_use", name: "bash", args: { command: "ls" } },
         ],
         timestamp: 2000,
-      });
+      };
+      const result = normalizeMessage(message);
 
       expect(result.role).toBe("toolResult");
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(false);
       expect(result.content).toHaveLength(2);
       expect(result.content[0]).toEqual({
         type: "text",
