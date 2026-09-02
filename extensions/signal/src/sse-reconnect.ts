@@ -1,6 +1,6 @@
 // Signal plugin module implements sse reconnect behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
   logVerbose,
@@ -21,6 +21,20 @@ const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0.2,
 };
+
+// Only the native signal-cli transport (client.ts) throws this shape on a non-2xx
+// daemon response; the container/WebSocket transport never surfaces a status this way,
+// so an unmatched message falls through to the generic transient-error handling below.
+const SSE_REJECTION_STATUS_PATTERN = /^Signal SSE failed \((\d{3})\b/;
+const UNAUTHORIZED_ACCOUNT_STATUS = 401;
+const UNAUTHORIZED_ACCOUNT_MESSAGE =
+  'Signal daemon rejected the account (401 Unauthorized); the signal-cli device is likely unregistered or unlinked. Re-link with `signal-cli link -n "OpenClaw"` or re-register the account, then restart the channel.';
+
+function parseSseRejectionStatus(err: unknown): number | undefined {
+  const message = err instanceof Error ? err.message : undefined;
+  const match = message ? SSE_REJECTION_STATUS_PATTERN.exec(message) : null;
+  return match ? Number(match[1]) : undefined;
+}
 
 export type SignalStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 
@@ -107,6 +121,11 @@ export async function runSignalSseLoop({
         return;
       }
       runtime.error?.(`Signal stream error: ${String(err)}`);
+      if (parseSseRejectionStatus(err) === UNAUTHORIZED_ACCOUNT_STATUS) {
+        runtime.log?.(`Signal reconnect stopped: ${UNAUTHORIZED_ACCOUNT_MESSAGE}`);
+        statusSink?.(channelBlockedPatch(UNAUTHORIZED_ACCOUNT_MESSAGE, { connected: false }));
+        return;
+      }
       publishSignalRecovering(statusSink, String(err));
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);

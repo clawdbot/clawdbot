@@ -65,4 +65,27 @@ describe("runSignalSseLoop lifecycle", () => {
       expect.objectContaining({ lifecycle: "recovering", lastError: "Error: stream failed" }),
     );
   });
+
+  it("publishes a distinct terminal status and stops retrying on a 401 rejection", async () => {
+    const statusSink = vi.fn();
+    streamSignalEvents.mockRejectedValue(new Error("Signal SSE failed (401 Unauthorized)"));
+
+    await runSignalSseLoop({
+      baseUrl: "http://signal.test",
+      runtime: createRuntime(),
+      onEvent: vi.fn(),
+      statusSink,
+    });
+
+    expect(streamSignalEvents).toHaveBeenCalledTimes(1);
+    expect(statusSink).toHaveBeenCalledTimes(1);
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lifecycle: "blocked",
+        terminalDisconnect: true,
+        connected: false,
+        lastError: expect.stringMatching(/401 Unauthorized/),
+      }),
+    );
+  });
 });
