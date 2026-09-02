@@ -10,11 +10,11 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
-  SignalSseRejectionError,
   type SignalSseEvent,
   type SignalTransportKind,
   streamSignalEvents,
 } from "./client-adapter.js";
+import { SignalSseRejectionError } from "./client.js";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -23,15 +23,13 @@ const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   jitter: 0.2,
 };
 
-// Only the native signal-cli transport (client.ts) throws SignalSseRejectionError on a
-// non-2xx daemon response; the container/WebSocket transport never throws this type, so
-// an unmatched rejection falls through to the generic transient-error handling below.
-const UNAUTHORIZED_ACCOUNT_STATUS = 401;
-const UNAUTHORIZED_ACCOUNT_MESSAGE =
-  'Signal daemon rejected the connection (401 Unauthorized). This usually means the account needs re-linking (`signal-cli link -n "OpenClaw"`) or re-registering; if the daemon sits behind its own auth proxy, its credentials may need attention instead. Restart the channel once resolved.';
-
-function readSseRejectionStatus(err: unknown): number | undefined {
-  return err instanceof SignalSseRejectionError ? err.status : undefined;
+function isPermanentSignalSseRejection(error: unknown): error is SignalSseRejectionError {
+  if (!(error instanceof SignalSseRejectionError)) {
+    return false;
+  }
+  // signal-cli uses other 4xx responses for request/configuration rejection.
+  // These three statuses explicitly permit a later retry.
+  return error.status >= 400 && error.status < 500 && ![408, 425, 429].includes(error.status);
 }
 
 export type SignalStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
@@ -119,9 +117,10 @@ export async function runSignalSseLoop({
         return;
       }
       runtime.error?.(`Signal stream error: ${String(err)}`);
-      if (readSseRejectionStatus(err) === UNAUTHORIZED_ACCOUNT_STATUS) {
-        runtime.log?.(`Signal reconnect stopped: ${UNAUTHORIZED_ACCOUNT_MESSAGE}`);
-        statusSink?.(channelBlockedPatch(UNAUTHORIZED_ACCOUNT_MESSAGE, { connected: false }));
+      if (isPermanentSignalSseRejection(err)) {
+        const lastError = `Signal daemon rejected the event stream: ${err.message}. Check the configured account and daemon URL, fix the daemon or proxy response, then restart the channel.`;
+        runtime.log?.(`Signal reconnect stopped: ${lastError}`);
+        statusSink?.(channelBlockedPatch(lastError, { connected: false }));
         return;
       }
       publishSignalRecovering(statusSink, String(err));

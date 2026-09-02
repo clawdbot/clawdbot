@@ -16,8 +16,6 @@ import {
   streamSignalEvents as nativeStreamEvents,
 } from "./client.js";
 
-export { SignalSseRejectionError } from "./client.js";
-
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 export type SignalSseEvent = {

@@ -27,12 +27,11 @@ type SignalRpcResponse<T> = {
 
 /** Thrown when the native SSE endpoint rejects the request with a non-2xx HTTP status. */
 export class SignalSseRejectionError extends Error {
-  readonly status: number;
-
-  constructor(status: number, statusText: string) {
+  constructor(
+    readonly status: number,
+    statusText: string,
+  ) {
     super(`Signal SSE failed (${status} ${statusText})`);
-    this.name = "SignalSseRejectionError";
-    this.status = status;
   }
 }
 
