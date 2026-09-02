@@ -1039,7 +1039,7 @@ jobs:
             -f dispatch_id="${dispatch_id}")"
           echo "run_id=${run_id}" >> "${GITHUB_OUTPUT}"
           echo "workflow_ref=${CHILD_WORKFLOW_REF}" >> "${GITHUB_OUTPUT}"
-          gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status --interval 30
+          wait_for_run ci.yml "${run_id}" "${PARENT_WORKFLOW_SHA}" "" false
 
       - name: Verify exact native CI qualification
         id: proof

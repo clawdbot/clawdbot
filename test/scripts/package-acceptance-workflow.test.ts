@@ -3228,9 +3228,14 @@ if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispat
 } else if (args[0] === 'api' && args[1].endsWith('/actions/runs/91')) {
   console.log(readFileSync(${JSON.stringify(nativeRunPath)}, 'utf8'));
 } else if (args[0] === 'run' && args[1] === 'view') {
-  console.log(JSON.stringify({ headSha: args.includes('92') ? ${JSON.stringify(targetSha)} : ${JSON.stringify(workflowSha)}, url: 'https://github.com/openclaw/openclaw/actions/runs/91' }));
-} else if (args[0] === 'run' && args[1] === 'watch') {
-  process.exit(${mode === "failed" ? 1 : 0});
+  if (args.includes('jobs')) process.exit(0);
+  const run = JSON.parse(readFileSync(${JSON.stringify(nativeRunPath)}, 'utf8'));
+  console.log(JSON.stringify({
+    headSha: args.includes('92') ? ${JSON.stringify(targetSha)} : run.head_sha,
+    status: run.status, conclusion: run.conclusion,
+    createdAt: '2026-08-30T10:00:00Z', updatedAt: '2026-08-30T10:01:00Z',
+    url: 'https://github.com/openclaw/openclaw/actions/runs/91',
+  }));
 } else throw new Error('Unexpected GitHub operation: ' + JSON.stringify(args));
 `,
     );
@@ -3316,7 +3321,12 @@ NODE
           dispatch_id: dispatchId,
         },
       });
-      expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
+      if (mode === "other-tooling") {
+        expect(readFileSync(outputPath, "utf8")).toBe("");
+        expect(result.stderr).toContain("used workflow SHA");
+      } else {
+        expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
+      }
     }
     const approvalPath = join(root, "android-release-approval/approval.json");
     const approved = mode === "success" || mode === "rerun-at-dispatch";
