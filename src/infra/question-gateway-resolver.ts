@@ -11,7 +11,8 @@ const QUESTION_RECORD_ID_PATTERN = /^ask_[a-f0-9]{32}$/u;
 export type ResolveQuestionOverGatewayResult =
   | { status: "answered"; questionId: string; optionValue: string }
   | { status: "custom-input"; questionId: string }
-  | { status: "already-terminal"; reason: "already-terminal" | "not-found" };
+  | { status: "already-terminal"; reason: "already-terminal" | "not-found" }
+  | { status: "denied" };
 
 export type ResolveQuestionOverGatewayParams = {
   cfg: OpenClawConfig;
@@ -19,6 +20,11 @@ export type ResolveQuestionOverGatewayParams = {
   senderId?: string | null;
   gatewayUrl?: string;
   clientDisplayName?: string;
+  /**
+   * Re-checked after the awaited question read and immediately before the
+   * resolve write, so access lost during that window cannot answer.
+   */
+  authorize?: () => boolean | Promise<boolean>;
 } & (
   | {
       /** Rendered option value carried by the pressed control (reactions). */
@@ -111,6 +117,9 @@ export async function resolveQuestionOverGateway(
   const optionValue = params.optionValue ?? question.options[params.optionIndex as number]?.label;
   if (!optionValue) {
     throw new Error("question resolution index does not match a declared option");
+  }
+  if (params.authorize && !(await params.authorize())) {
+    return { status: "denied" };
   }
   try {
     await callGateway<QuestionResolveResult>({

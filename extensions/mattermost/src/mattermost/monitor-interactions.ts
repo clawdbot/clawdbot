@@ -45,20 +45,22 @@ function createMattermostQuestionInteractionHandler(
     // model-picker handler does, instead of leaning on the transport's earlier
     // check.
     const channelInfo = await resources.resolveChannelInfo(interaction.payload.channel_id);
-    const auth = await authorizeMattermostCommandInvocation({
-      account,
-      cfg,
-      senderId: interaction.payload.user_id,
-      senderName: interaction.userName,
-      channelId: interaction.payload.channel_id,
-      channelInfo,
-      readStoreAllowFrom: pairing.readAllowFromStore,
-      allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+    const decide = async () =>
+      await authorizeMattermostCommandInvocation({
+        account,
         cfg,
-        surface: "mattermost",
-      }),
-      hasControlCommand: false,
-    });
+        senderId: interaction.payload.user_id,
+        senderName: interaction.userName,
+        channelId: interaction.payload.channel_id,
+        channelInfo,
+        readStoreAllowFrom: pairing.readAllowFromStore,
+        allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+          cfg,
+          surface: "mattermost",
+        }),
+        hasControlCommand: false,
+      });
+    const auth = await decide();
     if (!auth.ok) {
       // No Gateway I/O for a click current policy refuses; the prompt stays usable.
       return { ephemeral_text: `OpenClaw ignored this action for ${auth.roomLabel}.` };
@@ -70,7 +72,13 @@ function createMattermostQuestionInteractionHandler(
         optionIndex: selection.optionIndex,
         senderId: interaction.payload.user_id,
         clientDisplayName: `Mattermost question (${account.accountId})`,
+        // The resolver awaits a read before it writes; access is re-checked
+        // inside that window so a revoked click cannot still answer.
+        authorize: async () => (await decide()).ok,
       });
+      if (result.status === "denied") {
+        return { ephemeral_text: `OpenClaw ignored this action for ${auth.roomLabel}.` };
+      }
       if (result.status !== "answered") {
         return { ephemeral_text: "This question was already answered." };
       }

@@ -138,6 +138,33 @@ describe("mattermost question interactions", () => {
     expect(response?.update).toBeUndefined();
   });
 
+  it("refuses a click whose access is lost while the Gateway read is in flight", async () => {
+    // The resolver hands back "denied" when the authorize hook it calls after the
+    // read says no; the prompt must survive that exactly like an entry denial.
+    resolveOptionMock.mockImplementation(async (params: { authorize?: () => unknown }) => {
+      authorizeMock.mockResolvedValue({
+        ok: false,
+        denyReason: "channel-no-allowlist",
+        roomLabel: "#town-square",
+      });
+      return (await params.authorize?.()) === false ? { status: "denied" } : { status: "answered" };
+    });
+
+    const response = await captureDispatcher()(questionInteraction(questionContext));
+
+    expect(response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
+    expect(response?.update).toBeUndefined();
+  });
+
+  it("re-checks access inside the resolver, not only before it", async () => {
+    await captureDispatcher()(questionInteraction(questionContext));
+
+    const passed = resolveOptionMock.mock.calls[0]?.[0] as { authorize?: () => unknown };
+    expect(typeof passed.authorize).toBe("function");
+    await passed.authorize?.();
+    expect(authorizeMock).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the prompt when the question was already answered", async () => {
     resolveOptionMock.mockResolvedValue({ status: "already-answered" });
 
