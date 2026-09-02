@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
@@ -110,19 +111,16 @@ type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
   validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
 };
 
-const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
-  path.resolve(entry),
-);
-function pathIsSameOrChild(candidate: string, parent: string): boolean {
-  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
-}
+const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"]
+  .map((entry) => path.resolve(entry))
+  .filter((root) => root !== path.parse(root).root);
 
 function isTemporaryProgramPath(value: string | undefined): boolean {
   if (!value || !path.isAbsolute(value)) {
     return false;
   }
   const resolved = path.resolve(value);
-  return TEMP_PROGRAM_ROOTS.some((root) => pathIsSameOrChild(resolved, root));
+  return TEMP_PROGRAM_ROOTS.some((root) => isPathInside(root, resolved));
 }
 
 function isMissingProgramPath(value: string | undefined): boolean {
