@@ -64,6 +64,36 @@ keeps the claim held, while shutdown or abort leaves unadopted work retryable.
 The monitor tracks delivery independently from claim settlement because
 adoption can tombstone a row before the channel's delivery promise returns.
 
+### One turn, several durable claims
+
+A channel that answers several inbound events as one turn holds one durable
+claim per event, and every one of them has to reach the same terminal state.
+`fanInChannelIngressLifecycles(lifecycles)` returns a single
+`ChannelIngressLifecycle` that fans each callback out across all of them, plus
+`settle`, `abandon`, and `cancel` for the paths that finish outside a callback.
+Pass the events' lifecycles in the order they were claimed; `undefined` entries
+are skipped, and an empty input yields `lifecycle: undefined` so a caller can
+fall back to the single-claim path without branching. Adopting the combined
+lifecycle adopts every claim, and abandoning it returns every claim to its retry
+budget — a partial outcome is what this exists to prevent.
+
+Use it only when one agent turn genuinely consumes several claims. A channel
+that answers each event on its own keeps passing that event's lifecycle
+directly.
+
+### Start slots and deferral
+
+`drain.startLimit` bounds how many deliveries the drain starts at once. A
+delivery that defers normally keeps its slot, because a deferred delivery on the
+default `deferredLaneOccupancy: "hold"` still serializes its lane. A drain that
+declares `deferredLaneOccupancy: "release"` gives the lane up on deferral, so
+its deferred deliveries also give their start slot back, bounded by a budget
+equal to `startLimit`: open delivery callbacks stay within `startLimit` plus that
+budget, and past it a deferral keeps its slot. Without the release, a handful of
+deferred deliveries would hold every slot and stall the other lanes. How much
+handed-off deferred work may be pending at once stays the drain owner's
+semantics, unchanged by this budget.
+
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
