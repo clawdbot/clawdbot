@@ -589,7 +589,7 @@ resolve_openclaw_npm_publish_state() {
   manifest_dir="${RUNNER_TEMP}/openclaw-npm-resume-preflight"
   rm -rf "${manifest_dir}"
   mkdir -p "${manifest_dir}"
-  gh run download "${PREFLIGHT_RUN_ID}" \
+  gh run download "${PREFLIGHT_ARTIFACT_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
     --name "${artifact_name}" \
     --dir "${manifest_dir}"
@@ -597,7 +597,7 @@ resolve_openclaw_npm_publish_state() {
   manifest_sha="$(jq -er '.releaseSha' "${manifest_path}")"
   manifest_tarball_sha="$(jq -er '.tarballSha256' "${manifest_path}")"
   if [[ "${manifest_sha}" != "${TARGET_SHA}" ]]; then
-    echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
+    echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_ARTIFACT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
     exit 1
   fi
   published_tarball_url="$(npm view "openclaw@${release_version}" dist.tarball)"
@@ -1002,7 +1002,7 @@ upload_dependency_evidence_release_asset() {
 
   rm -rf "${download_dir}" "${asset_path}"
   mkdir -p "${download_dir}"
-  gh run download "${PREFLIGHT_RUN_ID}" \
+  gh run download "${PREFLIGHT_ARTIFACT_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
     --name "${artifact_name}" \
     --dir "${download_dir}"
@@ -1279,7 +1279,7 @@ append_release_proof_to_github_release() {
     RELEASE_TARBALL="${tarball}" \
     RELEASE_INTEGRITY="${integrity}" \
     RELEASE_PUBLISH_RUN_ID="${GITHUB_RUN_ID}" \
-    PREFLIGHT_RUN_ID="${PREFLIGHT_RUN_ID}" \
+    PREFLIGHT_ARTIFACT_RUN_ID="${PREFLIGHT_ARTIFACT_RUN_ID}" \
     RELEASE_VALIDATION_LABEL="${proof_label}" \
     RELEASE_VALIDATION_RUN_ID="${proof_run_id}" \
     PLUGIN_NPM_RUN_ID="${plugin_npm_run_id}" \
@@ -1306,7 +1306,7 @@ const section = [
   `- release SHA: \`${process.env.RELEASE_SHA}\``,
   `- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
   `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
-  `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
+  `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_ARTIFACT_RUN_ID}`,
   `- ${process.env.RELEASE_VALIDATION_LABEL}: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_VALIDATION_RUN_ID}`,
   `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
   process.env.CLAWHUB_LINE,
