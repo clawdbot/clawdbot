@@ -477,4 +477,72 @@ describe("buildSubagentList", () => {
     expect(list.active).toStrictEqual([]);
     expect(list.recent[0]?.status).toBe("done");
   });
+
+  it("lists a run whose wait expired without an observed child stop as live, not as a recent timeout", () => {
+    // Regression (round 3, finding 3): a `child-unconfirmed` timeout records the
+    // end of the PARENT'S WAIT. Filing it under "recent" with a bare `timeout`
+    // told the parent the child was dead in the same breath as the completion
+    // warning that told it the child may still be running — and a parent that
+    // believes the list is the one that spawns the destructive replacement.
+    const now = Date.now();
+    const unconfirmedRun = {
+      runId: "run-wait-expired-unconfirmed",
+      childSessionKey: "agent:main:subagent:wait-expired-unconfirmed",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "long build that outlived the parent's wait",
+      cleanup: "keep",
+      createdAt: now - 120_000,
+      runTimeoutSeconds: 60,
+      execution: {
+        status: "terminal",
+        startedAt: now - 120_000,
+        endedAt: now - 60_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(unconfirmedRun);
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const list = buildSubagentList({
+      cfg,
+      runs: [unconfirmedRun],
+      recentMinutes: 30,
+      taskMaxChars: 110,
+    });
+
+    expect(list.recent).toStrictEqual([]);
+    expect(list.active).toHaveLength(1);
+    expect(list.active[0]?.status).toBe("running (wait expired; child stop unconfirmed)");
+    expect(list.active[0]?.status).not.toBe("timeout");
+    expect(list.text).toContain("child stop unconfirmed");
+
+    // Anti-vacuity control: an OBSERVED timeout on the same shape still reads as
+    // a finished timeout under "recent", so the change is scoped to the
+    // unconfirmed disposition rather than hiding every timeout from the list.
+    resetSubagentRegistryForTests();
+    const observedRun = {
+      ...unconfirmedRun,
+      runId: "run-wait-expired-observed",
+      childSessionKey: "agent:main:subagent:wait-expired-observed",
+      execution: {
+        ...unconfirmedRun.execution,
+        outcome: { status: "timeout", timeoutDisposition: "child-stopped" },
+      },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(observedRun);
+
+    const observedList = buildSubagentList({
+      cfg,
+      runs: [observedRun],
+      recentMinutes: 30,
+      taskMaxChars: 110,
+    });
+
+    expect(observedList.active).toStrictEqual([]);
+    expect(observedList.recent[0]?.status).toBe("timeout");
+  });
 });

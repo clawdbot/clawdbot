@@ -29,6 +29,13 @@
  *   Every request is recorded, so the proof asserts on what the production code
  *   actually submitted — notably whether any `sessions.delete` was sent for a
  *   child that may still be live.
+ * - `subagentRegistryDeps.captureSubagentCompletionReply` — the child's own
+ *   transcript. It answers from a scripted per-session map so the proof can tell
+ *   pre-expiry partial output apart from the child's real final output. The seam
+ *   under test (`freezeRunResultAtCompletion`'s first-write-wins capture and the
+ *   promotion that must clear it) is entirely real; only the transcript text is
+ *   scripted, exactly as a real child would have changed it between the two
+ *   reads.
  * - `subagentRegistryDeps.loadAgentRuntimePluginRegistryHandle` — resolves "no
  *   plugin registry" rather than loading the plugin host. The terminal-hook code
  *   path still executes for real against an empty registry, which is what a real
@@ -90,6 +97,24 @@
  *                                 attachments directory survives and the row is
  *                                 not retired. The assertion that the discard
  *                                 actually ran is what keeps this non-vacuous.
+ *  7. Swarm slot retention      — a real collector in a real `maxConcurrent: 1`
+ *                                 scheduler lane with a real queued sibling: the
+ *                                 deadline-only expiry must NOT release the lane
+ *                                 slot, so the sibling does not start beside a
+ *                                 possibly-live child. The observed stop later
+ *                                 releases it and the sibling runs.
+ *  8. Result recapture          — the promoted run must publish the child's
+ *                                 FINAL output, not the partial text frozen when
+ *                                 the wait expired.
+ *  9. List liveness             — the production `buildSubagentList` must show an
+ *                                 unconfirmed run as live rather than filing it
+ *                                 under recent timeouts while its task is still
+ *                                 running.
+ * 10. Cancellation at the deadline — a real `lifecycle` abort event whose
+ *                                 authoritative `endedAt` equals the deadline is
+ *                                 stop evidence: it must promote a row whose
+ *                                 child session record is genuinely absent,
+ *                                 rather than deferring cleanup forever.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -110,6 +135,9 @@ type SubagentRegistryMemoryModule =
   typeof import("../src/agents/subagents/registry/subagent-registry-memory.js");
 type DetachedTaskRuntimeModule = typeof import("../src/tasks/detached-task-runtime.js");
 type SessionAccessorModule = typeof import("../src/config/sessions/session-accessor.js");
+type SwarmSchedulerModule = typeof import("../src/agents/subagents/swarm/swarm-scheduler.js");
+type SubagentListModule = typeof import("../src/agents/subagents/registry/subagent-list.js");
+type AgentEventsModule = typeof import("../src/infra/agent-events.js");
 
 const repoRoot = process.env.PROOF_REPO_ROOT ?? process.cwd();
 const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-proof-126924-"));
@@ -138,6 +166,14 @@ const ABSENT_RUN_ID = "run-proof-126924-absent";
 const ABSENT_CHILD_SESSION_KEY = "agent:main:subagent:proof-126924-absent";
 const CONTROL_RUN_ID = "run-proof-126924-control";
 const CONTROL_CHILD_SESSION_KEY = "agent:main:subagent:proof-126924-control";
+const COLLECT_RUN_ID = "run-proof-126924-collector";
+const COLLECT_CHILD_SESSION_KEY = "agent:main:subagent:proof-126924-collector";
+const COLLECT_SIBLING_RUN_ID = "run-proof-126924-collector-sibling";
+const SWARM_GROUP_ID = "swarm-proof-126924";
+const KILL_RUN_ID = "run-proof-126924-kill-at-deadline";
+const KILL_CHILD_SESSION_KEY = "agent:main:subagent:proof-126924-kill-at-deadline";
+const PARTIAL_OUTPUT = "PARTIAL: 40% done when the parent's wait expired";
+const FINAL_OUTPUT = "FINAL: the child finished the whole task";
 const RUN_TIMEOUT_SECONDS = 6;
 const SUSPENDED_RETENTION_DAYS = 7;
 
@@ -216,12 +252,27 @@ try {
   const sessionAccessor = (await importSource(
     "src/config/sessions/session-accessor.js",
   )) as SessionAccessorModule;
+  const swarmScheduler = (await importSource(
+    "src/agents/subagents/swarm/swarm-scheduler.js",
+  )) as SwarmSchedulerModule;
+  const subagentList = (await importSource(
+    "src/agents/subagents/registry/subagent-list.js",
+  )) as SubagentListModule;
+  const agentEvents = (await importSource("src/infra/agent-events.js")) as AgentEventsModule;
   log(`[boot] production modules imported in ${Math.round((Date.now() - bootStartedAt) / 1_000)}s`);
 
   // The ONLY stub: the gateway edge that would reach the child agent's own run.
   // `agent.wait` returning a bare timeout with no terminal snapshot IS the
   // deadline-only expiry this PR is about.
+  // The child's transcript, scripted. Flipped from partial to final exactly when
+  // the child's own session row is flipped to `done` in scenario 4 — i.e. the
+  // transcript changes when the child finishes, as it would in production.
+  const childTranscript = new Map<string, string>();
   depsModule.setSubagentRegistryDepsForTest({
+    captureSubagentCompletionReply: (async (sessionKey: string) =>
+      childTranscript.get(
+        sessionKey,
+      )) as SubagentRegistryDepsModule["subagentRegistryDeps"]["captureSubagentCompletionReply"],
     callGateway: (async (request: { method?: string }) => {
       gatewayRequests.push(request);
       if (request.method === "agent.wait") {
@@ -336,8 +387,80 @@ try {
       `the launch must own a real running task row for ${runId}, or later assertions are vacuous`,
     );
   }
+
+  // The live child's transcript as it stands while it is still working. Nothing
+  // has observed it stop, so this is the only text any capture can return yet.
+  childTranscript.set(LIVE_CHILD_SESSION_KEY, PARTIAL_OUTPUT);
+
+  // A third run for scenario 10: its child session record is deliberately never
+  // written, which is the exact condition in which a rejected cancellation
+  // callback leaves the row deferred forever.
+  registry.registerSubagentRun({
+    runId: KILL_RUN_ID,
+    childSessionKey: KILL_CHILD_SESSION_KEY,
+    requesterSessionKey: REQUESTER_SESSION_KEY,
+    requesterDisplayKey: "main",
+    task: "proof: a cancellation recorded at the deadline is stop evidence",
+    cleanup: "keep",
+    runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+    expectsCompletionMessage: false,
+    taskRowOwnership: "required",
+  });
+
+  // A real swarm lane with room for exactly one collector, driven through the
+  // production scheduler the spawn path uses. The sibling is a genuine queued
+  // launch: nothing but a released slot can start it.
+  const collectorSiblingStarts: string[] = [];
+  const swarmActiveRunIds: string[] = [];
+  await writeChildSessionRow(COLLECT_CHILD_SESSION_KEY, {
+    status: "running",
+    updatedAt: startedAtMs,
+    startedAt: startedAtMs,
+  });
+  swarmScheduler.enqueueSwarmRun({
+    groupId: SWARM_GROUP_ID,
+    runId: COLLECT_RUN_ID,
+    maxConcurrent: 1,
+    activeRunIds: swarmActiveRunIds,
+    start: async () => {
+      swarmActiveRunIds.push(COLLECT_RUN_ID);
+      registry.registerSubagentRun({
+        runId: COLLECT_RUN_ID,
+        childSessionKey: COLLECT_CHILD_SESSION_KEY,
+        requesterSessionKey: REQUESTER_SESSION_KEY,
+        requesterDisplayKey: "main",
+        task: "proof: a collector must keep its swarm slot until it is seen to stop",
+        cleanup: "keep",
+        collect: true,
+        groupId: SWARM_GROUP_ID,
+        runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+        expectsCompletionMessage: false,
+        taskRowOwnership: "required",
+      });
+    },
+    onStartFailure: () => true,
+  });
+  swarmScheduler.enqueueSwarmRun({
+    groupId: SWARM_GROUP_ID,
+    runId: COLLECT_SIBLING_RUN_ID,
+    maxConcurrent: 1,
+    activeRunIds: swarmActiveRunIds,
+    start: async () => {
+      collectorSiblingStarts.push(COLLECT_SIBLING_RUN_ID);
+    },
+    onStartFailure: () => true,
+  });
+  await waitFor(
+    "the collector to occupy the only slot in its lane",
+    () => swarmScheduler.isSwarmRunActive(COLLECT_RUN_ID) && readRun(COLLECT_RUN_ID) !== undefined,
+  );
+  assert.deepEqual(
+    collectorSiblingStarts,
+    [],
+    "the queued sibling must be genuinely blocked by maxConcurrent, or scenario 7 is vacuous",
+  );
   log(
-    `[setup] two runs registered with real running task rows (deadline in ${RUN_TIMEOUT_SECONDS}s)`,
+    `[setup] four runs registered with real running task rows (deadline in ${RUN_TIMEOUT_SECONDS}s); collector holds the only slot in a maxConcurrent=1 lane`,
   );
 
   // ---------------------------------------------------------------- scenario 1
@@ -366,9 +489,9 @@ try {
       `the detached task must stay nonterminal on a deadline-only expiry (${runId} was ${String(taskStatus)})`,
     );
   }
-  log("[1/6] deadline-only expiry: outcome=timeout disposition=child-unconfirmed for both runs");
+  log("[1/10] deadline-only expiry: outcome=timeout disposition=child-unconfirmed for both runs");
   log(
-    "[1/6] detached tasks read back through the real task registry: status=running (nonterminal)",
+    "[1/10] detached tasks read back through the real task registry: status=running (nonterminal)",
   );
 
   for (const runId of [LIVE_RUN_ID, ABSENT_RUN_ID]) {
@@ -379,6 +502,57 @@ try {
     );
   }
   log("[clock] unconfirmed rows armed no destructive retention deadline");
+
+  // ---------------------------------------------------------------- scenario 7
+  // The collector's wait expired on the same clock. `releaseSwarmRun` deletes the
+  // lane's active reservation and pumps the queue, so releasing it here would
+  // start the sibling beside a child nothing has observed stopping.
+  await waitFor(
+    "the collector's deadline-only expiry",
+    () => readRun(COLLECT_RUN_ID)?.execution.outcome !== undefined,
+  );
+  assert.equal(
+    readRun(COLLECT_RUN_ID)?.execution.outcome?.timeoutDisposition,
+    "child-unconfirmed",
+    "the collector must reach the same deadline-only disposition",
+  );
+  await sleep(200);
+  assert.equal(
+    swarmScheduler.isSwarmRunActive(COLLECT_RUN_ID),
+    true,
+    "the swarm slot belongs to the child, not the row: a bare deadline must not release it",
+  );
+  assert.deepEqual(
+    collectorSiblingStarts,
+    [],
+    "no queued sibling may start beside a collector whose stop was never observed",
+  );
+  log(
+    "[7/10] swarm slot retention: collector expired child-unconfirmed, slot still held, queued sibling not started",
+  );
+
+  // Now the collector's own record reports a stop. The promotion must release
+  // the slot exactly once and let the queued sibling run — without this half the
+  // assertion above could be satisfied by never releasing the slot at all.
+  const collectorEndedAt = deadlineMs - 1_000;
+  await writeChildSessionRow(COLLECT_CHILD_SESSION_KEY, {
+    status: "done",
+    updatedAt: collectorEndedAt,
+    startedAt: startedAtMs,
+    endedAt: collectorEndedAt,
+  });
+  await sweep();
+  await waitFor(
+    "the observed collector stop to release the swarm slot",
+    () => collectorSiblingStarts.length > 0,
+  );
+  assert.deepEqual(
+    collectorSiblingStarts,
+    [COLLECT_SIBLING_RUN_ID],
+    "the observed stop must release the slot exactly once",
+  );
+  assert.equal(swarmScheduler.isSwarmRunActive(COLLECT_RUN_ID), false);
+  log("[7/10] observed collector stop released the slot; the queued sibling started");
 
   // ---------------------------------------------------------------- scenario 2
   await sweep();
@@ -404,7 +578,7 @@ try {
     "the child's attachments must survive: a live child may still be writing there",
   );
   log(
-    `[2/6] continued liveness: run retained, child row still "running", attachments intact, sessions.delete count=${sessionDeleteCount()}`,
+    `[2/10] continued liveness: run retained, child row still "running", attachments intact, sessions.delete count=${sessionDeleteCount()}`,
   );
 
   // ---------------------------------------------------------------- scenario 3
@@ -432,14 +606,57 @@ try {
     "an absent session snapshot must not authorize removing the child's attachments",
   );
   log(
-    `[3/6] absent session snapshot: run retained across repeated sweeps, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
+    `[3/10] absent session snapshot: run retained across repeated sweeps, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
   );
+
+  // ---------------------------------------------------------------- scenario 9
+  // The model-visible listing, built by the production `buildSubagentList` from
+  // the real registry rows while the live run is still unconfirmed. Filing it
+  // under recent timeouts here would contradict, in the same turn, both the
+  // completion warning and the still-`running` detached task — and a parent that
+  // believes the listing is the one that spawns the destructive replacement.
+  const unconfirmedList = subagentList.buildSubagentList({
+    cfg: depsModule.subagentRegistryDeps.getRuntimeConfig(),
+    runs: registryRead.listSubagentRunsForRequester(REQUESTER_SESSION_KEY),
+    recentMinutes: 30,
+  });
+  const listedLiveRun = unconfirmedList.active.find((item) => item.runId === LIVE_RUN_ID);
+  assert.ok(
+    listedLiveRun,
+    "an unconfirmed run must be listed as live work, not filed under recent timeouts",
+  );
+  assert.equal(
+    unconfirmedList.recent.some((item) => item.runId === LIVE_RUN_ID),
+    false,
+    "an unconfirmed run must not appear under recent",
+  );
+  assert.notEqual(
+    listedLiveRun.status,
+    "timeout",
+    "the listing must never report a possibly-live child as a finished timeout",
+  );
+  assert.match(listedLiveRun.status, /unconfirmed/);
+  assert.equal(
+    readTaskStatus(LIVE_RUN_ID, LIVE_CHILD_SESSION_KEY),
+    "running",
+    "the contradiction under test requires the detached task to still be running here",
+  );
+  log(`[9/10] subagents list: active row status="${listedLiveRun.status}", task still running`);
 
   // ---------------------------------------------------------------- scenario 4
   // The live child's own record now says it finished successfully, at a moment
   // inside the deadline window — exactly the race this PR exists to fix: the
   // wait expired on a clock while a successful stop had already happened.
   const observedEndedAt = deadlineMs - 2_000;
+  // The child's transcript changed when it finished, exactly as it would in
+  // production. The registry froze `PARTIAL_OUTPUT` at wait expiry, and
+  // `freezeRunResultAtCompletion` is first-write-wins on `resultText`.
+  assert.equal(
+    readRun(LIVE_RUN_ID)?.completion?.resultText,
+    PARTIAL_OUTPUT,
+    "scenario 8 requires the provisional capture to have really frozen the partial text",
+  );
+  childTranscript.set(LIVE_CHILD_SESSION_KEY, FINAL_OUTPUT);
   await writeChildSessionRow(LIVE_CHILD_SESSION_KEY, {
     status: "done",
     updatedAt: observedEndedAt,
@@ -458,7 +675,36 @@ try {
     "succeeded",
     "the observed success must be publishable; a published timed_out would have blocked it",
   );
-  log("[4/6] later observed completion: detached task promoted running -> succeeded");
+  log("[4/10] later observed completion: detached task promoted running -> succeeded");
+
+  // ---------------------------------------------------------------- scenario 8
+  // The durable projection is the one that matters: this is the task a parent
+  // or operator reads after the promotion, and it is what would have exposed
+  // pre-expiry output as a finished run's result.
+  const promotedTask = taskRuntime.findDetachedTaskRun({
+    runId: LIVE_RUN_ID,
+    runtime: "subagent",
+    sessionKey: LIVE_CHILD_SESSION_KEY,
+    createdAtOrAfter: startedAtMs,
+  });
+  const promotedSummary =
+    promotedTask.lookup === "available" ? promotedTask.task?.progressSummary : undefined;
+  assert.notEqual(
+    promotedSummary,
+    PARTIAL_OUTPUT,
+    "the succeeded task must not expose the text frozen when the wait expired",
+  );
+  assert.equal(
+    promotedSummary,
+    FINAL_OUTPUT,
+    "the succeeded task must expose the child's final result",
+  );
+  assert.notEqual(
+    readRun(LIVE_RUN_ID)?.completion?.resultText,
+    PARTIAL_OUTPUT,
+    "the registry row must not retain the pre-expiry capture after promotion",
+  );
+  log("[8/10] result recapture: the succeeded task exposes the child's FINAL output");
 
   // ---------------------------------------------------------------- scenario 5
   // Control. The same promotion from a published `timed_out` is refused, which
@@ -501,7 +747,66 @@ try {
     "timed_out",
     "a published timeout stays published forever",
   );
-  log("[5/6] control: timed_out -> succeeded rejected by the real task transition rules");
+  log("[5/10] control: timed_out -> succeeded rejected by the real task transition rules");
+
+  // --------------------------------------------------------------- scenario 10
+  // The kill run is still `child-unconfirmed` and its child session record was
+  // never written, so the sweeper's pull path can never promote it: absence is
+  // not stop evidence. The only owner left is a lifecycle callback. A real
+  // `lifecycle` abort event is published through the production emitter and
+  // consumed by the registry's own listener; its authoritative `endedAt` is the
+  // deadline itself, which is where a hard run-timeout kill lands.
+  assert.equal(
+    readRun(KILL_RUN_ID)?.execution.outcome?.timeoutDisposition,
+    "child-unconfirmed",
+    "scenario 10 requires the kill run to be deferred first",
+  );
+  assert.equal(
+    readChildSessionRow(KILL_CHILD_SESSION_KEY),
+    undefined,
+    "scenario 10 requires a genuinely absent session record, so only the callback can promote",
+  );
+  const killEndedAt = readRun(KILL_RUN_ID)?.execution.endedAt;
+  assert.equal(typeof killEndedAt, "number");
+  agentEvents.emitAgentEvent({
+    runId: KILL_RUN_ID,
+    stream: "lifecycle",
+    sessionKey: KILL_CHILD_SESSION_KEY,
+    data: {
+      // No `startedAt`: the callback carries only the authoritative end. Sending
+      // an earlier observed start would move the effective deadline back and let
+      // the ordinary post-deadline clamp promote the row for a different reason,
+      // which is not the case under test.
+      phase: "end",
+      aborted: true,
+      stopReason: "aborted",
+      endedAt: killEndedAt,
+    },
+  });
+  await waitFor(
+    "the delayed cancellation to promote the unconfirmed row",
+    () => readRun(KILL_RUN_ID)?.execution.outcome?.timeoutDisposition !== "child-unconfirmed",
+  );
+  const promotedKillRun = readRun(KILL_RUN_ID);
+  assert.notEqual(
+    promotedKillRun?.execution.outcome?.timeoutDisposition,
+    "child-unconfirmed",
+    "a killed lifecycle end is stop evidence regardless of its recorded timestamp",
+  );
+  assert.ok(promotedKillRun, "the promoted row must still exist to be inspected");
+  assert.equal(
+    promotedKillRun.endedReason,
+    "subagent-killed",
+    "the cancellation itself must own the promoted terminal state",
+  );
+  await waitFor(
+    "the promoted cancellation to reach a terminal detached-task state",
+    () => readTaskStatus(KILL_RUN_ID, KILL_CHILD_SESSION_KEY) === "cancelled",
+    15_000,
+  );
+  log(
+    `[10/10] cancellation recorded at the deadline (endedAt=${String(killEndedAt)} == deadline) promoted the row: endedReason=${String(promotedKillRun.endedReason)}, task=cancelled`,
+  );
 
   // ---------------------------------------------------------------- scenario 6
   // The absent run is still `child-unconfirmed`. Suspend its final delivery and
@@ -545,7 +850,7 @@ try {
     "suspended-delivery expiry must not delete the child's session either",
   );
   log(
-    `[6/6] suspended-delivery expiry (${SUSPENDED_RETENTION_DAYS + 1}d old): delivery discarded, row retained, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
+    `[6/10] suspended-delivery expiry (${SUSPENDED_RETENTION_DAYS + 1}d old): delivery discarded, row retained, attachments intact, sessions.delete count=${sessionDeleteCount()}`,
   );
 
   log("");

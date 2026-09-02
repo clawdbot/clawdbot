@@ -9,6 +9,7 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentChildStopUnconfirmed } from "./subagent-session-metrics.js";
 
 export { settleSubagentRunFromSessionStore } from "./subagent-session-reconciliation.js";
 
@@ -65,8 +66,53 @@ export function resolveCleanupCompletionReason(
  *   `archiveAfterMinutes: 0` keeps its documented no-auto-archive meaning.
  */
 export function shouldDeferTerminalCleanupForUnconfirmedChild(entry: SubagentRunRecord): boolean {
-  const outcome = entry.execution.outcome;
-  return outcome?.status === "timeout" && outcome.timeoutDisposition === "child-unconfirmed";
+  // One derivation, shared with the read/display projections in
+  // `subagent-session-metrics.ts`. Those projections cannot import this module
+  // (they are read by the leaf liveness/list layer), and a second copy of the
+  // predicate is how a reader ends up disagreeing with the writer about whether
+  // a child is known to have stopped.
+  return isSubagentChildStopUnconfirmed(entry);
+}
+
+/**
+ * Drop collector state a `child-unconfirmed` row must not carry.
+ *
+ * Older persisted rows may already have frozen a collector result and armed
+ * group retention before this disposition existed. Neither is valid without
+ * observed stop evidence, and either one lets a member nominate its whole group
+ * for destructive archival, so both are cleared before the sweeper reads them.
+ */
+export function clearUnconfirmedCollectorRetention(entry: SubagentRunRecord): boolean {
+  if (entry.collect !== true || !shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    return false;
+  }
+  let mutated = false;
+  if (entry.collectorCompletion !== undefined) {
+    delete entry.collectorCompletion;
+    mutated = true;
+  }
+  if (entry.archiveAtMs !== undefined) {
+    delete entry.archiveAtMs;
+    mutated = true;
+  }
+  return mutated;
+}
+
+/**
+ * Whether one group member forbids archiving its swarm group right now.
+ *
+ * The sweeper evaluates this twice — once to select a candidate group and again
+ * under the post-cleanup revalidation — and the two must agree exactly, so they
+ * ask here rather than each restating the condition.
+ */
+export function blocksSwarmGroupArchival(entry: SubagentRunRecord, now: number): boolean {
+  return (
+    !entry.collectorCompletion ||
+    shouldDeferTerminalCleanupForUnconfirmedChild(entry) ||
+    entry.collectorLaunchCleanupPending === true ||
+    entry.archiveAtMs === undefined ||
+    entry.archiveAtMs > now
+  );
 }
 
 /**

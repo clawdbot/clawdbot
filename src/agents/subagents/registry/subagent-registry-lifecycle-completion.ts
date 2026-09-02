@@ -77,20 +77,6 @@ function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunR
   );
 }
 
-function isLateStopEvidenceForUnconfirmedExplicitTimeout(params: {
-  entry: SubagentRunRecord;
-  endedAt: number;
-}): boolean {
-  if (
-    params.entry.execution.outcome?.status !== "timeout" ||
-    params.entry.execution.outcome.timeoutDisposition !== "child-unconfirmed"
-  ) {
-    return false;
-  }
-  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
-  return deadlineMs !== undefined && params.endedAt > deadlineMs;
-}
-
 function resolveExpiredExplicitRunDeadlineMs(params: {
   entry: SubagentRunRecord;
   nextEndedAt: number;
@@ -250,26 +236,27 @@ export async function completeSubagentRunAttempt(
       }
     }
     sessionSuperseded = context.newerGenerationOwnsSession(currentEntry);
-    let requestedEndedAt =
-      typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
     if (
       completeParams.reason === SUBAGENT_ENDED_REASON_KILLED &&
       entry.killIntent === undefined &&
       entry.endedReason !== undefined &&
       entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED &&
       entry.execution.outcome !== undefined &&
-      !isLateStopEvidenceForUnconfirmedExplicitTimeout({
-        entry,
-        endedAt: requestedEndedAt,
-      })
+      !shouldDeferTerminalCleanupForUnconfirmedChild(entry)
     ) {
       // Any finalized provider outcome is canonical. A delayed abort listener
       // must not replace success, failure, or a settled timeout with a killed marker.
-      // An unconfirmed explicit timeout is deliberately provisional: a later
-      // post-deadline abort is stop evidence, so let deadline normalization
-      // promote its disposition without replacing the timeout outcome.
+      // An unconfirmed timeout is the one exception, and the timestamp is not part
+      // of the test: a killed lifecycle end IS the stop evidence this row is
+      // waiting for, whether the abort is recorded after the deadline or at/before
+      // it (a hard run-timeout kill lands exactly ON the deadline). Rejecting it
+      // by timestamp left the row `child-unconfirmed` forever whenever the child's
+      // session record was absent or unreadable, deferring cleanup, hooks and task
+      // finalization permanently even though cancellation proved the child stopped.
       return;
     }
+    let requestedEndedAt =
+      typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
     if (
       shouldPreservePublishedExplicitRunTimeout({
         entry,
@@ -354,6 +341,24 @@ export async function completeSubagentRunAttempt(
       // were withheld while the child might still have been running can run now.
       entry.cleanupHandled = false;
       entry.cleanupCompletedAt = undefined;
+      // The provisional completion capture goes with it. `freezeRunResultAtCompletion`
+      // is first-write-wins on `resultText`, so whatever partial text (or `null`)
+      // was captured when the WAIT expired would survive this promotion and be
+      // published as the finished run's result — a successful task exposing
+      // pre-expiry output. Clearing it here is what lets the ordinary capture
+      // below run again against the child's settled transcript. Producer-owned
+      // evidence is untouched: `terminalReply`, and any `completionSnapshot` or
+      // `terminalReply` carried by this promotion, are applied after this point
+      // and outrank the recapture.
+      const provisionalCompletion = entry.completion;
+      if (
+        provisionalCompletion &&
+        (provisionalCompletion.resultText !== undefined ||
+          provisionalCompletion.capturedAt !== undefined)
+      ) {
+        provisionalCompletion.resultText = undefined;
+        provisionalCompletion.capturedAt = undefined;
+      }
       mutated = true;
     }
     const killIntent = entry.killIntent;

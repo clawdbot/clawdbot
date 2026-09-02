@@ -1,5 +1,3 @@
-import type { callGateway } from "../../../gateway/call.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
@@ -8,18 +6,14 @@ import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
+  blocksSwarmGroupArchival,
+  clearUnconfirmedCollectorRetention,
   settleSubagentRunFromSessionStore,
   shouldDeferTerminalCleanupForUnconfirmedChild,
 } from "./subagent-registry-cleanup.js";
-import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { reconcileOrphanedRun, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import type {
-  SubagentLifecycleController,
-  SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
-import type { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import {
   discardSuspendedPendingFinalDelivery,
   isSuspendedPendingFinalDelivery,
@@ -31,11 +25,8 @@ import {
   reconcileDurableSubagentKillIntent,
   reconcileProvisionalSubagentKill,
 } from "./subagent-registry-sweep-kill.js";
-import type {
-  ContextEngineSubagentEndedParams,
-  SubagentCompletionRequest,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { SubagentRegistrySweeperOptions } from "./subagent-registry-sweeper.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import {
@@ -53,66 +44,7 @@ const restartRecoveryLoader = createLazyImportLoader(
 );
 const killRuntimeLoader = createLazyImportLoader(() => import("./subagent-control.runtime.js"));
 
-export function createSubagentRegistrySweeper(params: {
-  runs: Map<string, SubagentRunRecord>;
-  resumedRuns: Set<string>;
-  persist: (...runIds: string[]) => void;
-  clearPendingLifecycleError: (runId: string) => void;
-  clearPendingLifecycleTimeout: (runId: string) => void;
-  sweepPendingLifecycle: (now: number) => void;
-  completeSubagentRunWithRecovery: (
-    completion: SubagentCompletionRequest,
-    source: string,
-  ) => Promise<void>;
-  getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
-  abandonSubagentRestartRecoveryLaunch: ReturnType<
-    typeof createSubagentRunManager
-  >["abandonSubagentRestartRecoveryLaunch"];
-  clearAcceptedSubagentRestartRecovery: ReturnType<
-    typeof createSubagentRunManager
-  >["clearAcceptedSubagentRestartRecovery"];
-  resumeSettledSubagentRestartRecovery: ReturnType<
-    typeof createSubagentRunManager
-  >["resumeSettledSubagentRestartRecovery"];
-  replaceSubagentRunAfterSteer: ReturnType<
-    typeof createSubagentRunManager
-  >["replaceSubagentRunAfterSteer"];
-  markSubagentRestartRecoveryLaunchAttempted: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchAttempted"];
-  markSubagentRestartRecoveryLaunchAccepted: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchAccepted"];
-  markSubagentRestartRecoveryLaunchConsumed: ReturnType<
-    typeof createSubagentRunManager
-  >["markSubagentRestartRecoveryLaunchConsumed"];
-  reserveSubagentRestartRecoveryLaunch: ReturnType<
-    typeof createSubagentRunManager
-  >["reserveSubagentRestartRecoveryLaunch"];
-  resetSubagentRestartRecoveryLaunchAttempt: ReturnType<
-    typeof createSubagentRunManager
-  >["resetSubagentRestartRecoveryLaunchAttempt"];
-  finalizeInterruptedSubagentRun: ReturnType<
-    typeof createSubagentRegistryCompletionRuntime
-  >["finalizeInterruptedSubagentRun"];
-  resumeRequesterSettleWake: SubagentLifecycleController["resumeRequesterSettleWake"];
-  startSubagentAnnounceCleanupFlow: SubagentLifecycleController["startSubagentAnnounceCleanupFlow"];
-  completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
-  discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
-  shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
-  emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
-  callGateway: typeof callGateway;
-  cleanupCollectorLaunchResources: (entry: SubagentRunRecord) => Promise<boolean>;
-  runContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
-  notifyContextEngineSubagentEnded: (params: ContextEngineSubagentEndedParams) => Promise<void>;
-  retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
-  getRunsForCollectorGroup: (
-    requesterSessionKey: string,
-    groupId: string,
-  ) => Iterable<[string, SubagentRunRecord]>;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-}) {
+export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOptions) {
   const { runs, resumedRuns } = params;
   let intervalStarted = false;
   let scheduledTimer: NodeJS.Timeout | null = null;
@@ -436,21 +368,9 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
 
-        if (entry.collect && shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
-          // Older persisted rows may already have frozen a collector result and
-          // armed group retention before this disposition existed. Neither is
-          // valid without observed stop evidence; clear both before any member
-          // can nominate the group for destructive archival.
-          if (entry.collectorCompletion !== undefined) {
-            delete entry.collectorCompletion;
-            mutated = true;
-            mutatedRunIds.add(runId);
-          }
-          if (entry.archiveAtMs !== undefined) {
-            delete entry.archiveAtMs;
-            mutated = true;
-            mutatedRunIds.add(runId);
-          }
+        if (clearUnconfirmedCollectorRetention(entry)) {
+          mutated = true;
+          mutatedRunIds.add(runId);
         }
         if (
           entry.collect &&
@@ -615,16 +535,7 @@ export function createSubagentRegistrySweeper(params: {
       }
       for (const { requesterSessionKey, groupId } of collectorArchiveCandidates.values()) {
         const groupEntries = [...params.getRunsForCollectorGroup(requesterSessionKey, groupId)];
-        if (
-          groupEntries.some(
-            ([, candidate]) =>
-              !candidate.collectorCompletion ||
-              shouldDeferTerminalCleanupForUnconfirmedChild(candidate) ||
-              candidate.collectorLaunchCleanupPending === true ||
-              candidate.archiveAtMs === undefined ||
-              candidate.archiveAtMs > now,
-          )
-        ) {
+        if (groupEntries.some(([, candidate]) => blocksSwarmGroupArchival(candidate, now))) {
           continue;
         }
         let deleteFailed = false;
@@ -720,11 +631,7 @@ export function createSubagentRegistrySweeper(params: {
           liveGroupEntries.some(
             ([candidateRunId, candidate]) =>
               expectedGroupEntries.get(candidateRunId) !== candidate ||
-              !candidate.collectorCompletion ||
-              shouldDeferTerminalCleanupForUnconfirmedChild(candidate) ||
-              candidate.collectorLaunchCleanupPending === true ||
-              candidate.archiveAtMs === undefined ||
-              candidate.archiveAtMs > now,
+              blocksSwarmGroupArchival(candidate, now),
           )
         ) {
           continue;

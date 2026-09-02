@@ -312,11 +312,6 @@ export async function completeTerminalEffects(
     await retireSupersededSession(entry);
     return;
   }
-  if (entry.collect) {
-    releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
-  }
-  refreshSessionEffectsSuppression();
-  const isProvisionalKill = entry.killReconciliation !== undefined;
   // One derivation for every provisional terminal projection this callback owns:
   // the durable signal-log record, the child's own session-timing write, the
   // `progress ended` presentation event, and the resource teardown in
@@ -325,6 +320,19 @@ export async function completeTerminalEffects(
   // claim about the child may be published and no child-owned resource may be
   // torn down until an observed stop promotes the row.
   const deferForUnconfirmedChild = shouldDeferTerminalCleanupForUnconfirmedChild(entry);
+  // The swarm slot is the child's, not the row's. `releaseSwarmRun` deletes the
+  // lane's active reservation and immediately pumps the queue
+  // (`swarm-scheduler.ts`), so releasing it here on a bare deadline starts the
+  // next queued collector while this one may still be running — the same
+  // overlap the announce warning tells the parent not to create, except imposed
+  // by `maxConcurrent` itself. Hold the slot; the promotion that observes the
+  // stop re-enters this function with `deferForUnconfirmedChild === false` and
+  // releases it then.
+  if (entry.collect && !deferForUnconfirmedChild) {
+    releaseSwarmRun(entry.schedulerSlotId ?? entry.runId);
+  }
+  refreshSessionEffectsSuppression();
+  const isProvisionalKill = entry.killReconciliation !== undefined;
   // Record only the current, non-superseded callback with a committed outcome; the
   // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
   // would permanently mislabel the signal-log terminal kind. A `child-unconfirmed`
