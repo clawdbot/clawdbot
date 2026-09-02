@@ -97,6 +97,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
           ship: "~zod",
           code: "test-code",
           url: baseUrl,
+          mediaMaxMb: 1,
           network: { dangerouslyAllowPrivateNetwork: true },
         },
       },
@@ -145,7 +146,10 @@ describe("tlon outbound assistant-visible sanitization", () => {
       ],
       skipQueue: true,
     });
-    expect(uploadImageFromUrl).toHaveBeenCalledWith("https://source.example/image.png");
+    expect(uploadImageFromUrl).toHaveBeenCalledWith(
+      "https://source.example/image.png",
+      1024 * 1024,
+    );
 
     expect(pokes).toHaveLength(3);
     expect(pokes.map(({ app, mark }) => ({ app, mark }))).toEqual([

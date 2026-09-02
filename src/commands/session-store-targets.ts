@@ -1,12 +1,7 @@
-/**
- * Session store target resolution wrapper for CLI commands.
- *
- * The config helper throws on invalid agent/store combinations; this module
- * converts those errors into command output and exit codes.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import {
   resolveSessionStoreTargets,
   type SessionStoreSelectionOptions,
@@ -16,7 +11,6 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 const SESSION_STORE_SELECTION_CONTEXT = {
   surface: "session-store selection",
@@ -33,7 +27,7 @@ function formatResolvedStoreTarget(params: {
     : `${params.resolvedPath} (resolved from --store ${JSON.stringify(params.inputStorePath)})`;
 }
 
-function validateExplicitSessionStorePath(params: {
+export function resolveExplicitSessionStorePath(params: {
   agentId: string;
   inputStorePath: string;
   storePath: string;
@@ -99,72 +93,35 @@ function validateExplicitSessionStorePath(params: {
   return storePath;
 }
 
-/** Resolves and validates an operator-supplied legacy selector without changing its semantics. */
-export function resolveExplicitSessionStorePathOrExit(params: {
-  storePath: string;
-  inputStorePath?: string;
-  agentId: string;
-  runtime: RuntimeEnv;
-  json?: boolean;
-}): string | null {
-  try {
-    return validateExplicitSessionStorePath({
-      agentId: params.agentId,
-      inputStorePath: params.inputStorePath ?? params.storePath,
-      storePath: params.storePath,
-    });
-  } catch (error) {
-    return exitSessionStoreError(params, error);
-  }
-}
-
-function exitSessionStoreError(
-  params: { runtime: RuntimeEnv; json?: boolean },
-  error: unknown,
-): null {
-  const message = formatErrorMessage(error);
-  if (params.json) {
-    writeRuntimeJson(params.runtime, { error: message });
-  } else {
-    params.runtime.error(message);
-  }
-  params.runtime.exit(1);
-  return null;
-}
-
-/** Resolves session store targets or exits the current command on validation errors. */
-export function resolveSessionStoreTargetsOrExit(params: {
+/** Selection failures reach the root CLI handler for shared JSON output and cleanup. */
+export function resolveCommandSessionStoreTargets(params: {
   cfg: OpenClawConfig;
   opts: SessionStoreSelectionOptions;
-  runtime: RuntimeEnv;
-  json?: boolean;
-}): SessionStoreTarget[] | null {
-  let targets: SessionStoreTarget[];
+}): SessionStoreTarget[] {
   try {
-    targets = resolveSessionStoreTargets(params.cfg, params.opts);
+    const targets = resolveSessionStoreTargets(params.cfg, params.opts);
+    if (!params.opts.store) {
+      return targets;
+    }
+    const target = targets[0];
+    if (!target) {
+      throw new Error("Explicit session store selection did not resolve a target.");
+    }
+    return [
+      {
+        ...target,
+        storePath: resolveExplicitSessionStorePath({
+          ...target,
+          inputStorePath: params.opts.store,
+        }),
+      },
+    ];
   } catch (error) {
-    const displayError =
+    const message = formatErrorMessage(
       error instanceof AgentSelectionRequiredError
         ? new AgentSelectionRequiredError(error.agentIds, SESSION_STORE_SELECTION_CONTEXT)
-        : error;
-    return exitSessionStoreError(params, displayError);
-  }
-  if (!params.opts.store) {
-    return targets;
-  }
-  const target = targets[0];
-  if (!target) {
-    return exitSessionStoreError(
-      params,
-      new Error("Explicit session store selection did not resolve a target."),
+        : error,
     );
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
-  const storePath = resolveExplicitSessionStorePathOrExit({
-    storePath: target.storePath,
-    inputStorePath: params.opts.store,
-    agentId: target.agentId,
-    runtime: params.runtime,
-    json: params.json,
-  });
-  return storePath ? [{ ...target, storePath }] : null;
 }

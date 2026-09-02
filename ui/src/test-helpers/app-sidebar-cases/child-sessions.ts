@@ -297,7 +297,7 @@ describe("AppSidebar agent chip", () => {
     );
   });
 
-  it("retries an incomplete child page set after the canonical list advances", async () => {
+  it("retries an incomplete child page set only after the operator retries", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:parent"]);
     const page = (sessions: SessionsListResult["sessions"], hasMore: boolean) => ({
@@ -350,8 +350,20 @@ describe("AppSidebar agent chip", () => {
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
+    await waitForFast(() =>
+      expect(
+        sidebar.querySelector('[data-child-session-error="agent:main:parent"]')?.textContent,
+      ).toContain("child session list returned no result"),
+    );
 
     publishParent(11);
+    await sidebar.updateComplete;
+    expect(harness.list).toHaveBeenCalledTimes(2);
+    expect(sidebar.querySelector('[data-child-session-error="agent:main:parent"]')).not.toBeNull();
+
+    sidebar
+      .querySelector<HTMLButtonElement>('[data-retry-child-sessions="agent:main:parent"]')
+      ?.click();
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(3));
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
@@ -427,6 +439,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')?.textContent).toContain(
       "Replacement child",
     );
+    expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
   });
 
   it("nests the selected child under its parent and reveals the active path", async () => {

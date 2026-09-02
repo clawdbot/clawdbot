@@ -40,7 +40,10 @@ vi.mock("../../../config/config.js", () => ({
   loadConfig: () => gatewayConfig,
 }));
 vi.mock("../../../config/io.js", () => ({ getRuntimeConfig: () => gatewayConfig }));
-vi.mock("../../../infra/system-presence.js", () => ({ upsertPresence: upsertPresenceMock }));
+vi.mock("../../../infra/system-presence.js", () => ({
+  upsertPresence: upsertPresenceMock,
+  listSystemPresence: vi.fn(() => []),
+}));
 vi.mock("../../../state/user-profiles.js", () => ({
   adoptTailscaleProfileAvatar: vi.fn(),
   ensureProfileForEmail: vi.fn(async () => ({
@@ -77,7 +80,6 @@ vi.mock("../health-state.js", () => ({
   })),
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
-  incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 vi.mock("../../../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../version.js")>();
@@ -196,6 +198,7 @@ describe("Control UI build admission over WebSocket", () => {
           },
         },
         connId: "legacy-build-connection",
+        bootId: "control-ui-build-admission-test-boot",
         remoteAddr: "127.0.0.1",
         localAddr: "127.0.0.1",
         requestHost: request.headers.host,
@@ -210,7 +213,12 @@ describe("Control UI build admission over WebSocket", () => {
         gatewayMethods: [],
         events: [],
         extraHandlers: {},
-        buildRequestContext: () => ({ broadcast: vi.fn() }) as unknown as GatewayRequestContext,
+        buildRequestContext: () =>
+          ({
+            broadcast: vi.fn(),
+            incrementPresenceVersion: incrementPresenceVersionMock,
+            getHealthVersion: () => 1,
+          }) as unknown as GatewayRequestContext,
         nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
         refreshHealthSnapshot: vi.fn(),
         send,

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
-// Tracks plugin HTTP registry context for current async execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
@@ -12,11 +12,59 @@ type PluginHttpRouteHandler = (
   res: ServerResponse,
 ) => Promise<boolean | void> | boolean | void;
 
-const pluginHttpRouteRegistryScope = new AsyncLocalStorage<PluginRegistry>();
+type PluginHttpRouteRegistrationLease = Pick<PluginRuntimeCapabilityLease, "isActive" | "retain">;
+
+const pluginHttpRouteRegistryScope = new AsyncLocalStorage<{
+  registry: PluginRegistry;
+  leases: readonly PluginHttpRouteRegistrationLease[];
+}>();
+const pluginHttpRouteHolders = new WeakMap<PluginHttpRouteRegistration, Set<() => void>>();
 const noopUnregister = () => {};
 
-export function withPluginHttpRouteRegistry<T>(registry: PluginRegistry, run: () => T): T {
-  return pluginHttpRouteRegistryScope.run(registry, run);
+// Same-owner reuse creates independent holders so one task cannot evict a route
+// while another task still owns the shared registration.
+function retainPluginHttpRoute(params: {
+  entry: PluginHttpRouteRegistration;
+  routes: PluginHttpRouteRegistration[];
+  leases: readonly PluginHttpRouteRegistrationLease[];
+}): () => void {
+  const holders = pluginHttpRouteHolders.get(params.entry);
+  // Static API routes belong to the registry; borrowing one cannot give a
+  // dynamic caller authority to remove it on unregister or lease expiry.
+  if (!holders) {
+    return noopUnregister;
+  }
+  const leaseReleases: Array<() => void> = [];
+  const release = () => {
+    if (!holders.delete(release)) {
+      return;
+    }
+    for (const releaseLease of leaseReleases.splice(0)) {
+      releaseLease();
+    }
+    if (holders.size > 0) {
+      return;
+    }
+    const index = params.routes.indexOf(params.entry);
+    if (index >= 0) {
+      params.routes.splice(index, 1);
+    }
+  };
+  holders.add(release);
+  for (const lease of params.leases) {
+    leaseReleases.push(lease.retain(release));
+  }
+  return release;
+}
+
+export function withPluginHttpRouteRegistry<T>(
+  registry: PluginRegistry,
+  run: () => T,
+  lease?: PluginHttpRouteRegistrationLease,
+): T {
+  const inherited = pluginHttpRouteRegistryScope.getStore()?.leases ?? [];
+  const leases = lease && !inherited.includes(lease) ? [...inherited, lease] : inherited;
+  return pluginHttpRouteRegistryScope.run({ registry, leases }, run);
 }
 
 export function registerPluginHttpRoute(params: {
@@ -39,14 +87,8 @@ export function registerPluginHttpRoute(params: {
   log?: (message: string) => void;
   registry?: PluginRegistry;
 }): () => void {
-  const registry =
-    params.registry ??
-    pluginHttpRouteRegistryScope.getStore() ??
-    requireActivePluginHttpRouteRegistry();
-  const routes = registry.httpRoutes ?? [];
-  registry.httpRoutes = routes;
-
-  const normalizedPath = normalizePluginHttpPath(params.path, params.fallbackPath);
+  const scope = pluginHttpRouteRegistryScope.getStore();
+  const registry = params.registry ?? scope?.registry ?? requireActivePluginHttpRouteRegistry();
   const suffix = params.accountId ? ` for account "${params.accountId}"` : "";
   const rejectRegistration = (message: string): (() => void) => {
     params.log?.(message);
@@ -55,6 +97,15 @@ export function registerPluginHttpRoute(params: {
     }
     return noopUnregister;
   };
+  // AsyncLocalStorage survives timed-out lifecycle callbacks; expired continuations must not
+  // regain route authority, even when they retained an explicit registry reference.
+  if (scope?.leases.some((lease) => !lease.isActive())) {
+    return rejectRegistration("plugin runtime HTTP route lease is no longer active");
+  }
+
+  const routes = registry.httpRoutes ?? [];
+  registry.httpRoutes = routes;
+  const normalizedPath = normalizePluginHttpPath(params.path, params.fallbackPath);
   if (!normalizedPath) {
     return rejectRegistration(`plugin: webhook path missing${suffix}`);
   }
@@ -97,7 +148,11 @@ export function registerPluginHttpRoute(params: {
         params.log?.(
           `plugin: reusing existing webhook path ${normalizedPath} (${routeMatch}) (${requestedOwner}/${requestedSource})`,
         );
-        return noopUnregister;
+        return retainPluginHttpRoute({
+          entry: existing,
+          routes,
+          leases: scope?.leases ?? [],
+        });
       }
       const conflictingOwner = mismatchedOwner ?? existing;
       return rejectRegistration(
@@ -144,12 +199,11 @@ export function registerPluginHttpRoute(params: {
     pluginId: params.pluginId,
     source: params.source,
   };
+  pluginHttpRouteHolders.set(entry, new Set());
   routes.push(entry);
-
-  return () => {
-    const index = routes.indexOf(entry);
-    if (index >= 0) {
-      routes.splice(index, 1);
-    }
-  };
+  return retainPluginHttpRoute({
+    entry,
+    routes,
+    leases: scope?.leases ?? [],
+  });
 }

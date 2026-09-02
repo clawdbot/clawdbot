@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   scanReasoningTags,
   stripReasoningTagsFromMarkdown,
@@ -9,16 +8,6 @@ import { findFinalTagMatches } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 export type ReasoningTagScope = "all" | "leading";
-
-function applyTrim(value: string, mode: ReasoningTagTrim): string {
-  if (mode === "none") {
-    return value;
-  }
-  if (mode === "start") {
-    return value.trimStart();
-  }
-  return value.trim();
-}
 
 /** Detects whether a stray reasoning close tag separates two visible text regions. */
 export function hasOrphanReasoningCloseBoundary(params: {
@@ -35,6 +24,7 @@ export function stripReasoningTagsFromText(
     mode?: ReasoningTagMode;
     trim?: ReasoningTagTrim;
     scope?: ReasoningTagScope;
+    recoverUnclosed?: boolean;
   },
 ): string {
   if (!text) {
@@ -52,24 +42,25 @@ export function stripReasoningTagsFromText(
     return text;
   }
   if (matches.length > 0) {
-    const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
     const preCodeRegions = findCodeRegions(cleaned);
+    let visible = "";
+    let lastIndex = 0;
     for (const match of matches) {
-      const start = match.index;
-      finalMatches.push({
-        start,
-        length: match.text.length,
-        inCode: isInsideCode(start, preCodeRegions),
-      });
-    }
-
-    for (let i = finalMatches.length - 1; i >= 0; i--) {
-      const m = expectDefined(finalMatches[i], "final matches capture group i");
-      if (!m.inCode) {
-        cleaned = cleaned.slice(0, m.start) + cleaned.slice(m.start + m.length);
+      if (!isInsideCode(match.index, preCodeRegions)) {
+        visible += cleaned.slice(lastIndex, match.index);
+        lastIndex = match.index + match.text.length;
       }
     }
+    cleaned = visible + cleaned.slice(lastIndex);
   }
 
-  return applyTrim(stripReasoningTagsFromMarkdown(cleaned, { mode, scope }), trimMode);
+  const stripped = stripReasoningTagsFromMarkdown(cleaned, {
+    mode,
+    scope,
+    recoverUnclosed: options?.recoverUnclosed,
+  });
+  if (trimMode === "none") {
+    return stripped;
+  }
+  return trimMode === "start" ? stripped.trimStart() : stripped.trim();
 }

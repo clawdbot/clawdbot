@@ -1,15 +1,15 @@
 // Nextcloud Talk plugin module implements send behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  readProviderJsonResponse,
-  readResponseTextLimited,
-} from "openclaw/plugin-sdk/provider-http";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   FormatCapabilityProfile,
   renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
+import {
+  readNextcloudTalkErrorBody,
+  releaseNextcloudTalkGuardedResponse,
+} from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -23,11 +23,6 @@ import {
 } from "./send.runtime.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
-// Nextcloud Talk runs against self-hosted servers whose responses are not
-// trusted to be small. Cap error bodies so a hostile or misbehaving endpoint
-// cannot stream an unbounded body into memory. (Success JSON is bounded by the
-// shared readProviderJsonResponse helper.)
-const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
 const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
 
@@ -44,27 +39,13 @@ function renderNextcloudTalkMarkdown(markdown: string): string {
   );
 }
 
-/** Collapses whitespace and caps an error-body prefix to a short, log-safe snippet. */
+/** Collapses and caps an already-redacted error body for display. */
 function collapseErrorSnippet(text: string): string {
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (collapsed.length > NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS) {
     return `${truncateUtf16Safe(collapsed, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS)}…`;
   }
   return collapsed;
-}
-
-/** Reads a bounded, collapsed error-body snippet without buffering hostile responses. */
-async function readNextcloudTalkErrorSnippet(response: Response): Promise<string> {
-  try {
-    // readResponseTextLimited caps the read at the byte budget and cancels the
-    // upstream stream once full, so a hostile endpoint cannot stream an
-    // unbounded body into memory. Collapse the bounded prefix locally to keep a
-    // short, log-safe error snippet (no new plugin SDK surface required).
-    const text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
-    return collapseErrorSnippet(text);
-  } catch {
-    return "";
-  }
 }
 
 type NextcloudTalkSendOpts = {
@@ -217,7 +198,7 @@ export async function sendMessageNextcloudTalk(
 
   try {
     if (!response.ok) {
-      const errorBody = await readNextcloudTalkErrorSnippet(response);
+      const errorBody = collapseErrorSnippet(await readNextcloudTalkErrorBody(response, signature));
       const status = response.status;
       let errorMsg = `Nextcloud Talk send failed (${status})`;
 
@@ -317,7 +298,7 @@ export async function sendReactionNextcloudTalk(
 
   try {
     if (!response.ok) {
-      const errorBody = await readNextcloudTalkErrorSnippet(response);
+      const errorBody = collapseErrorSnippet(await readNextcloudTalkErrorBody(response, signature));
       throw new Error(`Nextcloud Talk reaction failed: ${response.status} ${errorBody}`.trim());
     }
 

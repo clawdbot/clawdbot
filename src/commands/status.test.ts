@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import type { StatusScanResult } from "./status.scan-result.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -279,7 +280,15 @@ function createSessionStatusRows() {
   };
 }
 
-async function createMockStatusScanResult(params: { includePluginCompatibility?: boolean } = {}) {
+async function createMockStatusScanResult(
+  params: {
+    includePluginCompatibility?: boolean;
+    configDiagnostics?: {
+      path: string;
+      issues: Array<{ path: string; message: string }>;
+    } | null;
+  } = {},
+) {
   const cfg = mocks.loadConfig();
   const gatewayProbe = await mocks.probeGateway();
   const gatewayReachable = gatewayProbe.ok === true;
@@ -328,6 +337,7 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
   return {
     cfg,
     sourceConfig: cfg,
+    configDiagnostics: params.configDiagnostics ?? null,
     secretDiagnostics: gatewayAuthWarning ? ["gateway.auth.token unavailable"] : [],
     osSummary: {
       platform: "darwin",
@@ -741,7 +751,7 @@ vi.mock("../config/config.js", () => ({
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
   readBestEffortConfigSnapshot: vi.fn(async () => {
     const config = mocks.loadConfig();
-    return { config, sourceConfig: config };
+    return { config, sourceConfig: config, configDiagnostics: null };
   }),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
@@ -784,9 +794,6 @@ vi.mock("./status.scan.js", () => ({
 }));
 
 vi.mock("./status-runtime-shared.ts", () => ({
-  loadStatusProviderUsageModule: vi.fn(async () => ({
-    formatUsageReportLines: vi.fn(() => []),
-  })),
   resolveStatusGatewayHealth: vi.fn(async () => ({})),
   resolveStatusSecurityAudit: vi.fn(async (input: unknown) =>
     mocks.runSecurityAudit({
@@ -1063,6 +1070,24 @@ describe("statusCommand", () => {
     expect(auditParams?.includeChannelSecurity).toBe(true);
   });
 
+  it("includes invalid config diagnostics in JSON status only when present", async () => {
+    const { scanStatusJsonFast } = await import("./status.scan.fast-json.js");
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [{ path: "gateway.port", message: "invalid" }],
+    };
+    vi.mocked(scanStatusJsonFast).mockResolvedValueOnce(
+      (await createMockStatusScanResult({ configDiagnostics })) as unknown as StatusScanResult,
+    );
+
+    await statusCommand({ json: true }, runtime as never);
+
+    expect(JSON.parse(getRuntimeLog(0)).configDiagnostics).toEqual(configDiagnostics);
+    runtimeLogMock.mockClear();
+    await statusCommand({ json: true }, runtime as never);
+    expect(JSON.parse(getRuntimeLog(0))).not.toHaveProperty("configDiagnostics");
+  });
+
   it("scopes usage resolution to the scanned config", async () => {
     const snapshotMock = resolveStatusRuntimeSnapshot as Mock;
     const usageMock = resolveStatusUsageSummary as Mock;
@@ -1098,6 +1123,52 @@ describe("statusCommand", () => {
     await statusCommand({}, runtime as never);
 
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
+  });
+
+  it("prints invalid config diagnostics in default and deep text status only when present", async () => {
+    const { scanStatus } = await import("./status.scan.js");
+    const configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [
+        {
+          path: "gateway.port",
+          message: "Invalid input: expected number, received string",
+        },
+      ],
+    };
+
+    for (const args of [{}, { deep: true }]) {
+      vi.mocked(scanStatus).mockResolvedValueOnce(
+        (await createMockStatusScanResult({ configDiagnostics })) as unknown as StatusScanResult,
+      );
+      const output = (await runStatusAndGetLogs(args)).join("\n");
+      expect(output).toContain("Config diagnostics:");
+      expect(output).toContain("Config file is invalid: /tmp/openclaw.json");
+      expect(output).toContain("gateway.port: Invalid input: expected number, received string");
+      expect(output).toContain("Fix: openclaw --profile isolated doctor --fix");
+    }
+
+    expect((await runStatusAndGetLogs()).join("\n")).not.toContain("Config diagnostics:");
+  });
+
+  it("prints invalid config diagnostics before a deep gateway-health failure", async () => {
+    const { scanStatus } = await import("./status.scan.js");
+    vi.mocked(scanStatus).mockResolvedValueOnce(
+      (await createMockStatusScanResult({
+        configDiagnostics: {
+          path: "/tmp/openclaw.json",
+          issues: [{ path: "gateway.port", message: "invalid" }],
+        },
+      })) as unknown as StatusScanResult,
+    );
+    vi.mocked(resolveStatusRuntimeSnapshot).mockResolvedValueOnce({
+      health: { error: "gateway health unavailable" },
+    } as never);
+
+    await expect(statusCommand({ deep: true }, runtime as never)).rejects.toThrow(
+      "gateway health unavailable",
+    );
+    expect(runtimeLogMock.mock.calls.flat().join("\n")).toContain("Config diagnostics:");
   });
 
   it("includes the security audit for deep JSON status", async () => {

@@ -16,11 +16,13 @@ import {
   resolveQaEvidenceProfile,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import { sanitizeQaProgressValue } from "./progress-format.js";
 import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 import {
+  formatQaScenarioCommandOutput,
   runQaScenarioCommandLifecycle,
   type QaScenarioCommandExecution,
   type QaScenarioCommandResult,
@@ -48,8 +50,10 @@ type QaTestFileScenarioRunParams = {
   env?: NodeJS.ProcessEnv;
   envMode?: "replace";
   failFast?: boolean;
+  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   primaryModel: string;
+  progress?: (message: string) => void;
   providerMode: QaProviderMode;
   repoRoot: string;
   runCommand?: QaScenarioCommandRunner;
@@ -75,6 +79,20 @@ type QaTestFileScenarioResult = {
   scenario: QaTestFileScenario;
   status: QaEvidenceStatus;
 };
+
+type QaTestFileExecutionUnit =
+  | {
+      kind: "docker-batch";
+      order: number;
+      scenarios: Parameters<typeof runDockerE2eBatch>[0]["scenarios"];
+      timeoutMs: number;
+    }
+  | {
+      kind: "scenario";
+      order: number;
+      scenario: QaTestFileScenario;
+      timeoutMs: number;
+    };
 
 export type QaTestFileScenarioRunResult = {
   evidence: QaEvidenceSummaryJson;
@@ -239,6 +257,7 @@ function withScenarioCoverage(
 async function runScenarioCommandSteps(params: {
   commandTimeoutMs: number;
   env: NodeJS.ProcessEnv;
+  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   repoRoot: string;
   runCommand: QaScenarioCommandRunner;
@@ -270,14 +289,12 @@ async function runScenarioCommandSteps(params: {
         args: step.args,
         cwd: params.repoRoot,
         env: params.env,
+        ...(params.scenario.execution.kind === "script" && params.onCommandOutput
+          ? { onOutput: params.onCommandOutput }
+          : {}),
         timeoutMs,
       });
-      if (result.stdout) {
-        logChunks.push(result.stdout);
-      }
-      if (result.stderr) {
-        logChunks.push(result.stderr);
-      }
+      logChunks.push(formatQaScenarioCommandOutput(result));
       if (result.failureMessage || result.exitCode !== 0 || result.signal) {
         failureMessage =
           result.failureMessage ??
@@ -316,6 +333,7 @@ async function runScenarioCommandSteps(params: {
 async function runQaTestFileScenario(params: {
   env: NodeJS.ProcessEnv;
   commandTimeoutMs: number;
+  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   repoRoot: string;
   runCommand: QaScenarioCommandRunner;
@@ -383,6 +401,56 @@ async function runQaTestFileScenario(params: {
   };
 }
 
+function resolveScenarioTimeoutMs(scenario: QaTestFileScenario, commandTimeoutMs: number) {
+  return scenario.execution.kind === "script"
+    ? resolvePositiveTimerTimeoutMs(scenario.execution.timeoutMs, commandTimeoutMs)
+    : commandTimeoutMs;
+}
+
+function buildExecutionUnits(params: {
+  commandTimeoutMs: number;
+  failFast: boolean;
+  scenarios: readonly QaTestFileScenario[];
+}): QaTestFileExecutionUnit[] {
+  const scenarioOrder = new Map(params.scenarios.map((scenario, index) => [scenario, index]));
+  const dockerBatchScenarios =
+    !params.failFast && params.scenarios[0]?.execution.kind === "script"
+      ? params.scenarios.filter(isDockerE2eScenario)
+      : [];
+  const dockerBatchGroups = new Map<number, typeof dockerBatchScenarios>();
+  for (const scenario of dockerBatchScenarios) {
+    const timeoutMs = resolveScenarioTimeoutMs(scenario, params.commandTimeoutMs);
+    const group = dockerBatchGroups.get(timeoutMs) ?? [];
+    group.push(scenario);
+    dockerBatchGroups.set(timeoutMs, group);
+  }
+  const batchedScenarioIds = new Set(dockerBatchScenarios.map((scenario) => scenario.id));
+  const units: QaTestFileExecutionUnit[] = [
+    ...[...dockerBatchGroups].map(([timeoutMs, scenarios]) => ({
+      kind: "docker-batch" as const,
+      order: Math.min(...scenarios.map((scenario) => scenarioOrder.get(scenario) ?? 0)),
+      scenarios,
+      timeoutMs,
+    })),
+    ...params.scenarios
+      .filter((scenario) => !batchedScenarioIds.has(scenario.id))
+      .map((scenario) => ({
+        kind: "scenario" as const,
+        order: scenarioOrder.get(scenario) ?? 0,
+        scenario,
+        timeoutMs: resolveScenarioTimeoutMs(scenario, params.commandTimeoutMs),
+      })),
+  ];
+  if (!params.failFast && params.scenarios[0]?.execution.kind === "script") {
+    // Native producers stay serial because they may rebuild shared dist output.
+    // Longest declared budgets run first so one late producer cannot starve at the suite deadline.
+    units.sort((left, right) => right.timeoutMs - left.timeoutMs || left.order - right.order);
+  } else {
+    units.sort((left, right) => left.order - right.order);
+  }
+  return units;
+}
+
 function statusFromProducerEvidence(params: {
   allowBlockedEvidence: boolean;
   producerEvidence: QaEvidenceSummaryJson | undefined;
@@ -394,31 +462,24 @@ function statusFromProducerEvidence(params: {
       status: "fail",
     };
   }
-  const blockingEntry = producerEvidence.entries.find(
-    (entry) =>
-      entry.result.status === "fail" ||
-      (!allowBlockedEvidence && entry.result.status === "blocked"),
-  );
-  if (blockingEntry) {
+  const failedEntry = producerEvidence.entries.find((entry) => entry.result.status === "fail");
+  const blockedEntry = producerEvidence.entries.find((entry) => entry.result.status === "blocked");
+  if (failedEntry) {
     return {
       failureMessage:
-        blockingEntry.result.failure?.reason ??
-        `${blockingEntry.test.id} reported ${blockingEntry.result.status}`,
-      status: blockingEntry.result.status,
+        failedEntry.result.failure?.reason ?? `${failedEntry.test.id} reported failed`,
+      status: "fail",
     };
   }
-  if (!producerEvidence.entries.some((entry) => entry.result.status === "pass")) {
-    // Allowing blocked checks does not make an entirely unexecuted producer a successful run.
-    const blockedEntry = producerEvidence.entries.find(
-      (entry) => entry.result.status === "blocked",
-    );
-    if (blockedEntry) {
-      return {
-        failureMessage:
-          blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
-        status: "blocked",
-      };
-    }
+  const hasPassed = producerEvidence.entries.some((entry) => entry.result.status === "pass");
+  if (blockedEntry && (!allowBlockedEvidence || !hasPassed)) {
+    return {
+      failureMessage:
+        blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
+      status: "blocked",
+    };
+  }
+  if (producerEvidence.entries.some((entry) => entry.result.status === "skipped")) {
     return { status: "skipped" };
   }
   return { status: "pass" };
@@ -455,11 +516,11 @@ function buildTestFileEvidence(params: {
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
-    // Failed scripts still need generic fallback evidence unless their producer
-    // already recorded that scenario identity at the authoritative boundary.
+    // Producer failures stay authoritative; parent terminal failures replace
+    // colliding non-fail results without discarding producer execution facts.
     const producerEntryIds = new Set(producerEntries.map((entry) => entry.test.id));
     const fallbackResults = params.results.filter(
-      (result) => !result.producerEvidence || result.includeFallbackEvidence,
+      (result) => !result.producerEvidence?.entries.length || result.includeFallbackEvidence,
     );
     const evidenceMode =
       params.evidenceMode ??
@@ -491,17 +552,27 @@ function buildTestFileEvidence(params: {
       generatedAt: params.generatedAt,
       evidenceMode,
       profile: resolveQaEvidenceProfile({ env: params.env }),
-      entries: [
-        ...producerEntries.map((entry) => {
+      entries: params.results.flatMap((result) => [
+        ...(result.producerEvidence?.entries ?? []).map((entry) => {
+          const coveredEntry = withScenarioCoverage(entry, result.scenario);
+          const fallbackFailure = fallbackEvidence?.entries.find(
+            (fallback) =>
+              fallback.test.id === coveredEntry.test.id && fallback.result.status === "fail",
+          );
+          const resolvedEntry =
+            coveredEntry.result.status !== "fail" && fallbackFailure
+              ? Object.assign({}, coveredEntry, { result: fallbackFailure.result })
+              : coveredEntry;
           if (evidenceMode !== "slim") {
-            return entry;
+            return resolvedEntry;
           }
-          const { execution: _execution, ...withoutExecution } = entry;
+          const { execution: _execution, ...withoutExecution } = resolvedEntry;
           return withoutExecution;
         }),
-        ...(fallbackEvidence?.entries.filter((entry) => !producerEntryIds.has(entry.test.id)) ??
-          []),
-      ],
+        ...(fallbackEvidence?.entries.filter(
+          (entry) => entry.test.id === result.scenario.id && !producerEntryIds.has(entry.test.id),
+        ) ?? []),
+      ]),
     });
   }
   const definition = testFileRunnerDefinitions[params.kind];
@@ -550,6 +621,8 @@ async function writeTestFileEvidenceFile(params: {
   if (params.writeEvidenceFile ?? true) {
     await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  } else {
+    await fs.rm(evidencePath, { force: true });
   }
   return { evidencePath };
 }
@@ -570,46 +643,47 @@ export async function runQaTestFileScenarios(
   );
   const env = params.envMode === "replace" ? (params.env ?? {}) : { ...process.env, ...params.env };
   const results: QaTestFileScenarioResult[] = [];
-  const dockerBatchScenarios =
-    kind === "script" && !params.failFast ? scenarios.filter(isDockerE2eScenario) : [];
-  const dockerBatchGroups = new Map<number, typeof dockerBatchScenarios>();
-  for (const scenario of dockerBatchScenarios) {
-    const scenarioTimeoutMs = resolvePositiveTimerTimeoutMs(
-      scenario.execution.timeoutMs,
-      commandTimeoutMs,
-    );
-    const group = dockerBatchGroups.get(scenarioTimeoutMs) ?? [];
-    group.push(scenario);
-    dockerBatchGroups.set(scenarioTimeoutMs, group);
-  }
-  for (const [scenarioTimeoutMs, group] of dockerBatchGroups) {
-    // A scheduler invocation shares one fallback lane timeout, so timeout overrides
-    // stay in separate batches instead of borrowing another scenario's budget.
-    results.push(
-      ...(await runDockerE2eBatch({
-        commandTimeoutMs: scenarioTimeoutMs,
+  const executionUnits = buildExecutionUnits({
+    commandTimeoutMs,
+    failFast: params.failFast === true,
+    scenarios,
+  });
+  for (const unit of executionUnits) {
+    if (unit.kind === "docker-batch") {
+      params.progress?.(
+        `native docker-batch start scenarios=${unit.scenarios.length} timeoutMs=${unit.timeoutMs}`,
+      );
+      const startedAt = Date.now();
+      const batchResults = await runDockerE2eBatch({
+        commandTimeoutMs: unit.timeoutMs,
         env,
+        onCommandOutput: params.onCommandOutput,
         outputDir: params.outputDir,
         repoRoot: params.repoRoot,
         runCommand,
-        scenarios: group,
-      })),
-    );
-  }
-  const dockerBatchScenarioIds = new Set(dockerBatchScenarios.map((scenario) => scenario.id));
-  for (const scenario of scenarios) {
-    if (dockerBatchScenarioIds.has(scenario.id)) {
+        scenarios: unit.scenarios,
+      });
+      results.push(...batchResults);
+      params.progress?.(
+        `native docker-batch finish passed=${batchResults.filter((result) => result.status === "pass").length} failed=${batchResults.filter((result) => result.status !== "pass").length} durationMs=${Math.max(1, Date.now() - startedAt)}`,
+      );
       continue;
     }
+    const scenarioId = sanitizeQaProgressValue(unit.scenario.id);
+    params.progress?.(`native ${kind} start scenario=${scenarioId} timeoutMs=${unit.timeoutMs}`);
     const result = await runQaTestFileScenario({
       env,
       commandTimeoutMs,
+      onCommandOutput: params.onCommandOutput,
       outputDir: params.outputDir,
       repoRoot: params.repoRoot,
       runCommand,
-      scenario,
+      scenario: unit.scenario,
     });
     results.push(result);
+    params.progress?.(
+      `native ${kind} finish scenario=${scenarioId} status=${result.status} durationMs=${result.durationMs}`,
+    );
     if (params.failFast && result.status !== "pass") {
       break;
     }

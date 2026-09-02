@@ -16,11 +16,13 @@ import {
   listBoardWidgetContentKinds,
   resolveBoardWidgetContentKind,
 } from "../plugins/board-widget-content-kinds.js";
+import { describeDashboardCapabilities } from "../plugins/dashboard-capabilities.js";
 import type {
   WidgetPresentationError,
   WidgetPresentationSuccess,
   WidgetPresenter,
-  WidgetPresenterTarget,
+  WidgetPresenterContext,
+  WidgetPresenterDocument,
 } from "../plugins/plugin-registration.types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -43,26 +45,36 @@ export function hasRegisteredShowWidgetKinds(): boolean {
 function createShowWidgetToolSchema(
   kinds: readonly string[],
   presenters: readonly WidgetPresenter[],
+  capabilityGuidance: string,
 ) {
-  const presenterTargets = presenters.map((presenter) => presenter.target);
+  const presenterTargets = presenters.flatMap((presenter) =>
+    presenter.target === "current_channel" ? [] : [presenter.target],
+  );
   const targets = ["assistant_message", ...presenterTargets] as const;
-  const presenterDescriptions = presenters.map(
-    (presenter) => `${presenter.target}: ${presenter.description}`,
+  const presenterDescriptions = presenters.flatMap((presenter) =>
+    presenter.target === "current_channel" ? [] : [`${presenter.target}: ${presenter.description}`],
   );
   return Type.Object({
     title: Type.String(),
-    widget_code: Type.String(),
+    widget_code: Type.String({
+      description:
+        "For HTML, fit the iframe width at every viewport: avoid fixed page or card widths; use fluid sizing and wrap or stack multi-column layouts when narrow. Use horizontal scrolling only when exact geometry must remain.",
+    }),
     kind: optionalStringEnum(kinds, {
       description: `Widget source kind: ${kinds.join(", ")}`,
     }),
     name: Type.Optional(
       Type.String({
         pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
-        description: "Stable dashboard widget name when pinning",
+        description:
+          "Stable dashboard widget name; reuse the same name with pin=true and new widget_code to update",
       }),
     ),
     pin: Type.Optional(
-      Type.Boolean({ description: "Also pin this widget to the session dashboard" }),
+      Type.Boolean({
+        description:
+          "Pin only for an explicit dashboard request or multiple non-code visualizations",
+      }),
     ),
     tab: Type.Optional(
       Type.String({ pattern: "^[a-z0-9-]{1,40}$", description: "Dashboard tab slug" }),
@@ -98,8 +110,7 @@ function createShowWidgetToolSchema(
         ),
         tools: Type.Optional(
           Type.Array(Type.String(), {
-            description:
-              "Pinned widget host tools, such as prompt, sessions.list, or cron.trigger:<jobId>",
+            description: `Pinned widget host tools: prompt or cron.trigger:<jobId>; grant each read/action ID below unless a scoped grant is specified. ${capabilityGuidance}`,
           }),
         ),
       }),
@@ -114,7 +125,9 @@ type ShowWidgetToolOptions = {
   stateDir?: string;
   callGateway?: InProcessGatewayCaller;
   inlineHostEnabled?: boolean;
+  inlineClientAvailable?: boolean;
   presenters?: readonly WidgetPresenter[];
+  presenterContext?: WidgetPresenterContext;
 };
 
 type WidgetPresentationAttempt =
@@ -122,55 +135,72 @@ type WidgetPresentationAttempt =
   | { ok: false; error: WidgetPresentationError };
 
 async function presentWidget(params: {
-  presenters: readonly WidgetPresenter[];
-  target: WidgetPresenterTarget;
-  documentUrlPath: string;
+  presenter?: WidgetPresenter;
+  document: WidgetPresenterDocument;
   title: string;
-  sessionKey?: string;
+  context: WidgetPresenterContext;
 }): Promise<WidgetPresentationAttempt> {
-  const presenters = params.presenters.filter((presenter) => presenter.target === params.target);
-  let lastError: WidgetPresentationError = {
-    code: "no_eligible_node",
-    message: "No widget presenter is registered for this target.",
-  };
-  for (const presenter of presenters) {
-    const sessionContext = params.sessionKey ? { sessionKey: params.sessionKey } : {};
-    let availability: Awaited<ReturnType<WidgetPresenter["availability"]>>;
-    try {
-      availability = await presenter.availability(sessionContext);
-    } catch (error) {
-      lastError = { code: "node_error", message: formatErrorMessage(error) };
-      continue;
-    }
-    if (!availability.ok) {
-      lastError = availability.error;
-      continue;
-    }
-    let result: Awaited<ReturnType<WidgetPresenter["present"]>>;
-    try {
-      result = await presenter.present({
-        documentUrlPath: params.documentUrlPath,
-        title: params.title,
-        sessionContext,
-      });
-    } catch (error) {
-      lastError = { code: "node_error", message: formatErrorMessage(error) };
-      continue;
-    }
-    if (result.ok) {
-      return result;
-    }
-    lastError = result.error;
+  const presenter = params.presenter;
+  if (!presenter) {
+    return {
+      ok: false,
+      error: {
+        code: "no_eligible_node",
+        message: "No widget presenter is registered for this target.",
+      },
+    };
   }
-  return { ok: false, error: lastError };
+  const errorCode = presenter.target === "current_channel" ? "presentation_error" : "node_error";
+  try {
+    const availability = await presenter.availability(params.context);
+    if (!availability.ok) {
+      return availability;
+    }
+    return await presenter.present({
+      document: params.document,
+      title: params.title,
+      context: params.context,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: { code: errorCode, message: formatErrorMessage(error) },
+    };
+  }
 }
 
-function widgetPresentationFailureText(error: WidgetPresentationError): string {
+export function resolveCurrentChannelWidgetPresenter(
+  presenters: readonly WidgetPresenter[],
+  context: WidgetPresenterContext,
+): Extract<WidgetPresenter, { target: "current_channel" }> | undefined {
+  const matches = presenters.filter(
+    (presenter): presenter is Extract<WidgetPresenter, { target: "current_channel" }> => {
+      if (presenter.target !== "current_channel") {
+        return false;
+      }
+      try {
+        return presenter.match(context);
+      } catch {
+        return false;
+      }
+    },
+  );
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function widgetPresentationFailureText(
+  error: WidgetPresentationError,
+  inlineAvailable: boolean,
+): string {
+  const message = /[.!?]$/u.test(error.message) ? error.message : `${error.message}.`;
+  if (!inlineAvailable) {
+    return message;
+  }
   const nextStep =
     error.code === "no_eligible_node"
       ? "Pair a canvas-capable device or open the OpenClaw app, then retry."
-      : "Open the OpenClaw app and retry.";
-  return `${error.message} The widget is available inline here. ${nextStep}`;
+      : "Retry the requested presentation destination when it is available.";
+  return `${message} The widget is available inline here. ${nextStep}`;
 }
 
 function slugWidgetName(title: string): string {
@@ -222,17 +252,39 @@ function assertPinnedWidgetDocumentSize(html: string): void {
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
   const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
   const inlineHostEnabled = options.inlineHostEnabled !== false;
+  const inlineAvailable = inlineHostEnabled && options.inlineClientAvailable !== false;
   const registeredKinds = listBoardWidgetContentKinds(currentPluginRegistry());
-  const kinds = ["html", ...registeredKinds] as const;
+  const allKinds = ["html", ...registeredKinds] as const;
   const presenters = options.presenters ?? [];
+  const presenterContext =
+    options.presenterContext ??
+    (options.agentSessionKey ? { sessionKey: options.agentSessionKey } : {});
+  const currentChannelPresenter = resolveCurrentChannelWidgetPresenter(
+    presenters,
+    presenterContext,
+  );
+  const kinds =
+    currentChannelPresenter && !inlineAvailable
+      ? allKinds.filter((kind) => currentChannelPresenter.capabilities.sourceKinds.includes(kind))
+      : allKinds;
+  const advertisedRegisteredKinds = kinds.filter((kind) => kind !== "html");
+  const explicitPresenters = presenters.filter(
+    (presenter) => presenter.target !== "current_channel",
+  );
   const presenterPrompt =
-    presenters.length > 0 ? " Use presentation.target to choose a registered device surface." : "";
+    explicitPresenters.length > 0
+      ? " Use presentation.target to choose a registered device surface."
+      : "";
   return {
     label: "Show Widget",
     name: "show_widget",
-    description: `Visual helps? Make widget. Do not wait for ask. Use for comparisons, trends, timelines, flows, hierarchies, dashboards, status, progress, layouts, and choices. Text clearer? Skip. Show a widget on the user's current surface; kind defaults to html${registeredKinds.length ? ` and registered kinds are ${registeredKinds.join(", ")}` : ""}. ${inlineHostEnabled ? "Set pin=true to also place it on this session's dashboard" : "Inline hosting is disabled; set pin=true to place it on this session's dashboard"}; use name for a stable widget id, tab for a tab slug, size sm|md|lg|xl|full, presentation.frame card|full-bleed|frameless, and after for a sibling widget anchor. Pinned widgets may declare capabilities.netOrigins and capabilities.tools for operator approval. HTML widgets are self-contained HTML or SVG. Dashboard host APIs: openclaw.prompt.send(text), openclaw.state.emit(payload), openclaw.data.read(bindingId, params?), and openclaw.cron.trigger(jobId). \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. HTML is pre-themed with --surface --card --elevated --text --text-strong --muted --border --border-strong --accent --accent-fill --accent-fg --ok --warn --danger --info --radius --font-body --font-mono.${presenterPrompt}`,
-    parameters: createShowWidgetToolSchema(kinds, presenters),
-    requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS,
+    description: `Visual helps? Make widget. Do not wait for ask. Keep one ad hoc visualization inline; pin for explicit dashboard request or multiple non-code visualizations. Update HTML by name. Use for comparisons, trends, timelines, flows, hierarchies, dashboards, status, progress, layouts, and choices. Text clearer? Skip. Show a widget on the user's current surface; kind defaults to html${advertisedRegisteredKinds.length ? ` and registered kinds are ${advertisedRegisteredKinds.join(", ")}` : ""}. ${inlineHostEnabled ? "Set pin=true to also place it on this session's dashboard" : "Inline hosting is disabled; set pin=true to place it on this session's dashboard"}; reuse the same explicit name with pin=true and new widget_code to update pinned content. Use name for a stable widget id, tab for a tab slug, size sm|md|lg|xl|full, presentation.frame card|full-bleed|frameless, and after for a sibling widget anchor. Pinned widgets may declare capabilities.netOrigins and capabilities.tools for operator approval. HTML widgets are self-contained HTML or SVG. Dashboard host APIs: openclaw.prompt.send(text), openclaw.state.emit(payload), openclaw.data.read(bindingId, params?), openclaw.action.run(actionId, params?), and openclaw.cron.trigger(jobId). openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard host initialization, otherwise null; read it at click time. Open links in a new tab with target="_blank" and rel="noopener noreferrer". \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. HTML is pre-themed with --surface --card --elevated --text --text-strong --muted --border --border-strong --accent --accent-fill --accent-fg --ok --warn --danger --info --radius --font-body --font-mono.${presenterPrompt}`,
+    parameters: createShowWidgetToolSchema(
+      kinds,
+      explicitPresenters,
+      describeDashboardCapabilities(currentPluginRegistry()),
+    ),
+    ...(currentChannelPresenter ? {} : { requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const kind = readToolStringParam(params, "kind") ?? "html";
@@ -277,32 +329,44 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           throw new WidgetHtmlInputError(`invalid ${kind} widget source: ${String(error)}`);
         }
       }
-      if (!inlineHostEnabled && !shouldPin) {
+      const currentPresenterSupportsKind =
+        currentChannelPresenter?.target === "current_channel" &&
+        currentChannelPresenter.capabilities.sourceKinds.includes(kind);
+      const wantsCurrentChannel =
+        requestedTarget === "assistant_message" && currentPresenterSupportsKind;
+      const wantsNodePanel = requestedTarget === "node_panel";
+      if (!inlineAvailable && !wantsCurrentChannel && !wantsNodePanel && !shouldPin) {
         throw new WidgetHtmlInputError(
           "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
         );
       }
-      const wrappedDocument = inlineHostEnabled
-        ? buildWidgetDocument(
+      if (wantsCurrentChannel && currentChannelPresenter?.target === "current_channel") {
+        const { maxSourceBytes } = currentChannelPresenter.capabilities;
+        if (maxSourceBytes !== undefined) {
+          assertWidgetHtmlSize(rawWidgetCode, maxSourceBytes, { inputName: "widget_code" });
+        }
+      }
+      const composedWidget = registration
+        ? registration.definition.composeDocument({
+            source: widgetCode,
             title,
-            registration
-              ? registration.definition.composeDocument({
-                  source: widgetCode,
-                  title,
-                  resourceUrls: Object.fromEntries(
-                    registration.definition.resources.paths.map((resourcePath) => [
-                      resourcePath,
-                      resourcePath,
-                    ]),
-                  ),
-                  promptGranted: false,
-                })
-              : widgetCode,
-            registration ? { scriptOrigins: ["'self'"] } : {},
-          )
-        : undefined;
+            resourceUrls: Object.fromEntries(
+              registration.definition.resources.paths.map((resourcePath) => [
+                resourcePath,
+                resourcePath,
+              ]),
+            ),
+            promptGranted: false,
+          })
+        : widgetCode;
+      const wrappedDocument = buildWidgetDocument(
+        title,
+        composedWidget,
+        registration ? { scriptOrigins: ["'self'"] } : {},
+      );
       let pinnedText = "";
       let pinnedWidgetName: string | undefined;
+      let capabilityState: BoardWidgetPutResult["widgets"][number]["grantState"] | undefined;
       if (pinSessionKey) {
         const sessionKey = pinSessionKey;
         const explicitName = readToolStringParam(params, "name");
@@ -345,65 +409,137 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const widget = snapshot.widgets.find(
           (candidate) => candidate.name === snapshot.resolvedWidgetName,
         );
-        pinnedText = `pinned to dashboard tab ${widget?.tabId ?? tab ?? "main"} as ${
+        if (!widget) {
+          throw new WidgetHtmlInputError(
+            "Dashboard did not return the pinned widget; read the board and retry.",
+          );
+        }
+        capabilityState = widget.grantState;
+        pinnedText = `pinned to dashboard tab ${widget.tabId} as ${
           snapshot.resolvedWidgetName
         }${size ? ` (${size})` : ""}`;
+        if (capabilityState === "pending") {
+          pinnedText +=
+            "; capabilities pending: ask the operator to review and approve the dashboard permission card";
+        }
+        if (capabilityState === "rejected") {
+          pinnedText +=
+            "; capabilities rejected: review the requested access and session permission policy with the operator before retrying";
+        }
+        if (capabilityState === "granted") {
+          pinnedText += "; capabilities granted";
+        }
       }
-      if (!wrappedDocument) {
+      const hasPresentationRoute = inlineAvailable || wantsCurrentChannel || wantsNodePanel;
+      if (!hasPresentationRoute) {
         return jsonResult({
-          status: "pinned",
+          status:
+            capabilityState === "pending" || capabilityState === "rejected"
+              ? capabilityState
+              : "pinned",
           boardWidgetName: pinnedWidgetName,
+          capabilityState,
           text: `Widget ${pinnedText}`,
         });
       }
-      // Pin first: placement validation can fail, and a rejected board write
-      // must not materialize or prune the bounded inline-document store.
-      const document = await createCanvasDocument(
-        {
-          kind: "html_bundle",
+      let document: Awaited<ReturnType<typeof createCanvasDocument>> | undefined;
+      const hostDocument = async () =>
+        (document ??= await createCanvasDocument(
+          {
+            kind: "html_bundle",
+            title,
+            entrypoint: { type: "html", value: wrappedDocument },
+            surface: "assistant_message",
+            retentionScope: resolveRetentionScope(options),
+            // Direct navigation must not run widget script as the Control UI origin.
+            cspSandbox: "scripts",
+          },
+          {
+            stateDir: options.stateDir,
+            maxDocumentsPerScope: WIDGET_MAX_PER_SCOPE,
+          },
+        ));
+
+      let presentationAttempt: WidgetPresentationAttempt | undefined;
+      if (wantsCurrentChannel && currentChannelPresenter) {
+        presentationAttempt = await presentWidget({
+          presenter: currentChannelPresenter,
+          document: { kind: "html", html: wrappedDocument },
           title,
-          entrypoint: { type: "html", value: wrappedDocument },
-          surface: "assistant_message",
-          retentionScope: resolveRetentionScope(options),
-          // Direct navigation must not run widget script as the Control UI origin.
-          cspSandbox: "scripts",
-        },
-        {
-          stateDir: options.stateDir,
-          maxDocumentsPerScope: WIDGET_MAX_PER_SCOPE,
-        },
-      );
-      const presentationAttempt =
-        requestedTarget === "node_panel"
-          ? await presentWidget({
-              presenters,
-              target: requestedTarget,
-              documentUrlPath: document.entryUrl,
-              title,
-              sessionKey: options.agentSessionKey,
-            })
+          context: presenterContext,
+        });
+      } else if (wantsNodePanel) {
+        const hosted = await hostDocument();
+        presentationAttempt = await presentWidget({
+          presenter: explicitPresenters.find((presenter) => presenter.target === "node_panel"),
+          document: { kind: "html", html: wrappedDocument, hostedUrl: hosted.entryUrl },
+          title,
+          context: presenterContext,
+        });
+      }
+
+      if (presentationAttempt?.ok && presentationAttempt.value.kind === "message") {
+        const receipt = presentationAttempt.value.receipt;
+        const messageId = receipt.primaryPlatformMessageId ?? receipt.platformMessageIds[0];
+        return jsonResult({
+          kind: "widget",
+          presentation: {
+            target: "current_channel",
+            title,
+            receipt,
+          },
+          ...(pinnedWidgetName ? { boardWidgetName: pinnedWidgetName } : {}),
+          ...(capabilityState ? { capabilityState } : {}),
+          text: `Widget presented in the current channel${messageId ? ` as message ${messageId}` : ""}${pinnedText ? `; ${pinnedText}` : ""}`,
+        });
+      }
+
+      if (presentationAttempt && !presentationAttempt.ok && !inlineAvailable) {
+        const failureText = widgetPresentationFailureText(presentationAttempt.error, false);
+        if (pinnedWidgetName) {
+          return jsonResult({
+            status: "partial",
+            boardWidgetName: pinnedWidgetName,
+            capabilityState,
+            presentation: {
+              target: requestedTarget === "node_panel" ? "node_panel" : "current_channel",
+              status: "failed",
+              error: presentationAttempt.error,
+            },
+            text: `Widget ${pinnedText}, but presentation failed: ${failureText}`,
+          });
+        }
+        throw new WidgetHtmlInputError(`Widget presentation failed: ${failureText}`);
+      }
+
+      const hosted = await hostDocument();
+      const presentedNode =
+        presentationAttempt?.ok && presentationAttempt.value.kind === "node"
+          ? presentationAttempt.value
           : undefined;
-      const presented = presentationAttempt?.ok ? presentationAttempt.value : undefined;
-      const target = presented ? "node_panel" : "assistant_message";
-      const presentationText = presentationAttempt?.ok
-        ? `; presented on ${presentationAttempt.value.nodeName ?? presentationAttempt.value.nodeId} (${presentationAttempt.value.nodeId})`
-        : presentationAttempt
-          ? `; ${widgetPresentationFailureText(presentationAttempt.error)}`
+      const target = presentedNode ? "node_panel" : "assistant_message";
+      const presentationText = presentedNode
+        ? `; presented on ${presentedNode.nodeName ?? presentedNode.nodeId} (${presentedNode.nodeId})`
+        : presentationAttempt && !presentationAttempt.ok
+          ? `; ${widgetPresentationFailureText(presentationAttempt.error, true)}`
           : "";
       return jsonResult({
         kind: "canvas",
+        ...(capabilityState ? { capabilityState } : {}),
         presentation: {
           target,
           title,
           sandbox: "scripts",
-          ...(presented ? { node: { id: presented.nodeId, name: presented.nodeName } } : {}),
+          ...(presentedNode
+            ? { node: { id: presentedNode.nodeId, name: presentedNode.nodeName } }
+            : {}),
         },
         view: {
-          id: document.id,
-          url: document.entryUrl,
+          id: hosted.id,
+          url: hosted.entryUrl,
           ...(pinnedWidgetName ? { boardWidgetName: pinnedWidgetName } : {}),
         },
-        text: `Widget hosted at ${document.entryUrl}${pinnedText ? `; ${pinnedText}` : ""}${presentationText}`,
+        text: `Widget hosted at ${hosted.entryUrl}${pinnedText ? `; ${pinnedText}` : ""}${presentationText}`,
       });
     },
   };

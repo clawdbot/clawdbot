@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
+import OpenClawKit
 import Testing
+import WebKit
 @testable import OpenClaw
 
 private actor DashboardWindowOwnershipAuthGate {
@@ -16,11 +18,16 @@ private actor DashboardWindowOwnershipAuthGate {
 }
 
 private actor DashboardWindowOwnershipEndpointGate {
+    private let firstURL: URL
     private var firstRequested = false
     private var firstContinuation: CheckedContinuation<Void, Never>?
 
+    init(firstURL: URL) {
+        self.firstURL = firstURL
+    }
+
     func authToken(for config: GatewayConnection.Config) async -> String? {
-        if config.url.port == 60002 {
+        if config.url == self.firstURL {
             self.firstRequested = true
             await withCheckedContinuation { continuation in
                 self.firstContinuation = continuation
@@ -42,19 +49,32 @@ private actor DashboardWindowOwnershipEndpointGate {
     }
 }
 
-private actor DashboardWindowOwnershipPresentationGate {
+actor DashboardWindowOwnershipPresentationGate {
     private var requested = false
     private var released = false
     private var requestCount = 0
     private var continuations: [CheckedContinuation<Void, Never>] = []
 
-    func waitForRelease() async {
+    init(released: Bool = false) {
+        self.released = released
+    }
+
+    func hold() {
+        self.requested = false
+        self.released = false
+    }
+
+    @discardableResult
+    func waitForRelease() async -> Int {
         self.requested = true
         self.requestCount += 1
-        guard !self.released else { return }
-        await withCheckedContinuation { continuation in
-            self.continuations.append(continuation)
+        let request = self.requestCount
+        if !self.released {
+            await withCheckedContinuation { continuation in
+                self.continuations.append(continuation)
+            }
         }
+        return request
     }
 
     func waitUntilRequested() async {
@@ -96,7 +116,7 @@ private final class DashboardWindowOwnershipTrackingWindow: NSWindow {
 @Suite(.serialized)
 @MainActor
 struct DashboardWindowOwnershipTests {
-    private static let primaryGateway = DashboardGatewayEntry(
+    static let primaryGateway = DashboardGatewayEntry(
         id: "primary",
         name: "Local Gateway",
         kind: "local",
@@ -105,20 +125,27 @@ struct DashboardWindowOwnershipTests {
         health: .ok)
 
     @Test func `disconnect and auth recovery preserve one native window`() async throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=before"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let replacementServer = try await DashboardHTTPFixture.start()
+        defer { replacementServer.stop() }
+        let url = server.url("/#token=before")
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
-            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
         let originalWindow = try #require(controller.window)
         let gate = DashboardWindowOwnershipAuthGate()
-        let readyState = try GatewayEndpointState.ready(
+        let readyState = GatewayEndpointState.ready(
             mode: .remote,
-            url: #require(URL(string: "ws://127.0.0.1:60002")),
+            url: replacementServer.websocketURL(""),
             token: nil,
             password: nil,
             routeRevision: 2)
@@ -146,7 +173,7 @@ struct DashboardWindowOwnershipTests {
         #expect(recoveredController !== failureController)
         #expect(recoveredController.window === originalWindow)
         #expect(recoveredController.currentURL.absoluteString ==
-            "http://127.0.0.1:60002/#token=after")
+            replacementServer.url("/#token=after").absoluteString)
         let authScripts = recoveredController._testUserScripts
             .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
         #expect(authScripts.count == 1)
@@ -159,31 +186,40 @@ struct DashboardWindowOwnershipTests {
     }
 
     @Test func `overlapping endpoint updates cannot orphan a dashboard window`() async throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=initial"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let replacementServer = try await DashboardHTTPFixture.start()
+        defer { replacementServer.stop() }
+        let currentServer = try await DashboardHTTPFixture.start()
+        defer { currentServer.stop() }
+        let url = server.url("/#token=initial")
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
-            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
         let originalWindow = try #require(controller.window)
-        let gate = DashboardWindowOwnershipEndpointGate()
+        let gate = DashboardWindowOwnershipEndpointGate(firstURL: replacementServer.websocketURL(""))
         let manager = DashboardManager._testMake(
             authTokenProvider: { config in await gate.authToken(for: config) })
         manager._testSetController(controller)
         defer { manager.close() }
 
-        let staleState = try GatewayEndpointState.ready(
+        let staleState = GatewayEndpointState.ready(
             mode: .remote,
-            url: #require(URL(string: "ws://127.0.0.1:60002")),
+            url: replacementServer.websocketURL(""),
             token: nil,
             password: nil,
             routeRevision: 1)
-        let currentState = try GatewayEndpointState.ready(
+        let currentState = GatewayEndpointState.ready(
             mode: .remote,
-            url: #require(URL(string: "ws://127.0.0.1:60003")),
+            url: currentServer.websocketURL(""),
             token: nil,
             password: nil,
             routeRevision: 2)
@@ -200,7 +236,7 @@ struct DashboardWindowOwnershipTests {
         #expect(manager._testController() === currentController)
         #expect(currentController.window === originalWindow)
         #expect(currentController.currentURL.absoluteString ==
-            "http://127.0.0.1:60003/#token=current")
+            currentServer.url("/#token=current").absoluteString)
         let authScripts = currentController._testUserScripts
             .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
         #expect(authScripts.count == 1)
@@ -209,19 +245,24 @@ struct DashboardWindowOwnershipTests {
     }
 
     @Test func `reopening after credential changes isolates the privileged document`() async throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=before"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let url = server.url("/#token=before")
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
-            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
         let originalWindow = try #require(controller.window)
         let originalDocument = controller._testDashboardWebViewIdentity
         originalWindow.orderOut(nil)
-        let endpointURL = try #require(URL(string: "ws://127.0.0.1:60001/"))
+        let endpointURL = server.websocketURL("/")
 
         let manager = DashboardManager._testMake(
             primaryEndpointProvider: { _ in
@@ -248,7 +289,11 @@ struct DashboardWindowOwnershipTests {
     }
 
     @Test func `replacing a key dashboard transfers keyboard ownership`() async throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=before"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let replacementServer = try await DashboardHTTPFixture.start()
+        defer { replacementServer.stop() }
+        let url = server.url("/#token=before")
         let originalWindow = DashboardWindowOwnershipTrackingWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -257,11 +302,14 @@ struct DashboardWindowOwnershipTests {
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
+            websiteDataStore: .nonPersistent(),
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
-            reusingWindow: originalWindow)
+            reusingWindow: originalWindow,
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
         originalWindow.simulatesKeyWindow = true
 
@@ -269,9 +317,9 @@ struct DashboardWindowOwnershipTests {
         manager._testSetController(controller)
         defer { manager.close() }
 
-        try await manager.handleEndpointState(.ready(
+        await manager.handleEndpointState(.ready(
             mode: .remote,
-            url: #require(URL(string: "ws://127.0.0.1:60002/")),
+            url: replacementServer.websocketURL("/"),
             token: "after",
             password: nil,
             routeRevision: 2))
@@ -282,7 +330,13 @@ struct DashboardWindowOwnershipTests {
     }
 
     @Test func `stale async presentation cannot overwrite a newer endpoint`() async throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=initial"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let replacementServer = try await DashboardHTTPFixture.start()
+        defer { replacementServer.stop() }
+        let currentServer = try await DashboardHTTPFixture.start()
+        defer { currentServer.stop() }
+        let url = server.url("/#token=initial")
         let originalWindow = DashboardWindowOwnershipTrackingWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -291,13 +345,16 @@ struct DashboardWindowOwnershipTests {
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
+            websiteDataStore: .nonPersistent(),
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
-            reusingWindow: originalWindow)
+            reusingWindow: originalWindow,
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
-        let staleEndpointURL = try #require(URL(string: "ws://127.0.0.1:60002/"))
+        let staleEndpointURL = replacementServer.websocketURL("/")
         let gate = DashboardWindowOwnershipPresentationGate()
         let manager = DashboardManager._testMake(
             primaryEndpointProvider: { _ in
@@ -313,9 +370,9 @@ struct DashboardWindowOwnershipTests {
 
         let presentation = Task { @MainActor in try await manager.show() }
         await gate.waitUntilRequested()
-        try await manager.handleEndpointState(.ready(
+        await manager.handleEndpointState(.ready(
             mode: .remote,
-            url: #require(URL(string: "ws://127.0.0.1:60003/")),
+            url: currentServer.websocketURL("/"),
             token: "current",
             password: nil,
             routeRevision: 2))
@@ -328,20 +385,29 @@ struct DashboardWindowOwnershipTests {
         #expect(currentController.window === originalWindow)
         #expect(originalWindow.foregroundRequestCount > backgroundForegroundCount)
         #expect(currentController.currentURL.absoluteString ==
-            "http://127.0.0.1:60003/#token=current")
+            currentServer.url("/#token=current").absoluteString)
     }
 
     @Test func `hidden dashboard invalidates stale reopening authority`() async throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=initial"))
-        let staleEndpointURL = try #require(URL(string: "ws://127.0.0.1:60002/"))
-        let currentEndpointURL = try #require(URL(string: "ws://127.0.0.1:60003/"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let replacementServer = try await DashboardHTTPFixture.start()
+        defer { replacementServer.stop() }
+        let currentServer = try await DashboardHTTPFixture.start()
+        defer { currentServer.stop() }
+        let url = server.url("/#token=initial")
+        let staleEndpointURL = replacementServer.websocketURL("/")
+        let currentEndpointURL = currentServer.websocketURL("/")
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
-            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
         let originalWindow = try #require(controller.window)
         originalWindow.orderOut(nil)
@@ -376,18 +442,25 @@ struct DashboardWindowOwnershipTests {
         #expect(await gate.numberOfRequests() == 2)
         #expect(replacement.window === originalWindow)
         #expect(replacement.currentURL.absoluteString ==
-            "http://127.0.0.1:60003/#token=current")
+            currentServer.url("/#token=current").absoluteString)
     }
 
     @Test func `superseded endpoint failure preserves a newer live dashboard`() async throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=initial"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let currentServer = try await DashboardHTTPFixture.start()
+        defer { currentServer.stop() }
+        let url = server.url("/#token=initial")
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "initial",
                 password: nil),
-            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
         let originalWindow = try #require(controller.window)
         let gate = DashboardWindowOwnershipPresentationGate()
@@ -402,9 +475,9 @@ struct DashboardWindowOwnershipTests {
 
         let presentation = Task { @MainActor in try await manager.show() }
         await gate.waitUntilRequested()
-        try await manager.handleEndpointState(.ready(
+        await manager.handleEndpointState(.ready(
             mode: .remote,
-            url: #require(URL(string: "ws://127.0.0.1:60003/")),
+            url: currentServer.websocketURL("/"),
             token: "current",
             password: nil,
             routeRevision: 2))
@@ -415,11 +488,13 @@ struct DashboardWindowOwnershipTests {
         #expect(manager._testController() === currentController)
         #expect(currentController.window === originalWindow)
         #expect(currentController.currentURL.absoluteString ==
-            "http://127.0.0.1:60003/#token=current")
+            currentServer.url("/#token=current").absoluteString)
     }
 
-    @Test func `window handoff ignores a conflicting target autosave frame`() throws {
-        let url = try #require(URL(string: "http://127.0.0.1:60001/#token=before"))
+    @Test func `window handoff ignores a conflicting target autosave frame`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let url = server.url("/#token=before")
         let originalAutosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
         let targetAutosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
         defer {
@@ -439,10 +514,13 @@ struct DashboardWindowOwnershipTests {
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "before",
                 password: nil),
-            windowAutosaveName: originalAutosaveName)
+            websiteDataStore: .nonPersistent(),
+            windowAutosaveName: originalAutosaveName,
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
         controller.show()
         let originalWindow = try #require(controller.window)
         let originalFrame = originalWindow.frame
@@ -450,11 +528,13 @@ struct DashboardWindowOwnershipTests {
         let replacement = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
-                gatewayUrl: "ws://127.0.0.1:60001/",
+                gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "after",
                 password: nil),
+            websiteDataStore: .nonPersistent(),
             windowAutosaveName: targetAutosaveName,
-            reusingWindow: transferredWindow)
+            reusingWindow: transferredWindow,
+            requestBrowserProfileImportOffer: { _ in false })
         defer { replacement.closeDashboard() }
 
         #expect(replacement.window === originalWindow)
@@ -462,9 +542,16 @@ struct DashboardWindowOwnershipTests {
     }
 
     @Test func `concurrent explicit opens share one presentation owner`() async throws {
-        let endpointURL = try #require(URL(string: "ws://127.0.0.1:60004/"))
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let dataStore = WKWebsiteDataStore.nonPersistent()
+        let endpointURL = server.websocketURL("/")
         let gate = DashboardWindowOwnershipPresentationGate()
+        let probes = AsyncStream<DashboardRouteProbePurpose>.makeStream()
+        defer { probes.continuation.finish() }
         let manager = DashboardManager._testMake(
+            websiteDataStore: dataStore,
+            routeProbe: { probes.continuation.yield($0) },
             primaryEndpointProvider: { _ in
                 await gate.waitForRelease()
                 return GatewayConnection.EndpointSnapshot(
@@ -488,6 +575,75 @@ struct DashboardWindowOwnershipTests {
         let controller = try #require(manager._testController())
         #expect(controller.isWindowOpen)
         #expect(controller.currentURL.absoluteString ==
-            "http://127.0.0.1:60004/#token=shared")
+            server.url("/#token=shared").absoluteString)
+        try await self.expectPresentationProbe(from: probes.stream)
+
+        let autosaveName = try #require(controller.window?.frameAutosaveName)
+        #expect(autosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
+        #expect(controller._testDashboardDataStore === dataStore)
+        #expect(!controller._testDashboardDataStore.isPersistent)
+        controller._testOpenLinkBrowser(server.url("/reader/first"))
+        #expect(controller._testLinkBrowserDataStore === dataStore)
+
+        await manager.handleEndpointState(.connecting(mode: .remote, detail: "Reconnecting"))
+        let failure = try #require(manager._testController())
+        #expect(failure !== controller)
+        #expect(failure._testDashboardDataStore === dataStore)
+        #expect(failure.window?.frameAutosaveName == autosaveName)
+
+        await manager.handleEndpointState(.ready(
+            mode: .remote,
+            url: endpointURL,
+            token: "recovered",
+            password: nil,
+            routeRevision: 2))
+        let recovered = try #require(manager._testController())
+        #expect(recovered !== failure)
+        #expect(recovered._testDashboardDataStore === dataStore)
+        #expect(recovered.window?.frameAutosaveName == autosaveName)
+        recovered._testOpenLinkBrowser(server.url("/reader/recovered"))
+        #expect(recovered._testLinkBrowserDataStore === dataStore)
+    }
+
+    @Test func `configured presentation uses its owned health probe`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+        let config = """
+        {"gateway":{"remote":{"transport":"direct","url":"\(server.websocketURL())","token":"configured"}}}
+        """
+        try Data(config.utf8).write(to: URL(fileURLWithPath: configPath))
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_TOKEN": nil,
+            "OPENCLAW_GATEWAY_PASSWORD": nil,
+        ]) {
+            let state = AppStateStore.shared
+            let originalMode = state.connectionMode
+            state.connectionMode = .remote
+            defer { state.connectionMode = originalMode }
+            let probes = AsyncStream<DashboardRouteProbePurpose>.makeStream()
+            defer { probes.continuation.finish() }
+            let manager = DashboardManager._testMake(
+                routeProbe: { probes.continuation.yield($0) },
+                gatewayEntriesProvider: { [Self.primaryGateway] })
+            defer { manager.close() }
+
+            #expect(manager.showConfiguredWindowIfPossible())
+            let controller = try #require(manager._testController())
+            #expect(controller.isWindowOpen)
+            #expect(controller.currentURL.absoluteString ==
+                server.url("/#token=configured").absoluteString)
+            try await self.expectPresentationProbe(from: probes.stream)
+        }
+    }
+
+    private func expectPresentationProbe(from probes: AsyncStream<DashboardRouteProbePurpose>) async throws {
+        let purpose = try await AsyncTimeout.withTimeout(
+            seconds: 3,
+            onTimeout: { NSError(domain: "DashboardPresentationProbe", code: 1) },
+            operation: { await probes.first(where: { _ in true }) })
+        #expect(purpose == .presentation)
     }
 }

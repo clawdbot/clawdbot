@@ -1,7 +1,9 @@
 // Gateway early-startup runtime helpers.
 // Starts discovery, remote skills, task maintenance, and delayed maintenance setup.
+import { isNixMode } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
@@ -71,6 +73,7 @@ export async function startGatewayEarlyRuntime(params: {
     warn: (msg: string) => void;
   };
   nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
+  swapBonjourStop: (next: (() => Promise<void>) | null) => (() => Promise<void>) | null;
   pluginRegistry?: PluginRegistry;
   broadcast: GatewayMaintenanceParams["broadcast"];
   nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
@@ -102,8 +105,11 @@ export async function startGatewayEarlyRuntime(params: {
       ensureTaskRuntimeStateReady();
     });
   }
-  const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
-    startGatewayPluginDiscovery(params),
+  // Startup failure can occur immediately after discovery; publish its owner first.
+  params.swapBonjourStop(
+    await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
+      startGatewayPluginDiscovery(params),
+    ),
   );
   let getActiveTaskCount = () => 0;
 
@@ -169,7 +175,7 @@ export async function startGatewayEarlyRuntime(params: {
         };
       });
 
-  const startMaintenance = async () => {
+  const startMaintenance = async (activeWorkInspectors: Partial<GatewayActiveWorkInspectors>) => {
     // Defer periodic maintenance until the caller has finished ready-state
     // wiring, but keep the lazy import owned by this early-runtime bundle.
     if (params.minimalTestGateway) {
@@ -184,6 +190,7 @@ export async function startGatewayEarlyRuntime(params: {
         getHealthVersion: params.getHealthVersion,
         refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
         restartRunningChannels: params.restartRunningChannels,
+        activeWorkInspectors,
         refreshPresence: params.refreshPresence,
         resetEventLoopHealth: params.resetEventLoopHealth,
         logHealth: params.logHealth,
@@ -195,8 +202,8 @@ export async function startGatewayEarlyRuntime(params: {
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,
+        isNixMode,
         getRuntimeConfig: params.getRuntimeConfig,
-        enableSkillCurator: true,
         ...(typeof params.mediaCleanupTtlMs === "number"
           ? { mediaCleanupTtlMs: params.mediaCleanupTtlMs }
           : {}),
@@ -205,7 +212,6 @@ export async function startGatewayEarlyRuntime(params: {
   };
 
   return {
-    bonjourStop,
     getActiveTaskCount,
     skillsChangeUnsub,
     startMaintenance,

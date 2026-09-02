@@ -5,13 +5,13 @@ import {
   isPositionalSeg,
   isQuotedSeg,
   parseArrayIndexSegment,
-  resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
 } from "../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import type { JsoncAst, JsoncValue } from "./ast.js";
 import { parseJsonc } from "./parse.js";
+import { resolveJsoncPositionalSegment } from "./resolve-value.js";
 
 type JsoncEditPath = Array<string | number>;
 type JsoncEditTarget = { readonly path: JsoncEditPath; readonly value: JsoncValue };
@@ -126,7 +126,7 @@ function resolveEditTarget(root: JsoncValue, segments: readonly string[]): Jsonc
       return null;
     }
     if (isPositionalSeg(segment)) {
-      const concrete = positionalForJsonc(current, segment);
+      const concrete = resolveJsoncPositionalSegment(current, segment);
       if (concrete !== null) {
         segment = concrete;
       }
@@ -152,17 +152,6 @@ function resolveEditTarget(root: JsoncValue, segments: readonly string[]): Jsonc
     return null;
   }
   return { path: out, value: current };
-}
-
-function positionalForJsonc(node: JsoncValue, segment: string): string | null {
-  if (node.kind === "object") {
-    const keys = node.entries.map((entry) => entry.key);
-    return resolvePositionalSeg(segment, { indexable: false, size: keys.length, keys });
-  }
-  if (node.kind === "array") {
-    return resolvePositionalSeg(segment, { indexable: true, size: node.items.length });
-  }
-  return null;
 }
 
 function jsoncValueToJson(value: JsoncValue): unknown {

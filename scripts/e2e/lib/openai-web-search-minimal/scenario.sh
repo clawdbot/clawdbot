@@ -57,7 +57,7 @@ dump_debug_logs() {
   done
   echo "OpenAI web_search minimal failed command: $failed_command" >&2
 }
-trap 'status=$?; dump_debug_logs "$status" "$BASH_COMMAND"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$TLS_DIR"

@@ -102,12 +102,13 @@ export function buildMcpAppHostCapabilities(
   csp?: McpAppHostSandboxCsp,
   supportsMessage = false,
   supportsUpdateModelContext = false,
+  supportsServerResources = false,
 ): McpAppHostCapabilities {
   return {
     openLinks: {},
-    serverResources: {},
     serverTools: {},
     sandbox: { csp: csp ?? {} },
+    ...(supportsServerResources ? { serverResources: {} } : {}),
     ...(supportsMessage ? { message: { text: {} } } : {}),
     ...(supportsUpdateModelContext ? { updateModelContext: { text: {} } } : {}),
   };

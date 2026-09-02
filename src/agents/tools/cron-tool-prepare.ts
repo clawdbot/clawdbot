@@ -31,6 +31,12 @@ function hasNestedJob(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && Object.keys(value).length > 0;
 }
 
+function rejectTopLevelMode(): never {
+  throw new Error(
+    'Remove the top-level "mode" field and retry. "mode" is only valid for action="wake".',
+  );
+}
+
 // Schedule ambiguity is rejected here; a wrong schedule fails invisibly.
 // Payload conflicts (message/text, toolsAllow) are deliberately NOT
 // rejected because their result is visible on the created job and
@@ -60,10 +66,9 @@ export function prepareCronToolArguments(args: unknown): Record<string, unknown>
     return next;
   }
   const nestedJob = hasNestedJob(next.job) ? next.job : undefined;
-  if (Object.hasOwn(next, "mode")) {
-    throw new Error(
-      'Remove the top-level "mode" field and retry. "mode" is only valid for action="wake".',
-    );
+  const hasTopLevelMode = Object.hasOwn(next, "mode");
+  if (nestedJob && hasTopLevelMode) {
+    rejectTopLevelMode();
   }
 
   for (const key of ["toolsAllow", "fallbacks"] as const) {
@@ -79,9 +84,19 @@ export function prepareCronToolArguments(args: unknown): Record<string, unknown>
     return next;
   }
 
+  const recovered = recoverCronObjectFromFlatParams(next);
+  if (hasTopLevelMode) {
+    const schedule = isRecord(recovered.value.schedule) ? recovered.value.schedule : undefined;
+    if (schedule?.kind !== "stream") {
+      rejectTopLevelMode();
+    }
+    // `mode` is already copied into the recovered stream schedule. Remove the
+    // wake-only top-level field before provider validation sees its wake enum.
+    delete next.mode;
+  }
+
   assertFlatContractInvariants(next);
 
-  const recovered = recoverCronObjectFromFlatParams(next);
   if (!recovered.found) {
     return next;
   }

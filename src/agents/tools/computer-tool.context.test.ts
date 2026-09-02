@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../runtime/index.js";
-import { invalidateComputerFrameIfMissing, TINY_PNG_BASE64 } from "./computer-tool.test-helpers.js";
+import {
+  createVisionComputerTool,
+  invalidateComputerFrameIfMissing,
+  readFrameId,
+  resetComputerToolMocks,
+  TINY_PNG_BASE64,
+} from "./computer-tool.test-helpers.js";
 
 function imageIdentity(data: string, mimeType = "image/png") {
   return createHash("sha256")
@@ -37,6 +43,8 @@ function screenshotToolResult(data = TINY_PNG_BASE64) {
 }
 
 describe("computer screenshot context binding", () => {
+  beforeEach(resetComputerToolMocks);
+
   it("keeps coordinates valid while the tracked tool result image remains visible", () => {
     const contextEpoch = trackedContextEpoch(0);
 
@@ -61,6 +69,42 @@ describe("computer screenshot context binding", () => {
     expect(contextEpoch).toEqual({ value: 1 });
     expect(invalidateComputerFrameIfMissing({ contextEpoch, messages: [] })).toBe(false);
     expect(contextEpoch.value).toBe(1);
+  });
+
+  it("tracks the original image across deduplication and redelivers after context pruning", async () => {
+    const contextEpoch = { value: 0 };
+    const tool = createVisionComputerTool({ contextEpoch });
+    const original = await tool.execute("shot-1", { action: "screenshot" });
+    const frameId = readFrameId(original);
+    const duplicate = await tool.execute("shot-2", { action: "screenshot" });
+    const duplicateMessage = computerToolResult("shot-2", duplicate.content);
+
+    expect(duplicate.content.every((block) => block.type !== "image")).toBe(true);
+    expect(readFrameId(duplicate)).toBe(frameId);
+    expect(
+      invalidateComputerFrameIfMissing({
+        contextEpoch,
+        messages: [computerToolResult("shot-1", original.content), duplicateMessage],
+      }),
+    ).toBe(false);
+    expect(contextEpoch).toMatchObject({ value: 0, frameToolCallId: "shot-1" });
+
+    expect(
+      invalidateComputerFrameIfMissing({
+        contextEpoch,
+        messages: [
+          computerToolResult("shot-1", [{ type: "text", text: "image pruned" }]),
+          duplicateMessage,
+        ],
+      }),
+    ).toBe(true);
+    expect(contextEpoch).toEqual({ value: 1 });
+
+    const redelivered = await tool.execute("shot-3", { action: "screenshot" });
+
+    expect(redelivered.content).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(readFrameId(redelivered)).not.toBe(frameId);
+    expect(contextEpoch).toMatchObject({ value: 1, frameToolCallId: "shot-3" });
   });
 
   it.each([

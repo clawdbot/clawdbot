@@ -1,10 +1,8 @@
 /**
  * Public SDK facade for browser profile defaults and activated profile resolution.
  */
-import path from "node:path";
 import type { BrowserConfig } from "../config/types.browser.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./browser-types.js";
 import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 export type {
@@ -27,8 +25,10 @@ export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "openclaw";
 export const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 60_000;
 /** Default maximum AI snapshot text captured from browser pages. */
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
-/** Default upload staging directory used by browser-backed file uploads. */
-export const DEFAULT_UPLOAD_DIR = path.join(resolvePreferredOpenClawTmpDir(), "uploads");
+/**
+ * Portable SDK compatibility default; the browser plugin owns platform-aware runtime paths.
+ */
+export const DEFAULT_UPLOAD_DIR = "/tmp/openclaw/uploads";
 
 type BrowserProfilesSurface = {
   resolveBrowserConfig: (
@@ -41,15 +41,11 @@ type BrowserProfilesSurface = {
   ) => ResolvedBrowserProfile | null;
 };
 
-let cachedBrowserProfilesSurface: BrowserProfilesSurface | undefined;
-
 function loadBrowserProfilesSurface(): BrowserProfilesSurface {
-  cachedBrowserProfilesSurface ??=
-    loadBundledPluginPublicSurfaceModuleSyncCore<BrowserProfilesSurface>({
-      dirName: "browser",
-      artifactBasename: "browser-profiles.js",
-    });
-  return cachedBrowserProfilesSurface;
+  return loadBundledPluginPublicSurfaceModuleSyncCore<BrowserProfilesSurface>({
+    dirName: "browser",
+    artifactBasename: "browser-profiles.js",
+  });
 }
 
 /** Resolves browser config through the activated bundled browser profile facade. */

@@ -15,14 +15,17 @@ const STARTUP_TIMEOUT_MS = 60_000;
 const REMEMBERED_SESSION_KEY = "agent:main:picker-target";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function seedRememberedSession(stateDir: string) {
+async function seedRememberedSession(
+  stateDir: string,
+  sessionKey: string = REMEMBERED_SESSION_KEY,
+) {
   await writeTuiLastSessionKey({
     scopeKey: buildTuiLastSessionScopeKey({
       connectionUrl: "pty-fixture://local",
       agentId: "main",
       sessionScope: "per-sender",
     }),
-    sessionKey: REMEMBERED_SESSION_KEY,
+    sessionKey,
     stateDir,
   });
 }
@@ -71,6 +74,97 @@ afterEach(async () => {
   await disposeActiveTuiFixtures();
 });
 
+it("submits provider-specific thinking labels with one Enter", async () => {
+  const fixture = await startTuiFixture({
+    env: {
+      OPENCLAW_TUI_PTY_THINKING_LABEL: "on",
+      OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL: "always on",
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+
+    for (const [index, { label, id }] of [
+      { label: "on", id: "fixture-thinking" },
+      { label: "always on", id: "fixture-thinking-safe" },
+    ].entries()) {
+      await fixture.run.write(`/think ${label}`, { delay: false });
+      await fixture.run.waitForOutput(`→ ${label}`, STARTUP_TIMEOUT_MS);
+      await fixture.run.write("\r", { delay: false });
+      const entries = await waitForLogCount({
+        logPath: fixture.logPath,
+        predicate: (entry) => entry.method === "patchSession",
+        count: index + 1,
+      });
+      expect(entries.findLast((entry) => entry.method === "patchSession")?.payload).toMatchObject({
+        thinkingLevel: id,
+      });
+      await fixture.run.waitForOutput(`thinking set to ${label}`, STARTUP_TIMEOUT_MS);
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
+it("clears the previous display name when the selected session is unnamed", async () => {
+  const fixture = await startTuiFixture();
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.run.write("/session agent:main:mode-source\r", { delay: false });
+    await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "loadHistory" &&
+        objectFieldEquals(entry, "sessionKey", "agent:main:mode-source"),
+      STARTUP_TIMEOUT_MS,
+    );
+    await fixture.run.waitForOutput("Production incident", STARTUP_TIMEOUT_MS);
+
+    const targetOutputOffset = fixture.run.visibleOutput().length;
+    await fixture.run.write("/session agent:main:mode-target\r", { delay: false });
+    await fixture.waitForLogEntry(
+      (entry) =>
+        entry.method === "loadHistory" &&
+        objectFieldEquals(entry, "sessionKey", "agent:main:mode-target"),
+      STARTUP_TIMEOUT_MS,
+    );
+    await fixture.run.waitForOutput("session mode-target", STARTUP_TIMEOUT_MS);
+
+    expect(fixture.run.visibleOutput().slice(targetOutputOffset)).not.toContain(
+      "Production incident",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
+it("keeps the active stream when the current session is selected again", async () => {
+  const fixture = await startTuiFixture();
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.run.write("streaming prompt\r", { delay: false });
+    await fixture.run.waitForOutput("PTY_STREAMING: streaming prompt", STARTUP_TIMEOUT_MS);
+    const historyLoadsBefore = (await readFixtureLog(fixture.logPath)).filter(
+      (entry) => entry.method === "loadHistory",
+    ).length;
+
+    await fixture.run.write("/session main\r/think\r", { delay: false });
+    await fixture.run.waitForOutput("usage: /think", STARTUP_TIMEOUT_MS);
+    const rows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) => frame.some((row) => row.includes("PTY_STREAMING: streaming prompt")),
+      STARTUP_TIMEOUT_MS,
+    );
+
+    expect(rows.join("\n")).not.toContain("local ready | idle");
+    expect(
+      (await readFixtureLog(fixture.logPath)).filter((entry) => entry.method === "loadHistory"),
+    ).toHaveLength(historyLoadsBefore);
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
 it("hides a stale approval when startup restores the remembered session", async () => {
   const stateDir = tempDirs.make("openclaw-tui-identity-");
   await seedRememberedSession(stateDir);
@@ -106,25 +200,30 @@ it("hides a stale approval when startup restores the remembered session", async 
   }
 }, 65_000);
 
-it("keeps startup input editable until the remembered session and history are stable", async () => {
+it("restores a remembered global session while keeping pre-ready input editable", async () => {
   const stateDir = tempDirs.make("openclaw-tui-startup-session-");
   const marker = "startup remembered session proof";
-  await seedRememberedSession(stateDir);
+  await seedRememberedSession(stateDir, "global");
   const fixture = await startTuiFixture({
     env: {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_PICKER_SESSION_KEY: "global",
       OPENCLAW_TUI_PTY_RESTORE_DELAY_MS: "400",
     },
   });
 
   try {
-    await fixture.waitForLogEntry(
-      (entry) =>
-        entry.method === "listSessions" &&
-        objectFieldEquals(entry, "search", REMEMBERED_SESSION_KEY),
+    const lookup = await fixture.waitForLogEntry(
+      (entry) => entry.method === "listSessions" && objectFieldEquals(entry, "search", "global"),
       STARTUP_TIMEOUT_MS,
     );
+    expect(lookup.payload).toMatchObject({
+      search: "global",
+      includeGlobal: true,
+      includeUnknown: false,
+      agentId: "main",
+    });
     const outputOffset = fixture.run.visibleOutput().length;
     await fixture.run.write(`${marker}\r`, { delay: false });
     const decision = await waitForSubmitDecision({ fixture, marker, outputOffset });
@@ -133,7 +232,7 @@ it("keeps startup input editable until the remembered session and history are st
     const rows = await waitForSynchronizedFrameRows(
       fixture.run,
       (frame) =>
-        frame.some((row) => row.includes("session picker-target")) &&
+        frame.some((row) => row.includes("session global")) &&
         frame.some((row) => row.includes("local ready")) &&
         frame.some((row) => row.includes(marker)),
       STARTUP_TIMEOUT_MS,
@@ -146,7 +245,7 @@ it("keeps startup input editable until the remembered session and history are st
       (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", marker),
       STARTUP_TIMEOUT_MS,
     );
-    expect(sent.payload).toMatchObject({ sessionKey: REMEMBERED_SESSION_KEY });
+    expect(sent.payload).toMatchObject({ sessionKey: "global", agentId: "main" });
     expect(markerSends(await readFixtureLog(fixture.logPath), marker)).toHaveLength(1);
   } finally {
     await fixture.cleanup();

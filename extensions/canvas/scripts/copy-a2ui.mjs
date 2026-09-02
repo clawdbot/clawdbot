@@ -43,7 +43,6 @@ export async function copyA2uiAssets({ srcDir, outDir }) {
 
   const skipMissing = shouldSkipMissingA2uiAssets(process.env);
   try {
-    await fs.stat(path.join(srcDir, "index.html"));
     await fs.stat(path.join(srcDir, "a2ui.bundle.js"));
     await fs.stat(path.join(srcDir, "a2ui-v0.9.bundle.js"));
   } catch (err) {

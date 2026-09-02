@@ -3,17 +3,37 @@ export const TUI_PTY_RECONNECT_FIXTURE = {
   variables: `
       const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
       const reconnectOutcome = process.env.OPENCLAW_TUI_PTY_RECONNECT_OUTCOME;
+      const reconnectMembership = process.env.OPENCLAW_TUI_PTY_RECONNECT_MEMBERSHIP;
+      const replacementReconnect = ["replacement", "appeared", "gap"].includes(reconnectOutcome);
       let disconnectPending = disconnectReason === undefined
         ? 0
         : Number(process.env.OPENCLAW_TUI_PTY_DISCONNECT_COUNT ?? 1);
       let reconnectHistoryReady = false;
       let reconnectRunId = "run-reconnect-fixture";
+      let reconnectSessionKey = "agent:main:main";
+      let replacementReconnectHistoryLoads = 0;
   `,
   disconnect: `
         emitDisconnect() {
+          if (disconnectPending === 0 && reconnectMembership) {
+            this.onEvent?.({
+              event: "chat",
+              payload: {
+                runId: "run-reconnect-replacement",
+                sessionKey: reconnectSessionKey,
+                seq: 2,
+                state: "final",
+                message: { role: "assistant", content: "PTY_REPLACEMENT_FINAL" },
+              },
+            });
+          }
           if (disconnectPending <= 0 || disconnectReason === undefined) return;
           disconnectPending -= 1;
           reconnectHistoryReady = true;
+          if (reconnectOutcome === "gap") {
+            this.onGap?.({ expected: 2, received: 3 });
+            return;
+          }
           record("disconnect");
           this.onDisconnected?.(disconnectReason);
           setTimeout(() => this.onConnected?.(), 50);
@@ -22,11 +42,13 @@ export const TUI_PTY_RECONNECT_FIXTURE = {
   sendChat: `
           if (reconnectOutcome && opts.message === "reconnect terminal proof") {
             reconnectRunId = runId;
+            reconnectSessionKey = opts.sessionKey;
             queueMicrotask(() => this.onEvent?.({
               event: "chat",
               payload: {
                 runId,
                 sessionKey: opts.sessionKey,
+                seq: 1,
                 state: "delta",
                 message: { role: "assistant", content: "PTY_RECONNECT_PARTIAL" },
               },
@@ -47,8 +69,25 @@ export const TUI_PTY_RECONNECT_FIXTURE = {
   `,
   loadHistory: `
           if (reconnectHistoryReady && reconnectOutcome) {
+            if (replacementReconnect) {
+              replacementReconnectHistoryLoads += 1;
+              record("replacementReconnectHistory", {
+                attempt: replacementReconnectHistoryLoads,
+              });
+              if (replacementReconnectHistoryLoads > 1 && !reconnectMembership) {
+                return {
+                  sessionInfo: { ...sessionEntry(sessionKey), status: "done" },
+                  messages: [{ role: "assistant", content: "PTY_RECONNECT_RECOVERED" }],
+                };
+              }
+            }
             const sessionInfo = {
               ...sessionEntry(sessionKey),
+              ...(reconnectMembership === "replacement"
+                ? { activeRunIds: ["run-reconnect-replacement"] }
+                : reconnectMembership === "concurrent"
+                  ? { activeRunIds: [reconnectRunId, "run-reconnect-replacement"] }
+                  : {}),
               ...(reconnectOutcome === "interrupted"
                 ? { status: "killed", abortedLastRun: true }
                 : reconnectOutcome === "failed"
@@ -60,8 +99,15 @@ export const TUI_PTY_RECONNECT_FIXTURE = {
               messages: reconnectOutcome === "completed"
                 ? [{ role: "assistant", content: "PTY_RECONNECT_COMPLETED" }]
                 : [],
-              ...(reconnectOutcome === "active"
-                ? { inFlightRun: { runId: reconnectRunId, text: "PTY_RECONNECT_PARTIAL" } }
+              ...(reconnectOutcome === "active" || replacementReconnect
+                ? {
+                    inFlightRun: {
+                      runId: replacementReconnect ? "run-reconnect-replacement" : reconnectRunId,
+                      text: replacementReconnect
+                        ? "PTY_RECONNECT_REPLACEMENT"
+                        : "PTY_RECONNECT_PARTIAL",
+                    },
+                  }
                 : {}),
             };
           }

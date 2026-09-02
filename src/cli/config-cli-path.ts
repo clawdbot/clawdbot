@@ -1,12 +1,27 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
+import { rejectConfigNonFiniteNumbers } from "../config/io.read-helpers.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { toDotPath } from "../shared/dot-path.js";
+import {
+  formatConcreteConfigPath,
+  toDotPath,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatStrictJsonParseFailure } from "./error-format.js";
 
+export { parseConcreteConfigPath as parseConfigSetPath } from "../shared/dot-path.js";
+
 export type PathSegment = string;
+
+export function formatConfigSetPath(
+  path: readonly PathSegment[],
+  pathTokens?: readonly ConcreteConfigPathSegment[],
+  source?: unknown,
+): string {
+  return formatConcreteConfigPath(pathTokens ?? path, source);
+}
 
 export type JsonSchemaRecord = {
   type?: unknown;
@@ -20,6 +35,8 @@ export type JsonSchemaRecord = {
 
 type SetAtPathOptions = {
   numericObjectKeys?: boolean;
+  pathTokens?: readonly ConcreteConfigPathSegment[];
+  quotedNumericSegments?: ReadonlySet<number>;
   schema?: JsonSchemaRecord;
 };
 
@@ -31,147 +48,26 @@ function isIndexSegment(raw: string): boolean {
   return parseIndexSegment(raw) !== undefined;
 }
 
-function parseBracketPathSegment(raw: string, fullPath: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    throw new Error(`Invalid path (empty "[]"): ${fullPath}`);
-  }
-  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
-    try {
-      const parsed = JSON5.parse(trimmed) as unknown;
-      if (typeof parsed === "string" && parsed.trim()) {
-        return parsed;
-      }
-    } catch (err) {
-      throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`, { cause: err });
-    }
-    throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`);
-  }
-  return trimmed;
-}
-
-function assertNotWhitespaceSegment(current: string, raw: string): void {
-  if (current.length > 0 && !current.trim()) {
-    throw new Error(`Invalid path (empty segment): ${raw}`);
-  }
-}
-
-function findBracketPathClose(path: string, open: number): number {
-  let quote: '"' | "'" | undefined;
-  for (let index = open + 1; index < path.length; index += 1) {
-    const character = path[index];
-    if (quote) {
-      if (character === "\\") {
-        index += 1;
-      } else if (character === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (character === "]") {
-      return index;
-    }
-    if ((character === '"' || character === "'") && !path.slice(open + 1, index).trim()) {
-      quote = character;
-    }
-  }
-  return -1;
-}
-
-function parsePath(raw: string): PathSegment[] {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return [];
-  }
-  const parts: string[] = [];
-  let current = "";
-  let segmentEmitted = false;
-  let i = 0;
-  while (i < trimmed.length) {
-    const ch = trimmed[i];
-    if (ch === "\\") {
-      const next = trimmed[i + 1];
-      if (next === undefined) {
-        throw new Error(`Invalid path (trailing escape): ${raw}`);
-      }
-      current += next;
-      i += 2;
-      continue;
-    }
-    if (ch === ".") {
-      assertNotWhitespaceSegment(current, raw);
-      if (!segmentEmitted && !current.trim()) {
-        throw new Error(`Invalid path (empty segment): ${raw}`);
-      }
-      if (current) {
-        parts.push(current.trim());
-      }
-      current = "";
-      segmentEmitted = false;
-      i += 1;
-      continue;
-    }
-    if (ch === "[") {
-      assertNotWhitespaceSegment(current, raw);
-      if (!current.trim() && !segmentEmitted && parts.length > 0) {
-        throw new Error(`Invalid path (empty segment): ${raw}`);
-      }
-      if (current) {
-        parts.push(current.trim());
-      }
-      current = "";
-      const close = findBracketPathClose(trimmed, i);
-      if (close === -1) {
-        throw new Error(`Invalid path (missing "]"): ${raw}`);
-      }
-      const inside = trimmed.slice(i + 1, close).trim();
-      if (!inside) {
-        throw new Error(`Invalid path (empty "[]"): ${raw}`);
-      }
-      parts.push(parseBracketPathSegment(inside, raw));
-      const next = trimmed[close + 1];
-      if (next !== undefined && next !== "." && next !== "[") {
-        throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
-      }
-      segmentEmitted = true;
-      i = close + 1;
-      continue;
-    }
-    current += ch;
-    i += 1;
-  }
-  if (!segmentEmitted && !current.trim()) {
-    throw new Error(`Invalid path (empty segment): ${raw}`);
-  }
-  if (current) {
-    parts.push(current.trim());
-  }
-  return parts;
-}
-
-export function parseConfigSetPath(path: string): string[] {
-  const parsedPath = parsePath(path);
-  if (parsedPath.length === 0) {
-    throw new Error("Path is empty.");
-  }
-  validatePathSegments(parsedPath);
-  return parsedPath;
-}
-
 export function parseConfigSetValue(raw: string, strictJson: boolean): unknown {
   const trimmed = raw.trim();
   if (strictJson) {
+    let parsed: unknown;
     try {
-      return JSON.parse(trimmed);
+      parsed = JSON.parse(trimmed);
     } catch (err) {
       throw new Error(formatStrictJsonParseFailure({ value: raw, cause: err }), { cause: err });
     }
+    rejectConfigNonFiniteNumbers(parsed);
+    return parsed;
   }
+  let parsed: unknown;
   try {
-    return JSON5.parse(trimmed);
+    parsed = JSON5.parse(trimmed);
   } catch {
     return raw;
   }
+  rejectConfigNonFiniteNumbers(parsed);
+  return parsed;
 }
 
 export function validatePathSegments(path: PathSegment[]): void {
@@ -320,6 +216,13 @@ function schemasAtPath(
   return schemas;
 }
 
+export function isConfigSchemaPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): boolean {
+  return schemasAtPath(schema, path).length > 0;
+}
+
 function schemaPrefersArrayAtPath(
   schema: JsonSchemaRecord | undefined,
   path: readonly PathSegment[],
@@ -348,6 +251,13 @@ function shouldCreateArrayForMissingPathSegment(params: {
   options?: SetAtPathOptions;
 }): boolean {
   if (!params.next || params.options?.numericObjectKeys || !isIndexSegment(params.next)) {
+    return false;
+  }
+  const nextToken = params.options?.pathTokens?.[params.segmentIndex + 1];
+  if (typeof nextToken === "number") {
+    return true;
+  }
+  if (params.options?.quotedNumericSegments?.has(params.segmentIndex + 1)) {
     return false;
   }
   const parentPath = params.path.slice(0, params.segmentIndex + 1);
@@ -455,17 +365,67 @@ function isProviderModelListPath(path: PathSegment[]): boolean {
   );
 }
 
+type MergePath = {
+  parent?: MergePath;
+  segment: PathSegment;
+};
+
+function appendMergePath(parent: MergePath | undefined, segment: PathSegment): MergePath {
+  return { parent, segment };
+}
+
+function toMergePath(path: PathSegment[]): MergePath | undefined {
+  let current: MergePath | undefined;
+  for (const segment of path) {
+    current = appendMergePath(current, segment);
+  }
+  return current;
+}
+
+function isProviderModelListMergePath(path: MergePath): boolean {
+  const provider = path.parent;
+  const providers = provider?.parent;
+  const models = providers?.parent;
+  return (
+    path.segment === "models" &&
+    providers?.segment === "providers" &&
+    models?.segment === "models" &&
+    models.parent === undefined
+  );
+}
+
 function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]): unknown {
   if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
     return mergeModelArrays(existing, patch);
   }
   if (isPlainRecord(existing) && isPlainRecord(patch)) {
     const next: Record<string, unknown> = { ...existing };
-    for (const [key, value] of Object.entries(patch)) {
-      next[key] =
-        hasOwnPathKey(next, key) && isPlainRecord(next[key]) && isPlainRecord(value)
-          ? mergeConfigValue(next[key], value, [...path, key])
-          : value;
+    // Linked paths keep deep merges linear while preserving descendant-specific merge policy.
+    const pending = [{ target: next, patch, path: toMergePath(path) }];
+    while (pending.length > 0) {
+      const frame = pending.pop()!;
+      for (const [key, value] of Object.entries(frame.patch)) {
+        const current = frame.target[key];
+        const childPath = appendMergePath(frame.path, key);
+        if (
+          hasOwnPathKey(frame.target, key) &&
+          isProviderModelListMergePath(childPath) &&
+          Array.isArray(current) &&
+          Array.isArray(value)
+        ) {
+          frame.target[key] = mergeModelArrays(current, value);
+        } else if (
+          hasOwnPathKey(frame.target, key) &&
+          isPlainRecord(current) &&
+          isPlainRecord(value)
+        ) {
+          const child = { ...current };
+          frame.target[key] = child;
+          pending.push({ target: child, patch: value, path: childPath });
+        } else {
+          frame.target[key] = value;
+        }
+      }
     }
     return next;
   }

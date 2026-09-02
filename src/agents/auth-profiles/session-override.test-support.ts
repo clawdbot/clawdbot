@@ -70,7 +70,7 @@ vi.mock("../../plugins/provider-model-routes.js", () => ({
   resolveProviderModelRoutes: authStoreMocks.resolveProviderModelRoutes,
 }));
 
-export const { clearSessionAuthProfileOverride, resolveSessionAuthProfileOverride } =
+export const { clearSessionAuthProfileOverride, resolveSessionAuthSelection } =
   await import("./session-override.js");
 export { authStoreMocks };
 
@@ -170,16 +170,19 @@ export async function resolveSession(params: {
   storePath?: string;
   isNewSession?: boolean;
 }): Promise<string | undefined> {
-  return await resolveSessionAuthProfileOverride({
-    cfg: params.cfg ?? ({} as OpenClawConfig),
-    provider: params.provider ?? "openai",
-    agentDir: params.agentDir,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey ?? "agent:main:main",
-    storePath: params.storePath,
-    isNewSession: params.isNewSession ?? false,
-  });
+  return (
+    await resolveSessionAuthSelection({
+      cfg: params.cfg ?? ({} as OpenClawConfig),
+      provider: params.provider ?? "openai",
+      modelId: params.sessionEntry.model ?? "model-x",
+      agentDir: params.agentDir,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      sessionKey: params.sessionKey ?? "agent:main:main",
+      storePath: params.storePath,
+      isNewSession: params.isNewSession ?? false,
+    })
+  )?.profileId;
 }
 
 export function createAutomaticSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {

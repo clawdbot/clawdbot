@@ -17,11 +17,14 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
   "../config/control-ui-startup-budget-baseline.json",
 );
 
-// This absorbs measured local-to-Linux gzip variance plus bounded Linux
-// build-to-build chunk-hash variance. Local zlib emits smaller streams than
-// CI's Linux builder, so baseline updates must use CI bytes via
-// --startup-js-bytes. The fixed JS baseline ceiling bounds cumulative creep.
-const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1056;
+// Each landed change can consume this much ratchet tolerance, so small increases
+// may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
+const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
+const CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES = 64;
+// The opaque Mermaid sandbox loads one self-contained classic script only when
+// a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
+const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
+const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
@@ -33,9 +36,19 @@ const controlUiPerformanceBudgets = {
   startupJsGzipBytes: 350 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
+  // Briefly 47 KiB for the Tide/Beacon/Phosphor palettes, restored to 45 KiB
+  // once those palettes moved out of the startup sheet into public/themes and
+  // measured 42.2 KiB — below where they started. Adding a built-in theme no
+  // longer costs the default path anything, so this ceiling should stay put.
   startupCssGzipBytes: 45 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 45 * KIB,
+  // Composer multiline surface (stack #124301) legitimately grew boot CSS;
+  // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
+  // 53.0 KiB was exhausted by organic growth (main sat at 99.94% by 2026-08-29);
+  // bumped to 53.5 KiB with operator approval on PR #132054. 2026-09-02: side
+  // panel, workboard chip, and Lobsterdex styles moved to their lazy owners,
+  // measured boot sheet 52,337 B; ceiling lowered to keep ~1 KiB headroom.
+  largestCssGzipBytes: 53_400,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
@@ -118,8 +131,10 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
     return asset;
   });
   const jsAssets = assets.filter((asset) => asset.type === "js");
+  const mermaidRenderer = jsAssets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file));
+  const ordinaryJsAssets = jsAssets.filter((asset) => !MERMAID_RENDERER_ASSET.test(asset.file));
   const cssAssets = assets.filter((asset) => asset.type === "css");
-  if (jsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
+  if (ordinaryJsAssets.length === 0 || cssAssets.length === 0 || startup.length === 0) {
     throw new Error("Control UI performance check found an incomplete production bundle");
   }
   return {
@@ -134,9 +149,10 @@ export function collectControlUiPerformanceMetrics(distDir: string) {
       css: summarizeAssets(cssAssets),
     },
     largest: {
-      js: largestAsset(jsAssets),
+      js: largestAsset(ordinaryJsAssets),
       css: largestAsset(cssAssets),
     },
+    mermaidRenderer,
   };
 }
 
@@ -147,17 +163,31 @@ export function evaluateControlUiPerformanceBudgets(
   startupJsTolerance = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
 ) {
   const baselineBytes = startupBudgetBaseline?.startupJsGzipBytes;
-  const startupJsGzipLimit =
-    baselineBytes === undefined
-      ? budgets.startupJsGzipBytes
-      : Math.min(baselineBytes, budgets.startupJsGzipBytes) + startupJsTolerance;
+  const startupJsLimits = resolveControlUiStartupJsGzipLimits(
+    budgets,
+    startupBudgetBaseline,
+    startupJsTolerance,
+  );
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
-    ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsGzipLimit, "bytes"],
+    ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsLimits.enforcementLimit, "bytes"],
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
+    ["isolated Mermaid JS assets", metrics.mermaidRenderer.length, 1, "count"],
+    [
+      "isolated Mermaid JS gzip",
+      summarizeAssets(metrics.mermaidRenderer).gzipBytes,
+      MERMAID_RENDERER_GZIP_BYTES,
+      "bytes",
+    ],
+    [
+      "startup Mermaid JS assets",
+      metrics.startup.assets.filter((asset) => MERMAID_RENDERER_ASSET.test(asset.file)).length,
+      0,
+      "count",
+    ],
   ];
   const violations = checks.flatMap(([metric, actual, limit, unit]) =>
     actual > limit ? [{ metric, actual, limit, unit }] : [],
@@ -171,6 +201,30 @@ export function evaluateControlUiPerformanceBudgets(
     });
   }
   return violations;
+}
+
+function resolveControlUiStartupJsGzipLimits(
+  budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS>,
+  startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null,
+  startupJsTolerance: number,
+) {
+  const baselineCap = budgets.startupJsGzipBytes;
+  if (!startupBudgetBaseline) {
+    return {
+      baselineCap,
+      growthLimit: baselineCap,
+      buildVariance: 0,
+      enforcementLimit: baselineCap,
+    };
+  }
+  const growthLimit =
+    Math.min(startupBudgetBaseline.startupJsGzipBytes, baselineCap) + startupJsTolerance;
+  return {
+    baselineCap,
+    growthLimit,
+    buildVariance: CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES,
+    enforcementLimit: growthLimit + CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES,
+  };
 }
 
 type ControlUiPerformanceBudgetViolation = ReturnType<
@@ -211,6 +265,11 @@ export function formatControlUiPerformanceReport(
   startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null = null,
   startupJsTolerance: number = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
 ): string {
+  const startupJsLimits = resolveControlUiStartupJsGzipLimits(
+    budgets,
+    startupBudgetBaseline,
+    startupJsTolerance,
+  );
   const violations = evaluateControlUiPerformanceBudgets(
     metrics,
     budgets,
@@ -219,27 +278,32 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupBudgetBaseline ? Math.min(startupBudgetBaseline.startupJsGzipBytes, budgets.startupJsGzipBytes) + startupJsTolerance : budgets.startupJsGzipBytes)} gzip)`,
+    `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {
     lines.push(
-      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + tolerance ${startupJsTolerance} B, max committed baseline ${budgets.startupJsGzipBytes} B)`,
+      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + growth allowance ${startupJsTolerance} B = growth limit ${startupJsLimits.growthLimit} B; build-variance allowance ${startupJsLimits.buildVariance} B; enforcement limit ${startupJsLimits.enforcementLimit} B; max committed baseline ${startupJsLimits.baselineCap} B)`,
     );
   }
   lines.push(
     `  startup CSS: ${formatAssetSummary(metrics.startup.css)} (limits: ${formatRequestCount(budgets.startupCssRequests)}, ${formatControlUiPerformanceBytes(budgets.startupCssGzipBytes)} gzip)`,
-    `  largest JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
+    `  largest ordinary JS: ${metrics.largest.js.file}, ${formatControlUiPerformanceBytes(metrics.largest.js.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestJsGzipBytes)})`,
     `  largest CSS: ${metrics.largest.css.file}, ${formatControlUiPerformanceBytes(metrics.largest.css.gzipBytes)} gzip (limit: ${formatControlUiPerformanceBytes(budgets.largestCssGzipBytes)})`,
     `  all JS: ${formatAssetSummary(metrics.total.js)}`,
     `  all CSS: ${formatAssetSummary(metrics.total.css)}`,
   );
+  if (metrics.mermaidRenderer.length > 0) {
+    lines.push(
+      `  isolated Mermaid JS: ${formatAssetSummary(summarizeAssets(metrics.mermaidRenderer))} (limits: 1 deferred asset, ${formatControlUiPerformanceBytes(MERMAID_RENDERER_GZIP_BYTES)} gzip; forbidden at startup)`,
+    );
+  }
   if (
     startupBudgetBaseline &&
     metrics.startup.js.gzipBytes + STARTUP_JS_BASELINE_RATCHET_BYTES <
       startupBudgetBaseline.startupJsGzipBytes
   ) {
     lines.push(
-      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with node --import tsx scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"`,
+      `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with ${baselineUpdateCommand()}`,
     );
   }
   if (violations.length > 0) {
@@ -252,7 +316,7 @@ export function formatControlUiPerformanceReport(
 }
 
 function baselineUpdateCommand(): string {
-  return 'node --import tsx scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
+  return 'node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --update-baseline --reason "<reason>"';
 }
 
 function isIsoDate(value: string): boolean {
@@ -337,6 +401,7 @@ export function runControlUiPerformanceCheck(
     budgets,
     startupBudgetBaseline,
     startupJsTolerance: CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
+    startupJsBuildVariance: CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES,
     violations,
     report,
   };

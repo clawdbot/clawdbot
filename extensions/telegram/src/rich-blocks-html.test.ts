@@ -1,5 +1,6 @@
 // HTML-island → typed block mapping tests: this is the agent authoring contract
 // the core system prompt advertises for rich-enabled Telegram accounts.
+import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import { countInputRichBlockChars, type InputRichBlock } from "./rich-block-model.js";
 import { splitTelegramRichBlocks } from "./rich-block-split.js";
@@ -30,6 +31,21 @@ describe("block HTML islands", () => {
     }
     expect(JSON.stringify(block.summary)).toContain("output");
     expect(block.blocks).toEqual([{ type: "paragraph", text: "hidden body" }]);
+  });
+
+  it("keeps Markdown lists inside <details> islands", () => {
+    const block = single("<details><summary>List</summary>\n\n- item A\n- item B\n\n</details>");
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.summary).toBe("List");
+    expect(block.blocks).toHaveLength(1);
+    expect(block.blocks[0]?.type).toBe("paragraph");
+    const serialized = JSON.stringify(block);
+    expect(serialized).toContain("• item A");
+    expect(serialized).toContain("• item B");
+    expect(serialized).not.toContain("<details>");
   });
 
   it("maps <ul> with checkbox tasks", () => {
@@ -152,8 +168,8 @@ describe("block HTML islands", () => {
     if (block.type !== "table") {
       return;
     }
-    expect(block.cells[0]?.[0]).toEqual({ text: "bad span" });
-    expect(block.cells[0]?.[1]).toEqual({ text: "next" });
+    expect(block.cells[0]?.[0]).toEqual({ text: "bad span", align: "left", valign: "middle" });
+    expect(block.cells[0]?.[1]).toEqual({ text: "next", align: "left", valign: "middle" });
   });
 
   it.each([
@@ -272,6 +288,38 @@ describe("block HTML islands", () => {
     const wideRow = Array.from({ length: 21 }, (_, i) => `<td>c${i}</td>`).join("");
     const block = single(`<table><tr>${wideRow}</tr></table>`);
     expect(block.type).toBe("pre");
+  });
+
+  it("aligns Unicode and expands colspan in over-wide HTML tables", () => {
+    const header = [
+      '<th colspan="2">Name</th>',
+      ...Array.from({ length: 19 }, (_value, index) => `<th>H${index + 3}</th>`),
+    ].join("");
+    const values = [
+      "小明",
+      "✅",
+      "⌚",
+      "⚽",
+      "👨‍👩‍👧",
+      "🇨🇳",
+      "1⃣",
+      "1️⃣",
+      "❤",
+      "❤️",
+      "©",
+      "©️",
+      "cafe\u0301",
+      ...Array.from({ length: 8 }, (_value, index) => String(index + 14)),
+    ];
+    const row = values.map((value) => `<td>${value}</td>`).join("");
+    const block = single(`<table><tr>${header}</tr><tr>${row}</tr></table>`);
+    expect(block.type).toBe("pre");
+    if (block.type !== "pre") {
+      return;
+    }
+    const lines = block.text.split("\n");
+    expect(lines.every((line) => line.split("|").length === 23)).toBe(true);
+    expect(new Set(lines.map((line) => stringWidth(line))).size).toBe(1);
   });
 
   it("emits anchor_link nodes for fragment hrefs", () => {

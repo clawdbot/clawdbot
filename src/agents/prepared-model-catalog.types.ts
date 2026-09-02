@@ -5,6 +5,8 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 export type PublishedModelCatalogOwnerCandidate = Readonly<{
+  /** Captured during preparation; undefined is a known-unbound runtime. */
+  catalogOwner: Readonly<{ agentId: string; workspaceDir: string }> | undefined;
   agentId?: string;
   agentDir: string;
   workspaceDir?: string;
@@ -16,6 +18,7 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
 }>;
 
 export type ResolvedPublishedModelCatalogOwner = Readonly<{
+  catalogOwner: NonNullable<PublishedModelCatalogOwnerCandidate["catalogOwner"]>;
   agentId: string;
   agentDir: string;
   workspaceDir: string;

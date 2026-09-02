@@ -167,6 +167,8 @@ flow:
         - set: transcriptPath
           value:
             expr: "path.join(sessionsDir, `${config.transcriptId}.jsonl`)"
+        - set: recallEvidence
+          value: []
         - try:
             actions:
               - call: fs.mkdir
@@ -228,6 +230,9 @@ flow:
                         expr: "JSON.stringify(payload.results ?? []).includes(config.expectedNeedle)"
                         message:
                           expr: "`memory search missed dreaming canary for query: ${query}`"
+                    - set: recallEvidence
+                      value:
+                        expr: "[...recallEvidence, { query, results: (payload.results ?? []).map(({ path, snippet }) => ({ path, snippet })) }]"
               - set: cronRunStartedAt
                 value:
                   expr: "Date.now()"
@@ -269,6 +274,7 @@ flow:
                   - 1000
             finally:
               - call: patchConfig
+                saveAs: restoreResult
                 args:
                   - env:
                       ref: env
@@ -286,4 +292,30 @@ flow:
                 args:
                   - ref: env
                   - 60000
-      detailsExpr: "JSON.stringify({ promotedTotal: promoted.status.dreaming?.promotedTotal ?? 0, shortTermCount: promoted.status.dreaming?.shortTermCount ?? 0, phaseSignalCount: promoted.status.dreaming?.phaseSignalCount ?? 0, lightSleep: promoted.lightReport.includes('# Light Sleep'), remSleep: promoted.remReport.includes('# REM Sleep'), promotionMarkerPresent: promoted.promotedMemory.includes(promoted.promotionMarker) })"
+      detailsExpr: "JSON.stringify({ promotedTotal: promoted.status.dreaming?.promotedTotal ?? 0, shortTermCount: promoted.status.dreaming?.shortTermCount ?? 0, phaseSignalCount: promoted.status.dreaming?.phaseSignalCount ?? 0, lightSleep: promoted.lightReport.includes('# Light Sleep'), remSleep: promoted.remReport.includes('# REM Sleep'), promotionMarkerPresent: promoted.promotedMemory.includes(promoted.promotionMarker), recallEvidence, cronRun: { id: cronId, status: finishedRun.status, ts: finishedRun.ts } })"
+
+    - name: reports restored configuration and runtime readiness
+      actions:
+        - call: readConfigSnapshot
+          saveAs: restored
+          args:
+            - ref: env
+        - call: fetchJson
+          saveAs: readyz
+          args:
+            - expr: "`${env.gateway.baseUrl}/readyz`"
+        - call: env.gateway.call
+          saveAs: restoredChannels
+          args:
+            - channels.status
+            - probe: false
+              timeoutMs: 10000
+            - timeoutMs: 15000
+      detailsExpr: >-
+        JSON.stringify({ dreamingBefore: dreamingOriginal ?? null,
+          dreamingAfter: restored.config.plugins?.entries?.['memory-core']?.config?.dreaming ?? null,
+          restoreReceipt: { ok: restoreResult?.ok ?? null, noop: restoreResult?.noop ?? false,
+            restarted: restoreResult?.restarted ?? false }, readyz,
+          channels: Object.fromEntries(Object.entries(restoredChannels.channelAccounts ?? {}).map(
+            ([channel, accounts]) => [channel, accounts.map(({ accountId, running, connected,
+              lifecycle, restartPending }) => ({ accountId, running, connected, lifecycle, restartPending }))])) })

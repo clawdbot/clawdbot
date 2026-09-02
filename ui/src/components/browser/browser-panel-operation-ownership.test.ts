@@ -38,5 +38,13 @@ describe("BrowserPanelOperationOwnership", () => {
       { id: "tab-a", targetId: "raw-a", title: "B", url: "https://b.example" },
     ]);
     expect(ownership.capturedTabs(reconciled, "tab-a", metrics, metrics.url)).toBe(reconciled);
+    expect(
+      ownership.capturedTabs(
+        [{ ...reconciled[0]!, urlUnavailableReason: "navigation_blocked" }],
+        "tab-a",
+        metrics,
+        metrics.url,
+      )[0]?.urlUnavailableReason,
+    ).toBeUndefined();
   });
 });

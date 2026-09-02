@@ -6,7 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { getPluginToolMeta, setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import {
+  getPluginToolMeta,
+  setPluginToolMeta,
+  type PluginToolMcpMeta,
+} from "../plugins/tool-metadata.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -20,10 +24,15 @@ import type {
   McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
-import { projectMcpCallToolResult } from "./mcp-content.js";
+import {
+  projectMcpCallToolResult,
+  setMcpCodeModeGuestResult,
+  setMcpCodeModeGuestResultFromAgentResult,
+} from "./mcp-content.js";
 import { isMcpToolAllowed } from "./mcp-tool-filter.js";
 import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import type { AnyAgentTool } from "./tools/common.js";
 function isAppOnlyTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
@@ -85,7 +94,7 @@ function buildAppToolPolicyProjections(params: {
         toolName: tool.toolName,
         operation: "tool",
         codexApproval: {
-          mode: server?.codexApprovalMode ?? "auto",
+          mode: server?.codexApprovalMode,
           ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
         },
       },
@@ -111,11 +120,21 @@ function toJsonAgentToolResult(params: {
   operation: string;
   value: unknown;
 }): AgentToolResult<unknown> {
-  return {
+  const publicValue = toToolSearchJsonSafe(
+    params.operation === "resources_list" && Array.isArray(params.value)
+      ? { resources: params.value }
+      : params.operation === "prompts_list" && Array.isArray(params.value)
+        ? { prompts: params.value }
+        : params.value,
+  );
+  if (isRecord(publicValue)) {
+    delete publicValue._meta;
+  }
+  const result: AgentToolResult<unknown> = {
     content: [
       {
         type: "text",
-        text: JSON.stringify(params.value, null, 2),
+        text: JSON.stringify(publicValue, null, 2),
       },
     ],
     details: {
@@ -124,6 +143,7 @@ function toJsonAgentToolResult(params: {
       untrustedMcpOutput: true,
     },
   };
+  return setMcpCodeModeGuestResult(result, publicValue);
 }
 
 function requireStringArg(input: unknown, key: string): string {
@@ -192,6 +212,7 @@ function addMcpUtilityTool(params: {
     description: params.description,
     parameters: normalizeToolParameterSchema(params.parameters as never),
     executionMode: params.executionMode,
+    ...(params.execute ? { resultContentSource: "network" as const } : {}),
     execute:
       params.execute ??
       (async () => {
@@ -225,24 +246,34 @@ export function buildBundleMcpToolsFromCatalog(params: {
   createPromptListExecute?: (serverName: string) => AnyAgentTool["execute"];
   createPromptGetExecute?: (serverName: string) => AnyAgentTool["execute"];
   includeSessionDenied?: boolean;
+  includeAppOnlyInventory?: boolean;
 }): AnyAgentTool[] {
   const initialReservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessionDeniedOnly = params.includeSessionDenied === true;
-  // Preserve executable IDs by allocating them before denied-only inventory rows.
-  const tools = sessionDeniedOnly
+  const appOnlyInventory = params.includeAppOnlyInventory === true;
+  // Preserve callable IDs by allocating them before hidden inventory rows.
+  const tools = appOnlyInventory
     ? buildBundleMcpToolsFromCatalog({
         ...params,
         reservedToolNames: initialReservedNames,
-        includeSessionDenied: false,
+        includeAppOnlyInventory: false,
       })
-    : [];
+    : sessionDeniedOnly
+      ? buildBundleMcpToolsFromCatalog({
+          ...params,
+          reservedToolNames: initialReservedNames,
+          includeSessionDenied: false,
+        })
+      : [];
   const reservedNames = normalizeReservedToolNames([
     ...initialReservedNames,
     ...tools.map((tool) => tool.name),
   ]);
-  const catalogTools = sessionDeniedOnly
-    ? (params.catalog.sessionDeniedTools ?? [])
-    : params.catalog.tools;
+  const catalogTools = appOnlyInventory
+    ? params.catalog.tools.filter(isAppOnlyTool)
+    : sessionDeniedOnly
+      ? (params.catalog.sessionDeniedTools ?? [])
+      : params.catalog.tools;
   const sortedCatalogTools = [...catalogTools].toSorted((a, b) => {
     const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
     if (serverOrder !== 0) {
@@ -256,7 +287,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
   });
 
   for (const tool of sortedCatalogTools) {
-    if (isAppOnlyTool(tool)) {
+    const appOnly = isAppOnlyTool(tool);
+    if (appOnly && !appOnlyInventory) {
       continue;
     }
     const originalName = tool.toolName.trim();
@@ -283,6 +315,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
       description: tool.description || tool.fallbackDescription,
       parameters: normalizeToolParameterSchema(tool.inputSchema),
       executionMode,
+      ...(params.createExecute && !sessionDeniedOnly
+        ? { resultContentSource: "network" as const }
+        : {}),
       execute:
         (!sessionDeniedOnly ? params.createExecute?.(tool) : undefined) ??
         (async () => {
@@ -297,9 +332,12 @@ export function buildBundleMcpToolsFromCatalog(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(tool.excludedFromOpenClawCatalog || appOnly
+          ? { excludedFromOpenClawCatalog: true }
+          : {}),
         ...(tool.deniedBySession ? { deniedBySession: true } : {}),
         codexApproval: {
-          mode: server?.codexApprovalMode ?? "auto",
+          mode: server?.codexApprovalMode,
           ...(tool.codexAnnotations ? { annotations: tool.codexAnnotations } : {}),
         },
       },
@@ -436,7 +474,7 @@ export async function materializeBundleMcpToolsForRun(params: {
         if (!Object.hasOwn(catalog.servers, tool.serverName)) {
           const connect = runtime.requesterConnect?.createExecute(tool.serverName);
           if (connect) {
-            return await connect(toolCallId, input);
+            return setMcpCodeModeGuestResultFromAgentResult(await connect(toolCallId, input));
           }
         }
         runtime.markUsed();
@@ -567,12 +605,18 @@ export async function materializeBundleMcpToolsForRun(params: {
 
 export async function createBundleMcpToolRuntime(params: {
   workspaceDir: string;
+  agentDir?: string;
   cfg?: OpenClawConfig;
+  excludeServerNames?: ReadonlySet<string>;
   reservedToolNames?: Iterable<string>;
+  safeServerNamesByServer?: ReadonlyMap<string, string>;
   createRuntime?: (params: {
     sessionId: string;
     workspaceDir: string;
+    agentDir?: string;
     cfg?: OpenClawConfig;
+    excludeServerNames?: ReadonlySet<string>;
+    safeServerNamesByServer?: ReadonlyMap<string, string>;
   }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
   const createRuntime =
@@ -581,6 +625,11 @@ export async function createBundleMcpToolRuntime(params: {
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.excludeServerNames ? { excludeServerNames: params.excludeServerNames } : {}),
+    ...(params.safeServerNamesByServer
+      ? { safeServerNamesByServer: params.safeServerNamesByServer }
+      : {}),
   });
   const materialized = await materializeBundleMcpToolsForRun({
     runtime,

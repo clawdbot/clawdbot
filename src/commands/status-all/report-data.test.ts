@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
   inspectPortUsage: vi.fn(async () => null),
   resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
-  resolveStatusGatewayDiagnosticsSafe: vi.fn(async () => null),
+  resolveStatusGatewayDiagnosticsSafe: vi.fn(async () => ({ ok: true, value: {} })),
   resolveStatusGatewayHealthSafe: vi.fn(async () => undefined),
   resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
   loadExecApprovalsReadOnly: vi.fn(() => ({ version: 1, agents: {} })),
@@ -63,7 +63,7 @@ import { buildStatusAllReportData } from "./report-data.js";
 describe("buildStatusAllReportData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue(null);
+    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue({ ok: true, value: {} });
     mocks.resolveStatusGatewayHealthSafe.mockResolvedValue(undefined);
   });
 

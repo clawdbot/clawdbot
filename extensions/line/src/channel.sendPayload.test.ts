@@ -7,8 +7,9 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../api.js";
+import type { OpenClawConfig } from "../api.js";
 import { linePlugin } from "./channel.js";
+import { createRuntime, lineResult } from "./channel.sendPayload.test-support.js";
 import { lineConfigAdapter } from "./config-adapter.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
@@ -28,21 +29,6 @@ afterAll(() => {
   vi.resetModules();
 });
 
-type LineRuntimeMocks = {
-  pushMessageLine: ReturnType<typeof vi.fn>;
-  pushMessagesLine: ReturnType<typeof vi.fn>;
-  pushFlexMessage: ReturnType<typeof vi.fn>;
-  pushTemplateMessage: ReturnType<typeof vi.fn>;
-  pushLocationMessage: ReturnType<typeof vi.fn>;
-  pushTextMessageWithQuickReplies: ReturnType<typeof vi.fn>;
-  createQuickReplyItems: ReturnType<typeof vi.fn>;
-  buildTemplateMessageFromPayload: ReturnType<typeof vi.fn>;
-  sendMessageLine: ReturnType<typeof vi.fn>;
-  chunkMarkdownText: ReturnType<typeof vi.fn>;
-  resolveLineAccount: ReturnType<typeof vi.fn>;
-  resolveTextChunkLimit: ReturnType<typeof vi.fn>;
-};
-
 beforeEach(() => {
   vi.setSystemTime(1_800_000_000_000);
   ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
@@ -57,86 +43,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function lineResult(messageId: string, chatId = "c1") {
-  return {
-    messageId,
-    chatId,
-    receipt: createLineSendReceipt({ messageId, chatId, kind: "text" }),
-  };
-}
-
 function createCredentialBearingHttpUrl(): string {
   const url = new URL("http://example.com/image.jpg");
   url.username = ["line", "user"].join("-");
   url.password = ["line", "fixture"].join("-");
   url.searchParams.set("auth", ["line", "query"].join("-"));
   return url.href;
-}
-
-function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
-  const pushMessageLine = vi.fn(async () => lineResult("m-text"));
-  const pushMessagesLine = vi.fn(async () => lineResult("m-batch"));
-  const pushFlexMessage = vi.fn(async () => lineResult("m-flex"));
-  const pushTemplateMessage = vi.fn(async () => lineResult("m-template"));
-  const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
-  const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
-  const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-  const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
-  const sendMessageLine = vi.fn(async () => lineResult("m-media"));
-  const chunkMarkdownText = vi.fn((text: string) => [text]);
-  const resolveTextChunkLimit = vi.fn(() => 123);
-  const resolveLineAccount = vi.fn(
-    ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) => {
-      const resolved = accountId ?? "default";
-      const lineConfig = (cfg.channels?.line ?? {}) as {
-        accounts?: Record<string, Record<string, unknown>>;
-      };
-      const accountConfig = resolved !== "default" ? (lineConfig.accounts?.[resolved] ?? {}) : {};
-      return {
-        accountId: resolved,
-        config: { ...lineConfig, ...accountConfig },
-      };
-    },
-  );
-
-  const runtime = {
-    channel: {
-      line: {
-        pushMessageLine,
-        pushMessagesLine,
-        pushFlexMessage,
-        pushTemplateMessage,
-        pushLocationMessage,
-        pushTextMessageWithQuickReplies,
-        createQuickReplyItems,
-        buildTemplateMessageFromPayload,
-        sendMessageLine,
-        resolveLineAccount,
-      },
-      text: {
-        chunkMarkdownText,
-        resolveTextChunkLimit,
-      },
-    },
-  } as unknown as PluginRuntime;
-
-  return {
-    runtime,
-    mocks: {
-      pushMessageLine,
-      pushMessagesLine,
-      pushFlexMessage,
-      pushTemplateMessage,
-      pushLocationMessage,
-      pushTextMessageWithQuickReplies,
-      createQuickReplyItems,
-      buildTemplateMessageFromPayload,
-      sendMessageLine,
-      chunkMarkdownText,
-      resolveLineAccount,
-      resolveTextChunkLimit,
-    },
-  };
 }
 
 describe("line outbound sendPayload", () => {
@@ -220,7 +132,7 @@ describe("line outbound sendPayload", () => {
   it.each([
     { name: "title", title: " ", address: "1 Main Street" },
     { name: "address", title: "Meet here", address: " " },
-  ])("skips a direct location with a blank $name while delivering text", async (location) => {
+  ])("delivers a blank-$name location instead of dropping it", async (location) => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
 
@@ -239,7 +151,13 @@ describe("line outbound sendPayload", () => {
       cfg: { channels: { line: {} } } as OpenClawConfig,
     });
 
-    expect(mocks.pushLocationMessage).not.toHaveBeenCalled();
+    // The pin LINE will not render still reaches the chat as the text it was
+    // made of; the builder owns that degradation, so delivery must not skip it.
+    expect(mocks.pushLocationMessage).toHaveBeenCalledWith(
+      "line:user:U123",
+      { ...location, latitude: 35.6895, longitude: 139.6917 },
+      expect.any(Object),
+    );
     expect(mocks.pushMessageLine).toHaveBeenCalledWith(
       "line:user:U123",
       "Meet me there.",
@@ -247,7 +165,7 @@ describe("line outbound sendPayload", () => {
     );
   });
 
-  it("omits an invalid direct location from the quick-reply inline batch", async () => {
+  it("keeps a degraded location in the quick-reply inline batch", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
 
@@ -272,9 +190,18 @@ describe("line outbound sendPayload", () => {
       cfg: { channels: { line: {} } } as OpenClawConfig,
     });
 
-    expect(mocks.pushLocationMessage).not.toHaveBeenCalled();
-    expect(mocks.pushMessagesLine).not.toHaveBeenCalled();
-    expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:U123",
+      [
+        expect.objectContaining({
+          type: "text",
+          text: "Meet here" + String.fromCharCode(10) + "35.6895, 139.6917",
+          quickReply: expect.any(Object),
+        }),
+      ],
+      expect.any(Object),
+    );
+    expect(mocks.pushTextMessageWithQuickReplies).not.toHaveBeenCalledWith(
       "line:user:U123",
       expect.stringContaining("Continue"),
       ["Continue"],
@@ -690,7 +617,7 @@ describe("line outbound sendPayload", () => {
     );
   });
 
-  it("keeps generic media payloads on the image-only send path", async () => {
+  it("forwards generic media payloads to the shared send path unresolved", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -818,7 +745,7 @@ describe("line outbound sendPayload", () => {
     );
   });
 
-  it("keeps generic quick-reply media on the validated image route", async () => {
+  it("keeps generic quick-reply media on the validated media route", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -827,7 +754,7 @@ describe("line outbound sendPayload", () => {
       to: "line:user:U123",
       text: "",
       payload: {
-        mediaUrl: "https://example.com/clip.mp4",
+        mediaUrl: "https://example.com/photo.png",
         channelData: { line: { quickReplies: ["One"] } },
       },
       accountId: "default",
@@ -839,8 +766,8 @@ describe("line outbound sendPayload", () => {
       [
         {
           type: "image",
-          originalContentUrl: "https://example.com/clip.mp4",
-          previewImageUrl: "https://example.com/clip.mp4",
+          originalContentUrl: "https://example.com/photo.png",
+          previewImageUrl: "https://example.com/photo.png",
           quickReply: { items: ["One"] },
         },
       ],
@@ -849,6 +776,38 @@ describe("line outbound sendPayload", () => {
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("example.com", {
       policy: { allowPrivateNetwork: false },
     });
+  });
+
+  it("sends inline quick-reply media as the kind its URL proves", async () => {
+    // The inline batch used to force every generic media URL onto the image
+    // route, so an audio clip arrived as an empty image bubble.
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:U123",
+      text: "",
+      payload: {
+        mediaUrl: "https://example.com/voice.m4a",
+        channelData: { line: { quickReplies: ["One"] } },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:U123",
+      [
+        {
+          type: "audio",
+          originalContentUrl: "https://example.com/voice.m4a",
+          duration: 60000,
+          quickReply: { items: ["One"] },
+        },
+      ],
+      { verbose: false, accountId: "default", cfg },
+    );
   });
 
   it("rejects insecure generic media before quick-reply batch sends", async () => {

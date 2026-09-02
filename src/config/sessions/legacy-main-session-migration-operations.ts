@@ -1,13 +1,9 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
-import {
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   LegacyMainSessionMigrationMode,
   LegacyMainSessionMigrationOutcome,
@@ -17,13 +13,21 @@ import type {
 } from "./legacy-main-session-migration.contract.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import {
+  runSqliteSessionDeletionTransaction,
+  withSqliteSessionDeletions,
+} from "./session-accessor.sqlite-deletion.js";
+import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { importSqliteSessionRows } from "./session-accessor.sqlite-import.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
+import {
+  getSessionKysely,
+  runExclusiveSqliteSessionWrite,
+} from "./session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "./types.js";
 
 function projectEntryIdentity(entry: SessionEntry): SessionEntry {
@@ -108,60 +112,112 @@ export function warningForDivergence(
   return `session: ${kind} for ${canonicalKey}; preserved claims ${claimsText}. Run openclaw doctor --fix to quarantine the losing claims.`;
 }
 
+function writeMigratedSessionClaim(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  entry: SessionEntry,
+): void {
+  writeSessionEntry(database, sessionKey, entry, {
+    allowStoredAliases: true,
+    previousEntry: null,
+  });
+  replaceSessionOwnerInTransaction(database, sessionKey, entry.owner);
+}
+
+function mutateLegacySessionClaims<T>(
+  params: {
+    store: PhysicalStore;
+    env: NodeJS.ProcessEnv;
+    claims: readonly SessionClaim[];
+    operationLabel: string;
+    beforePersistentApply?: () => void;
+  },
+  commit: (database: OpenClawAgentDatabase) => T,
+): Promise<T> {
+  const scope = {
+    agentId: params.store.databaseAgentId,
+    env: params.env,
+    path: params.store.path,
+    ownerStorePath: params.store.ownerStorePath,
+  };
+  return withSqliteSessionDeletions(
+    scope,
+    params.claims.map(({ key: sessionKey, entry }) => ({ sessionKey, entry })),
+    async (assertCurrent) =>
+      runExclusiveSqliteSessionWrite(scope, async () => {
+        assertCurrent();
+        params.beforePersistentApply?.();
+        return runSqliteSessionDeletionTransaction(commit, scope, {
+          operationLabel: params.operationLabel,
+        });
+      }),
+  );
+}
+
 function migrateClaimsInPlace(params: {
+  beforePersistentApply?: () => void;
   aliases: readonly SessionClaim[];
   canonical?: SessionClaim;
   canonicalKey: string;
   env: NodeJS.ProcessEnv;
   store: PhysicalStore;
   winner: SessionClaim;
-}): boolean {
-  let committed = false;
-  runOpenClawAgentWriteTransaction(
+}): Promise<boolean> {
+  return mutateLegacySessionClaims(
+    {
+      ...params,
+      claims: params.aliases.filter((claim) => claim.key !== params.canonicalKey),
+      operationLabel: "session-migration.legacy-main-in-place",
+    },
     (database) => {
       const currentAliases = params.aliases.map((claim) =>
         readClaim(database, params.store, claim.key, params.canonicalKey),
       );
-      const currentCanonical = params.canonical
-        ? readClaim(database, params.store, params.canonicalKey, params.canonicalKey)
-        : undefined;
+      // Absence is part of the snapshot: owner preparation may let a new canonical row appear.
+      const currentCanonical = readClaim(
+        database,
+        params.store,
+        params.canonicalKey,
+        params.canonicalKey,
+      );
       if (
         currentAliases.some(
           (claim, index) => !claim || !claimsMatch(claim, params.aliases[index]!),
         ) ||
-        (params.canonical &&
-          (!currentCanonical || !claimsMatch(currentCanonical, params.canonical)))
+        (params.canonical
+          ? !currentCanonical || !claimsMatch(currentCanonical, params.canonical)
+          : currentCanonical !== undefined)
       ) {
-        return;
+        return false;
       }
       if (!currentCanonical) {
-        writeSessionEntry(database, params.canonicalKey, params.winner.entry, {
-          allowStoredAliases: true,
-          previousEntry: null,
-        });
+        writeMigratedSessionClaim(database, params.canonicalKey, params.winner.entry);
       }
       deleteLegacySessionEntryRows(
         database,
         params.aliases.map((claim) => claim.key),
         params.canonicalKey,
-        { rehomeMembers: true },
+        {
+          rehomeMembers: true,
+          validatedEntries: new Map(currentAliases.map((claim) => [claim!.key, claim!.entry])),
+        },
       );
-      committed = true;
+      return true;
     },
-    { agentId: params.store.databaseAgentId, env: params.env, path: params.store.path },
-    { operationLabel: "session-migration.legacy-main-in-place" },
   );
-  return committed;
 }
 
 async function copyClaimCrossStore(params: {
+  beforePersistentApply?: () => void;
   canonicalKey: string;
   destination: PhysicalStore;
   env: NodeJS.ProcessEnv;
   source: SessionClaim;
 }): Promise<SessionClaim | undefined> {
   await importSqliteSessionRows({
+    beforePersistentApply: params.beforePersistentApply,
     agentId: params.destination.databaseAgentId,
+    defaultAgentId: params.destination.databaseAgentId,
     env: params.env,
     storePath: params.destination.path,
     sessionKey: params.canonicalKey,
@@ -184,9 +240,13 @@ async function copyClaimCrossStore(params: {
   return destination.found ? destination.value : undefined;
 }
 
-async function deleteExpectedClaim(claim: SessionClaim): Promise<boolean> {
+async function deleteExpectedClaim(
+  claim: SessionClaim,
+  commitGuard?: () => void,
+): Promise<boolean> {
   const result = await deleteSessionEntryLifecycle({
-    agentId: parseAgentSessionKey(claim.key)?.agentId,
+    commitGuard,
+    agentId: claim.store.databaseAgentId,
     archiveTranscript: false,
     deleteTranscriptWithoutArchive: true,
     expectedEntry: claim.entry,
@@ -195,19 +255,26 @@ async function deleteExpectedClaim(claim: SessionClaim): Promise<boolean> {
       eventJson: claim.eventRows.map((row) => row.eventJson),
     },
     requireWriteSuccess: true,
-    storePath: claim.store.path,
+    storePath: claim.store.ownerStorePath,
     target: { canonicalKey: claim.key, storeKeys: [claim.key] },
   });
   return result.deleted;
 }
 
 function quarantineClaim(params: {
+  beforePersistentApply?: () => void;
   claim: SessionClaim;
   env: NodeJS.ProcessEnv;
   ownerAgentId: string;
-}): string | undefined {
-  let quarantineKey: string | undefined;
-  runOpenClawAgentWriteTransaction(
+}): Promise<string | undefined> {
+  return mutateLegacySessionClaims(
+    {
+      beforePersistentApply: params.beforePersistentApply,
+      store: params.claim.store,
+      env: params.env,
+      claims: [params.claim],
+      operationLabel: "session-migration.legacy-main-quarantine",
+    },
     (database) => {
       const fresh = readClaim(
         database,
@@ -216,8 +283,9 @@ function quarantineClaim(params: {
         params.claim.canonicalKey,
       );
       if (!fresh || !claimsMatch(fresh, params.claim)) {
-        return;
+        return undefined;
       }
+      let quarantineKey: string;
       for (let index = 1; ; index += 1) {
         const candidate = `agent:${params.ownerAgentId}:legacy-main-conflict-${index}`;
         if (!readExactSessionEntryRow(database, candidate)) {
@@ -225,25 +293,18 @@ function quarantineClaim(params: {
           break;
         }
       }
-      writeSessionEntry(database, quarantineKey, params.claim.entry, {
-        allowStoredAliases: true,
-        previousEntry: null,
-      });
+      writeMigratedSessionClaim(database, quarantineKey, params.claim.entry);
       deleteLegacySessionEntryRows(database, [params.claim.key], quarantineKey, {
         rehomeMembers: true,
+        validatedEntries: new Map([[fresh.key, fresh.entry]]),
       });
+      return quarantineKey;
     },
-    {
-      agentId: params.claim.store.databaseAgentId,
-      env: params.env,
-      path: params.claim.store.path,
-    },
-    { operationLabel: "session-migration.legacy-main-quarantine" },
   );
-  return quarantineKey;
 }
 
 export async function processIdenticalClaims(params: {
+  beforePersistentApply?: () => void;
   aliases: SessionClaim[];
   canonical?: SessionClaim;
   canonicalKey: string;
@@ -275,13 +336,14 @@ export async function processIdenticalClaims(params: {
   if (!canonical && destinationAliases.length > 0) {
     const inPlaceWinner = freshestClaim(destinationAliases);
     if (
-      !migrateClaimsInPlace({
+      !(await migrateClaimsInPlace({
+        beforePersistentApply: params.beforePersistentApply,
         aliases: destinationAliases,
         canonicalKey: params.canonicalKey,
         env: params.env,
         store: params.destination,
         winner: inPlaceWinner,
-      })
+      }))
     ) {
       return {
         kind: "divergent-aliases",
@@ -303,6 +365,7 @@ export async function processIdenticalClaims(params: {
   if (!canonical) {
     const sourceBefore = winner;
     const copied = await copyClaimCrossStore({
+      beforePersistentApply: params.beforePersistentApply,
       canonicalKey: params.canonicalKey,
       destination: params.destination,
       env: params.env,
@@ -345,7 +408,7 @@ export async function processIdenticalClaims(params: {
     if (samePhysicalStore(claim.store, params.destination)) {
       continue;
     }
-    if (!(await deleteExpectedClaim(claim))) {
+    if (!(await deleteExpectedClaim(claim, params.beforePersistentApply))) {
       return {
         kind: "divergent-canonical",
         canonicalKey: params.canonicalKey,
@@ -355,14 +418,15 @@ export async function processIdenticalClaims(params: {
   }
   if (params.canonical && destinationAliases.length > 0) {
     if (
-      !migrateClaimsInPlace({
+      !(await migrateClaimsInPlace({
+        beforePersistentApply: params.beforePersistentApply,
         aliases: destinationAliases,
         canonical: params.canonical,
         canonicalKey: params.canonicalKey,
         env: params.env,
         store: params.destination,
         winner: params.canonical,
-      })
+      }))
     ) {
       return {
         kind: "divergent-canonical",
@@ -384,6 +448,7 @@ export async function processIdenticalClaims(params: {
 }
 
 export async function repairDivergentClaims(params: {
+  beforePersistentApply?: () => void;
   canonicalKey: string;
   claims: SessionClaim[];
   destination: PhysicalStore;
@@ -394,6 +459,7 @@ export async function repairDivergentClaims(params: {
   const winner = params.destinationCanonical ?? freshestClaim(params.claims);
   if (!params.destinationCanonical) {
     const migrated = await processIdenticalClaims({
+      beforePersistentApply: params.beforePersistentApply,
       aliases: [winner],
       canonicalKey: params.canonicalKey,
       destination: params.destination,
@@ -424,7 +490,8 @@ export async function repairDivergentClaims(params: {
     }
     if (claimsMatch(claim, canonical)) {
       const cleaned = samePhysicalStore(claim.store, params.destination)
-        ? migrateClaimsInPlace({
+        ? await migrateClaimsInPlace({
+            beforePersistentApply: params.beforePersistentApply,
             aliases: [claim],
             canonical,
             canonicalKey: params.canonicalKey,
@@ -432,13 +499,14 @@ export async function repairDivergentClaims(params: {
             store: params.destination,
             winner: canonical,
           })
-        : await deleteExpectedClaim(claim);
+        : await deleteExpectedClaim(claim, params.beforePersistentApply);
       if (!cleaned) {
         return { quarantinedKeys, resolved: false };
       }
       continue;
     }
-    const quarantineKey = quarantineClaim({
+    const quarantineKey = await quarantineClaim({
+      beforePersistentApply: params.beforePersistentApply,
       claim,
       env: params.env,
       ownerAgentId: params.ownerAgentId,

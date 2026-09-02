@@ -12,6 +12,7 @@ export type ApplyAuthChoiceParams = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   agentDir?: string;
+  workspaceDir?: string;
   setDefaultModel: boolean;
   preserveExistingDefaultModel?: boolean;
   agentId?: string;

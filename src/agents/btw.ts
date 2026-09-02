@@ -23,9 +23,9 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
-import { resolveSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
+import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
@@ -33,7 +33,7 @@ import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync, resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
-import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -63,10 +63,7 @@ import {
   isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider,
 } from "./model-runtime-aliases.js";
-import {
-  isOpenAIProvider,
-  listOpenAIAuthProfileProvidersForAgentRuntime,
-} from "./openai-routing.js";
+import { isOpenAIProvider } from "./openai-routing.js";
 import {
   loadPreparedModelRuntimeSnapshot,
   preparedModelRuntimeConfigsMatch,
@@ -515,16 +512,11 @@ async function resolveRuntimeModel(params: {
   const runtimeProvider = model.provider;
   const runtimeModelId = model.id;
 
-  const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: runtimeProvider,
-    harnessRuntime: params.harnessId,
-    agentHarnessId: params.harnessId,
-    config: cfg,
-  });
-  const authProfileId = await resolveSessionAuthProfileOverride({
+  const authSelection = await resolveSessionAuthSelection({
     cfg,
     provider: runtimeProvider,
-    acceptedProviderIds,
+    modelId: runtimeModelId,
+    harnessRuntime: params.harnessId,
     agentDir,
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
@@ -532,7 +524,8 @@ async function resolveRuntimeModel(params: {
     storePath: params.storePath,
     isNewSession: params.isNewSession,
   });
-  const authProfileIdSource = resolveReturnedAuthProfileSource(params.sessionEntry, authProfileId);
+  const authProfileId = authSelection?.profileId;
+  const authProfileIdSource = authSelection?.source;
   const authProfileStoreSelection = resolveBtwAuthProfileStore({
     cfg,
     provider: runtimeProvider,
@@ -584,6 +577,7 @@ async function resolveRuntimeModel(params: {
 
 type RunBtwSideQuestionParams = {
   cfg: OpenClawConfig;
+  agentId: string;
   agentDir: string;
   provider: string;
   model: string;
@@ -729,14 +723,10 @@ export async function runBtwSideQuestion(
     throw new Error("No active session transcript.");
   }
 
-  const requestedAgentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  const requestedWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, requestedAgentId);
+  const requestedWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const preparedModelRuntime = await loadPreparedModelRuntimeSnapshot({
     config: params.cfg,
-    agentId: requestedAgentId,
+    agentId: params.agentId,
     agentDir: params.agentDir,
     workspaceDir: requestedWorkspaceDir,
     // Gateway-published owners are keyed with this flag, so a gateway-hosted
@@ -744,9 +734,7 @@ export async function runBtwSideQuestion(
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true as const } : {}),
   });
   return await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
-    const sessionAgentId =
-      preparedModelRuntime.agentId ??
-      resolveSessionAgentId({ sessionKey: params.sessionKey, config: preparedModelRuntime.config });
+    const sessionAgentId = preparedModelRuntime.agentId ?? params.agentId;
     const workspaceDir =
       preparedModelRuntime.workspaceDir ??
       resolveAgentWorkspaceDir(preparedModelRuntime.config, sessionAgentId);
@@ -999,6 +987,11 @@ export async function runBtwSideQuestion(
         })) ??
         (await resolveSandboxContext({
           config: params.cfg,
+          // An independent policy key keeps its own owner; global execution retains its prepared one.
+          agentId:
+            !params.sandboxSessionKey || params.sandboxSessionKey === params.sessionKey
+              ? sessionAgentId
+              : undefined,
           sessionKey: params.sandboxSessionKey ?? params.sessionKey ?? sessionId,
           workspaceDir,
         }));
@@ -1281,7 +1274,7 @@ export async function runBtwSideQuestion(
       env: process.env,
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       llmRuntime: modelRegistryRuntime.llmRuntime,
       currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
       providerStreamFn,

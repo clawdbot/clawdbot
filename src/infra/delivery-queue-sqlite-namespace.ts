@@ -4,7 +4,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   completeDeliveryQueueEntry,
   deleteDeliveryQueueEntry,
-  getDeliveryQueueEntryStatuses,
+  getDeliveryQueueEntryOwners,
   upsertDeliveryQueueEntry,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
@@ -50,7 +50,7 @@ export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(params: {
       if (!staging) {
         return "missing";
       }
-      const owner = getDeliveryQueueEntryStatuses(
+      const owner = getDeliveryQueueEntryOwners(
         [params.queueName, ...params.conflictQueueNames],
         params.entry.id,
         params.stateDir,
@@ -100,7 +100,7 @@ export function upsertDeliveryQueueEntryOnceAcrossNamespaces(params: {
   return runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      const owner = getDeliveryQueueEntryStatuses(
+      const owner = getDeliveryQueueEntryOwners(
         [params.queueName, ...params.conflictQueueNames],
         params.entry.id,
         params.stateDir,
@@ -243,7 +243,7 @@ export function movePendingDeliveryQueueEntryNamespace(
       ) {
         return "source-changed";
       }
-      const destination = getDeliveryQueueEntryStatuses(
+      const destination = getDeliveryQueueEntryOwners(
         [params.destinationQueueName, ...(params.conflictQueueNames ?? [])],
         params.destinationEntry.id,
         params.stateDir,

@@ -12,10 +12,13 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import {
   getAgentTestMocks,
+  operatorWriteCliClient,
   makeContext,
   type AgentHandlerArgs,
   type AgentParams,
@@ -379,11 +382,7 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-runtime-owner",
       },
       {
-        client: {
-          internal: {
-            pluginRuntimeOwnerId: "memory-core",
-          },
-        } as never,
+        client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "memory-core" }),
       },
     );
 
@@ -401,16 +400,14 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-tools-also-allow",
       },
       {
-        client: {
-          internal: {
-            agentRunTracking: "plugin_subagent",
-            pluginRuntimeOwnerId: "workboard",
-            runtimePluginToolGrant: {
-              pluginId: "workboard",
-              toolNames: ["workboard_heartbeat", "workboard_complete"],
-            },
+        client: createSyntheticPluginRuntimeClient({
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "workboard",
+          runtimePluginToolGrant: {
+            pluginId: "workboard",
+            toolNames: ["workboard_heartbeat", "workboard_complete"],
           },
-        } as never,
+        }),
       },
     );
 
@@ -421,6 +418,28 @@ describe("gateway agent handler", () => {
       pluginId: "workboard",
       toolNames: ["workboard_heartbeat", "workboard_complete"],
     });
+  });
+
+  it("forwards a tracked plugin subagent exact empty tool cap", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "write a tool-free narrative",
+        sessionKey: "agent:main:subagent:dreaming-narrative",
+        idempotencyKey: "plugin-tools-disabled",
+      },
+      {
+        client: createSyntheticPluginRuntimeClient({
+          agentRunTracking: "plugin_subagent",
+          pluginRuntimeOwnerId: "memory-core",
+          pluginSubagentToolsAllow: [],
+        }),
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{ toolsAllow?: string[] }>();
+    expect(call.toolsAllow).toEqual([]);
   });
 
   it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
@@ -538,11 +557,7 @@ describe("gateway agent handler", () => {
         idempotencyKey: "plugin-runtime-existing-owner",
       },
       {
-        client: {
-          internal: {
-            pluginRuntimeOwnerId: "memory-core",
-          },
-        } as never,
+        client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "memory-core" }),
       },
     );
 
@@ -563,11 +578,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "test-idem-model-override",
-        client: {
-          connect: {
-            scopes: ["operator.admin"],
-          },
-        } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.admin"]),
       },
     );
 
@@ -678,11 +689,7 @@ describe("gateway agent handler", () => {
       },
       {
         reqId: "test-idem-model-override-write",
-        client: {
-          connect: {
-            scopes: ["operator.write"],
-          },
-        } as AgentHandlerArgs["client"],
+        client: operatorWriteCliClient(["operator.write"]),
         respond,
       },
     );
@@ -708,9 +715,7 @@ describe("gateway agent handler", () => {
       {
         reqId: "test-idem-model-override-internal",
         client: {
-          connect: {
-            scopes: ["operator.write"],
-          },
+          ...operatorWriteCliClient(["operator.write"]),
           internal: {
             allowModelOverride: true,
           },
@@ -1160,6 +1165,10 @@ describe("gateway agent handler", () => {
     mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
     mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
     mocks.loadGatewaySessionRow.mockReturnValueOnce({
+      key: childSessionKey,
+      kind: "direct",
+      updatedAt,
+      sessionId: "sess-followup",
       status: "running",
       startedAt: 123,
       endedAt: undefined,
@@ -1204,7 +1213,7 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
-      status: "queued",
+      status: "running",
       task: "follow-up",
     });
   });
@@ -1237,6 +1246,10 @@ describe("gateway agent handler", () => {
       return await updater(store);
     });
     mocks.loadGatewaySessionRow.mockReturnValue({
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt,
+      sessionId: "sess-main",
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: "/tmp/subagent",
       forkedFromParent: true,
@@ -1294,12 +1307,13 @@ describe("gateway agent handler", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
       totalTokens: 12,
-      status: "queued",
+      status: "running",
     });
     expect(mockCallArg(broadcastToConnIds, 0, 2)).toEqual(new Set(["conn-1"]));
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({
       agentId: "main",
       dropIfSlow: true,
+      sessionKeys: ["agent:main:main"],
     });
   });
 
@@ -1436,6 +1450,13 @@ describe("gateway agent handler", () => {
         basePersisted: true,
         toolsAllow: ["image_generate", "write"],
         toolsAllowIsDefault: true,
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+        toolsAllowExecTargetRequirement: {
+          version: 1,
+          target: { version: 1, host: "gateway", ask: "always" },
+          grantIndex: 1,
+        },
         cliSessionBindingFacts: {
           sourceReplyDeliveryMode: "automatic" as const,
           requireExplicitMessageTarget: true,
@@ -1480,6 +1501,11 @@ describe("gateway agent handler", () => {
       sessionId?: string;
       toolsAllow?: string[];
       toolsAllowIsDefault?: boolean;
+      scheduledToolPolicy?: {
+        version: 1;
+        mode: "trusted";
+        execTarget?: { host: "gateway"; ask?: "always" };
+      };
       requireExplicitMessageTarget?: boolean;
       sourceReplyDeliveryMode?: string;
       cliSessionBindingFacts?: {
@@ -1494,8 +1520,13 @@ describe("gateway agent handler", () => {
     expect(callArgs.model).toBe("claude-opus-4-8");
     expect(callArgs.thinking).toBe("high");
     expect(callArgs.bootstrapContextRunKind).toBe("cron");
-    expect(callArgs.toolsAllow).toEqual(["image_generate", "write"]);
+    expect(callArgs.toolsAllow).toEqual(["image_generate", "exec", "write"]);
     expect(callArgs.toolsAllowIsDefault).toBe(true);
+    expect(callArgs.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "trusted",
+      execTarget: { host: "gateway", ask: "always" },
+    });
     expect(callArgs.requireExplicitMessageTarget).toBe(true);
     expect(callArgs.sourceReplyDeliveryMode).toBe("automatic");
     expect(callArgs.cliSessionBindingFacts).toEqual({
@@ -1551,6 +1582,15 @@ describe("gateway agent handler", () => {
       basePersisted: false,
       code: ErrorCodes.INVALID_REQUEST,
     },
+    {
+      name: "when its required exec pin is missing",
+      client: "continuation" as const,
+      phase: "ready" as const,
+      freshRevision: "revision-1",
+      basePersisted: true,
+      damagedExecPin: true,
+      code: ErrorCodes.UNAVAILABLE,
+    },
   ])("rejects a cron media continuation $name", async (testCase) => {
     mocks.agentCommand.mockClear();
     const sessionKey = "agent:main:cron:job-1:run:run-1";
@@ -1566,6 +1606,16 @@ describe("gateway agent handler", () => {
           "basePersisted" in testCase ? testCase.basePersisted : testCase.phase === "ready",
         ...("ownerLifecycleGeneration" in testCase
           ? { ownerLifecycleGeneration: testCase.ownerLifecycleGeneration }
+          : {}),
+        ...("damagedExecPin" in testCase
+          ? {
+              toolsAllow: ["image_generate", "write"],
+              toolsAllowExecTargetRequirement: {
+                version: 1,
+                target: { version: 1, host: "gateway", ask: "always" },
+                grantIndex: 1,
+              },
+            }
           : {}),
       },
     };
@@ -1655,6 +1705,15 @@ describe("gateway agent handler", () => {
         flushDispatch: false,
       },
     );
+    let admissionActiveAtFinalResponse: boolean | undefined;
+    first.mockImplementation((ok, payload) => {
+      if (ok && payload && typeof payload === "object" && "status" in payload) {
+        admissionActiveAtFinalResponse = isSessionWorkAdmissionActive("/tmp/sessions.json", [
+          sessionKey,
+          "run-1",
+        ]);
+      }
+    });
     await waitForAgentCommandCall();
     expect(
       expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
@@ -1699,8 +1758,61 @@ describe("gateway agent handler", () => {
         basePersisted: true,
       });
     });
+    await waitForAssertion(() => expect(admissionActiveAtFinalResponse).toBe(false));
     expect(first).toHaveBeenCalledWith(true, expect.objectContaining({ status: "ok" }), undefined, {
       runId: "cron-media-first",
+    });
+  });
+
+  it("rejects terminal continuation settlement after its Gateway owner generation changes", async () => {
+    mocks.agentCommand.mockClear();
+    const { sessionKey, store } = setupCronContinuationReleaseFixture();
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+    let finishTurn: (result: { payloads: Array<{ text: string }> }) => void = () => {};
+    mocks.agentCommand.mockImplementationOnce(
+      async () =>
+        await new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
+          finishTurn = resolve;
+        }),
+    );
+
+    const respond = await invokeAgent(
+      {
+        message: "media completion",
+        sessionKey,
+        internalEvents: [cronMediaCompletionEvent()],
+        idempotencyKey: "cron-media-owner-generation-changed",
+      },
+      {
+        reqId: "cron-media-owner-generation-changed",
+        client: cronContinuationGatewayClient(),
+        flushDispatch: false,
+      },
+    );
+    await waitForAgentCommandCall();
+    const marker = expectDefined(
+      store[sessionKey]?.cronRunContinuation,
+      "cron continuation marker test invariant",
+    );
+    marker.ownerLifecycleGeneration = "retired-gateway-generation";
+
+    finishTurn({ payloads: [{ text: "continued" }] });
+
+    await waitForAssertion(() => {
+      expect(respond).toHaveBeenLastCalledWith(
+        false,
+        expect.objectContaining({
+          status: "error",
+          summary: "failed to persist cron continuation settlement",
+        }),
+        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
+        { runId: "cron-media-owner-generation-changed", error: expect.any(String) },
+      );
+    });
+    expect(store[sessionKey]?.cronRunContinuation).toMatchObject({
+      phase: "continuing",
+      ownerRunId: "cron-media-owner-generation-changed",
+      ownerLifecycleGeneration: "retired-gateway-generation",
     });
   });
 

@@ -166,6 +166,11 @@ internal fun OpenClawWearScreens(
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onSelectModel: (String) -> Unit,
+  onSearchSessions: () -> Unit = {},
+  onLoadMoreSessionSearch: () -> Unit = {},
+  onClearSessionSearch: () -> Unit = {},
+  onSearchModels: () -> Unit = {},
+  onClearModelSearch: () -> Unit = {},
   onAgentPulseVisibilityChanged: (Boolean) -> Unit = {},
   onAgentPulseRefresh: () -> Unit = {},
   onRefresh: () -> Unit,
@@ -285,7 +290,7 @@ internal fun OpenClawWearScreens(
           voicePagerState.currentPage == VOICE_THREAD_MODE,
     ) { page ->
       when (homePages.getOrNull(page)) {
-        WearHomePage.Chat ->
+        WearHomePage.Chat -> {
           ChatPage(
             snapshot = snapshot,
             interaction = interaction,
@@ -299,10 +304,17 @@ internal fun OpenClawWearScreens(
             onSelectAgent = onSelectAgent,
             onSelectSession = onSelectSession,
             onSelectModel = onSelectModel,
+            onSearchSessions = onSearchSessions,
+            onLoadMoreSessionSearch = onLoadMoreSessionSearch,
+            onClearSessionSearch = onClearSessionSearch,
+            onSearchModels = onSearchModels,
+            onClearModelSearch = onClearModelSearch,
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
-        WearHomePage.Voice ->
+        }
+
+        WearHomePage.Voice -> {
           VoicePage(
             voicePagerState = voicePagerState,
             showSwipeHint = showVoiceSwipeHint && homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice,
@@ -321,7 +333,9 @@ internal fun OpenClawWearScreens(
             onRealtimeTalk = onRealtimeTalk,
             onStopSpeaking = onStopSpeaking,
           )
-        WearHomePage.Controls ->
+        }
+
+        WearHomePage.Controls -> {
           ControlsPage(
             snapshot = snapshot,
             themeMode = themeMode,
@@ -336,7 +350,9 @@ internal fun OpenClawWearScreens(
             onRefresh = onRefresh,
             onGatewayEnabledChange = onGatewayEnabledChange,
           )
-        WearHomePage.Pulse ->
+        }
+
+        WearHomePage.Pulse -> {
           AgentPulsePage(
             snapshot = snapshot,
             onRefresh = {
@@ -347,7 +363,9 @@ internal fun OpenClawWearScreens(
               }
             },
           )
-        else -> Unit
+        }
+
+        else -> {}
       }
     }
   }
@@ -372,6 +390,11 @@ private fun ChatPage(
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onSelectModel: (String) -> Unit,
+  onSearchSessions: () -> Unit,
+  onLoadMoreSessionSearch: () -> Unit,
+  onClearSessionSearch: () -> Unit,
+  onSearchModels: () -> Unit,
+  onClearModelSearch: () -> Unit,
   onSpeakLatest: () -> Unit,
   onStopSpeaking: () -> Unit,
 ) {
@@ -385,8 +408,6 @@ private fun ChatPage(
       visibleMessageCount = visibleMessages.size,
       hasStreaming = streamingText != null,
       canAbort = canAbort,
-      hasAssistant = hasAssistant,
-      hasFailure = snapshot.failure != null,
     )
   val contentRevision =
     wearChatContentRevision(
@@ -396,6 +417,25 @@ private fun ChatPage(
       latestAnchorIndex = latestAnchorIndex,
     )
   var followState by remember(snapshot.activeSessionId) { mutableStateOf(WearThreadFollowState()) }
+  var contextPicker by remember { mutableStateOf<WearContextPicker?>(null) }
+
+  fun clearContextPickerSearch() {
+    when (contextPicker) {
+      WearContextPicker.Session -> onClearSessionSearch()
+      WearContextPicker.Model -> onClearModelSearch()
+      else -> Unit
+    }
+  }
+
+  fun finishContextPicker() {
+    clearContextPickerSearch()
+    contextPicker = null
+  }
+
+  fun closeContextPicker() {
+    clearContextPickerSearch()
+    contextPicker = contextPicker?.let(::wearContextPickerAfterClose)
+  }
 
   LaunchedEffect(listState, snapshot.activeSessionId) {
     snapshotFlow {
@@ -430,42 +470,11 @@ private fun ChatPage(
       listState = listState,
     ) {
       item {
-        ConversationIdentity(
-          snapshot = snapshot,
-          actionBusy = actionBusy,
-          onSelectAgent = onSelectAgent,
-          onSelectSession = onSelectSession,
-          onSelectModel = onSelectModel,
-        )
-      }
-      item {
         ConversationStatus(
           interaction = interaction,
           speaking = speaking,
           gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED,
         )
-      }
-      item {
-        Row(
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .padding(horizontal = 12.dp),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          ActionButton(
-            label = stringResource(R.string.talk),
-            enabled = inputEnabled && !actionBusy && !speaking,
-            onClick = onTalk,
-            modifier = Modifier.weight(1f),
-          )
-          ActionButton(
-            label = stringResource(R.string.type),
-            enabled = inputEnabled && !actionBusy && !speaking,
-            onClick = onType,
-            modifier = Modifier.weight(1f),
-          )
-        }
       }
       if (canAbort) {
         item {
@@ -492,6 +501,11 @@ private fun ChatPage(
           }
         }
       }
+      if (latestAnchorIndex >= 0) {
+        item(key = "chat-end") {
+          Spacer(modifier = Modifier.height(1.dp))
+        }
+      }
       if (hasAssistant) {
         item {
           SecondaryButton(
@@ -506,18 +520,42 @@ private fun ChatPage(
           )
         }
       }
+      item {
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .padding(horizontal = 12.dp),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          ActionButton(
+            label = stringResource(R.string.talk),
+            enabled = inputEnabled && !actionBusy && !speaking,
+            onClick = onTalk,
+            modifier = Modifier.weight(1f),
+          )
+          ActionButton(
+            label = stringResource(R.string.type),
+            enabled = inputEnabled && !actionBusy && !speaking,
+            onClick = onType,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+      item {
+        ConversationContextPicker(
+          snapshot = snapshot,
+          actionBusy = actionBusy,
+          onOpenContextPicker = { contextPicker = WearContextPicker.Session },
+        )
+      }
       snapshot.failure?.let { failure ->
         item {
           InlineError(text = failureDetail(failure))
         }
       }
-      if (latestAnchorIndex >= 0) {
-        item(key = "chat-end") {
-          Spacer(modifier = Modifier.height(1.dp))
-        }
-      }
     }
-    if (followState.hasNewContent) {
+    if (followState.hasNewContent && contextPicker == null) {
       NewMessagesAction(
         modifier =
           Modifier
@@ -531,6 +569,31 @@ private fun ChatPage(
           }
         }
       }
+    }
+    contextPicker?.let { picker ->
+      ContextPickerOverlay(
+        picker = picker,
+        snapshot = snapshot,
+        actionBusy = actionBusy,
+        onDismiss = ::closeContextPicker,
+        onOpenAgentPicker = { contextPicker = WearContextPicker.Agent },
+        onOpenModelPicker = { contextPicker = WearContextPicker.Model },
+        onSelectAgent = { agentId ->
+          onSelectAgent(agentId)
+          finishContextPicker()
+        },
+        onSelectSession = { sessionId ->
+          onSelectSession(sessionId)
+          finishContextPicker()
+        },
+        onSelectModel = { modelRef ->
+          onSelectModel(modelRef)
+          finishContextPicker()
+        },
+        onSearchSessions = onSearchSessions,
+        onLoadMoreSessionSearch = onLoadMoreSessionSearch,
+        onSearchModels = onSearchModels,
+      )
     }
   }
 }
@@ -604,7 +667,7 @@ private fun VoicePage(
       rotaryScrollableBehavior = null,
     ) { mode ->
       when (mode) {
-        VOICE_HOME_MODE ->
+        VOICE_HOME_MODE -> {
           VoiceHomeMode(
             realtimeTalk = realtimeTalk,
             speaking = speaking,
@@ -621,7 +684,9 @@ private fun VoicePage(
             onStopSpeaking = onStopSpeaking,
             onOpenThread = { selectMode(VOICE_THREAD_MODE) },
           )
-        else ->
+        }
+
+        else -> {
           ThreadVoiceMode(
             conversation = realtimeTalk.conversation,
             thinking =
@@ -632,6 +697,7 @@ private fun VoicePage(
             onType = onType,
             onRealtimeTalk = onRealtimeTalk,
           )
+        }
       }
     }
     if (showSwipeHint) {
@@ -857,7 +923,7 @@ private fun VoiceGestureLabel(
 ) {
   val interactionModifier =
     when {
-      onDoubleClick != null ->
+      onDoubleClick != null -> {
         Modifier
           .pointerInput(onDoubleClick) {
             detectTapGestures(onDoubleTap = { onDoubleClick() })
@@ -868,13 +934,19 @@ private fun VoiceGestureLabel(
               true
             }
           }
-      onClick != null ->
+      }
+
+      onClick != null -> {
         Modifier.clickable(
           role = Role.Button,
           onClickLabel = onClickLabel,
           onClick = onClick,
         )
-      else -> Modifier
+      }
+
+      else -> {
+        Modifier
+      }
     }
   Column(
     modifier =
@@ -1201,13 +1273,11 @@ internal fun wearChatLatestAnchorIndex(
   visibleMessageCount: Int,
   hasStreaming: Boolean,
   canAbort: Boolean,
-  hasAssistant: Boolean,
-  hasFailure: Boolean,
 ): Int {
   if (visibleMessageCount == 0 && !hasStreaming) return -1
   return CHAT_FIXED_ITEM_COUNT +
     visibleMessageCount +
-    listOf(canAbort, hasStreaming, hasAssistant, hasFailure).count { it }
+    listOf(canAbort, hasStreaming).count { it }
 }
 
 internal fun wearThreadLatestAnchorIndex(
@@ -1306,21 +1376,35 @@ private fun realtimeVoiceButtonState(
   realtimeThinkingOverride: Boolean,
 ): RealtimeVoiceButtonState =
   when {
-    realtimePlaybackFailed || realtimeTalk.status == WearRealtimeTalkStatus.ERROR ->
+    realtimePlaybackFailed || realtimeTalk.status == WearRealtimeTalkStatus.ERROR -> {
       RealtimeVoiceButtonState.ERROR
-    realtimeThinkingOverride ->
+    }
+
+    realtimeThinkingOverride -> {
       RealtimeVoiceButtonState.THINKING
-    realtimePlaying || realtimeTalk.speaking || ttsOnly ->
+    }
+
+    realtimePlaying || realtimeTalk.speaking || ttsOnly -> {
       RealtimeVoiceButtonState.SPEAKING
-    realtimeTalk.status == WearRealtimeTalkStatus.THINKING ->
+    }
+
+    realtimeTalk.status == WearRealtimeTalkStatus.THINKING -> {
       RealtimeVoiceButtonState.THINKING
+    }
+
     realtimeCapturing ||
       realtimeTalk.listening ||
-      realtimeTalk.status == WearRealtimeTalkStatus.LISTENING ->
+      realtimeTalk.status == WearRealtimeTalkStatus.LISTENING -> {
       RealtimeVoiceButtonState.LISTENING
-    realtimeTalk.status == WearRealtimeTalkStatus.CONNECTING ->
+    }
+
+    realtimeTalk.status == WearRealtimeTalkStatus.CONNECTING -> {
       RealtimeVoiceButtonState.CONNECTING
-    else -> RealtimeVoiceButtonState.IDLE
+    }
+
+    else -> {
+      RealtimeVoiceButtonState.IDLE
+    }
   }
 
 private fun formatVoiceElapsedTime(totalSeconds: Long): String {
@@ -1409,6 +1493,7 @@ private fun ControlsPage(
   onGatewayEnabledChange: (Boolean) -> Unit,
 ) {
   val gatewayConnected = snapshot.gatewayState == WearGatewayState.CONNECTED
+
   WearPage(pageLabel = stringResource(R.string.controls)) {
     item {
       ConnectionPanel(snapshot = snapshot)
@@ -1496,21 +1581,25 @@ private fun AgentPulsePage(
   val pulse = snapshot.agentPulse
   WearPage(pageLabel = stringResource(R.string.pulse)) {
     when {
-      snapshot.gatewayState != WearGatewayState.CONNECTED ->
+      snapshot.gatewayState != WearGatewayState.CONNECTED -> {
         item {
           EmptyPanel(
             title = stringResource(R.string.pulse_unavailable),
             detail = stringResource(R.string.gateway_offline_detail),
           )
         }
-      !snapshot.agentPulseSupported ->
+      }
+
+      !snapshot.agentPulseSupported -> {
         item {
           EmptyPanel(
             title = stringResource(R.string.pulse_unavailable),
             detail = stringResource(R.string.update_required_detail),
           )
         }
-      pulse == null ->
+      }
+
+      pulse == null -> {
         item {
           EmptyPanel(
             title =
@@ -1527,6 +1616,8 @@ private fun AgentPulsePage(
               },
           )
         }
+      }
+
       else -> {
         item { AgentPulseTasksPanel(pulse.tasks) }
         item { AgentPulseSwarmPanel(pulse.swarm) }
@@ -1843,66 +1934,287 @@ private fun OpenClawHeader(pageLabel: String) {
 }
 
 @Composable
-private fun ConversationIdentity(
+private fun ConversationContextPicker(
   snapshot: WearConversationSnapshot,
   actionBusy: Boolean,
+  onOpenContextPicker: () -> Unit,
+) {
+  val session = snapshot.sessions.firstOrNull(WearSessionSummary::selected) ?: snapshot.sessions.firstOrNull()
+  val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+  val model = snapshot.models.firstOrNull(WearModelSummary::selected)
+  val agentName =
+    listOfNotNull(
+      agent?.emoji?.takeIf(String::isNotBlank),
+      agent?.name ?: stringResource(R.string.agent),
+    ).joinToString(" ")
+  val modelName = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model)
+  ContextPickerOption(
+    title =
+      stringResource(
+        R.string.context_label_value,
+        stringResource(R.string.session),
+        session?.title ?: stringResource(R.string.current_session),
+      ),
+    detail =
+      stringResource(
+        R.string.context_label_value,
+        stringResource(R.string.agent),
+        agentName,
+      ),
+    status =
+      stringResource(
+        R.string.context_label_value,
+        stringResource(R.string.model),
+        modelName,
+      ),
+    selected = true,
+    enabled = !actionBusy,
+    onClick = onOpenContextPicker,
+    modifier = Modifier.padding(horizontal = 12.dp),
+  )
+}
+
+internal enum class WearContextPicker {
+  Agent,
+  Session,
+  Model,
+}
+
+internal fun wearContextPickerAfterClose(picker: WearContextPicker): WearContextPicker? =
+  when (picker) {
+    WearContextPicker.Agent, WearContextPicker.Model -> WearContextPicker.Session
+    WearContextPicker.Session -> null
+  }
+
+@Composable
+private fun ContextPickerOverlay(
+  picker: WearContextPicker,
+  snapshot: WearConversationSnapshot,
+  actionBusy: Boolean,
+  onDismiss: () -> Unit,
+  onOpenAgentPicker: () -> Unit,
+  onOpenModelPicker: () -> Unit,
   onSelectAgent: (String) -> Unit,
   onSelectSession: (String) -> Unit,
   onSelectModel: (String) -> Unit,
+  onSearchSessions: () -> Unit,
+  onLoadMoreSessionSearch: () -> Unit,
+  onSearchModels: () -> Unit,
 ) {
-  val agentIndex = snapshot.agents.indexOfFirst(WearAgentSummary::selected)
-  val sessionIndex = snapshot.sessions.indexOfFirst(WearSessionSummary::selected)
-  val modelIndex = snapshot.models.indexOfFirst(WearModelSummary::selected)
-  val agent = snapshot.agents.getOrNull(agentIndex) ?: snapshot.agents.firstOrNull()
-  val session = snapshot.sessions.getOrNull(sessionIndex) ?: snapshot.sessions.firstOrNull()
-  val model = snapshot.models.getOrNull(modelIndex)
-  Panel {
-    ContextPickerRow(
-      label = stringResource(R.string.agent),
-      value =
-        listOfNotNull(
-          agent?.emoji?.takeIf(String::isNotBlank),
-          agent?.name ?: stringResource(R.string.agent),
-        ).joinToString(" "),
-      previous =
-        snapshot.agents
-          .getOrNull(agentIndex - 1)
-          ?.takeIf { snapshot.agentControlsSupported && !actionBusy }
-          ?.let { previous -> ({ onSelectAgent(previous.id) }) },
-      next =
-        snapshot.agents
-          .getOrNull(if (agentIndex < 0) 0 else agentIndex + 1)
-          ?.takeIf { snapshot.agentControlsSupported && !actionBusy }
-          ?.let { next -> ({ onSelectAgent(next.id) }) },
+  BackHandler(onBack = onDismiss)
+  val pageLabel =
+    when (picker) {
+      WearContextPicker.Agent -> stringResource(R.string.agent)
+      WearContextPicker.Session -> stringResource(R.string.session)
+      WearContextPicker.Model -> stringResource(R.string.model)
+    }
+  WearPage(pageLabel = pageLabel) {
+    item {
+      SecondaryButton(
+        label = stringResource(R.string.close),
+        enabled = true,
+        onClick = onDismiss,
+      )
+    }
+    if (picker == WearContextPicker.Session) {
+      item {
+        val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+        val model = snapshot.models.firstOrNull(WearModelSummary::selected)
+        Panel {
+          ContextPickerRow(
+            label = stringResource(R.string.agent),
+            value =
+              listOfNotNull(
+                agent?.emoji?.takeIf(String::isNotBlank),
+                agent?.name ?: stringResource(R.string.agent),
+              ).joinToString(" "),
+            onClick = onOpenAgentPicker.takeIf { snapshot.agentControlsSupported && !actionBusy },
+          )
+          ContextPickerDivider()
+          ContextPickerRow(
+            label = stringResource(R.string.model),
+            value = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model),
+            onClick = onOpenModelPicker.takeIf { snapshot.modelControlsSupported && !actionBusy },
+          )
+        }
+      }
+      if (snapshot.sessionSearchSupported) {
+        item {
+          SecondaryButton(
+            label = stringResource(R.string.search_sessions),
+            enabled = !actionBusy,
+            onClick = onSearchSessions,
+          )
+        }
+        snapshot.sessionSearchQuery?.let { query ->
+          item { PickerQueryLabel(query = query) }
+        }
+      }
+    }
+    if (picker == WearContextPicker.Model && snapshot.modelSearchSupported) {
+      item {
+        SecondaryButton(
+          label = stringResource(R.string.search_models),
+          enabled = !actionBusy,
+          onClick = onSearchModels,
+        )
+      }
+      snapshot.modelSearchQuery?.let { query ->
+        item { PickerQueryLabel(query = query) }
+      }
+    }
+    when (picker) {
+      WearContextPicker.Agent -> {
+        snapshot.agents.forEach { agent ->
+          item(key = "agent:${agent.id}") {
+            ContextPickerOption(
+              title = listOfNotNull(agent.emoji?.takeIf(String::isNotBlank), agent.name).joinToString(" "),
+              detail = agent.id,
+              status = null,
+              selected = agent.selected,
+              enabled = !actionBusy,
+              onClick = { onSelectAgent(agent.id) },
+            )
+          }
+        }
+      }
+
+      WearContextPicker.Session -> {
+        val sessions =
+          if (snapshot.sessionSearchQuery == null) snapshot.sessions else snapshot.sessionSearchResults
+        if (sessions.isEmpty()) {
+          item { PickerEmptyResult() }
+        }
+        sessions.forEach { session ->
+          item(key = "session:${session.id}") {
+            val status =
+              listOfNotNull(
+                stringResource(R.string.active_on_phone).takeIf { session.activeOnPhone },
+                stringResource(R.string.open_on_watch).takeIf { session.openOnWatch },
+              ).joinToString(" / ").takeIf(String::isNotEmpty)
+            ContextPickerOption(
+              title = session.title ?: stringResource(R.string.current_session),
+              detail = null,
+              status = status,
+              selected = session.openOnWatch,
+              enabled = !actionBusy,
+              onClick = { onSelectSession(session.id) },
+            )
+          }
+        }
+        if (
+          snapshot.sessionSearchSupported &&
+          snapshot.sessionSearchQuery != null &&
+          snapshot.sessionSearchHasMore
+        ) {
+          item {
+            SecondaryButton(
+              label = stringResource(R.string.load_more),
+              enabled = !actionBusy,
+              onClick = onLoadMoreSessionSearch,
+            )
+          }
+        }
+      }
+
+      WearContextPicker.Model -> {
+        val models =
+          if (snapshot.modelSearchQuery == null) snapshot.models else snapshot.modelSearchResults
+        if (models.isEmpty()) {
+          item { PickerEmptyResult() }
+        }
+        models.forEach { model ->
+          item(key = "model:${model.ref}") {
+            ContextPickerOption(
+              title = model.name,
+              detail = model.ref,
+              status = null,
+              selected = model.selected,
+              enabled = !actionBusy,
+              onClick = { onSelectModel(model.ref) },
+            )
+          }
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun PickerQueryLabel(query: String) {
+  Text(
+    text = query,
+    color = OpenClawWearTheme.colors.textMuted,
+    fontSize = 11.sp,
+    maxLines = 1,
+    overflow = TextOverflow.Ellipsis,
+  )
+}
+
+@Composable
+private fun PickerEmptyResult() {
+  Text(
+    text = stringResource(R.string.no_matches),
+    color = OpenClawWearTheme.colors.textMuted,
+    fontSize = 12.sp,
+    textAlign = TextAlign.Center,
+  )
+}
+
+@Composable
+private fun ContextPickerOption(
+  title: String,
+  detail: String?,
+  status: String?,
+  selected: Boolean,
+  enabled: Boolean,
+  onClick: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val colors = OpenClawWearTheme.colors
+  Column(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .padding(horizontal = 12.dp)
+        .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+        .then(
+          Modifier.border(
+            width = 1.dp,
+            color = if (selected) colors.primary else colors.border,
+            shape = RoundedCornerShape(14.dp),
+          ),
+        ).padding(horizontal = 12.dp, vertical = 9.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Text(
+      text = title,
+      color = if (enabled) colors.text else colors.textMuted,
+      fontSize = 12.sp,
+      fontWeight = FontWeight.SemiBold,
+      textAlign = TextAlign.Center,
+      maxLines = 2,
+      overflow = TextOverflow.Ellipsis,
     )
-    ContextPickerRow(
-      label = stringResource(R.string.session),
-      value = session?.title ?: stringResource(R.string.current_session),
-      previous =
-        snapshot.sessions
-          .getOrNull(sessionIndex - 1)
-          ?.takeIf { !actionBusy }
-          ?.let { previous -> ({ onSelectSession(previous.id) }) },
-      next =
-        snapshot.sessions
-          .getOrNull(if (sessionIndex < 0) 0 else sessionIndex + 1)
-          ?.takeIf { !actionBusy }
-          ?.let { next -> ({ onSelectSession(next.id) }) },
-    )
-    ContextPickerRow(
-      label = stringResource(R.string.model),
-      value = model?.name ?: snapshot.selectedModelRef ?: stringResource(R.string.model),
-      previous =
-        snapshot.models
-          .getOrNull(modelIndex - 1)
-          ?.takeIf { snapshot.modelControlsSupported && !actionBusy }
-          ?.let { previous -> ({ onSelectModel(previous.ref) }) },
-      next =
-        snapshot.models
-          .getOrNull(if (modelIndex < 0) 0 else modelIndex + 1)
-          ?.takeIf { snapshot.modelControlsSupported && !actionBusy }
-          ?.let { next -> ({ onSelectModel(next.ref) }) },
-    )
+    detail?.takeIf(String::isNotBlank)?.let {
+      Text(
+        text = it,
+        color = colors.textMuted,
+        fontSize = 9.sp,
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
+    status?.let {
+      Text(
+        text = it,
+        color = colors.primary,
+        fontSize = 9.sp,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+      )
+    }
   }
 }
 
@@ -1910,80 +2222,50 @@ private fun ConversationIdentity(
 private fun ContextPickerRow(
   label: String,
   value: String,
-  previous: (() -> Unit)?,
-  next: (() -> Unit)?,
+  onClick: (() -> Unit)?,
 ) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.CenterVertically,
+  val colors = OpenClawWearTheme.colors
+  val enabled = onClick != null
+  Column(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clickable(
+          enabled = enabled,
+          role = Role.Button,
+          onClick = { onClick?.invoke() },
+        ).padding(vertical = 7.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
   ) {
-    PickerChevron(
-      glyph = "‹",
-      contentDescription = stringResource(R.string.previous_item, label),
-      onClick = previous,
+    Text(
+      text = localizedWearUppercase(label),
+      color = colors.textMuted,
+      fontSize = 10.sp,
+      fontWeight = FontWeight.Bold,
+      letterSpacing = 0.8.sp,
+      maxLines = 1,
     )
-    Column(
-      modifier = Modifier.weight(1f),
-      horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-      Text(
-        text = localizedWearUppercase(label),
-        color = OpenClawWearTheme.colors.textMuted,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 0.8.sp,
-        maxLines = 1,
-      )
-      Text(
-        text = value,
-        color = OpenClawWearTheme.colors.text,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.SemiBold,
-        textAlign = TextAlign.Center,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-    }
-    PickerChevron(
-      glyph = "›",
-      contentDescription = stringResource(R.string.next_item, label),
-      onClick = next,
+    Text(
+      text = value,
+      color = if (enabled) colors.text else colors.textMuted,
+      fontSize = 12.sp,
+      fontWeight = FontWeight.SemiBold,
+      textAlign = TextAlign.Center,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
     )
   }
 }
 
 @Composable
-private fun PickerChevron(
-  glyph: String,
-  contentDescription: String,
-  onClick: (() -> Unit)?,
-) {
-  val colors = OpenClawWearTheme.colors
-  val enabled = onClick != null
+private fun ContextPickerDivider() {
   Box(
     modifier =
       Modifier
-        // Foundation clickable expands hit testing to the system minimum touch target.
-        // Compact visual bounds keep picker values readable on 192dp round screens.
-        .width(32.dp)
-        .height(30.dp)
-        .semantics { this.contentDescription = contentDescription }
-        .clickable(
-          enabled = enabled,
-          role = Role.Button,
-          onClick = { onClick?.invoke() },
-        ),
-    contentAlignment = Alignment.Center,
-  ) {
-    Text(
-      text = glyph,
-      color = if (enabled) colors.primary else colors.textMuted.copy(alpha = 0.42f),
-      fontSize = 24.sp,
-      lineHeight = 24.sp,
-      fontWeight = FontWeight.SemiBold,
-      textAlign = TextAlign.Center,
-    )
-  }
+        .fillMaxWidth()
+        .height(1.dp)
+        .background(OpenClawWearTheme.colors.borderStrong.copy(alpha = 0.45f)),
+  )
 }
 
 @Composable
@@ -1995,19 +2277,37 @@ private fun ConversationStatus(
   val colors = OpenClawWearTheme.colors
   val (label, color) =
     when {
-      speaking -> stringResource(R.string.speaking) to colors.success
-      interaction == WearInteractionState.LISTENING ->
+      speaking -> {
+        stringResource(R.string.speaking) to colors.success
+      }
+
+      interaction == WearInteractionState.LISTENING -> {
         stringResource(R.string.listening) to colors.danger
-      interaction == WearInteractionState.TYPING ->
+      }
+
+      interaction == WearInteractionState.TYPING -> {
         stringResource(R.string.typing) to colors.warning
-      interaction == WearInteractionState.SENDING ->
+      }
+
+      interaction == WearInteractionState.SENDING -> {
         stringResource(R.string.sending) to colors.warning
-      interaction == WearInteractionState.AGENT_WORKING ->
+      }
+
+      interaction == WearInteractionState.AGENT_WORKING -> {
         stringResource(R.string.agent_working) to colors.warning
-      interaction == WearInteractionState.ERROR ->
+      }
+
+      interaction == WearInteractionState.ERROR -> {
         stringResource(R.string.error) to colors.danger
-      gatewayConnected -> stringResource(R.string.ready) to colors.success
-      else -> stringResource(R.string.gateway_offline) to colors.danger
+      }
+
+      gatewayConnected -> {
+        stringResource(R.string.ready) to colors.success
+      }
+
+      else -> {
+        stringResource(R.string.gateway_offline) to colors.danger
+      }
     }
   Row(
     modifier =
@@ -2461,43 +2761,71 @@ private fun Panel(content: @Composable ColumnScope.() -> Unit) {
 @Composable
 private fun failureTitle(failure: WearConversationFailure?): String =
   when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE ->
+    WearConversationFailure.PHONE_UNAVAILABLE -> {
       stringResource(R.string.phone_unavailable)
-    WearConversationFailure.PHONE_NOT_READY ->
+    }
+
+    WearConversationFailure.PHONE_NOT_READY -> {
       stringResource(R.string.open_phone_app)
-    WearConversationFailure.GATEWAY_OFFLINE ->
+    }
+
+    WearConversationFailure.GATEWAY_OFFLINE -> {
       stringResource(R.string.gateway_offline)
-    WearConversationFailure.NOT_FOUND ->
+    }
+
+    WearConversationFailure.NOT_FOUND -> {
       stringResource(R.string.selection_not_found)
-    WearConversationFailure.ACTION_REJECTED ->
+    }
+
+    WearConversationFailure.ACTION_REJECTED -> {
       stringResource(R.string.message_not_sent)
-    WearConversationFailure.INCOMPATIBLE ->
+    }
+
+    WearConversationFailure.INCOMPATIBLE -> {
       stringResource(R.string.update_required)
+    }
+
     WearConversationFailure.INTERNAL_ERROR,
     null,
-    -> stringResource(R.string.something_went_wrong)
+    -> {
+      stringResource(R.string.something_went_wrong)
+    }
   }
 
 @Composable
 private fun failureDetail(failure: WearConversationFailure?): String =
   when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE ->
+    WearConversationFailure.PHONE_UNAVAILABLE -> {
       stringResource(R.string.phone_unavailable_detail)
-    WearConversationFailure.PHONE_NOT_READY ->
+    }
+
+    WearConversationFailure.PHONE_NOT_READY -> {
       stringResource(R.string.phone_not_ready_detail)
-    WearConversationFailure.GATEWAY_OFFLINE ->
+    }
+
+    WearConversationFailure.GATEWAY_OFFLINE -> {
       stringResource(R.string.gateway_offline_detail)
-    WearConversationFailure.NOT_FOUND ->
+    }
+
+    WearConversationFailure.NOT_FOUND -> {
       stringResource(R.string.refresh_and_try_again)
-    WearConversationFailure.ACTION_REJECTED ->
+    }
+
+    WearConversationFailure.ACTION_REJECTED -> {
       stringResource(R.string.try_again)
-    WearConversationFailure.INCOMPATIBLE ->
+    }
+
+    WearConversationFailure.INCOMPATIBLE -> {
       stringResource(R.string.update_required_detail)
+    }
+
     WearConversationFailure.INTERNAL_ERROR,
     null,
-    -> stringResource(R.string.try_again)
+    -> {
+      stringResource(R.string.try_again)
+    }
   }
 
-private const val CHAT_FIXED_ITEM_COUNT = 4
+private const val CHAT_FIXED_ITEM_COUNT = 2
 private const val VISIBLE_MESSAGE_COUNT = 8
 private const val VISIBLE_REALTIME_ENTRY_COUNT = 6

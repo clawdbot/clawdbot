@@ -5,7 +5,10 @@
  * lifecycle instead of individual config writers.
  */
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
@@ -56,6 +59,10 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
     const initialConfig = { session: { store: "/tmp/sessions.json" } } as OpenClawConfig;
     const broadcast = vi.fn();
     const reloader = startManagedGatewayConfigReloader({
+      configRevisionProjector: {
+        projectRawHash: (hash) => `opaque:${hash}`,
+        projectResolvedHash: (hash) => `resolved:${hash}`,
+      },
       minimalTestGateway: false,
       initialConfig,
       initialCompareConfig: initialConfig,
@@ -79,15 +86,14 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
           storePath: "/tmp/cron.json",
           cronEnabled: false,
           reconcileExitWatchers: vi.fn(async () => {}),
-          stopExitWatchers: vi.fn(),
           reconcileStreamWatchers: vi.fn(async () => {}),
           stopStreamWatchers: vi.fn(async () => {}),
-          reconcileHeartbeatJobs: vi.fn(async () => {}),
+          reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
         } as never,
         channelHealthMonitor: null,
       }),
       setState: vi.fn(),
-      startChannel: vi.fn(async () => {}),
+      startChannel: vi.fn(async () => new Map()),
       stopChannel: vi.fn(async () => {}),
       reloadPlugins: vi.fn(
         async (): Promise<GatewayPluginReloadResult> => ({
@@ -109,6 +115,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
         config,
         authStores: [],
         authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+        authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
         warnings: [],
         webTools: {},
       })) as never,
@@ -137,7 +144,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
     expect(hoisted.invalidateConfigGetResponseCache).toHaveBeenCalledOnce();
     expect(broadcast).toHaveBeenCalledWith(
       "config.changed",
-      { path: "/tmp/openclaw.json", hash: "persisted-1", ts: expect.any(Number) },
+      { path: "/tmp/openclaw.json", hash: "opaque:persisted-1", ts: expect.any(Number) },
       { dropIfSlow: true },
     );
 

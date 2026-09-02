@@ -10,7 +10,7 @@ const VISIBLE_REPLY_LEAK_PATTERNS = [
 
 const TOOL_BACKED_FAILURE_PATTERNS = [
   /\btool\s+[a-z0-9_.-]+\s+not found\b/i,
-  /^status:\s*blocked\b/im,
+  /^status\s*[:=]\s*(?:blocked|failed)\b/im,
 ];
 
 export function extractQaVisibleReplyLeakText(text: string): string | undefined {

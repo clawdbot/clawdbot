@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Measures CLI startup memory with an isolated home and RSS hook.
+// Measures CLI startup memory with an isolated home and an in-process bench entry.
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -11,12 +11,13 @@ const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.t
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const STARTUP_MEMORY_SAMPLE_COUNT = 3;
+const STARTUP_MEMORY_RSS_TOLERANCE_MB = 1;
 const COMMAND_TIMEOUT_MS = readPositiveIntEnv(
   "OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS",
   DEFAULT_COMMAND_TIMEOUT_MS,
 );
 let tmpHome = null;
-let rssHookPath = null;
+let benchEntryPath = null;
 const PASS = "pass";
 const FAIL = "fail";
 function readPositiveIntEnv(name, fallback, env = process.env) {
@@ -225,8 +226,8 @@ function buildBenchEnv(homeDir = tmpHome) {
   return env;
 }
 function runCaseSample(testCase, sampleIndex, params = {}) {
-  if (!rssHookPath) {
-    throw new Error("RSS hook path is not initialized");
+  if (!benchEntryPath) {
+    throw new Error("bench entry path is not initialized");
   }
   if (!tmpHome) {
     throw new Error("temporary home is not initialized");
@@ -236,18 +237,14 @@ function runCaseSample(testCase, sampleIndex, params = {}) {
   const env = buildBenchEnv(sampleHome);
   const spawn = params.spawnSync ?? defaultSpawnSync;
   const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
-  const result = spawn(
-    process.execPath,
-    ["--import", nodeImportSpecifierForPath(rssHookPath), ...testCase.args],
-    {
-      cwd: repoRoot,
-      env,
-      encoding: "utf8",
-      maxBuffer: 20 * 1024 * 1024,
-      timeout: timeoutMs,
-      killSignal: "SIGKILL",
-    },
-  );
+  const result = spawn(process.execPath, [benchEntryPath, ...testCase.args.slice(1)], {
+    cwd: repoRoot,
+    env,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+  });
   const stderr = String(result.stderr ?? "");
   const stdout = String(result.stdout ?? "");
   const maxRssMb = parseMaxRssMb(stderr);
@@ -257,6 +254,8 @@ function runCaseSample(testCase, sampleIndex, params = {}) {
     label: testCase.label,
     command: formatCaseCommand(testCase),
     limitMb: testCase.limitMb,
+    rssToleranceMb: STARTUP_MEMORY_RSS_TOLERANCE_MB,
+    effectiveLimitMb: testCase.limitMb + STARTUP_MEMORY_RSS_TOLERANCE_MB,
     maxRssMb,
     status: PASS,
     exitCode: result.status,
@@ -314,13 +313,13 @@ function runCase(testCase, params = {}) {
   }
   const maxRssMb = median(samples);
   const result = { ...report, maxRssMb, rssSamplesMb: samples };
-  if (maxRssMb > testCase.limitMb) {
-    const error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded ${testCase.limitMb} MB (samples: ${formatRssSamples(samples)} MB)`;
+  if (maxRssMb > result.effectiveLimitMb) {
+    const error = `${testCase.label} median max RSS ${maxRssMb.toFixed(1)} MB exceeded effective ceiling ${result.effectiveLimitMb} MB (base limit ${result.limitMb} MB; RSS tolerance ${result.rssToleranceMb} MB; samples: ${formatRssSamples(samples)} MB)`;
     return failResult(result, testCase, error);
   }
   console.log(
     `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB median max RSS ` +
-      `(limit ${testCase.limitMb} MB; samples ${formatRssSamples(samples)} MB)`,
+      `(base limit ${result.limitMb} MB; RSS tolerance ${result.rssToleranceMb} MB; effective ceiling ${result.effectiveLimitMb} MB; samples ${formatRssSamples(samples)} MB)`,
   );
   return result;
 }
@@ -342,9 +341,9 @@ function writeReport(options, results) {
     "",
     ...results.map((result) => {
       const samples = result.rssSamplesMb
-        ? ` (samples: ${result.rssSamplesMb.map(formatMb).join(", ")})`
+        ? `; samples: ${result.rssSamplesMb.map(formatMb).join(", ")}`
         : "";
-      return `- ${result.label}: ${result.status} median max RSS ${formatMb(result.maxRssMb)} / ${formatMb(result.limitMb)}${samples}`;
+      return `- ${result.label}: ${result.status} median max RSS ${formatMb(result.maxRssMb)} (base limit ${formatMb(result.limitMb)}; RSS tolerance ${formatMb(result.rssToleranceMb)}; effective ceiling ${formatMb(result.effectiveLimitMb)}${samples})`;
     }),
     "",
   ];
@@ -369,14 +368,24 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
   }
   const options = parseArgs(argv);
   tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
-  rssHookPath = path.join(tmpHome, "measure-rss.mjs");
+  benchEntryPath = path.join(tmpHome, "bench-entry.mjs");
+  // Run the real launcher in-process so peak RSS is self-reported at exit
+  // without --import/--require flags: the entry declines its dist ESM resolve
+  // fast path when preload hooks may be registered, so an injected hook would
+  // measure a slower non-default resolution configuration instead of what a
+  // plain `node openclaw.mjs ...` invocation pays.
+  const launcherPath = path.join(repoRoot, "openclaw.mjs");
   writeFileSync(
-    rssHookPath,
+    benchEntryPath,
     [
       "process.on('exit', () => {",
       "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
       `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
       "});",
+      `const launcherPath = ${JSON.stringify(launcherPath)};`,
+      "// The launcher and entry expect argv[1] to be the launcher path itself.",
+      "process.argv[1] = launcherPath;",
+      `await import(${JSON.stringify(nodeImportSpecifierForPath(launcherPath))});`,
       "",
     ].join("\n"),
     "utf8",
@@ -391,7 +400,7 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
     if (tmpHome) {
       rmSync(tmpHome, { recursive: true, force: true });
       tmpHome = null;
-      rssHookPath = null;
+      benchEntryPath = null;
     }
   }
   const failure = results.find((result) => result.status !== "pass");

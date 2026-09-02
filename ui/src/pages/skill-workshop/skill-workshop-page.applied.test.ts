@@ -48,7 +48,6 @@ function createContext(request: ReturnType<typeof vi.fn>): ApplicationContext {
       subscribe,
     },
     sessions: { state: { result: null, loading: false } },
-    skillWorkshopRevision: { prepare: vi.fn() },
     runtimeConfig: {
       state: { configSnapshot: null, configLoading: false, lastError: null },
       ensureLoaded: vi.fn(async () => undefined),

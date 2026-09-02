@@ -16,11 +16,19 @@ import {
 } from "../gateway/minimal-gateway.test-helpers.js";
 import {
   buildTailscaleHttpsUrl,
-  resolveGatewayProbeSnapshot,
+  resolveGatewayProbeSnapshot as resolveGatewayProbeSnapshotOwner,
   resolveSharedMemoryStatusSnapshot,
 } from "./status.scan.shared.js";
 
 const tempDirs: string[] = [];
+const resolveGatewayProbeSnapshot = (
+  params: Omit<Parameters<typeof resolveGatewayProbeSnapshotOwner>[0], "configPath" | "env">,
+) =>
+  resolveGatewayProbeSnapshotOwner({
+    ...params,
+    configPath: "/tmp/openclaw.json",
+    env: process.env,
+  });
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
@@ -62,6 +70,7 @@ type MemorySearchManagerCall = {
     };
   };
   purpose?: string;
+  inspectSources?: boolean;
 };
 
 function readGatewayCall(): GatewayCall {
@@ -225,6 +234,7 @@ describe("resolveGatewayProbeSnapshot", () => {
       ok: false,
       url: "ws://127.0.0.1:18789",
       connectLatencyMs: 51,
+      gatewayReached: true,
       error: "missing scope: operator.read",
       close: null,
       auth: {
@@ -297,6 +307,43 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbe?.status).toEqual({ sessions: 1 });
     expect(result.gatewayProbe?.auth?.capability).toBe("read_only");
     expect(result.gatewayProbeAuthWarning).toBe("warn");
+  });
+
+  it("does not use the local status RPC fallback for dotted localhost", async () => {
+    mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
+      url: "ws://localhost.:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://localhost.:18789",
+    });
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://localhost.:18789",
+      connectLatencyMs: null,
+      error: "timeout",
+      close: null,
+      auth: {
+        role: null,
+        scopes: [],
+        capability: "unknown",
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: {},
+      opts: {},
+    });
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(result.gatewayProbe?.ok).toBe(false);
   });
 
   it("uses built-in probe defaults for the local status RPC fallback", async () => {
@@ -594,6 +641,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
         provider: "local",
         files: 0,
         chunks: 0,
+        dirty: true,
       })),
       close: vi.fn(async () => {}),
     };
@@ -613,8 +661,11 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
 
     expect(resolveMemoryConfig).toHaveBeenCalledOnce();
-    expect(getMemorySearchManager).toHaveBeenCalledOnce();
+    expect(getMemorySearchManager).toHaveBeenCalledWith(
+      expect.objectContaining({ purpose: "status", inspectSources: true }),
+    );
     expect(result?.provider).toBe("local");
+    expect(result?.dirty).toBe(true);
   });
 
   it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
@@ -665,6 +716,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(managerCall?.cfg.plugins?.slots).toEqual({ memory: "memory-lancedb-pro" });
     expect(managerCall?.agentId).toBe("main");
     expect(managerCall?.purpose).toBe("status");
+    expect(managerCall?.inspectSources).toBe(true);
     expect(manager.probeVectorStoreAvailability).toHaveBeenCalled();
     expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
     expect(manager.status).toHaveBeenCalled();

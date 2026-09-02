@@ -15,6 +15,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveBootstrapFilesForPreparation } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   buildMemorySystemPromptAddition,
   prepareMemorySystemPromptAddition,
@@ -26,6 +27,7 @@ import type {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -89,7 +91,11 @@ export async function readMirroredSessionHistoryMessages(params: {
   admission?: TranscriptTurnAdmission;
 }): Promise<AgentMessage[] | undefined> {
   const { admission, ...target } = params;
-  const messages = await readCodexMirroredSessionHistoryMessages(target, admission);
+  const messages = await readCodexMirroredSessionHistoryMessages(
+    target,
+    admission,
+    "model-context",
+  );
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
@@ -168,6 +174,30 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
  * Loads workspace bootstrap files and partitions them into Codex-native prompt,
  * developer-instruction, heartbeat, and memory-tool contexts.
  */
+/** A child baseline reads the bounded workspace snapshot without invoking admission hooks. */
+export async function prepareCodexWorkspaceDeveloperInstructions(params: {
+  config: EmbeddedRunAttemptParams["config"];
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  workspaceDir: string;
+  cwd: string;
+}): Promise<string | undefined> {
+  if (isSameCodexWorkspacePath(params.workspaceDir, params.cwd)) {
+    return undefined;
+  }
+  const files = await resolveBootstrapFilesForPreparation(params);
+  const contextFiles = buildBootstrapContextForFiles(files, {
+    config: params.config,
+    agentId: params.agentId,
+  });
+  return renderCodexWorkspaceDeveloperInstructions({
+    files: selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.workspaceDir),
+    header: "## OpenClaw Agent Workspace Instructions",
+    preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
+  });
+}
+
 export async function buildCodexWorkspaceBootstrapContext(params: {
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
@@ -176,6 +206,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
+  ringZeroActive: boolean;
   sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
@@ -244,8 +275,15 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
+    const restrictedProjectDocNeedsOpenClawCarrier =
+      params.params.pluginHarnessToolPolicyRestricted === true &&
+      !params.params.disableTools &&
+      !isMessageOnlyCodexSourceReply(params.params) &&
+      params.params.bootstrapContextMode !== "lightweight";
     const threadDeveloperInstructionFiles =
-      injectOpenClawContext && inheritsAgentWorkspace
+      injectOpenClawContext &&
+      !params.ringZeroActive &&
+      (inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier)
         ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
         : [];
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext

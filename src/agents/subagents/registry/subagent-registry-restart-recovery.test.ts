@@ -33,8 +33,6 @@ vi.mock("../../../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: mocks.patchSessionEntryCore,
 }));
 vi.mock("../../../gateway/session-transcript-readers.js", () => ({
-  extractMessageRole: (message: { role?: string }) => message?.role,
-  extractSessionTranscriptText: (message: { content?: string }) => message?.content ?? null,
   readSessionMessagesAsync: mocks.readSessionMessages,
 }));
 
@@ -60,6 +58,7 @@ const dispatchAgent = vi.fn(async (payload: Record<string, unknown>, _timeoutMs?
   };
 });
 const gatewayRuntime: GatewayRecoveryRuntime = {
+  abortAgent: vi.fn(),
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
   waitForAgent: vi.fn(),
   sendRecoveryNotice: vi.fn(),
@@ -220,57 +219,109 @@ describe("subagent registry restart recovery", () => {
     mocks.readSessionMessages.mockResolvedValue([]);
   });
 
-  it("resumes a collector with transcript context and its output contract", async () => {
-    mocks.readSessionMessages.mockResolvedValue([
-      { role: "user", content: "latest user direction" },
-      { role: "assistant", content: "I updated openclaw.json" },
-    ]);
-    const entry = run({ collect: true, outputSchema: { type: "object" } });
-
-    await expect(recover(entry)).resolves.toEqual({ status: "accepted" });
-
-    expect(dispatchAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: childSessionKey,
-        expectedExistingSessionId: "session-id",
-        internalRuntimeHandoffId: expect.any(String),
-        lane: "subagent",
-        deliver: false,
-        swarmCollector: true,
-        swarmOutputSchema: { type: "object" },
-        sessionEffects: "internal",
-        suppressPromptPersistence: true,
-        message: expect.stringMatching(/latest user direction[\s\S]*already applied/),
-      }),
-    );
-    expect(reserveLaunch).toHaveBeenCalledWith({
-      runId: "original-run",
-      expected: entry,
-      sessionId: "session-id",
-      sessionMarker: expect.any(String),
-      idempotencyKey: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
-    });
-    expect(replaceRun).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousRunId: "original-run",
-        nextRunId: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
-        expected: entry,
-        task: "finish the restart-safe task",
-        persistenceFailure: "return-false",
-      }),
-    );
-    expect(replaceRun.mock.calls[0]?.[0].restartRecovery).toMatchObject({
-      phase: "accepted",
-      sessionId: "session-id",
-    });
-    expect(mocks.entries[childSessionKey]).toMatchObject({
-      abortedLastRun: false,
-      subagentRecovery: {
-        automaticAttempts: 1,
-        lastRunId: "original-run",
-      },
-    });
+  const signedAssistantText = (phase: "commentary" | "final_answer", text: string) => ({
+    type: "text",
+    text,
+    textSignature: JSON.stringify({ v: 1, id: `recovery-${phase}`, phase }),
   });
+
+  it.each([
+    {
+      label: "legacy scalar user text and visible assistant text",
+      userContent: "latest user direction",
+      assistantContent: "I updated openclaw.json",
+      appendImage: false,
+      configChanged: true,
+    },
+    {
+      label: "input_text user direction before an image and hidden reasoning",
+      userContent: [{ type: "input_text", text: "latest user direction" }],
+      assistantContent: [{ type: "reasoning", text: "I updated openclaw.json" }],
+      appendImage: true,
+      configChanged: false,
+    },
+    {
+      label: "legacy untyped user text and signed commentary",
+      userContent: [{ text: "latest user direction" }],
+      assistantContent: [signedAssistantText("commentary", "I will apply config.patch")],
+      appendImage: false,
+      configChanged: false,
+    },
+    {
+      label: "a final answer instead of preceding signed commentary",
+      userContent: "latest user direction",
+      assistantContent: [
+        signedAssistantText("commentary", "I will run openclaw gateway restart"),
+        signedAssistantText("final_answer", "The requested work remains pending"),
+      ],
+      appendImage: false,
+      configChanged: false,
+    },
+    {
+      label: "visible output_text after an image-only user follow-up",
+      userContent: [{ type: "input_text", text: "latest user direction" }],
+      assistantContent: [{ type: "output_text", text: "I updated openclaw.json" }],
+      appendImage: true,
+      configChanged: true,
+    },
+  ])(
+    "resumes a collector with $label",
+    async ({ userContent, assistantContent, appendImage, configChanged }) => {
+      mocks.readSessionMessages.mockResolvedValue([
+        { role: "user", content: userContent },
+        ...(appendImage ? [{ role: "user", content: [{ type: "image", image: "opaque" }] }] : []),
+        { role: "assistant", content: assistantContent },
+      ]);
+      const entry = run({ collect: true, outputSchema: { type: "object" } });
+
+      await expect(recover(entry)).resolves.toEqual({ status: "accepted" });
+
+      expect(dispatchAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: childSessionKey,
+          expectedExistingSessionId: "session-id",
+          internalRuntimeHandoffId: expect.any(String),
+          lane: "subagent",
+          deliver: false,
+          swarmCollector: true,
+          swarmOutputSchema: { type: "object" },
+          sessionEffects: "internal",
+          suppressPromptPersistence: true,
+          message: expect.stringContaining("latest user direction"),
+        }),
+      );
+      expect(String(dispatchAgent.mock.calls[0]?.[0].message).includes("already applied")).toBe(
+        configChanged,
+      );
+      expect(reserveLaunch).toHaveBeenCalledWith({
+        runId: "original-run",
+        expected: entry,
+        sessionId: "session-id",
+        sessionMarker: expect.any(String),
+        idempotencyKey: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
+      });
+      expect(replaceRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          previousRunId: "original-run",
+          nextRunId: expect.stringMatching(/^subagent-recovery:[a-f0-9]{64}$/),
+          expected: entry,
+          task: "finish the restart-safe task",
+          persistenceFailure: "return-false",
+        }),
+      );
+      expect(replaceRun.mock.calls[0]?.[0].restartRecovery).toMatchObject({
+        phase: "accepted",
+        sessionId: "session-id",
+      });
+      expect(mocks.entries[childSessionKey]).toMatchObject({
+        abortedLastRun: false,
+        subagentRecovery: {
+          automaticAttempts: 1,
+          lastRunId: "original-run",
+        },
+      });
+    },
+  );
 
   it("ignores non-aborted, yielded, steer-owned, and already-terminal rows", async () => {
     mocks.entries[childSessionKey]!.abortedLastRun = false;

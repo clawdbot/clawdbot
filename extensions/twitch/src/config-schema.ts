@@ -52,6 +52,10 @@ const TwitchConfigBaseShape = {
   configWrites: z.boolean().optional(),
   markdown: MarkdownConfigSchema.optional(),
   defaultAccount: z.string().optional(),
+  // Both union branches are closed, so a root override declared only on the
+  // account shape is rejected whenever accounts is present.
+  historyLimit: z.number().int().min(0).optional(),
+  responsePrefix: z.string().optional(),
 };
 
 /**

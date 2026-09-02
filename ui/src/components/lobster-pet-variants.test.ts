@@ -2,15 +2,11 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { lobsterPetSeed } from "./lobster-pet-contract.ts";
+import { canonicalLobsterLook, createLobsterPetLook } from "./lobster-pet-look.ts";
 import { LOBSTER_PALETTE_LORE } from "./lobster-pet-lore.ts";
-import { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
-import {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  createLobsterPetLook,
-  lobsterPetSeed,
-  moonPhaseFraction,
-} from "./lobster-pet.ts";
+import { moonPhaseFraction } from "./lobster-pet-moon.ts";
+import { LOBSTER_PALETTE_WEIGHTS, LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 type LobsterPetPaletteId = ReturnType<typeof createLobsterPetLook>["palette"]["id"];
 

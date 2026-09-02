@@ -3,6 +3,7 @@ import path from "node:path";
 import type {
   WorkboardCard,
   WorkboardExecution,
+  WorkboardLaunchState,
   WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -14,17 +15,14 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/security-runtime";
 import {
   assertRestrictedWorkboardTarget,
+  cleanupWorkboardCardWorktree,
   managedWorktreeName,
   resolveDispatchWorkspaceAccess,
   type ResolveAgentWorkspaceRuntime,
 } from "./dispatcher-workspace.js";
 import { workboardSessionKeyForCard } from "./session-link.js";
 import { cardBoardId } from "./store-card-helpers.js";
-import {
-  DEFAULT_WORKBOARD_DISPATCH_OWNER,
-  workboardCardConsumesOwnerSlot,
-  workboardCardSlotOwner,
-} from "./store-constants.js";
+import { workboardCardConsumesOwnerSlot, workboardCardSlotOwner } from "./store-constants.js";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import {
   assertCanonicalWorkboardRootAccess,
@@ -70,6 +68,8 @@ type WorkboardDispatchAndStartResult = WorkboardDispatchResult & {
   started: WorkboardStartedRun[];
   startFailures: WorkboardStartFailure[];
 };
+
+type WorkboardPreparedLaunch = Extract<WorkboardLaunchState, { phase: "prepared" }>;
 
 type WorkboardDispatchStartParams = {
   store: WorkboardStore;
@@ -224,15 +224,6 @@ function sortReadyCards(a: WorkboardCard, b: WorkboardCard): number {
   );
 }
 
-function resolveDispatchOwner(card: WorkboardCard, now: number, ownerOverride?: string): string {
-  return (
-    ownerOverride ||
-    (cardHasActiveClaim(card, now) ? card.metadata?.claim?.ownerId : undefined) ||
-    card.agentId ||
-    DEFAULT_WORKBOARD_DISPATCH_OWNER
-  );
-}
-
 function selectStartableCards(
   cards: WorkboardCard[],
   limit: number,
@@ -257,7 +248,7 @@ function selectStartableCards(
   const selectedOwners = new Set<string>();
   const ordered = mode === "scheduled" ? candidates.toSorted(sortReadyCards) : candidates;
   for (const card of ordered) {
-    const owner = resolveDispatchOwner(card, now, ownerOverride);
+    const owner = ownerOverride || workboardCardSlotOwner(card, now);
     const rejection = cardIsArchived(card)
       ? "Card is archived; restore it before starting."
       : cardHasActiveClaim(card, now)
@@ -352,7 +343,7 @@ async function runWorkboardDispatch(
     startFailures.push(selection.rejection);
   }
   for (const card of selection.cards) {
-    const ownerId = resolveDispatchOwner(card, now, ownerOverride);
+    const ownerId = ownerOverride || workboardCardSlotOwner(card, now);
     if (acceptedStarts >= maxStarts || attemptedStarts >= maxAttempts) {
       break;
     }
@@ -364,7 +355,8 @@ async function runWorkboardDispatch(
     let materializedWorkspace: WorkboardWorkspace | undefined;
     let implicitWorkspaceCwd: string | undefined;
     let runStarted = false;
-    let launchIntentPersisted = false;
+    let workspaceMutation: { before: WorkboardCard; after: WorkboardCard } | undefined;
+    let preparedLaunch: WorkboardPreparedLaunch | undefined;
     const requestedWorkspace = card.metadata?.automation?.workspace;
     let workspaceAccess: WorkboardWorkspaceAccess;
     let targetWorkspace: string | undefined;
@@ -479,7 +471,6 @@ async function runWorkboardDispatch(
       if (runCwd && !workspaceAccess.unrestricted) {
         await assertRestrictedWorkboardTarget({
           root: runCwd,
-          // Claim may populate agentId; keep the sessionKey target identity.
           agentId: card.agentId,
           sessionKey,
           modelProvider: params.options?.provider,
@@ -490,30 +481,25 @@ async function runWorkboardDispatch(
       }
       materializedWorkspace = materialized.workspace;
       if (materializedWorkspace) {
-        await params.store.update(card.id, { workspace: materializedWorkspace, workspaceAccess });
+        const workspaceBase = await params.store.get(card.id);
+        if (!workspaceBase) {
+          throw new Error(`card not found: ${card.id}`);
+        }
+        const materializedCard = await params.store.update(
+          card.id,
+          { workspace: materializedWorkspace, workspaceAccess },
+          { expectedUpdatedAt: workspaceBase.updatedAt },
+        );
+        workspaceMutation = { before: workspaceBase, after: materializedCard };
       }
-      const launchBase = await params.store.get(card.id);
-      if (!launchBase) {
-        throw new Error(`card not found: ${card.id}`);
-      }
-      const runId = `workboard:${card.id}:${launchBase.updatedAt}`;
-      const launched = await params.store.update(
-        card.id,
-        {
-          sessionKey,
-          runId,
-          execution: buildExecution({
-            card: launchBase,
-            sessionKey,
-            runId,
-            runtime: undefined,
-            now,
-          }),
-          ...(materializedWorkspace ? { workspace: materializedWorkspace } : {}),
-        },
-        { expectedUpdatedAt: launchBase.updatedAt },
-      );
-      launchIntentPersisted = true;
+      const prepared = await params.store.prepareExecutionLaunch(card.id, {
+        requestedSessionKey: sessionKey,
+        now,
+        scope: { ownerId, token: claimValue },
+      });
+      const launched = prepared.card;
+      preparedLaunch = prepared.launch;
+      const runId = prepared.launch.provisionalRunId;
       const run = await params.subagent.run({
         sessionKey,
         message: buildWorkerPrompt({
@@ -546,15 +532,18 @@ async function runWorkboardDispatch(
         runId: run.runId,
         execution: acceptedExecution,
       };
-      const updated = await params.store
-        .enrichExecutionAssociation(card.id, {
-          expectedSessionKey: sessionKey,
-          expectedRunId: runId,
-          sessionKey: acceptedSessionKey,
-          runId: run.runId,
-          execution: acceptedExecution,
-        })
-        .catch(() => acceptedCard);
+      const updated =
+        (await params.store
+          .acceptExecutionLaunch(card.id, {
+            expectedLaunch: prepared.launch,
+            acceptedAt: Math.max(Date.now(), prepared.launch.preparedAt),
+            expectedSessionKey: sessionKey,
+            expectedRunId: runId,
+            sessionKey: acceptedSessionKey,
+            runId: run.runId,
+            execution: acceptedExecution,
+          })
+          .catch(() => undefined)) ?? acceptedCard;
       acceptedStarts += 1;
       startedOwners.add(ownerId);
       started.push({
@@ -579,42 +568,39 @@ async function runWorkboardDispatch(
         )
         .catch(() => undefined);
     } catch (error) {
-      if (
-        !runStarted &&
-        materializedWorkspace?.kind === "worktree" &&
-        materializedWorkspace.path &&
-        params.worktrees
-      ) {
-        await params.worktrees
-          .removeIfLossless({
-            path: materializedWorkspace.path,
-            ownerKind: "workboard",
-            ownerId: card.id,
-          })
-          .catch(() => undefined);
-        const sourceWorkspace = card.metadata?.automation?.workspace;
-        if (sourceWorkspace) {
-          await params.store.update(card.id, { workspace: sourceWorkspace }).catch(() => undefined);
-        }
-      }
       const message = formatErrorMessage(error);
       startFailures.push({ cardId: card.id, title: card.title, error: message });
       if (!claimValue || runStarted) {
         continue;
       }
       try {
-        await params.store.block(
-          card.id,
-          {
-            ownerId,
-            token: claimValue,
-            reason: `Dispatcher could not start worker: ${message}`,
-          },
-          { ownerId, token: claimValue },
-          { clearExecutionAssociation: launchIntentPersisted },
-        );
+        const reason = `Dispatcher could not start worker: ${message}`;
+        if (preparedLaunch) {
+          await params.store.failPreparedLaunch(card.id, {
+            expectedLaunch: preparedLaunch,
+            reason,
+            failedAt: Date.now(),
+          });
+        } else {
+          await params.store.block(
+            card.id,
+            { ownerId, token: claimValue, reason },
+            { ownerId, token: claimValue },
+          );
+        }
       } catch {
         // Leave the original start failure visible; dispatch will diagnose stale claims later.
+      }
+      if (params.worktrees) {
+        const failedCard = await params.store.get(card.id).catch(() => undefined);
+        if (failedCard) {
+          await cleanupWorkboardCardWorktree({
+            store: params.store,
+            worktrees: params.worktrees,
+            card: failedCard,
+            ...(workspaceMutation ? { workspaceMutation } : {}),
+          }).catch(() => undefined);
+        }
       }
     }
   }

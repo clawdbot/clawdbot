@@ -72,6 +72,7 @@ function makeProps(overrides: Partial<BackgroundTasksProps> = {}): BackgroundTas
     loading: false,
     error: null,
     tasks: null,
+    activeCount: 0,
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:current",
@@ -133,6 +134,17 @@ it("uses the shared surface empty state when no background tasks exist", async (
   expect(container.querySelector(".chat-tasks-rail__scroll")?.hasAttribute("hidden")).toBe(true);
 });
 
+it("renders task-shaped placeholders while the initial task list loads", async () => {
+  const container = renderTaskRail({ loading: true, tasks: null });
+
+  const skeleton = container.querySelector("openclaw-panel-loading-skeleton");
+  expect(skeleton).toBeInstanceOf(HTMLElement);
+  await (skeleton as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+  expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("tasks");
+  expect(skeleton?.shadowRoot?.querySelectorAll(".skeleton").length).toBeGreaterThan(3);
+  expect(container.textContent).not.toContain("Loading tasks");
+});
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -171,6 +183,7 @@ describe("background tasks rail state", () => {
     expect(props.finishedCollapsed).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
+    expect(props.activeCount).toBe(1);
   });
 
   it("keeps the later recent page's equally current running progress", async () => {

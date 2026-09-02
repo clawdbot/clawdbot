@@ -182,7 +182,7 @@ export function shouldWaitForCompletionRequiredAsyncTasks(params: {
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
-  deadlineAtMs: number;
+  getDeadlineAtMs: () => number | undefined;
   now?: () => number;
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -226,7 +226,10 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       if (pendingRunIds.length === 0) {
         break;
       }
-      const remainingMs = params.deadlineAtMs - now();
+      // Approval pauses and resumed grace windows replace the owner's deadline.
+      // Unlimited waits still use finite sleeps and remain abort-responsive.
+      const deadlineAtMs = params.getDeadlineAtMs();
+      const remainingMs = deadlineAtMs === undefined ? pollIntervalMs : deadlineAtMs - now();
       if (remainingMs <= 0) {
         for (const runId of pendingRunIds) {
           timedOutRunIds.add(runId);

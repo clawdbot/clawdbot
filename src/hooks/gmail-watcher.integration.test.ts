@@ -9,6 +9,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startGmailWatcher, stopGmailWatcher } from "./gmail-watcher.js";
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
@@ -26,7 +27,6 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
   let savedPath: string | undefined;
   let gogPid: number | undefined;
   let helperPid: number | undefined;
-  let stopWatcher: (() => Promise<void>) | undefined;
 
   beforeAll(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "openclaw-gog-integration-"));
@@ -61,7 +61,7 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
 
   afterAll(async () => {
     try {
-      await stopWatcher?.();
+      await stopGmailWatcher();
     } catch {
       // Force cleanup below; this test must not leave subprocesses behind on failure.
     }
@@ -86,9 +86,6 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
   });
 
   it("stopGmailWatcher removes gog and its credential-helper descendant", async () => {
-    const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
-    stopWatcher = stopGmailWatcher;
-
     const result = await startGmailWatcher({
       hooks: {
         enabled: true,
@@ -99,7 +96,7 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
           pushToken: "integration-push-token",
         },
       },
-    } as never);
+    });
 
     expect(result.started).toBe(true);
 
@@ -123,10 +120,10 @@ describePosix("gmail-watcher process-tree shutdown (integration)", () => {
     console.log("calling stopGmailWatcher...");
     await stopGmailWatcher();
 
+    await expect.poll(() => alive(gogPid!), { interval: 25, timeout: 1_500 }).toBe(false);
+    await expect.poll(() => alive(helperPid!), { interval: 25, timeout: 1_500 }).toBe(false);
+
     console.log(`gog alive after stop: ${alive(gogPid)}`);
     console.log(`credential-helper alive after stop: ${alive(helperPid)}`);
-
-    expect(alive(gogPid)).toBe(false);
-    expect(alive(helperPid)).toBe(false); // descendant must also be gone
   }, 15_000);
 });

@@ -36,7 +36,7 @@ function runner(stdout: string): TailscaleStatusCommandRunner {
 }
 
 describe("prepareTailscaleConfigMigration", () => {
-  it("moves the shipped LAN Serve shape to managed ingress", async () => {
+  it("does not adopt a canonical-looking route without ownership proof", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
         mode: "local",
@@ -53,18 +53,30 @@ describe("prepareTailscaleConfigMigration", () => {
       runCommandWithTimeout: runner(serveStatus()),
     });
 
-    expect(result.config.gateway).toEqual({
-      mode: "local",
-      bind: "loopback",
-      port: 18789,
-      auth: { mode: "token", token: "secret", allowTailscale: true },
-      tailscale: { mode: "serve" },
-    });
-    expect(result.changes).toHaveLength(1);
-    expect(result.changes.join("\n")).toContain("managed Tailscale Serve ingress");
-    expect(result.warnings).toEqual([]);
-    expect(cfg.gateway?.bind).toBe("lan");
+    expect(result.config).toBe(cfg);
+    expect(result.changes).toEqual([]);
+    const warning = result.warnings.join("\n");
+    expect(warning).toContain("cannot prove that OpenClaw owns");
+    expect(warning).toContain("confirm the route belongs to the current Tailscale hostname");
+    expect(warning).toContain("leave managed Tailscale ingress off");
   });
+
+  it.each([443, 18789, 19001])(
+    "recognizes the predecessor of managed Gateway port %s",
+    async (port) => {
+      const cfg: OpenClawConfig = {
+        gateway: { bind: "loopback", port, tailscale: { mode: "serve" } },
+      };
+      const result = await prepareTailscaleConfigMigration({
+        cfg,
+        env: {},
+        runCommandWithTimeout: runner(serveStatus({ backendPort: port, proxyHost: "localhost" })),
+      });
+      expect(result.config).toBe(cfg);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("will be adopted");
+    },
+  );
 
   it.each([
     ["no matching route", {}, "{}"],
@@ -102,30 +114,35 @@ describe("prepareTailscaleConfigMigration", () => {
       "a custom HTTPS port",
       { tailscale: { mode: "off" as const } },
       serveStatus({ hostPort: 8443 }),
+      8443,
     ],
-    ["authentication disabled", { auth: { mode: "none" as const } }, serveStatus()],
-  ])("warns instead of guessing how to migrate %s", async (_label, gatewayOverrides, stdout) => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        mode: "local",
-        bind: "lan",
-        port: 18789,
-        auth: { mode: "token", token: "secret" },
-        tailscale: { mode: "off" },
-        ...gatewayOverrides,
-      },
-    };
+    ["authentication disabled", { auth: { mode: "none" as const } }, serveStatus(), 443],
+  ])(
+    "warns instead of guessing how to migrate %s",
+    async (_label, gatewayOverrides, stdout, httpsPort) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          mode: "local",
+          bind: "lan",
+          port: 18789,
+          auth: { mode: "token", token: "secret" },
+          tailscale: { mode: "off" },
+          ...gatewayOverrides,
+        },
+      };
 
-    const result = await prepareTailscaleConfigMigration({
-      cfg,
-      env: {},
-      runCommandWithTimeout: runner(stdout),
-    });
+      const result = await prepareTailscaleConfigMigration({
+        cfg,
+        env: {},
+        runCommandWithTimeout: runner(stdout),
+      });
 
-    expect(result.config).toBe(cfg);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("not changed");
-  });
+      expect(result.config).toBe(cfg);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain("not changed");
+      expect(result.warnings.join("\n")).toContain(`--https=${httpsPort} --set-path=/ off`);
+    },
+  );
 
   it("warns on malformed status but stays quiet when Tailscale is unavailable", async () => {
     const cfg: OpenClawConfig = {

@@ -263,6 +263,7 @@ function resolveHarnessSourceVisibleRepliesDefault(params: {
     });
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
+      agentId: params.sessionAgentId,
       defaultProvider: defaultModelRef.provider,
     });
     const parentSessionKey = resolveHarnessDefaultParentSessionKey(params);

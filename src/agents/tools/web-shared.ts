@@ -46,17 +46,19 @@ export function normalizeCacheKey(value: string): string {
 export function readCache<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
+  ttlMs = Infinity,
 ): { value: T; cached: boolean } | null {
   const entry = cache.get(key);
-  if (!entry) {
+  if (!entry || ttlMs <= 0) {
     return null;
   }
   const now = asDateTimestampMs(Date.now());
-  if (now === undefined || now > entry.expiresAt) {
+  if (now === undefined || now >= entry.expiresAt) {
     cache.delete(key);
     return null;
   }
-  return { value: entry.value, cached: true };
+  // A caller can shorten reuse without evicting an entry still valid for others.
+  return now - entry.insertedAt < ttlMs ? { value: entry.value, cached: true } : null;
 }
 
 export function writeCache<T>(
@@ -138,8 +140,9 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
   if (bytes[0] === 0xfe && bytes[1] === 0xff) {
     return "utf-16be";
   }
-  if (!shouldSniffDocumentCharset(contentType)) {
-    return undefined;
+  const declaredCharset = readCharsetParam(contentType);
+  if (declaredCharset || !shouldSniffDocumentCharset(contentType)) {
+    return declaredCharset;
   }
 
   const head = latin1Decoder.decode(
@@ -186,7 +189,7 @@ function responseContentType(res: Response): string | null {
 
 function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
   const contentType = responseContentType(res);
-  const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
+  const charset = sniffCharset(contentType, bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
   } catch {

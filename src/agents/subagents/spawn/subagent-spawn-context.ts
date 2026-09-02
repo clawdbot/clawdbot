@@ -20,7 +20,7 @@ type PreparedSpawnContext =
       status: "ok";
       mode: "fork";
       parentEntry: SessionEntry;
-      childEntry?: SessionEntry;
+      childEntry: SessionEntry;
       forked: { sessionId: string; sessionFile: string };
       forkFallbackNote?: never;
     }
@@ -48,10 +48,6 @@ export async function prepareSubagentSessionContext(params: {
     agentId: params.requesterAgentId,
   });
 
-  let parentEntry: SessionEntry | undefined;
-  let childEntry: SessionEntry | undefined;
-  let forkFallbackNote: string | undefined;
-
   try {
     if (params.targetAgentId !== params.requesterAgentId) {
       throw new Error(
@@ -78,50 +74,26 @@ export async function prepareSubagentSessionContext(params: {
         'context="fork" requested but OpenClaw could not fork the requester transcript.',
       );
     }
-    parentEntry = forkedResult.parentEntry;
-    childEntry = forkedResult.sessionEntry;
     if (forkedResult.status === "skipped") {
-      forkFallbackNote =
+      const forkFallbackNote =
         forkedResult.decision?.status === "skip" ? forkedResult.decision.message : undefined;
-    }
-    const forked =
-      forkedResult.status === "forked"
-        ? {
-            sessionId: forkedResult.fork.sessionId,
-            sessionFile: forkedResult.fork.sessionFile,
-          }
-        : null;
-
-    if (params.contextMode === "fork") {
-      if (!parentEntry || !forked) {
-        if (forkFallbackNote) {
-          return {
-            status: "ok",
-            mode: "isolated",
-            parentEntry,
-            childEntry,
-            forkFallbackNote,
-          };
-        }
-        return {
-          status: "error",
-          error: 'context="fork" requested but OpenClaw could not prepare forked context.',
-        };
+      if (!forkFallbackNote) {
+        throw new Error('context="fork" requested but OpenClaw could not prepare forked context.');
       }
       return {
         status: "ok",
-        mode: "fork",
-        parentEntry,
-        childEntry,
-        forked,
+        mode: "isolated",
+        parentEntry: forkedResult.parentEntry,
+        childEntry: forkedResult.sessionEntry,
+        forkFallbackNote,
       };
     }
     return {
       status: "ok",
-      mode: "isolated",
-      parentEntry,
-      childEntry,
-      ...(forkFallbackNote ? { forkFallbackNote } : {}),
+      mode: "fork",
+      parentEntry: forkedResult.parentEntry,
+      childEntry: forkedResult.sessionEntry,
+      forked: forkedResult.fork,
     };
   } catch (err) {
     return { status: "error", error: summarizeSpawnError(err) };
@@ -147,10 +119,7 @@ export async function prepareContextEngineSubagentSpawn(params: {
       contextMode: params.context.mode,
       parentSessionId: params.context.parentEntry?.sessionId,
       parentSessionFile: params.requesterInternalKey,
-      childSessionId:
-        params.context.mode === "fork"
-          ? params.context.forked.sessionId
-          : params.context.childEntry?.sessionId,
+      childSessionId: params.context.childEntry?.sessionId,
       childSessionFile:
         params.context.mode === "fork" ? params.context.forked.sessionFile : params.childSessionKey,
       ttlMs: finiteSecondsToTimerSafeMilliseconds(params.runTimeoutSeconds, {

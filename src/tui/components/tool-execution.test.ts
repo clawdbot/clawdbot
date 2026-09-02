@@ -1,6 +1,6 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { splitAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 
@@ -13,6 +13,45 @@ function renderToolOutput(text: string, width: number) {
 }
 
 describe("ToolExecutionComponent", () => {
+  it.each(
+    [
+      { source: "    # heading\n    command --flag", literal: "# heading" },
+      { source: "    > quoted source\n    next line", literal: "> quoted source" },
+      { source: "    - source item\n      nested", literal: "- source item" },
+    ].flatMap(({ source, literal }) => [
+      { source, literal, phase: "partial", complete: false },
+      { source, literal, phase: "final", complete: true },
+    ]),
+  )("preserves indented $literal in $phase tool output", ({ source, literal, complete }) => {
+    const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
+    const result = { content: [{ type: "text", text: source }] };
+    if (complete) {
+      component.setResult(result);
+    } else {
+      component.setPartialResult(result);
+    }
+
+    const rendered = component.render(80).map(normalizeTestText).join("\n");
+    expect(rendered).toContain("```");
+    expect(rendered).toContain(literal);
+  });
+
+  it.each([
+    { phase: "partial", complete: false },
+    { phase: "final", complete: true },
+  ])("keeps whitespace-only $phase tool output visually empty", ({ complete }) => {
+    const component = new ToolExecutionComponent("read_file", { path: "example.txt" });
+    const result = { content: [{ type: "text", text: "   \n  " }] };
+    if (complete) {
+      component.setResult(result);
+    } else {
+      component.setPartialResult(result);
+    }
+
+    const rendered = component.render(80).map(normalizeTestText).join("\n");
+    expect(rendered.includes("...")).toBe(!complete);
+  });
+
   it.each([
     { width: 20, characters: 8_192 },
     { width: 20, characters: 16_384 },
@@ -125,7 +164,7 @@ describe("ToolExecutionComponent", () => {
     const raw = lines.join("\n");
     const normalized = normalizeTestText(raw).replace(/[\u2067\u2069]/gu, "");
     const linkedRtl = lines.find((line) => line.includes("عنصر") && line.includes("\x1b]8;;"));
-    const targets = splitAnsiSegments(raw).flatMap((segment) => {
+    const targets = [...iterateAnsiSegments(raw)].flatMap((segment) => {
       if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
         return [];
       }

@@ -12,7 +12,6 @@
   width: fit-content;
   max-width: 100%;
   min-width: 0;
-  box-sizing: border-box;
   padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -74,7 +73,6 @@
 .chat-activity-group__summary {
   --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
 
-  font-family: var(--font-body);
   font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 400;
   line-height: 1.5;
@@ -91,6 +89,8 @@
 }
 
 .chat-tool-msg-summary {
+  display: inline-flex;
+  align-items: center;
   gap: 7px;
   width: fit-content;
   max-width: 100%;
@@ -325,19 +325,7 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
-    animation: chatToolRowTextWave 2.2s ease-in-out infinite;
-  }
-}
-
-/* Gradient is 2x element width with identical end stops, so one full period
-   per cycle wraps seamlessly and the band sweeps left to right. */
-@keyframes chatToolRowTextWave {
-  0% {
-    background-position: 100% 0;
-  }
-
-  100% {
-    background-position: -100% 0;
+    animation: text-shimmer 2.2s ease-in-out infinite;
   }
 }
 
@@ -519,38 +507,13 @@
   color: inherit;
 }
 
-/* ── Command token colors (display-only highlighting) ── */
-.chat-cmd--name {
-  color: inherit;
-  font: inherit;
-}
-
-.chat-cmd--str {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--num {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--flag {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--op {
-  font: inherit;
-  color: inherit;
-}
-
 /* ── Key-value args (generic tools) ── */
 .chat-tool-kv {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 6px;
+  margin: 0;
+  padding: 10px 12px;
   font-size: var(--control-ui-text-sm);
   line-height: 1.6;
 }
@@ -578,7 +541,6 @@
 
 /* ── Expanded tool row body ── */
 .chat-tool-msg-body {
-  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
   margin-top: 5px;
@@ -620,7 +582,6 @@
 }
 
 .chat-tool-card {
-  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
 }
@@ -649,7 +610,7 @@
 .chat-tool-card--flush > .chat-tool-card__actions {
   position: absolute;
   top: 8px;
-  right: 6px;
+  inset-inline-end: 6px;
   z-index: 1;
   opacity: 0;
   transition: opacity 120ms ease;
@@ -659,10 +620,44 @@
   opacity: 1;
 }
 
+.chat-tool-card__modes {
+  --track-width: 0;
+}
+
+.chat-tool-card__modes::part(nav) {
+  padding: 4px 8px 0;
+}
+
+.chat-tool-card__modes::part(tabs) {
+  gap: 2px;
+}
+
+.chat-tool-card__modes::part(body) {
+  padding: 0;
+}
+
+.chat-tool-card__modes wa-tab::part(base) {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+}
+
+.chat-tool-card__modes wa-tab[active]::part(base) {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+.chat-tool-card__modes wa-tab-panel {
+  padding: 0;
+}
+
 /* Reserve the floating action box (button + its 6px inset) plus the block's own
    12px padding so command text never runs underneath it. */
 .chat-tool-card--flush:has(> .chat-tool-card__actions) .chat-tool-term__cmd {
-  padding-right: calc(var(--chat-tool-action-size, 40px) + 18px);
+  padding-inline-end: calc(var(--chat-tool-action-size, 40px) + 18px);
 }
 
 .chat-tool-card--flush:hover > .chat-tool-card__actions,
@@ -681,10 +676,11 @@
   align-items: center;
   gap: 6px;
   justify-content: flex-end;
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 
-.chat-tool-card__action-btn {
+.chat-tool-card__action-btn,
+.chat-tool-card__actions :where(.chat-copy-btn) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -702,7 +698,8 @@
 }
 
 .chat-tool-card__action-btn:hover,
-.chat-tool-card__action-btn:focus-visible {
+.chat-tool-card__action-btn:focus-visible,
+.chat-tool-card__actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
 }
@@ -736,7 +733,7 @@
   border: 0;
   background: transparent;
   font: 11px/1.4 var(--mono);
-  text-align: left;
+  text-align: start;
   cursor: var(--cursor-action);
 }
 
@@ -787,7 +784,6 @@
 }
 
 .chat-tool-card__block-content {
-  box-sizing: border-box;
   max-width: 100%;
   min-width: 0;
   margin: 0;
@@ -835,11 +831,17 @@
   margin-top: 8px;
 }
 
+.chat-tool-card__widget-host {
+  width: 100%;
+}
+
 .chat-tool-card__preview {
   position: relative;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: var(--radius-md);
-  background: var(--card);
+  width: 100%;
+  max-width: 100%;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -850,7 +852,7 @@
 
 /* MCP Apps are responsive documents, so give them the assistant column instead
    of letting the content-sized reply bubble collapse their iframe to ~300px. */
-.chat-group.assistant .chat-bubble:has(> .chat-tool-card__preview[data-content-kind="mcp-app"]) {
+.chat-group.assistant .chat-bubble:has(> .chat-tool-card__widget-host) {
   align-self: stretch;
   width: 100%;
 }
@@ -875,13 +877,26 @@
   flex-shrink: 0;
 }
 
+/* Chromium can retain a skipped row's pre-menu geometry. Fully lay out the
+   active widget row so closing its top-layer menu cannot move the disclosure. */
+.chat-virtual-row:has(.chat-tool-card__widget-actions[open]) {
+  content-visibility: visible;
+}
+
 .chat-tool-card__widget-actions::part(menu) {
-  min-width: 176px;
+  min-width: 164px;
+  max-width: 208px;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
+}
+
+.chat-tool-card__widget-actions .session-menu__item {
+  min-height: 32px;
+  padding-inline: 7px;
+  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-tool-card__widget-actions-trigger,
@@ -957,6 +972,22 @@
   background: var(--card);
 }
 
+.chat-tool-card__widget-raw {
+  width: 100%;
+}
+
+.chat-tool-card__widget-raw > .chat-tool-card__raw {
+  margin-top: 8px;
+}
+
+.chat-tool-card__widget-raw .chat-tool-card__raw-toggle {
+  display: none;
+}
+
+.chat-tool-card__widget-raw .chat-tool-card__raw-body {
+  margin-top: 0;
+}
+
 .chat-tool-card__raw-toggle {
   font-size: 12px;
 }
@@ -965,100 +996,11 @@
   margin-top: 4px;
 }
 
-/* ── Inline JSON disclosure ── */
-.chat-json-collapse {
-  margin-top: 4px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--secondary) 60%, transparent);
-  overflow: hidden;
-}
-
-.chat-json-summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--muted);
-  user-select: none;
-  list-style: none;
-  transition:
-    color 150ms ease,
-    background 150ms ease;
-}
-
-.chat-json-summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-json-summary::before {
-  content: "▸";
-  font-size: 12px;
-  flex-shrink: 0;
-  transition: transform 150ms ease;
-}
-
-.chat-json-collapse[open] > .chat-json-summary::before {
-  transform: rotate(90deg);
-}
-
-.chat-json-summary:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 50%, transparent);
-}
-
-.chat-json-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
-  flex-shrink: 0;
-}
-
-.chat-json-label {
-  font-family: var(--mono);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-json-content {
-  margin: 0;
-  padding: 10px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text);
-  overflow-x: auto;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.chat-json-content code {
-  font-family: inherit;
-  font-size: inherit;
-}
-
 /* ── Activity group (a turn's run of tool rows) ── */
-/* Keep the activity summary, call bubbles, and flat result rows on one width.
-   Include the role classes so this wins over the generic tool-group rule. */
-.chat-group.tool.chat-group--activity .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(760px, 100%));
-}
-
 .chat-activity-group {
   width: 100%;
   min-width: 0;
-  max-width: 100%;
+  max-width: var(--chat-message-max-width, min(760px, 100%));
 }
 
 .chat-activity-group__summary {
@@ -1092,6 +1034,30 @@
   white-space: nowrap;
 }
 
+.chat-activity-group__review-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.chat-activity-group__review-status svg {
+  width: 15px;
+  height: 15px;
+}
+
+.chat-activity-group__review-status[data-outcome="approved"] {
+  color: var(--ok);
+}
+
+.chat-activity-group__review-status[data-outcome="denied"] {
+  color: var(--danger);
+}
+
+.chat-activity-group__review-status[data-outcome="reviewing"] {
+  color: var(--warn);
+}
+
 /* Parent and child rows share one icon/text grid; order and whitespace carry
    hierarchy without shrinking the available command width. */
 .chat-activity-group__body {
@@ -1106,10 +1072,27 @@
 }
 
 /* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
-   the turn's intermediate tool/commentary groups. Sits snug above the final
-   reply, aligned with the message column via a gutter matching the avatar. */
+   the turn's intermediate tool/commentary groups. Keep it equally separated
+   from the prompt and final reply. */
 .chat-group--work {
-  padding-bottom: 8px;
+  padding-block: 9px;
+}
+
+@keyframes chat-work-settle-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-group--work {
+    animation: chat-work-settle-in 200ms var(--ease-out) both;
+  }
 }
 
 .chat-work-group .chat-activity-group__label {
@@ -1126,823 +1109,40 @@
   background: var(--border);
 }
 
-/* Reading indicator = working claw: the brand pincer claws in place where the
-   reply will materialize while the agent works with nothing visibly
-   streaming. Bubble chrome and sizing come from
-   .chat-bubble.chat-reading-indicator (components.css). Filled silhouette;
-   18px because the claw is denser than a star glyph. The row settles into
-   stance once, then the solid claw carries the ongoing working signal. The
-   default cycle is two jaw snips with a sympathetic body flex — no lateral
-   travel, that read as too busy. Rare surprise moves layer over this loop
-   once after a short delay, then the default loop resumes. */
-.chat-reading-indicator {
-  --claw-cycle: 2.4s;
-  --claw-surprise-delay: 4.8s;
-
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  color: var(--accent);
-}
-
-.chat-working-indicator {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 28px;
-  animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.chat-working-indicator__status {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-variant-numeric: tabular-nums;
-}
-
-.chat-working-indicator__elapsed {
-  color: var(--muted);
-}
-
-.chat-working-indicator--continuation {
-  gap: 6px;
-  min-height: 0;
-  margin-top: 4px;
-}
-
-.chat-turn-recap--continuation {
-  margin-bottom: 0;
-  font-size: var(--control-ui-text-sm);
-}
-
-.chat-reading-indicator svg {
-  width: 18px;
-  height: 18px;
-  fill: currentColor;
-  stroke: none;
-  animation: chatWorkingClawFlex var(--claw-cycle) ease-out infinite;
-  will-change: transform;
-}
-
-/* The upper jaw hinges at the palm joint. Rest is slightly open — the open
-   notch is what reads "claw" at 18px — and the jaw snaps shut on the snip
-   frames (keyframe percentages must stay in lockstep with
-   chatWorkingClawFlex, and with chatWorkingClawCombo in the shadowbox
-   stance). */
-.chat-reading-indicator svg .claw-icon__jaw {
-  transform-box: view-box;
-  transform-origin: 8.6px 11px;
-  transform: rotate(-10deg);
-  animation: chatWorkingClawSnip var(--claw-cycle) ease-out infinite;
-  will-change: transform;
-}
-
-/* Pow star: the one-shot shadowbox surprise pops at the cross impact. */
-.chat-reading-indicator--shadowbox::after {
-  content: "✦";
-  position: absolute;
-  right: -14px;
-  top: -2px;
-  font-size: 11px;
-  line-height: 1;
-  color: var(--accent);
-  opacity: 0;
-  animation: chatWorkingClawPow 1.2s ease-out var(--claw-surprise-delay) 1;
-  pointer-events: none;
-}
-
-@keyframes chatWorkingIndicatorEnter {
-  0% {
-    opacity: 0;
-    transform: translateY(4px) scale(0.96);
-  }
-
-  72% {
-    opacity: 1;
-    transform: translateY(-1px) scale(1.01);
-  }
-
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-/* Shadowbox body: jab 1 at 12-16%, jab 2 at 26-30%, big wind-up, cross at
-   46-52%. */
-@keyframes chatWorkingClawCombo {
-  0%,
-  8% {
-    transform: translateX(0);
-  }
-
-  12% {
-    transform: translateX(-2px);
-  }
-
-  16% {
-    transform: translateX(5px);
-  }
-
-  22%,
-  26% {
-    transform: translateX(-2px);
-  }
-
-  30% {
-    transform: translateX(5px);
-  }
-
-  38% {
-    transform: translateX(0);
-  }
-
-  46% {
-    transform: translateX(-3px) rotate(-6deg);
-  }
-
-  52% {
-    transform: translateX(8px) rotate(4deg);
-  }
-
-  62%,
-  100% {
-    transform: translateX(0);
-  }
-}
-
-/* Shadowbox jaw: snaps shut in lockstep with chatWorkingClawCombo impacts. */
-@keyframes chatWorkingClawJaw {
-  0%,
-  8% {
-    transform: rotate(-10deg);
-  }
-
-  12% {
-    transform: rotate(-16deg);
-  }
-
-  16% {
-    transform: rotate(4deg);
-  }
-
-  22%,
-  26% {
-    transform: rotate(-16deg);
-  }
-
-  30% {
-    transform: rotate(4deg);
-  }
-
-  38% {
-    transform: rotate(-10deg);
-  }
-
-  46% {
-    transform: rotate(-18deg);
-  }
-
-  52% {
-    transform: rotate(6deg);
-  }
-
-  62%,
-  100% {
-    transform: rotate(-10deg);
-  }
-}
-
-@keyframes chatWorkingClawPow {
-  0%,
-  46% {
-    opacity: 0;
-    transform: scale(0.4);
-  }
-
-  52% {
-    opacity: 1;
-    transform: scale(1.2);
-  }
-
-  58%,
-  100% {
-    opacity: 0;
-    transform: scale(1.5);
-  }
-}
-
-/* Seeded one-shot surprises (see selectWorkingClawSurprise): the default claw
-   keeps working until one move takes over briefly, then resumes afterward. */
-.chat-reading-indicator--southpaw {
-  animation: chatWorkingClawSouthpaw 1.2s ease-in-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--flurry svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawFlex 650ms ease-out var(--claw-surprise-delay) 2;
-}
-
-.chat-reading-indicator--flurry svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawSnip 650ms ease-out var(--claw-surprise-delay) 2;
-}
-
-/* Fake 3D: perspective() + rotateY reads as a spinning coin at 18px. Linear
-   timing keeps the single revolve steady; the jaw keeps its snip cycle. */
-.chat-reading-indicator--spin svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawSpin 900ms linear var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--shadowbox svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawCombo 1.2s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--shadowbox svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawJaw 1.2s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--backflip svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawBackflip 900ms ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--zen svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawZenBreath 2.4s ease-in-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--zen svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawZenSnip 2.4s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--drummer svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawDrumRock 1.2s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--drummer svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawDrumHit 1.2s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--peekaboo svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawPeekaboo 1.2s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--peekaboo svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawPeekabooJaw 1.2s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--nodoff svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawNodOff 2.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--nodoff svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawNodOffJaw 2.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--curious svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawCurious 1.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--curious svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawCuriousJaw 1.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--omnom svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawOmNom 1.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--omnom svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawOmNomJaw 1.8s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--fakeout svg {
-  animation:
-    chatWorkingClawFlex var(--claw-cycle) ease-out infinite,
-    chatWorkingClawFakeOut 2.4s ease-out var(--claw-surprise-delay) 1;
-}
-
-.chat-reading-indicator--fakeout svg .claw-icon__jaw {
-  animation:
-    chatWorkingClawSnip var(--claw-cycle) ease-out infinite,
-    chatWorkingClawFakeOutJaw 2.4s ease-out var(--claw-surprise-delay) 1;
-}
-
-@keyframes chatWorkingClawSouthpaw {
-  0%,
-  100% {
-    transform: scaleX(1);
-  }
-
-  20%,
-  80% {
-    transform: scaleX(-1);
-  }
-}
-
-@keyframes chatWorkingClawSpin {
-  0% {
-    transform: perspective(60px) rotateY(0deg);
-  }
-
-  100% {
-    transform: perspective(60px) rotateY(360deg);
-  }
-}
-
-/* Long rest, then one quick somersault with a small hop; -360deg lands back
-   at the rest pose so the loop seam is invisible. translateY comes first so
-   the hop stays vertical while the claw rotates in place. */
-@keyframes chatWorkingClawBackflip {
-  0%,
-  55% {
-    transform: translateY(0) rotate(0deg);
-  }
-
-  62% {
-    transform: translateY(-3px) rotate(-120deg);
-  }
-
-  70% {
-    transform: translateY(-3px) rotate(-240deg);
-  }
-
-  78%,
-  100% {
-    transform: translateY(0) rotate(-360deg);
-  }
-}
-
-/* Zen: one long meditative cycle — a slow scale breath, then a single
-   deliberate snip on the exhale. Scale keeps it perfectly in place. */
-@keyframes chatWorkingClawZenBreath {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-
-  30% {
-    transform: scale(1.08);
-  }
-
-  55% {
-    transform: scale(1);
-  }
-}
-
-@keyframes chatWorkingClawZenSnip {
-  0%,
-  60% {
-    transform: rotate(-10deg);
-  }
-
-  70% {
-    transform: rotate(-24deg);
-  }
-
-  76% {
-    transform: rotate(2deg);
-  }
-
-  86%,
-  100% {
-    transform: rotate(-10deg);
-  }
-}
-
-/* Drummer: two-beat rock — the body tilts left then right and the jaw hits
-   on each tilt peak. Rotation only, no travel. */
-@keyframes chatWorkingClawDrumRock {
-  0%,
-  100% {
-    transform: rotate(0deg);
-  }
-
-  15% {
-    transform: rotate(-8deg);
-  }
-
-  30% {
-    transform: rotate(0deg);
-  }
-
-  55% {
-    transform: rotate(8deg);
-  }
-
-  70% {
-    transform: rotate(0deg);
-  }
-}
-
-@keyframes chatWorkingClawDrumHit {
-  0%,
-  100% {
-    transform: rotate(-10deg);
-  }
-
-  10% {
-    transform: rotate(-20deg);
-  }
-
-  15% {
-    transform: rotate(2deg);
-  }
-
-  25% {
-    transform: rotate(-10deg);
-  }
-
-  50% {
-    transform: rotate(-20deg);
-  }
-
-  55% {
-    transform: rotate(2deg);
-  }
-
-  65% {
-    transform: rotate(-10deg);
-  }
-}
-
-/* Peekaboo: long rest, duck down small with the jaw tucked, hold a beat,
-   then pop back up wide open. Vertical dip only — no lateral travel. */
-@keyframes chatWorkingClawPeekaboo {
-  0%,
-  55% {
-    transform: translateY(0) scale(1);
-  }
-
-  62%,
-  72% {
-    transform: translateY(5px) scale(0.72);
-  }
-
-  78% {
-    transform: translateY(-1.5px) scale(1.06);
-  }
-
-  84%,
-  100% {
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes chatWorkingClawPeekabooJaw {
-  0%,
-  55% {
-    transform: rotate(-10deg);
-  }
-
-  62%,
-  72% {
-    transform: rotate(-2deg);
-  }
-
-  78% {
-    transform: rotate(-28deg);
-  }
-
-  86%,
-  100% {
-    transform: rotate(-10deg);
-  }
-}
-
-/* Nodoff body: droop through 60%, jolt awake at 64%, then settle by 70%.
-   Translation stays first so the sleepy dip remains vertical. */
-@keyframes chatWorkingClawNodOff {
-  0%,
-  10% {
-    transform: translateY(0) rotate(0deg);
-  }
-
-  35% {
-    transform: translateY(1px) rotate(10deg);
-  }
-
-  55% {
-    transform: translateY(1.4px) rotate(14deg);
-  }
-
-  60% {
-    transform: translateY(1.5px) rotate(15deg);
-  }
-
-  64% {
-    transform: translateY(-0.5px) rotate(-3deg);
-  }
-
-  70%,
-  100% {
-    transform: translateY(0) rotate(0deg);
-  }
-}
-
-/* Nodoff jaw: slackens during the droop, then wakes for guilty snips at
-   74% and 84%. */
-@keyframes chatWorkingClawNodOffJaw {
-  0%,
-  10% {
-    transform: rotate(-10deg);
-  }
-
-  35% {
-    transform: rotate(-16deg);
-  }
-
-  60% {
-    transform: rotate(-21deg);
-  }
-
-  64% {
-    transform: rotate(-6deg);
-  }
-
-  70% {
-    transform: rotate(-24deg);
-  }
-
-  74% {
-    transform: rotate(4deg);
-  }
-
-  80% {
-    transform: rotate(-22deg);
-  }
-
-  84% {
-    transform: rotate(4deg);
-  }
-
-  90%,
-  100% {
-    transform: rotate(-10deg);
-  }
-}
-
-/* Curious body: tilt into the question at 40%, hold through 62%, then
-   spring past center at 70% before settling. */
-@keyframes chatWorkingClawCurious {
-  0%,
-  30% {
-    transform: rotate(0deg);
-  }
-
-  40%,
-  62% {
-    transform: rotate(-14deg);
-  }
-
-  70% {
-    transform: rotate(4deg);
-  }
-
-  76%,
-  100% {
-    transform: rotate(0deg);
-  }
-}
-
-/* Curious jaw: tuck at the 40-62% head tilt, then pop open on the 70%
-   overshoot before returning to rest. */
-@keyframes chatWorkingClawCuriousJaw {
-  0%,
-  30% {
-    transform: rotate(-10deg);
-  }
-
-  40%,
-  62% {
-    transform: rotate(-16deg);
-  }
-
-  70% {
-    transform: rotate(-6deg);
-  }
-
-  76%,
-  100% {
-    transform: rotate(-10deg);
-  }
-}
-
-/* Om nom body: three tiny forward lunges land at 36%, 46%, and 56%,
-   then the claw slides home by 64%. */
-@keyframes chatWorkingClawOmNom {
-  0%,
-  30% {
-    transform: translateX(0);
-  }
-
-  36% {
-    transform: translateX(2.5px);
-  }
-
-  40% {
-    transform: translateX(1px);
-  }
-
-  46% {
-    transform: translateX(2.5px);
-  }
-
-  50% {
-    transform: translateX(1px);
-  }
-
-  56% {
-    transform: translateX(2.5px);
-  }
-
-  64%,
-  100% {
-    transform: translateX(0);
-  }
-}
-
-/* Om nom jaw: wide wind-ups at 30%, 42%, and 52% snap into three fast
-   chomps at 36%, 46%, and 56%. */
-@keyframes chatWorkingClawOmNomJaw {
-  0%,
-  26% {
-    transform: rotate(-10deg);
-  }
-
-  30% {
-    transform: rotate(-30deg);
-  }
-
-  36% {
-    transform: rotate(8deg);
-  }
-
-  42% {
-    transform: rotate(-30deg);
-  }
-
-  46% {
-    transform: rotate(8deg);
-  }
-
-  52% {
-    transform: rotate(-30deg);
-  }
-
-  56% {
-    transform: rotate(8deg);
-  }
-
-  64%,
-  100% {
-    transform: rotate(-10deg);
-  }
-}
-
-/* Fakeout body: wind up at 10%, freeze through 55%, then recoil across
-   the triple-snip hits at 58%, 66%, and 74%. */
-@keyframes chatWorkingClawFakeOut {
-  0%,
-  6% {
-    transform: rotate(0deg);
-  }
-
-  10%,
-  55% {
-    transform: rotate(-4deg);
-  }
-
-  58% {
-    transform: rotate(3deg);
-  }
-
-  62% {
-    transform: rotate(-4deg);
-  }
-
-  66% {
-    transform: rotate(3deg);
-  }
-
-  70% {
-    transform: rotate(-4deg);
-  }
-
-  74% {
-    transform: rotate(3deg);
-  }
-
-  80%,
-  100% {
-    transform: rotate(0deg);
-  }
-}
-
-/* Fakeout jaw: hold the mid-open wind-up from 10-55%, then fire the
-   accelerated triple snip at 58%, 66%, and 74%. */
-@keyframes chatWorkingClawFakeOutJaw {
-  0%,
-  6% {
-    transform: rotate(-10deg);
-  }
-
-  10%,
-  55% {
-    transform: rotate(-26deg);
-  }
-
-  58% {
-    transform: rotate(4deg);
-  }
-
-  62% {
-    transform: rotate(-24deg);
-  }
-
-  66% {
-    transform: rotate(4deg);
-  }
-
-  70% {
-    transform: rotate(-22deg);
-  }
-
-  74% {
-    transform: rotate(4deg);
-  }
-
-  80%,
-  100% {
-    transform: rotate(-10deg);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-working-indicator {
-    animation: none;
-  }
-
-  /* Includes the bubble itself: the southpaw surprise animates the bubble,
-     not the svg, and must stay still under reduced motion too. */
-  .chat-reading-indicator,
-  .chat-reading-indicator svg,
-  .chat-reading-indicator svg .claw-icon__jaw {
-    animation: none;
-  }
-
-  .chat-reading-indicator::after {
-    content: none;
-  }
-}
-
 /* Post-turn running-tasks status row: once the turn settles while background
    tasks keep running, the claw stays visible next to a free composer — but
    parked, not shadowboxing. It rests nose-down (the combo's cross pose) with
    only a slow opacity breath; tabular digits keep the ticking elapsed label
    from nudging the row sideways. */
 .chat-tasks-status {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
   margin: 4px 0 2px;
+  min-height: 34px;
+  padding: 0 12px;
   color: var(--muted);
+  background: var(--chat-composer-surface, var(--card));
+  border: 1px solid
+    var(--chat-composer-hairline, color-mix(in srgb, var(--text-strong) 11%, transparent));
+  border-radius: var(--radius-full);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 8%),
+    0 6px 18px rgb(0 0 0 / 10%);
+}
+
+/* The recap is a quiet postscript under the reply, not a floating status pill.
+   This follows the shared tasks-status rule so its surface geometry cannot win
+   later in the cascade. */
+.chat-tasks-status.chat-turn-recap {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .chat-tasks-status__claw {
@@ -1981,34 +1181,55 @@
   color: var(--muted);
   font: inherit;
   cursor: var(--cursor-action);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
-  text-underline-offset: 2px;
+  text-decoration: none;
 }
 
 .chat-tasks-status__link:hover,
 .chat-tasks-status__link:focus-visible {
-  color: var(--accent);
-  text-decoration-color: currentColor;
+  color: var(--text);
 }
 
 /* Hover preview on the status row: the latest tasks in a read-only card. The
    tooltip body is content-sized (width: max-content up to --max-width), so a
    single task stays one compact line instead of a fixed-size panel. */
 openclaw-tooltip.chat-tasks-status__preview {
-  --openclaw-tooltip-max-width: min(360px, calc(100vw - 24px));
+  --openclaw-tooltip-max-width: min(352px, calc(100vw - 24px));
+  --openclaw-tooltip-background-color: var(--chat-composer-surface, var(--popover));
+  --openclaw-tooltip-border-color: color-mix(in srgb, var(--text-strong) 11%, transparent);
+  --openclaw-tooltip-border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  --openclaw-tooltip-padding: 11px;
+  --openclaw-tooltip-shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 12px 32px rgb(0 0 0 / 14%);
 }
 
 .chat-tasks-preview {
   display: flex;
+  width: min(330px, calc(100vw - 46px));
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.chat-tasks-preview__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: 1px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .chat-tasks-preview__row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 
 .chat-tasks-preview__title {
@@ -2017,8 +1238,8 @@ openclaw-tooltip.chat-tasks-status__preview {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text);
-  font-weight: 550;
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .chat-tasks-preview__meta {
@@ -2027,6 +1248,7 @@ openclaw-tooltip.chat-tasks-status__preview {
   align-items: baseline;
   gap: 5px;
   color: var(--muted);
+  font-size: inherit;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2149,7 +1371,6 @@ openclaw-tooltip.chat-tasks-status__preview {
 }
 
 @media (pointer: coarse) {
-  .chat-tool-msg-summary,
   .chat-activity-group__summary {
     padding-top: 8px;
     padding-bottom: 8px;
@@ -2160,19 +1381,88 @@ openclaw-tooltip.chat-tasks-status__preview {
   .chat-tool-msg-body {
     padding-left: 0;
   }
+}
 
-  .chat-json-content {
-    padding: 8px 10px;
-    max-height: 300px;
-  }
+.chat-tool-reviews {
+  display: grid;
+  gap: 4px;
+  margin: 4px 8px 8px 24px;
+}
+
+.chat-tool-review {
+  padding: 7px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--ok) 48%, var(--border));
+  background: linear-gradient(90deg, var(--ok-subtle), transparent 68%);
+}
+
+.chat-tool-review[data-review-status="denied"],
+.chat-tool-review[data-review-status="timed_out"],
+.chat-tool-review[data-review-status="aborted"] {
+  border-left-color: color-mix(in srgb, var(--danger) 48%, var(--border));
+  background: linear-gradient(90deg, var(--danger-subtle), transparent 68%);
+}
+
+.chat-tool-review[data-review-status="in_progress"] {
+  border-left-color: color-mix(in srgb, var(--warn) 48%, var(--border));
+  background: linear-gradient(90deg, var(--warn-subtle), transparent 68%);
+}
+
+.chat-tool-review__header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.chat-tool-review__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--ok);
+}
+
+.chat-tool-review[data-review-status="denied"] .chat-tool-review__icon,
+.chat-tool-review[data-review-status="timed_out"] .chat-tool-review__icon,
+.chat-tool-review[data-review-status="aborted"] .chat-tool-review__icon {
+  color: var(--danger);
+}
+
+.chat-tool-review[data-review-status="in_progress"] .chat-tool-review__icon {
+  color: var(--warn);
+}
+
+.chat-tool-review__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-tool-review__label {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.chat-tool-review__chip {
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.chat-tool-review__rationale {
+  margin: 4px 0 0 20px;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 560px) {
   .chat-tool-card__block-content {
     max-height: min(360px, 55vh);
-  }
-
-  .chat-json-content {
-    max-height: 200px;
   }
 }

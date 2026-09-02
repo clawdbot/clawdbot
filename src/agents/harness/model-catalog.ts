@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -10,23 +11,10 @@ import { DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { resolveModelRefFromString } from "../model-selection-shared.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
+import { collectPreparedModelRuntimeConfiguredRefs } from "../prepared-model-runtime.configured.js";
 import type { PreparedModelRuntimeInput } from "../prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../workspace.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
-
-function dedupeByKey(
-  entries: readonly ModelCatalogEntry[],
-  keyOf: (entry: ModelCatalogEntry) => string,
-): ModelCatalogEntry[] {
-  const merged = new Map<string, ModelCatalogEntry>();
-  for (const entry of entries) {
-    const key = keyOf(entry);
-    if (!merged.has(key)) {
-      merged.set(key, entry);
-    }
-  }
-  return [...merged.values()];
-}
 
 function normalizeRouteBaseUrl(value: string | undefined): string {
   if (!value) {
@@ -41,35 +29,79 @@ function normalizeRouteBaseUrl(value: string | undefined): string {
   }
 }
 
-function routeVariantKey(entry: ModelCatalogEntry): string {
-  return [
-    resolveModelCatalogIdentityKey(entry),
-    entry.api ?? "",
-    normalizeRouteBaseUrl(entry.baseUrl),
-  ].join("\0");
+function routeVariantKey(
+  entry: ModelCatalogEntry,
+  identityKey = resolveModelCatalogIdentityKey(entry),
+): string {
+  return [identityKey, entry.api ?? "", normalizeRouteBaseUrl(entry.baseUrl)].join("\0");
+}
+
+function mergeHarnessCompat(
+  observed: ModelCatalogEntry["compat"],
+  provider: ModelCatalogEntry["compat"],
+): ModelCatalogEntry["compat"] {
+  if (!observed && !provider) {
+    return undefined;
+  }
+  const compat = { ...provider, ...observed };
+  if (observed?.supportedReasoningEfforts?.length === 0) {
+    return { ...compat, supportsReasoningEffort: false, supportedReasoningEfforts: [] };
+  }
+  const efforts = [
+    ...new Set([
+      ...(provider?.supportedReasoningEfforts ?? []),
+      ...(observed?.supportedReasoningEfforts ?? []),
+    ]),
+  ];
+  return efforts.length > 0
+    ? { ...compat, supportsReasoningEffort: true, supportedReasoningEfforts: efforts }
+    : compat;
 }
 
 function enrichHarnessRows(
   rows: readonly ModelCatalogEntry[],
   snapshot: ModelCatalogSnapshot,
 ): ModelCatalogEntry[] {
-  const donors = new Map<string, ModelCatalogEntry>();
-  // First donor wins: live snapshot entries take precedence over static rows.
-  for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
-    const key = resolveModelCatalogIdentityKey(donor);
-    if (!donors.has(key)) {
-      donors.set(key, donor);
-    }
-  }
+  const routeDonors = new Map<string, ModelCatalogEntry>();
+  const identityDonors = new Map<string, ModelCatalogEntry>();
+  let donorsPrepared = false;
   return rows.map((entry) => {
-    const donor = donors.get(resolveModelCatalogIdentityKey(entry));
-    return donor
-      ? {
-          ...donor,
-          ...entry,
-          ...(donor.compat || entry.compat ? { compat: { ...donor.compat, ...entry.compat } } : {}),
+    // Native discovery owns these capabilities; host donors cannot invent its transport.
+    if (entry.nativeRuntime) {
+      return entry;
+    }
+    if (!donorsPrepared) {
+      // First donor wins: live snapshot entries take precedence over static rows.
+      for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
+        const identityKey = resolveModelCatalogIdentityKey(donor);
+        const routeKey = routeVariantKey(donor, identityKey);
+        if (!routeDonors.has(routeKey)) {
+          routeDonors.set(routeKey, donor);
         }
-      : entry;
+        if (!identityDonors.has(identityKey)) {
+          identityDonors.set(identityKey, donor);
+        }
+      }
+      donorsPrepared = true;
+    }
+    const identityKey = resolveModelCatalogIdentityKey(entry);
+    const donor =
+      routeDonors.get(routeVariantKey(entry, identityKey)) ??
+      (entry.api === undefined && entry.baseUrl === undefined
+        ? identityDonors.get(identityKey)
+        : undefined);
+    if (!donor) {
+      return entry;
+    }
+    const compat = mergeHarnessCompat(entry.compat, donor.compat);
+    const mergedParams =
+      donor.params || entry.params ? { ...donor.params, ...entry.params } : undefined;
+    return {
+      ...donor,
+      ...entry,
+      ...(mergedParams ? { params: mergedParams } : {}),
+      ...(compat ? { compat } : {}),
+    };
   });
 }
 
@@ -121,12 +153,30 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     return params.snapshot;
   }
   try {
+    const configuredModelRefs = collectPreparedModelRuntimeConfiguredRefs(
+      params.cfg,
+      params.agentId,
+    ).flatMap(({ value }) => {
+      const resolved = resolveModelRefFromString({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        raw: value,
+        defaultProvider: params.defaultProvider,
+        allowManifestNormalization: true,
+        allowPluginNormalization: true,
+      })?.ref;
+      return resolved ? [resolved] : [];
+    });
     const listedRows = await harness.loadModelCatalog({
       config: params.cfg,
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      configuredModelRefs,
     });
+    if (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry) {
+      return params.snapshot;
+    }
     if (listedRows.length === 0) {
       return params.snapshot;
     }

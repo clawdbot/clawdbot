@@ -277,7 +277,6 @@ async function resolvePickerLogicalCatalog(params: {
         })),
       });
       return resolveLogicalModelCatalogEntryState({
-        entry,
         evaluation,
         routePolicy: openAIModelCatalogRoutePolicy,
       });
@@ -1164,6 +1163,7 @@ export async function promptModelAllowlist(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   message?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -1173,7 +1173,7 @@ export async function promptModelAllowlist(params: {
   loadCatalog?: boolean;
   providerScopedCatalog?: boolean;
 }): Promise<PromptModelAllowlistResult> {
-  const cfg = params.config;
+  const cfg = resolveModelPickerConfig(params.config, params.agentId);
   const pickerAgentDir = resolvePickerAgentDir({
     cfg,
     ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),

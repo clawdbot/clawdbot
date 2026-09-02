@@ -14,8 +14,8 @@ import {
   hasLiveWorktreeRunLeaseRow,
   listRegistryWorktrees,
   releaseWorktreeRunLeaseRow,
-  type RunLeaseOwnerChecks,
 } from "./registry.js";
+import type { RunLeaseOwnerChecks } from "./run-lease-owner.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -248,7 +248,7 @@ function ensureExitCleanupRegistered(): void {
 
 export async function acquireWorktreeRunLease(
   id: string,
-  opts: { env?: NodeJS.ProcessEnv } = {},
+  opts: { env?: NodeJS.ProcessEnv; exclusive?: true } = {},
 ): Promise<WorktreeRunLease> {
   const env = opts.env ?? process.env;
   ensureExitCleanupRegistered();
@@ -264,6 +264,7 @@ export async function acquireWorktreeRunLease(
     startTime,
     now: Date.now(),
     checks: ownerChecks,
+    ...(opts.exclusive ? { exclusive: true } : {}),
   });
   const cleanup: LeaseCleanup = {
     env,
@@ -304,7 +305,7 @@ export async function acquireWorktreeRunLease(
 
 export function claimWorktreeRemoval(
   env: NodeJS.ProcessEnv,
-  params: { worktreeId: string; token: string; force: boolean },
+  params: { worktreeId: string; token: string },
 ): void {
   const pid = process.pid;
   claimWorktreeRemovalRow(env, {

@@ -4,6 +4,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import type { DockPanelPlacement } from "../dock-panel-layout.ts";
 import { icons } from "../icons.ts";
 import { renderPanelEmptyState } from "../panel-empty-state.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import {
   TerminalOpenTimeoutError,
   TerminalOpenUnusableSessionError,
@@ -97,10 +98,7 @@ export function renderTerminalPanelViewport({
       @drop=${uploadController.handleDrop}
     >
       ${connecting
-        ? html`<div class="tp-connecting" role="status">
-            <span class="tp-connecting__spinner" aria-hidden="true"></span>
-            <span>${t("terminal.connecting")}</span>
-          </div>`
+        ? renderPanelLoadingSkeleton("terminal", t("terminal.connecting"), false, true)
         : nothing}
       ${!activeId && !connecting && !error
         ? renderPanelEmptyState({

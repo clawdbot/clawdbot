@@ -42,6 +42,10 @@ function cloneWidget(widget: BoardWidget): BoardWidget {
     tabId: widget.tabId,
     ...(widget.title !== undefined ? { title: widget.title } : {}),
     contentKind: widget.contentKind,
+    ...(widget.contentOwner !== undefined ? { contentOwner: widget.contentOwner } : {}),
+    ...(widget.registeredContentKind !== undefined
+      ? { registeredContentKind: widget.registeredContentKind }
+      : {}),
     ...(widget.presentation !== undefined ? { presentation: widget.presentation } : {}),
     ...(widget.heightMode !== undefined ? { heightMode: widget.heightMode } : {}),
     ...(widget.pluginKind !== undefined ? { pluginKind: widget.pluginKind } : {}),
@@ -285,16 +289,19 @@ export function insertBoardWidget(
   placement: { tabId: string; after?: string; move?: boolean },
 ): BoardLayout {
   const next = cloneLayout(layout);
-  const existing = next.widgets.find((candidate) => candidate.name === widget.name);
+  const index = next.widgets.findIndex((candidate) => candidate.name === widget.name);
+  const existing = next.widgets[index];
+  // The producer fully materializes the replacement widget. Preserve position
+  // only because layout movement is explicit below; omitted optional metadata
+  // must not survive from the previous revision.
+  const inserted: BoardWidget = { ...widget, tabId: placement.tabId };
   if (existing) {
-    const position = existing.position;
-    Object.assign(existing, widget, { tabId: placement.tabId, position });
-    if (placement.move) {
-      moveWidget(next, existing, placement.tabId, undefined, placement.after);
-    }
+    inserted.position = existing.position;
+    next.widgets[index] = inserted;
   } else {
-    next.widgets.push({ ...widget, tabId: placement.tabId });
-    const inserted = requireWidget(next, widget.name);
+    next.widgets.push(inserted);
+  }
+  if (!existing || placement.move) {
     moveWidget(next, inserted, placement.tabId, undefined, placement.after);
   }
   return normalizeBoardLayout(next);

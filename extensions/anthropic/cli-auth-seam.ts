@@ -1,31 +1,70 @@
-/**
- * Claude CLI auth seam. Setup may prompt for keychain-backed credentials while
- * runtime paths stay non-interactive.
- */
-import { readClaudeCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import { spawnSync } from "node:child_process";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "openclaw/plugin-sdk/windows-spawn";
+import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 
-/** Read Claude CLI credentials for interactive setup paths. */
-export function readClaudeCliCredentialsForSetup() {
-  return readClaudeCliCredentialsCached();
-}
+const CLAUDE_CLI_AUTH_METHODS = [
+  "claude.ai",
+  "api_key",
+  "api_key_helper",
+  "oauth_token",
+  "third_party",
+  "none",
+] as const;
 
-/** Read Claude CLI credentials for setup checks that must not prompt. */
-export function readClaudeCliCredentialsForSetupNonInteractive() {
-  let unreadable = false;
-  const credential = readClaudeCliCredentialsCached({
-    allowKeychainPrompt: false,
-    tryKeychainWithoutPrompt: true,
-    ttlMs: 0,
-    onStoredCredentialUnreadable: () => {
-      unreadable = true;
-    },
-  });
-  return credential
-    ? ({ status: "available", credential } as const)
-    : ({ status: unreadable ? "unreadable" : "missing" } as const);
-}
+type ClaudeCliAuthStatus =
+  | {
+      status: "available";
+      authMethod?: (typeof CLAUDE_CLI_AUTH_METHODS)[number];
+      email?: string;
+    }
+  | { status: "missing" | "unreadable" };
 
-/** Read Claude CLI credentials for runtime without keychain prompts. */
-export function readClaudeCliCredentialsForRuntime() {
-  return readClaudeCliCredentialsCached({ allowKeychainPrompt: false });
+/** Ask Claude CLI whether its own login is usable without reading token material. */
+export function probeClaudeCliAuthStatus(params?: {
+  command?: string;
+  env?: NodeJS.ProcessEnv;
+}): ClaudeCliAuthStatus {
+  const env = { ...(params?.env ?? process.env) };
+  for (const name of CLAUDE_CLI_CLEAR_ENV) {
+    delete env[name];
+  }
+  try {
+    const program = resolveWindowsSpawnProgram({
+      command: params?.command ?? "claude",
+      env,
+      packageName: "@anthropic-ai/claude-code",
+    });
+    const invocation = materializeWindowsSpawnProgram(program, ["auth", "status", "--json"]);
+    const result = spawnSync(invocation.command, invocation.argv, {
+      encoding: "utf8",
+      env,
+      maxBuffer: 64 * 1024,
+      timeout: 3_000,
+      shell: invocation.shell,
+      windowsHide: invocation.windowsHide ?? true,
+    });
+    if (result.error || result.status === null) {
+      return { status: "unreadable" };
+    }
+    if (result.status !== 0) {
+      return { status: "missing" };
+    }
+    const parsed: unknown = JSON.parse(result.stdout);
+    if (!isRecord(parsed) || parsed.loggedIn !== true) {
+      return { status: "missing" };
+    }
+    const authMethod = CLAUDE_CLI_AUTH_METHODS.find((method) => method === parsed.authMethod);
+    const email = authMethod === "claude.ai" ? normalizeOptionalString(parsed.email) : undefined;
+    return {
+      status: "available",
+      ...(authMethod ? { authMethod } : {}),
+      ...(email && email.length <= 320 && !/[\r\n]/u.test(email) ? { email } : {}),
+    };
+  } catch {
+    return { status: "unreadable" };
+  }
 }

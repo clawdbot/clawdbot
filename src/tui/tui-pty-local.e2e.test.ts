@@ -11,13 +11,17 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
+import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { runExec } from "../process/exec.js";
+import { withEnv } from "../test-utils/env.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { sleep } from "../utils/sleep.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
@@ -57,6 +61,7 @@ type MockModelBehavior = {
 type MockModelRequest = {
   method: string;
   path: string;
+  authorization?: string;
   body: Record<string, unknown>;
 };
 
@@ -344,7 +349,12 @@ async function startRoutedMockModelServer(
         const body = await readJsonRequest(req);
         if (url.pathname === "/v1/responses" || url.pathname === "/responses") {
           const modelId = typeof body.model === "string" ? body.model : "";
-          const request = { method: req.method, path: url.pathname, body };
+          const request = {
+            method: req.method,
+            path: url.pathname,
+            authorization: req.headers.authorization,
+            body,
+          };
           const behavior = behaviors[modelId];
           if (!behavior) {
             rejectedRequests.push(request);
@@ -1111,6 +1121,23 @@ describe("TUI PTY real backends", () => {
   );
 
   it(
+    "prints local usage costs without submitting a model request",
+    async ({ onTestFinished }) => {
+      const fixture = await startLocalModeTui(onTestFinished);
+      try {
+        await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
+        await fixture.run.write("/usage cost\r", { delay: false });
+        await fixture.run.waitForOutput("Usage cost", LOCAL_OUTPUT_TIMEOUT_MS);
+        await fixture.run.waitForOutput("Last 30d", LOCAL_OUTPUT_TIMEOUT_MS);
+        expect(fixture.mockModel.requests()).toHaveLength(0);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "drives and steers the real local backend with a mocked model endpoint",
     async ({ onTestFinished }) => {
       const fixture = await startLocalModeTui(onTestFinished, {
@@ -1335,10 +1362,30 @@ describe("TUI PTY real backends", () => {
   );
 
   it(
-    "confirms and renders local shell output and environment through a real local PTY",
+    "confirms and renders local shell output, then extinguishes descendants before TUI exit",
     async ({ onTestFinished }) => {
       const fixture = await startLocalModeTui(onTestFinished);
+      const rootPath = path.join(fixture.stateDir, "tui-local-owned-root.cjs");
+      const pidPath = path.join(fixture.stateDir, "tui-local-owned-descendant.pid");
+      let descendantPid: number | undefined;
       try {
+        await writeFile(
+          rootPath,
+          `
+            const { spawn } = require("node:child_process");
+            const { writeFileSync } = require("node:fs");
+            const stdio = process.platform === "win32"
+              ? ["ignore", "ignore", "ignore"]
+              : ["ignore", "ignore", "ignore", 3];
+            const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+              stdio,
+              detached: process.platform === "win32",
+            });
+            child.unref();
+            writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));
+          `,
+          "utf8",
+        );
         await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write(
           "!node -e \"console.log('T06_STDOUT'); console.error('T06_STDERR'); console.log('T06_ENV='+process.env.OPENCLAW_SHELL); process.exitCode=7\"\r",
@@ -1355,9 +1402,17 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("[local] T06_ENV=tui-local");
         await fixture.run.waitForOutput("[local] exit 7");
 
+        const descendantCommandOffset = fixture.run.visibleOutput().length;
+        await fixture.run.write(`!node ${JSON.stringify(rootPath)}\r`);
+        await waitForOutputAfter(fixture.run, "[local] exit 0", descendantCommandOffset);
+        descendantPid = await waitForPidFile(pidPath, LOCAL_OUTPUT_TIMEOUT_MS);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        expect(isProcessAlive(descendantPid)).toBe(false);
       } finally {
+        killPidIfAlive(descendantPid);
         await fixture.cleanup();
       }
     },
@@ -1422,7 +1477,7 @@ describe("TUI PTY real backends", () => {
     "authenticates a manifest-discovered provider and resumes the unchanged local model",
     async ({ onTestFinished }) => {
       const pluginId = "t05-local-auth-fixture";
-      const providerId = "t05-local-auth-provider";
+      const providerId = "tui-pty-mock";
       const profileId = `${providerId}:default`;
       const sentinel = `t05-${randomUUID()}`;
       const expectedDigest = createHash("sha256").update(sentinel).digest("hex");
@@ -1540,7 +1595,13 @@ export default {
         const agentDir = path.join(fixture.stateDir, "agents", "main", "agent");
         const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
         expect(await stat(sqlitePath).then((entry) => entry.isFile())).toBe(true);
-        const store = loadPersistedAuthProfileStore(agentDir);
+        const store = withEnv({ OPENCLAW_STATE_DIR: fixture.stateDir }, () => {
+          reloadSharedAuthStoreOwnership();
+          return loadAuthProfileStoreForRuntime(agentDir, {
+            readOnly: true,
+            syncExternalCli: false,
+          });
+        });
         const profile = store?.profiles[profileId];
         expect(profile?.type === "api_key").toBe(true);
         expect(profile?.provider === providerId).toBe(true);
@@ -1561,6 +1622,7 @@ export default {
           onTimeout: () => new Error("post-auth prompt did not reach the mock provider"),
         });
         expect(fixture.mockModel.requests()[0]?.body.model).toBe("gpt-5.5");
+        expect(fixture.mockModel.requests()[0]?.authorization).toBe(`Bearer ${sentinel}`);
         await fixture.run.waitForOutput("LOCAL_AUTH_RESPONSE", LOCAL_OUTPUT_TIMEOUT_MS);
 
         await fixture.run.write("/exit\r", { delay: false });
@@ -1694,6 +1756,47 @@ export default {
       it(name, run, timeoutMs);
     });
   }
+
+  registerGatewayTest(
+    "routes usage cost through Gateway chat.send without patching or invoking the model",
+    async ({ onTestFinished }) => {
+      const shared = await requireSharedGatewayFixture();
+      const scenario = GATEWAY_SCENARIOS.command;
+      const sessionKey = `agent:${scenario.agentId}:tui-pty-usage-cost`;
+      await shared.controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
+      const initialModelRequests = shared.mockModel.requests().length;
+      const proxy = await startGatewayRpcDelayProxy(shared.gateway.url, []);
+      const cleanupProxy = registerIdempotentCleanup(
+        onTestFinished,
+        async () => await proxy.stop(),
+      );
+      const fixture = await startIsolatedGatewayPty({
+        gateway: shared.gateway,
+        registerCleanup: onTestFinished,
+        sessionKey,
+        url: proxy.url,
+      });
+      try {
+        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
+        const requestOffset = proxy.requests.length;
+        await fixture.run.write("/usage cost\r", { delay: false });
+        await fixture.run.waitForOutput("Last 30d", LOCAL_OUTPUT_TIMEOUT_MS);
+
+        const requests = proxy.requests.slice(requestOffset);
+        expect(requests.filter((request) => request.method === "chat.send")).toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ sessionKey, message: "/usage cost" }),
+          }),
+        ]);
+        expect(requests.some((request) => request.method === "sessions.patch")).toBe(false);
+        expect(shared.mockModel.requests()).toHaveLength(initialModelRequests);
+      } finally {
+        await fixture.cleanup();
+        await cleanupProxy();
+      }
+    },
+    LOCAL_TEST_TIMEOUT_MS,
+  );
 
   registerGatewayTest(
     "authenticates valid tokens and rejects invalid tokens through a real Gateway PTY",

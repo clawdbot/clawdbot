@@ -220,3 +220,44 @@ export function deleteExecApprovalsConfigRow(db: DatabaseSync): void {
       .where("config_key", "=", EXEC_APPROVALS_CONFIG_KEY),
   );
 }
+
+/** Called only inside the approval owner's winning resolution transaction. */
+export function mintMcpToolGrantLocked(
+  db: DatabaseSync,
+  grant: { agentId: string; server: string; tool: string },
+  nowMs: number,
+): void {
+  const row = readExecApprovalsConfigRow(db);
+  const current: ExecApprovalsFile | null = row
+    ? tryParsePersistedExecApprovals(row.raw_json)
+    : { version: 1 };
+  if (!current) {
+    throw new Error("Cannot save MCP tool grant: invalid exec approvals document");
+  }
+  const agent = current.agents?.[grant.agentId];
+  if (
+    agent?.mcpTools?.some((entry) => entry.server === grant.server && entry.tool === grant.tool)
+  ) {
+    return;
+  }
+  const next = {
+    ...current,
+    agents: {
+      ...current.agents,
+      [grant.agentId]: {
+        ...agent,
+        mcpTools: [
+          ...(agent?.mcpTools ?? []),
+          {
+            server: grant.server,
+            tool: grant.tool,
+            source: "allow-always" as const,
+            addedAt: nowMs,
+          },
+        ],
+      },
+    },
+  };
+  assertExecApprovalsMutationAllowed({ db, current, next });
+  writeExecApprovalsConfigRow({ db, file: next, now: nowMs });
+}

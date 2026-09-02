@@ -1,6 +1,5 @@
 /**
- * Canvas A2UI browser bootstrap that installs theme overrides and native bridge
- * helpers.
+ * Canvas A2UI browser bootstrap for sandboxed board documents.
  */
 import { v0_8 } from "@a2ui/lit";
 import { ContextProvider } from "@lit/context";
@@ -107,10 +106,6 @@ const statusShadow = isAndroid
   ? "0 2px 10px rgba(0, 0, 0, 0.18)"
   : "0 10px 24px rgba(0, 0, 0, 0.25)";
 const statusBlur = isAndroid ? "10px" : "14px";
-
-const postNativeMessage = (handler, payload) => {
-  Reflect.apply(handler.postMessage, handler, [payload]);
-};
 
 const createSecureActionId = () => {
   const crypto = globalThis.crypto;
@@ -527,38 +522,14 @@ class OpenClawA2UIHost extends LitElement {
       return;
     }
 
-    const handler =
-      globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction ??
-      globalThis.openclawCanvasA2UIAction;
-    if (handler?.postMessage) {
-      try {
-        // WebKit message handlers support structured objects; Android's JS interface expects strings.
-        if (handler === globalThis.openclawCanvasA2UIAction) {
-          postNativeMessage(handler, JSON.stringify({ userAction }));
-        } else {
-          postNativeMessage(handler, { userAction });
-        }
-      } catch (e) {
-        const msg = String(e?.message ?? e);
-        this.pendingAction = {
-          id: actionId,
-          name,
-          phase: "error",
-          startedAt: Date.now(),
-          error: msg,
-        };
-        this.#setToast(`Failed: ${msg}`, "error", 4500);
-      }
-    } else {
-      this.pendingAction = {
-        id: actionId,
-        name,
-        phase: "error",
-        startedAt: Date.now(),
-        error: "missing native bridge",
-      };
-      this.#setToast("Failed: missing native bridge", "error", 4500);
-    }
+    this.pendingAction = {
+      id: actionId,
+      name,
+      phase: "error",
+      startedAt: Date.now(),
+      error: "missing board action bridge",
+    };
+    this.#setToast("Failed: missing board action bridge", "error", 4500);
   }
 
   applyMessages(messages) {

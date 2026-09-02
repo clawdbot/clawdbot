@@ -2,16 +2,27 @@
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  readSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
+import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  projectAssistantDisplayContent,
+  retainAssistantModelContent,
+} from "../../shared/assistant-display-content.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 type GatewayInjectedAbortMeta = {
   aborted: true;
-  origin: "rpc" | "stop-command";
+  origin: "rpc" | "stop-command" | "placement-abandon";
   runId: string;
 };
 
@@ -20,6 +31,8 @@ type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  /** Set when the commit predicate declined the append; not an error. */
+  skipped?: boolean;
   error?: string;
 };
 
@@ -59,6 +72,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath?: string;
   storePath?: string;
   sessionId?: string;
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: SessionLifecycleRevisionExpectation;
   sessionKey?: string;
   agentId?: string;
   message: string;
@@ -91,22 +106,23 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     label: params.label,
     content: params.content,
   });
-  const rawDeliveryMessage: {
+  const displayMessage: {
     role: "assistant";
     content: Array<Record<string, unknown>>;
     openclawDelivery?: unknown;
   } = {
     role: "assistant",
-    content: [{ type: "text", text: params.message }],
+    content: resolvedContent.map((block) => Object.assign({}, block)),
   };
-  const rawDeliveryFacts = applyAssistantDeliveryDirectives(rawDeliveryMessage).openclawDelivery;
+  const preparedDisplayMessage = applyAssistantDeliveryDirectives(displayMessage);
+  const displayContent = preparedDisplayMessage.content;
+  const canonicalContent = retainAssistantModelContent(displayContent);
+  const rawDeliveryFacts = preparedDisplayMessage.openclawDelivery;
+  const abortRunId = params.abortMeta?.runId;
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
-    // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
-    content: resolvedContent.map((block) => Object.assign({}, block)) as unknown as Extract<
-      AppendMessageArg,
-      { role: "assistant" }
-    >["content"],
+    content: canonicalContent,
+    [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
     timestamp: now,
     // stopReason is a strict runner enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.
@@ -136,6 +152,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
       return { ok: false, error: "transcript identity not resolved" };
     }
+    let predicateDeclined = false;
     const turn = await persistSessionTranscriptTurn(
       {
         sessionKey: params.sessionKey ?? "",
@@ -145,27 +162,53 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         ...(params.agentId ? { agentId: params.agentId } : {}),
       },
       {
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
         updateMode: "inline",
+        ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
         touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
         ...(params.config ? { config: params.config } : {}),
         messages: [
           {
             message: messageBody,
             idempotencyLookup: "scan-assistant",
+            ...(params.abortMeta
+              ? {
+                  shouldAppendInTransaction: (latestAssistantMessage: unknown) => {
+                    const committedRunId = resolveTerminalAssistantTranscriptRunId(
+                      latestAssistantMessage,
+                      readSessionTranscriptRunId(latestAssistantMessage),
+                    );
+                    const committedText = extractAssistantPhaseText(latestAssistantMessage)?.trim();
+                    // The same run can commit before its live buffer clears. Recheck after
+                    // BEGIN IMMEDIATE so a direct writer cannot land between this fact and insert.
+                    predicateDeclined =
+                      committedRunId === abortRunId && committedText === params.message.trim();
+                    return !predicateDeclined;
+                  },
+                }
+              : {}),
             now,
             useRawWhenLinear: true,
           },
         ],
       },
     );
+    if (turn.rejectedReason) {
+      return { ok: false, error: turn.rejectedReason };
+    }
     const appended = turn.messages[0];
     if (!appended) {
+      // A declined predicate is a decision, not a failure: no row was wanted.
+      if (predicateDeclined) {
+        return { ok: true, skipped: true };
+      }
       return { ok: false, error: "gateway-injected assistant message was not appended" };
     }
     return {
       ok: true,
       messageId: appended.messageId,
-      message: appended.message as Record<string, unknown>,
+      message: projectAssistantDisplayContent(appended.message as Record<string, unknown>),
     };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };

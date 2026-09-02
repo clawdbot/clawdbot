@@ -276,12 +276,12 @@ async function writeDistInventory(): Promise<void> {
 
 export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   ensurePreparedArtifacts();
-  await writeDistInventory();
   runBuildSmoke();
   // The docs-map receipt serializes source-mutating pack lifecycles before the
   // changelog is touched, so concurrent packs cannot restore each other's files.
   await preparePackageDocsMap(process.cwd());
   try {
+    await writeDistInventory();
     await preparePackageManifest(process.cwd());
     await preparePackageChangelog(process.cwd(), {
       allowUnreleased: resolvePrepackAllowUnreleasedChangelog(env),
@@ -307,8 +307,11 @@ function prepackPreparationRestoreError(error: unknown, restoreError: unknown): 
 async function main(): Promise<void> {
   ensureSupportedSourcePack();
   const buildEnv = resolvePrepackBuildEnvironment();
-  runPnpm(["build"], buildEnv);
-  runPnpm(["ui:build"], buildEnv);
+  // Release preflight already built or restored clean outputs for its exact SHA.
+  // Preserve those artifacts while still running the complete packaging lifecycle.
+  if (buildEnv[PREPARED_RELEASE_ENV]?.trim() !== "1") {
+    runPnpm(["build:package"], buildEnv);
+  }
   await preparePrepackArtifacts(buildEnv);
 }
 

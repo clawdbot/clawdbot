@@ -431,7 +431,6 @@ const gatewayAuthCheck: HealthCheck = {
         cfg: ctx.cfg,
         env: process.env,
         unresolvedReasonStyle: "detailed",
-        envFallback: gatewayTokenRef ? "never" : "always",
       });
       if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
         return [];
@@ -540,7 +539,7 @@ const legacyStateCheck: HealthCheck & { readonly defaultEnabled: false } = {
   source: "doctor",
   defaultEnabled: false,
   async detect(ctx) {
-    const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
+    const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
     const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
     const detected = await detectLegacyStateMigrations({
@@ -1063,7 +1062,7 @@ function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
   return {
     id: GATEWAY_HEALTH_CHECK_ID,
     kind: "core",
-    description: "Gateway reachability is represented as structured findings.",
+    description: "Authenticated Gateway health and degraded secret owners are structured findings.",
     source: "doctor",
     defaultEnabled: false,
     async detect(ctx) {

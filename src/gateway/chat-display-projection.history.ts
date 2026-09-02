@@ -7,11 +7,13 @@ import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
+  isCompletionReportInputProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
@@ -25,82 +27,61 @@ import {
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
 
-function digestTtsSupplementText(text: string): string {
-  return createHash("sha256").update(text.trim()).digest("hex");
-}
+type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
 
 function readTtsSupplementMarker(
   message: Record<string, unknown>,
-): { textSha256?: string; spokenText?: string } | undefined {
-  const marker = message.openclawTtsSupplement;
-  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
+): TtsSupplementMarker | undefined {
+  const marker = readRecord(message.openclawTtsSupplement);
+  if (!marker) {
     return undefined;
   }
-  const entry = marker as { textSha256?: unknown; spokenText?: unknown };
   const textSha256 =
-    typeof entry.textSha256 === "string" && entry.textSha256.trim()
-      ? entry.textSha256.trim()
+    typeof marker.textSha256 === "string" && marker.textSha256.trim()
+      ? marker.textSha256.trim()
       : undefined;
   const spokenText =
-    typeof entry.spokenText === "string" && entry.spokenText.trim()
-      ? entry.spokenText.trim()
+    typeof marker.spokenText === "string" && marker.spokenText.trim()
+      ? marker.spokenText.trim()
       : undefined;
   return textSha256 || spokenText ? { textSha256, spokenText } : undefined;
 }
 
-function isAssistantTtsSupplementMessage(message: Record<string, unknown>): boolean {
-  if (asRoleContentMessage(message)?.role !== "assistant") {
-    return false;
-  }
-  if (!readTtsSupplementMarker(message)) {
-    return false;
+function readAssistantTtsSupplementMarker(
+  message: Record<string, unknown>,
+): TtsSupplementMarker | undefined {
+  const marker = readTtsSupplementMarker(message);
+  if (!marker || asRoleContentMessage(message)?.role !== "assistant") {
+    return undefined;
   }
   const content = message.content;
   if (!Array.isArray(content)) {
-    return false;
+    return undefined;
   }
   let hasSupplementBlock = false;
   for (const block of content) {
-    if (!block || typeof block !== "object") {
+    const record = readRecord(block);
+    if (!record) {
       continue;
     }
-    const type = (block as { type?: unknown }).type;
-    if (type !== "text") {
+    if (record.type !== "text") {
       hasSupplementBlock = true;
       continue;
     }
-    const text =
-      typeof (block as { text?: unknown }).text === "string"
-        ? (block as { text: string }).text.trim()
-        : "";
+    const text = typeof record.text === "string" ? record.text.trim() : "";
     if (text && text !== "Audio reply") {
-      return false;
+      return undefined;
     }
   }
-  return hasSupplementBlock;
+  return hasSupplementBlock ? marker : undefined;
 }
 
-function ttsSupplementMatchesAssistant(
-  marker: { textSha256?: string; spokenText?: string },
-  message: Record<string, unknown>,
-): boolean {
-  if (asRoleContentMessage(message)?.role !== "assistant") {
-    return false;
-  }
-  if (isProjectedSessionsSendForwardedMessage(message)) {
-    return false;
-  }
-  if (readTtsSupplementMarker(message)) {
-    return false;
-  }
-  const text = extractProjectedText(message.content ?? message.text).trim();
-  if (!text) {
-    return false;
-  }
-  if (marker.textSha256 && digestTtsSupplementText(text) === marker.textSha256) {
-    return true;
-  }
-  return Boolean(marker.spokenText && text === marker.spokenText);
+function readTtsSupplementTargetText(message: Record<string, unknown>): string {
+  return asRoleContentMessage(message)?.role === "assistant" &&
+    !isProjectedSessionsSendForwardedMessage(message) &&
+    !readTtsSupplementMarker(message)
+    ? extractProjectedText(message.content ?? message.text).trim()
+    : "";
 }
 
 function mergeTtsSupplementContent(
@@ -108,12 +89,10 @@ function mergeTtsSupplementContent(
   supplement: Record<string, unknown>,
 ): Record<string, unknown> {
   const supplementBlocks = Array.isArray(supplement.content)
-    ? supplement.content.filter(
-        (block) =>
-          Boolean(block) &&
-          typeof block === "object" &&
-          (block as { type?: unknown }).type !== "text",
-      )
+    ? supplement.content.filter((block) => {
+        const record = readRecord(block);
+        return record !== undefined && record.type !== "text";
+      })
     : [];
   if (supplementBlocks.length === 0) {
     return target;
@@ -132,18 +111,30 @@ function mergeTtsSupplementContent(
 export function mergeTtsSupplementMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  if (!messages.some(isAssistantTtsSupplementMessage)) {
+  if (!messages.some(readAssistantTtsSupplementMarker)) {
     return messages;
   }
+  const targetTexts: Array<string | undefined> = [];
+  const targetHashes: Array<string | undefined> = [];
   const merged: Array<Record<string, unknown>> = [];
   let changed = false;
   for (const message of messages) {
-    const marker = readTtsSupplementMarker(message);
-    if (marker && isAssistantTtsSupplementMessage(message)) {
+    const marker = readAssistantTtsSupplementMarker(message);
+    if (marker) {
       let targetIndex = -1;
       for (let i = merged.length - 1; i >= 0; i--) {
         const candidate = merged[i];
-        if (candidate && ttsSupplementMatchesAssistant(marker, candidate)) {
+        if (!candidate) {
+          continue;
+        }
+        const text = (targetTexts[i] ??= readTtsSupplementTargetText(candidate));
+        if (
+          text &&
+          ((marker.textSha256 &&
+            (targetHashes[i] ??= createHash("sha256").update(text).digest("hex")) ===
+              marker.textSha256) ||
+            (marker.spokenText && text === marker.spokenText))
+        ) {
           targetIndex = i;
           break;
         }
@@ -153,6 +144,9 @@ export function mergeTtsSupplementMessages(
           expectDefined(merged[targetIndex], "merged entry at target index"),
           message,
         );
+        // Appended media can carry text. Only this replaced position loses its
+        // prepared facts; other positions still refer to their original messages.
+        targetTexts[targetIndex] = targetHashes[targetIndex] = undefined;
         changed = true;
         continue;
       }
@@ -240,16 +234,22 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
 }
 
-function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
+function shouldHideProjectedHistoryMessage(
+  message: Record<string, unknown>,
+  roleContent: RoleContentMessage | null,
+  heartbeatUser: boolean,
+): boolean {
   if (isDisplayHiddenProjectedMessage(message)) {
     return true;
   }
   if (isProjectedSessionsSendForwardedMessage(message)) {
     return false;
   }
-  const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;
+  }
+  if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
+    return true;
   }
   if (roleContent.role === "user" && isSubagentAnnounceInterSessionUserMessage(message)) {
     return true;
@@ -264,10 +264,7 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return false;
   }
-  if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {
-    return true;
-  }
-  return isHeartbeatOkResponse(roleContent);
+  return heartbeatUser || isHeartbeatOkResponse(roleContent);
 }
 
 /** Identifies the hidden native input that starts a heartbeat-driven turn. */
@@ -365,10 +362,10 @@ function isDuplicateChannelFinalDeliveryMirror(
 }
 
 export function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
-  return messages.filter(
-    (message): message is Record<string, unknown> =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
-  );
+  return messages.flatMap((message) => {
+    const record = readRecord(message);
+    return record ? [projectAssistantDisplayContent(record)] : [];
+  });
 }
 
 export function filterVisibleProjectedHistoryMessages(
@@ -390,13 +387,14 @@ export function filterVisibleProjectedHistoryMessages(
       continue;
     }
     const currentRoleContent = asRoleContentMessage(current);
-    const next = messages[i + 1];
+    const heartbeatUser = Boolean(
+      currentRoleContent && isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT),
+    );
+    const next = heartbeatUser ? messages[i + 1] : undefined;
     const nextRoleContent = next ? asRoleContentMessage(next) : null;
     if (
-      currentRoleContent &&
       next &&
       nextRoleContent &&
-      isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
       isHeartbeatOkResponse(nextRoleContent) &&
       !isProjectedSessionsSendForwardedMessage(next)
     ) {
@@ -405,13 +403,13 @@ export function filterVisibleProjectedHistoryMessages(
       i++;
       continue;
     }
-    if (shouldHideProjectedHistoryMessage(current)) {
+    if (shouldHideProjectedHistoryMessage(current, currentRoleContent, heartbeatUser)) {
       changed = true;
-      pendingTurnBoundary ||= isHeartbeatHistoryTurnBoundaryMessage(current);
+      pendingTurnBoundary ||= heartbeatUser && !isSessionsSendInterSessionUserMessage(current);
       continue;
     }
     if (
-      isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1)) ||
+      isDuplicateAcpGatewayInjectedMessage(current, messages[i - 1]) ||
       isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
     ) {
       changed = true;
@@ -463,13 +461,17 @@ function extractPromptPrefixField(text: string, field: string): string | undefin
   return normalizeOptionalString(match?.[1]);
 }
 
-function resolveSessionsSendForwardedSenderLabel(message: Record<string, unknown>): string {
+function resolveSessionsSendForwardedSenderSession(
+  message: Record<string, unknown>,
+): { sessionKey?: string; agentId?: string } | undefined {
   const provenance = normalizeInputProvenance(message.provenance);
   const text = extractProjectedText(message.content ?? message.text);
   const sourceSessionKey =
     provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
   const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
-  return agentId ? `Forwarded from ${agentId}` : "Forwarded agent message";
+  return sourceSessionKey
+    ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}) }
+    : undefined;
 }
 
 export function projectSessionsSendInterSessionMessages(
@@ -481,10 +483,14 @@ export function projectSessionsSendInterSessionMessages(
       return message;
     }
     changed = true;
+    const senderSession = resolveSessionsSendForwardedSenderSession(message);
     const next: Record<string, unknown> = {
       ...message,
       role: "assistant",
-      senderLabel: resolveSessionsSendForwardedSenderLabel(message),
+      senderLabel: senderSession?.agentId
+        ? `Forwarded from ${senderSession.agentId}`
+        : "Forwarded agent message",
+      ...(senderSession ? { senderSession } : {}),
     };
     if ("content" in next) {
       next.content = stripInterSessionPromptPrefixFromContent(next.content);

@@ -14,33 +14,19 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
 import {
-  completeDeferredSessionMcpRuntimeRetirement,
   disposeAllSessionMcpRuntimes,
-  getAdvertisedScopedMcpCatalog,
-  getOrCreateRequesterScopedMcpRuntime,
-  getOrCreateSessionMcpRuntime,
   getSessionMcpRuntimeManagerForTesting,
-  peekSessionMcpRuntime,
-  rememberAdvertisedScopedMcpCatalog,
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-manager-api.js";
-import {
-  createSessionMcpRuntimeManager,
-  setDefaultCreateSessionMcpRuntime,
-} from "./agent-bundle-mcp-manager.js";
+import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
 import { assignSafeServerNames, sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
-import {
-  loadSessionMcpConfig,
-  resolveSessionMcpConfigSummary,
-} from "./agent-bundle-mcp-runtime-config.js";
-import { resolveSessionMcpRuntimeIdleTtlMs } from "./agent-bundle-mcp-runtime-shared.js";
+import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import type {
   McpCatalogTool,
   McpRequestOptions,
@@ -60,7 +46,7 @@ import {
 } from "./mcp-client-lifecycle.js";
 import {
   normalizeMcpCodexToolAnnotations,
-  resolveMcpCodexToolApprovalMode,
+  resolveProjectedMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
 import {
   applyMcpConnectionOverride,
@@ -71,7 +57,7 @@ import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
-import { createMcpToolCatalogMetadata, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
+import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type BundleMcpSession = {
@@ -128,9 +114,8 @@ async function listAllTools(
   client: Client,
   timeoutMs: number,
   signal: AbortSignal,
-  schemaValidator = createMcpJsonSchemaValidator(),
-) {
-  const tools = await collectMcpPaginatedItems({
+): Promise<Tool[]> {
+  return await collectMcpPaginatedItems({
     label: "MCP tool listing",
     itemLabel: "tools",
     timeoutMs,
@@ -161,11 +146,6 @@ async function listAllTools(
       }
     },
   });
-  const metadata = createMcpToolCatalogMetadata(tools, schemaValidator);
-  return {
-    tools: tools.filter((tool) => !metadata.isRequiredTaskTool(tool.name)),
-    metadata,
-  };
 }
 
 function isMcpMethodNotFoundError(error: unknown): boolean {
@@ -345,7 +325,6 @@ export function createSessionMcpRuntime(params: {
       ].toSorted((left, right) => left.serverName.localeCompare(right.serverName)),
     };
     catalogRetryAfterMs = Date.now();
-    catalogInFlight = undefined;
   };
   const catalogRetryIsDue = (): boolean =>
     catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
@@ -589,6 +568,9 @@ export function createSessionMcpRuntime(params: {
       const tools: McpCatalogTool[] = (retryBaseCatalog?.tools ?? []).filter(
         (tool) => !retryServerNames?.has(tool.serverName),
       );
+      const policyTools: McpCatalogTool[] = (retryBaseCatalog?.policyTools ?? []).filter(
+        (tool) => !retryServerNames?.has(tool.serverName),
+      );
       const sessionDeniedTools: McpCatalogTool[] = (
         retryBaseCatalog?.sessionDeniedTools ?? []
       ).filter((tool) => !retryServerNames?.has(tool.serverName));
@@ -658,6 +640,7 @@ export function createSessionMcpRuntime(params: {
           serverName: string;
           serverEntry: McpServerCatalog | null;
           toolEntries: McpCatalogTool[];
+          policyToolEntries: McpCatalogTool[];
           diagnostics: McpToolCatalogDiagnostic[];
         };
 
@@ -752,14 +735,11 @@ export function createSessionMcpRuntime(params: {
                 );
                 let listedTools: ListedTool[];
                 try {
-                  const listed = await listAllTools(
+                  listedTools = await listAllTools(
                     session.client,
                     getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
                     lifecycleAbortController.signal,
-                    schemaValidator,
                   );
-                  listedTools = listed.tools;
-                  session.toolMetadata = listed.metadata;
                 } catch (error) {
                   if (
                     !capabilities.tools &&
@@ -779,13 +759,18 @@ export function createSessionMcpRuntime(params: {
                 const deniedToolNames = new Set(
                   denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
                 );
-                const policyEligibleTools = listedTools.filter((tool) =>
-                  isMcpToolAllowed(toolFilter, tool.name.trim()),
+                const normalizedTools = normalizeMcpToolCatalog(
+                  listedTools,
+                  schemaValidator,
+                  (toolName) => {
+                    if (!isMcpToolAllowed(toolFilter, toolName)) {
+                      return "exclude";
+                    }
+                    return deniedToolNames.has(toolName) ? "denied" : "include";
+                  },
                 );
-                const exposedTools = policyEligibleTools.filter((tool) => {
-                  const toolName = tool.name.trim();
-                  return !deniedToolNames.has(toolName);
-                });
+                session.toolMetadata = normalizedTools.metadata;
+                const exposedTools = normalizedTools.tools;
                 const serverEntry: McpServerCatalog = {
                   serverName,
                   safeServerName,
@@ -809,14 +794,21 @@ export function createSessionMcpRuntime(params: {
                   ...(deniedToolNames.size > 0
                     ? { deniedToolNames: [...deniedToolNames].toSorted() }
                     : {}),
-                  codexApprovalMode: resolveMcpCodexToolApprovalMode(serverName, rawServer),
+                  codexApprovalMode: resolveProjectedMcpCodexToolApprovalMode(
+                    serverName,
+                    rawServer,
+                  ),
                 };
                 const toolEntries: McpCatalogTool[] = [];
-                for (const tool of policyEligibleTools) {
-                  const toolName = tool.name.trim();
-                  if (!toolName) {
-                    continue;
-                  }
+                const policyToolEntries: McpCatalogTool[] = [];
+                for (const [tool, excludedFromOpenClawCatalog, deniedBySession] of [
+                  ...normalizedTools.tools.map((entry) => [entry, false, false] as const),
+                  ...normalizedTools.deniedTools.map((entry) => [entry, false, true] as const),
+                  ...normalizedTools.excludedTools.map(
+                    (entry) => [entry, true, deniedToolNames.has(entry.name)] as const,
+                  ),
+                ]) {
+                  const toolName = tool.name;
                   const { _meta: metadata } = tool;
                   const uiMeta =
                     metadata?.ui && typeof metadata.ui === "object" && !Array.isArray(metadata.ui)
@@ -828,7 +820,7 @@ export function createSessionMcpRuntime(params: {
                       ? rawResourceUri
                       : undefined;
                   const uiVisibility = normalizeToolUiVisibility(uiMeta?.visibility);
-                  toolEntries.push({
+                  const entry: McpCatalogTool = {
                     serverName,
                     safeServerName,
                     toolName,
@@ -838,14 +830,22 @@ export function createSessionMcpRuntime(params: {
                     fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
-                    ...(deniedToolNames.has(toolName) ? { deniedBySession: true } : {}),
+                    ...(excludedFromOpenClawCatalog
+                      ? { excludedFromOpenClawCatalog: true as const }
+                      : {}),
+                    ...(deniedBySession ? { deniedBySession: true } : {}),
                     codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
-                  });
+                  };
+                  policyToolEntries.push(entry);
+                  if (!entry.excludedFromOpenClawCatalog) {
+                    toolEntries.push(entry);
+                  }
                 }
                 return {
                   serverName,
                   serverEntry,
                   toolEntries,
+                  policyToolEntries,
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
@@ -878,6 +878,7 @@ export function createSessionMcpRuntime(params: {
                   serverName,
                   serverEntry: null,
                   toolEntries: [],
+                  policyToolEntries: [],
                   diagnostics: diags,
                 } as ServerResult;
               }
@@ -896,7 +897,7 @@ export function createSessionMcpRuntime(params: {
           if (!result) {
             continue;
           }
-          const { serverEntry, toolEntries, diagnostics: serverDiags } = result;
+          const { serverEntry, toolEntries, policyToolEntries, diagnostics: serverDiags } = result;
           if (serverEntry) {
             servers[result.serverName] = serverEntry;
           }
@@ -907,6 +908,7 @@ export function createSessionMcpRuntime(params: {
               tools.push(tool);
             }
           }
+          policyTools.push(...policyToolEntries);
           diagnostics.push(...serverDiags);
         }
 
@@ -916,6 +918,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          ...(policyTools.length > 0 ? { policyTools } : {}),
           ...(sessionDeniedTools.length > 0 ? { sessionDeniedTools } : {}),
           ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
@@ -972,7 +975,9 @@ export function createSessionMcpRuntime(params: {
     return staleCatalog;
   };
   const getActiveSession = async (serverName: string) => {
-    await getCatalog();
+    const signal = getSessionMcpRequestSignal();
+    signal?.throwIfAborted();
+    await racePromiseWithAbortSignal(getCatalog(), signal);
     return requireConnectedSession(serverName);
   };
 
@@ -1020,6 +1025,7 @@ export function createSessionMcpRuntime(params: {
     },
     async callTool(serverName, toolName, input) {
       const session = await getActiveSession(serverName);
+      const validateResult = session.toolMetadata?.validatorForCall(toolName);
       const result = (await runGuardedMcpRequest(serverName, session, (signal) =>
         session.client.callTool(
           { name: toolName, arguments: isRecord(input) ? input : {} },
@@ -1027,7 +1033,7 @@ export function createSessionMcpRuntime(params: {
           { timeout: session.requestTimeoutMs, signal },
         ),
       )) as CallToolResult;
-      session.toolMetadata?.validateResult(toolName, result);
+      validateResult?.(result);
       return result;
     },
     async listTools(serverName, requestParams) {
@@ -1100,23 +1106,6 @@ export function createSessionMcpRuntime(params: {
   return runtime;
 }
 
-setDefaultCreateSessionMcpRuntime(createSessionMcpRuntime);
-
-export {
-  completeDeferredSessionMcpRuntimeRetirement,
-  disposeAllSessionMcpRuntimes,
-  getAdvertisedScopedMcpCatalog,
-  getOrCreateRequesterScopedMcpRuntime,
-  getOrCreateSessionMcpRuntime,
-  peekSessionMcpRuntime,
-  rememberAdvertisedScopedMcpCatalog,
-  resolveSessionMcpConfigSummary,
-  retireSessionMcpRuntime,
-  retireSessionMcpRuntimeForSessionKey,
-};
-export { createSessionMcpRuntimeManager };
-export { mergeMcpToolCatalogs };
-
 export const testing = {
   buildMcpClientCapabilities,
   createSessionMcpRuntimeManager,
@@ -1145,7 +1134,6 @@ export const testing = {
   },
   setBundleMcpCatalogListTimeoutMsForTest,
   setBundleMcpDisposeTimeoutMsForTest,
-  resolveSessionMcpRuntimeIdleTtlMs,
   mergeMcpToolCatalogs,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

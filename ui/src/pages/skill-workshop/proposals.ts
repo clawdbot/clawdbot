@@ -1,6 +1,8 @@
 // Control UI controller manages skill workshop gateway state.
+import { readSkillProposalRevisionChangedError } from "@openclaw/gateway-protocol";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
+import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -13,6 +15,7 @@ import {
   findSkillWorkshopAppliedPredecessor,
   type SkillWorkshopAction,
   type SkillWorkshopProposal,
+  type SkillWorkshopProposalDecision,
   type SkillWorkshopProposalStatus,
 } from "../../lib/skill-workshop/index.ts";
 import {
@@ -106,6 +109,7 @@ function showActionNotice(
   state: SkillWorkshopState,
   proposal: SkillWorkshopProposal | undefined,
   label: string,
+  options?: { persistent?: boolean },
 ): void {
   if (!proposal) {
     return;
@@ -116,6 +120,9 @@ function showActionNotice(
     label,
     slug: proposal.slug || proposal.name,
   };
+  if (options?.persistent) {
+    return;
+  }
   state.skillWorkshopActionNoticeTimer = globalThis.setTimeout(() => {
     if (state.skillWorkshopActionNotice?.key === proposal.key) {
       state.skillWorkshopActionNotice = null;
@@ -359,12 +366,26 @@ async function refreshAfterMutation(
   await loadSkillWorkshopProposalDetail(state, context, proposalId, { force: true });
 }
 
+function markSkillWorkshopRevisionChanged(
+  state: SkillWorkshopState,
+  proposalId: string,
+  fallback?: SkillWorkshopProposal,
+): void {
+  showActionNotice(
+    state,
+    state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId) ?? fallback,
+    t("skillWorkshop.notices.proposalChanged"),
+    { persistent: true },
+  );
+}
+
 export async function runSkillWorkshopLifecycleAction(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
   action: Extract<SkillWorkshopAction, "apply" | "reject">,
-  proposalId: string,
+  decision: SkillWorkshopProposalDecision,
 ): Promise<void> {
+  const { proposalId, expectedRevisionHash } = decision;
   const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
   if (!canCallGatewayMethod(context.gateway.snapshot, method, "operator.admin")) {
     return;
@@ -375,11 +396,21 @@ export async function runSkillWorkshopLifecycleAction(
     return;
   }
   const previous = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
+  if (!expectedRevisionHash) {
+    clearActionNoticeTimer(state);
+    state.skillWorkshopActionNotice = null;
+    state.skillWorkshopError = t("skillWorkshop.evaluation.errors.revisionHashUnavailable");
+    return;
+  }
   state.skillWorkshopActionBusy = { key: proposalId, action };
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    const requestParams = { ...loadedSkillWorkshopAgentParams(state, context), proposalId };
+    const requestParams = {
+      ...loadedSkillWorkshopAgentParams(state, context),
+      proposalId,
+      expectedRevisionHash,
+    };
     await client.request(method, requestParams);
     await refreshAfterMutation(state, context, proposalId);
     const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
@@ -389,7 +420,12 @@ export async function runSkillWorkshopLifecycleAction(
       t(action === "apply" ? "skillWorkshop.notices.applied" : "skillWorkshop.notices.rejected"),
     );
   } catch (err) {
-    state.skillWorkshopError = formatUiError(err);
+    if (readSkillProposalRevisionChangedError(err)) {
+      await refreshAfterMutation(state, context, proposalId);
+      markSkillWorkshopRevisionChanged(state, proposalId, previous);
+    } else {
+      state.skillWorkshopError = formatUiError(err);
+    }
   } finally {
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&
@@ -485,9 +521,10 @@ export async function requestSkillWorkshopRevision(
     instructions: string,
     proposal: SkillWorkshopProposal,
     agentId: string,
-  ) => Promise<void>,
+    expectedRevisionHash?: string,
+  ) => Promise<SkillWorkshopRevisionAdmissionOutcome>,
   isCurrent: () => boolean = () => true,
-): Promise<boolean> {
+): Promise<SkillWorkshopRevisionAdmissionOutcome | null> {
   if (
     !canCallGatewayMethod(
       context.gateway.snapshot,
@@ -495,15 +532,15 @@ export async function requestSkillWorkshopRevision(
       "operator.admin",
     )
   ) {
-    return false;
+    return null;
   }
   if (state.skillWorkshopActionBusy) {
-    return false;
+    return null;
   }
   const proposal = state.skillWorkshopProposals.find((item) => item.key === proposalId);
   const instructions = state.skillWorkshopRevisionDraft.trim();
   if (!proposal || !instructions) {
-    return false;
+    return null;
   }
   const proposalAgentId = loadedSkillWorkshopAgentParams(state, context).agentId;
   if (state.skillWorkshopAgentId === null) {
@@ -513,7 +550,6 @@ export async function requestSkillWorkshopRevision(
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    await loadSkillWorkshopProposalDetail(state, context, proposalId);
     if (
       !isCurrent() ||
       state.skillWorkshopAgentId !== proposalAgentId ||
@@ -523,18 +559,47 @@ export async function requestSkillWorkshopRevision(
         "operator.admin",
       )
     ) {
-      return false;
+      return null;
     }
     const currentProposal =
       state.skillWorkshopProposals.find((item) => item.key === proposalId) ?? proposal;
-    await sendRevisionRequest(instructions, currentProposal, proposalAgentId);
+    const outcome = await sendRevisionRequest(
+      instructions,
+      currentProposal,
+      proposalAgentId,
+      currentProposal.revisionHash ?? undefined,
+    );
+    if (outcome.status === "revision-changed") {
+      if (isCurrent() && state.skillWorkshopAgentId === proposalAgentId) {
+        await refreshAfterMutation(state, context, proposalId);
+        state.skillWorkshopRevisionKey = null;
+        state.skillWorkshopRevisionDraft = "";
+        markSkillWorkshopRevisionChanged(state, proposalId, proposal);
+      }
+      return outcome;
+    }
+    if (outcome.status === "retryable-failed") {
+      if (isCurrent() && state.skillWorkshopAgentId === proposalAgentId) {
+        state.skillWorkshopError = t("skillWorkshop.revision.notAdmitted", {
+          error: outcome.error,
+        });
+      }
+      return outcome;
+    }
+    if (!isCurrent() || state.skillWorkshopAgentId !== proposalAgentId) {
+      return outcome;
+    }
     state.skillWorkshopRevisionKey = null;
     state.skillWorkshopRevisionDraft = "";
     showActionNotice(state, proposal, t("skillWorkshop.notices.revisionRequested"));
-    return true;
+    return outcome;
   } catch (err) {
-    state.skillWorkshopError = formatUiError(err);
-    return false;
+    if (isCurrent()) {
+      state.skillWorkshopError = t("skillWorkshop.revision.notAdmitted", {
+        error: formatUiError(err),
+      });
+    }
+    return null;
   } finally {
     if (
       state.skillWorkshopActionBusy?.key === proposalId &&

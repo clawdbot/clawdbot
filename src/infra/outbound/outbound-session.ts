@@ -11,8 +11,11 @@ import {
   resolveSessionStorePathCore,
   updateSessionLastRoute,
 } from "../../config/sessions/inbound.runtime.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentRoute, type RoutePeer } from "../../routing/resolve-route.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
@@ -239,8 +242,12 @@ export async function resolveOutboundSessionRoute(
     ? (params.cfg.session?.dmScope ?? "main")
     : (params.cfg.session?.groupScope ?? "per-group");
   const bindingScope = isDirect ? bindingRoute.dmScope : bindingRoute.groupScope;
-  return bindingScope !== globalScope &&
-    normalizeAgentId(bindingRoute.agentId) === normalizeAgentId(params.agentId)
+  if (normalizeAgentId(bindingRoute.agentId) !== normalizeAgentId(params.agentId)) {
+    // Another agent owns the canonical inbound session. Keep the transport
+    // route, but never authorize this agent-local candidate as exact.
+    return { ...route, recipientSessionExact: false };
+  }
+  return bindingScope !== globalScope
     ? rebaseOutboundSessionRoute(route, bindingRoute.sessionKey)
     : route;
 }
@@ -250,7 +257,26 @@ type OutboundSessionEntryParams = {
   channel: ChannelId;
   accountId?: string | null;
   route: OutboundSessionRoute;
+  creation?: MsgContext["SessionCreation"];
+  sourceSessionKey?: string;
+  /** Revalidates caller-owned route authority at the final persistence boundary. */
+  assertCommitAllowed?: () => void;
 };
+
+function resolveOutboundSessionCreation(params: OutboundSessionEntryParams) {
+  if (params.creation || !params.sourceSessionKey) {
+    return params.creation;
+  }
+  const source = loadSessionEntryReadOnly({
+    sessionKey: params.sourceSessionKey,
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+      agentId: resolveAgentIdFromSessionKey(params.sourceSessionKey),
+    }),
+  });
+  return source?.sandbox === "required"
+    ? { via: source.createdVia ?? "channel", ...inheritSessionCreationPolicy(source) }
+    : undefined;
+}
 
 async function persistOutboundSessionEntry(
   params: OutboundSessionEntryParams,
@@ -271,6 +297,7 @@ async function persistOutboundSessionEntry(
     OriginatingTo: params.route.to,
     NativeDirectUserId: params.route.peer.kind === "direct" ? params.route.peer.id : undefined,
     NativeChannelId: params.route.peer.kind === "direct" ? undefined : params.route.peer.id,
+    SessionCreation: resolveOutboundSessionCreation(params),
   };
   // Shared-main context may still point at another channel. Commit route and
   // origin together so its conversation identity binds the exact destination.
@@ -285,6 +312,7 @@ async function persistOutboundSessionEntry(
     accountId: params.accountId ?? undefined,
     threadId: params.route.threadId,
     ctx,
+    ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
   });
 }
 
@@ -294,7 +322,12 @@ export async function ensureOutboundSessionEntry(
 ): Promise<void> {
   try {
     await persistOutboundSessionEntry(params);
-  } catch {
+  } catch (error) {
+    if (params.creation?.sandbox === "required" || params.sourceSessionKey) {
+      createSubsystemLogger("outbound/session").warn(
+        `Failed to preserve outbound session creation policy for ${params.route.sessionKey}: ${String(error)}`,
+      );
+    }
     // Do not block outbound sends on session meta writes.
   }
 }

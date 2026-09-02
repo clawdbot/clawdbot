@@ -23,7 +23,10 @@ import {
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
-import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
+import type {
+  DispatchFromConfigResult,
+  DispatchReplyFromConfig,
+} from "./reply/dispatch-from-config.types.js";
 import type {
   InternalGetReplyFromConfig,
   InternalGetReplyOptions,
@@ -142,9 +145,9 @@ function bindReplyPayloadRunState(
   const onAgentRunStart = replyOptions?.onAgentRunStart;
   return {
     ...replyOptions,
-    onAgentRunStart: (runId, executionIdentityToken) => {
-      runState.runId = runId;
-      onAgentRunStart?.(runId, executionIdentityToken);
+    onAgentRunStart: (...args) => {
+      runState.runId = args[0];
+      return onAgentRunStart?.(...args);
     },
   };
 }
@@ -200,6 +203,7 @@ export async function dispatchInboundMessage(params: {
   toolsAllow?: string[];
   replyOptions?: InternalDispatchReplyOptions;
   replyResolver?: InternalGetReplyFromConfig;
+  dispatchReplyFromConfig?: DispatchReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   replyPayloadRunState?: ReplyPayloadRunState;
   /** Observe-only turns run the agent without entering outbound hook stages. */
@@ -240,7 +244,7 @@ export async function dispatchInboundMessage(params: {
       measureDiagnosticsTimelineSpan(
         "auto_reply.dispatch_reply_from_config",
         () =>
-          dispatchReplyFromConfig({
+          (params.dispatchReplyFromConfig ?? dispatchReplyFromConfig)({
             ctx: finalized,
             cfg: params.cfg,
             dispatcher: params.dispatcher,
@@ -269,6 +273,7 @@ type BufferedInboundDispatcherParams = {
   toolsAllow?: string[];
   replyOptions?: InternalDispatchReplyOptions;
   replyResolver?: InternalGetReplyFromConfig;
+  dispatchReplyFromConfig?: DispatchReplyFromConfig;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 };
 
@@ -348,6 +353,7 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
       dispatcher,
       toolsAllow: params.toolsAllow,
       replyResolver: params.replyResolver,
+      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
       replyOptions: {
         ...params.replyOptions,
         ...replyOptions,

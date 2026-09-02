@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
+import { readQaScenarioPack } from "./scenario-catalog.js";
 import {
   runQaTestFileScenarios,
   type QaScenarioCommandExecution,
@@ -21,6 +22,22 @@ afterEach(async () => {
 });
 
 describe("qa test file scenario runner", () => {
+  it("keeps every Playwright scenario pattern aligned with an executable test", async () => {
+    for (const scenario of readQaScenarioPack().scenarios) {
+      const execution = scenario.execution;
+      if (execution.kind !== "playwright" || !execution.testNamePattern) {
+        continue;
+      }
+      const testSource = await fs.readFile(execution.path, "utf8");
+      const testNamePattern = new RegExp(execution.testNamePattern);
+      const testNames = testSource.matchAll(/\bit\s*\(\s*["'`]([^"'`\n]+)["'`]/gu);
+      expect(
+        Array.from(testNames, (match) => match[1] ?? "").some((name) => testNamePattern.test(name)),
+        `${scenario.id} testNamePattern matches an executable test`,
+      ).toBe(true);
+    }
+  });
+
   it("runs Playwright scenarios with the repo UI e2e command and writes Playwright evidence", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-scenario-");
     const commands: QaScenarioCommandExecution[] = [];
@@ -123,11 +140,14 @@ describe("qa test file scenario runner", () => {
     });
   });
 
-  it("can return aggregate evidence without writing a duplicate evidence file", async () => {
+  it("can return aggregate evidence without retaining a duplicate evidence file", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-memory-evidence-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(path.join(outputDir, "qa-evidence.json"), "stale evidence\n", "utf8");
     const result = await runQaTestFileScenarios({
       repoRoot,
-      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
+      outputDir,
       ...QA_TEST_RUNNER_DEFAULTS,
       scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       writeEvidenceFile: false,

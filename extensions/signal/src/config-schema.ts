@@ -7,7 +7,7 @@ import {
 import {
   buildChannelConfigSchema,
   buildChannelReactionShape,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelDeliveryStreamingConfigSchema,
   ChannelSendReadReceiptsSchema,
@@ -113,14 +113,15 @@ const SignalGroupEntrySchema = buildGroupEntrySchema(
 
 const SignalGroupsSchema = z.record(z.string(), SignalGroupEntrySchema.optional()).optional();
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["mentionPatterns"],
+  streaming: ChannelDeliveryStreamingConfigSchema.optional(),
+  mediaMaxMb: z.number().int().positive().optional(),
+});
+
 const SignalAccountSchemaBase = z
   .object({
-    ...buildCommonChannelAccountShape({
-      useDefaults: true,
-      omit: ["mentionPatterns"],
-      streaming: ChannelDeliveryStreamingConfigSchema.optional(),
-      mediaMaxMb: z.number().int().positive().optional(),
-    }),
+    ...accountShape,
     account: z.string().optional(),
     accountUuid: z.string().optional(),
     transport: SignalTransportSchema.optional(),
@@ -144,6 +145,7 @@ const SignalAccountSchemaBase = z
   .strict();
 
 const SignalConfigSchemaBase = SignalAccountSchemaBase.extend({
+  ...rootPolicyShape,
   // Account-level schemas skip allowFrom validation because accounts inherit
   // allowFrom from the parent channel config at runtime.
   accounts: z.record(z.string(), SignalAccountSchemaBase.optional()).optional(),

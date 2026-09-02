@@ -16,6 +16,12 @@ import {
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
+function pointerEvent(type: "pointerenter" | "pointerleave", pointerType = "mouse") {
+  const event = new Event(type);
+  Object.defineProperty(event, "pointerType", { value: pointerType });
+  return event;
+}
+
 describe("AppSidebar agent chip", () => {
   it("loads the workspace identity used by the Agents editor", async () => {
     const request = vi.fn().mockResolvedValue({
@@ -208,9 +214,9 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).toBeNull();
     expect(
-      [...(menu?.children ?? [])]
-        .filter((element) => element.localName === "wa-dropdown-item")
-        .map((element) => element.getAttribute("value")),
+      [...(menu?.querySelectorAll("wa-dropdown-item") ?? [])].map((element) =>
+        element.getAttribute("value"),
+      ),
     ).toEqual([
       "agent:main",
       "agent:research",
@@ -221,6 +227,8 @@ describe("AppSidebar agent chip", () => {
 
     const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? [])];
     expect(agentRows).toHaveLength(2);
+    expect(agentRows[0]?.classList.contains("sidebar-agent-menu__agent-switch--active")).toBe(true);
+    expect(agentRows[0]?.querySelector(".sidebar-agent-menu__agent-tile")).not.toBeNull();
     expect(menu?.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
       "🦞",
     );
@@ -245,6 +253,92 @@ describe("AppSidebar agent chip", () => {
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+  });
+
+  it("opens after fine-pointer hover intent without stealing focus", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    try {
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        TWO_AGENTS,
+      );
+      const menus = (
+        sidebar as unknown as {
+          sidebarMenus: { preloadMenuRenderer: () => Promise<unknown> };
+        }
+      ).sidebarMenus;
+      await menus.preloadMenuRenderer();
+      const input = document.createElement("input");
+      document.body.append(input);
+      input.focus();
+      const trigger = sidebar.querySelector<HTMLElement>(".sidebar-agent-card__main");
+      if (!trigger) {
+        throw new Error("Expected the sidebar agent card trigger");
+      }
+
+      trigger.dispatchEvent(pointerEvent("pointerenter"));
+      await vi.advanceTimersByTimeAsync(299);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+      trigger.dispatchEvent(pointerEvent("pointerleave"));
+      await vi.advanceTimersByTimeAsync(1);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+
+      trigger.dispatchEvent(pointerEvent("pointerenter"));
+      await vi.advanceTimersByTimeAsync(300);
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+      if (!menu) {
+        throw new Error("Expected the agent menu after hover intent");
+      }
+      menu.dispatchEvent(new Event("wa-after-show"));
+      expect(document.activeElement).toBe(input);
+
+      trigger.dispatchEvent(pointerEvent("pointerleave"));
+      await vi.advanceTimersByTimeAsync(199);
+      menu.dispatchEvent(pointerEvent("pointerenter"));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(menu);
+      menu.dispatchEvent(pointerEvent("pointerleave"));
+      await vi.advanceTimersByTimeAsync(200);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps hover opening disabled without a fine hover pointer", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false })),
+    );
+    try {
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        TWO_AGENTS,
+      );
+      sidebar
+        .querySelector<HTMLElement>(".sidebar-agent-card__main")
+        ?.dispatchEvent(pointerEvent("pointerenter"));
+      await vi.advanceTimersByTimeAsync(500);
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("requests composer focus and highlighting from the capabilities action", async () => {
@@ -301,6 +395,36 @@ describe("AppSidebar agent chip", () => {
     const menu = sidebar.querySelector(".sidebar-agent-menu");
     expect(menu?.getAttribute("placement")).toBe("bottom-start");
     expect(menu?.querySelector('[slot="trigger"]')?.getAttribute("style")).toContain("top: 92px");
+  });
+
+  it("keeps the widened agent menu inside a narrow viewport", async () => {
+    vi.stubGlobal("innerWidth", 280);
+    try {
+      const gateway = createGateway({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(
+        gateway,
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        TWO_AGENTS,
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+
+      const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main");
+      if (!card) {
+        throw new Error("Expected the sidebar agent card");
+      }
+      card.getBoundingClientRect = () =>
+        ({ bottom: 88, left: 100, right: 340, top: 40 }) as DOMRect;
+      card.click();
+      await sidebar.updateComplete;
+
+      const menus = (sidebar as unknown as { sidebarMenus: { agentMenuPosition: unknown } })
+        .sidebarMenus;
+      expect(menus.agentMenuPosition).toEqual({ x: 8, top: 92 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("opens the agent menu on right-click without toggling an open menu", async () => {
@@ -388,13 +512,13 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 
-  it("keeps the plain roster without a filter at ten agents or fewer", async () => {
+  it("keeps the plain roster without a filter at six agents or fewer", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
       createSessions("agent-1", ["agent:agent-1:main"]),
       "panel",
-      manyAgents(10),
+      manyAgents(6),
     );
     sidebar.connected = true;
     await sidebar.updateComplete;
@@ -406,10 +530,10 @@ describe("AppSidebar agent chip", () => {
       sidebar.querySelectorAll(
         ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
       ),
-    ).toHaveLength(10);
+    ).toHaveLength(6);
   });
 
-  it("shows pinned agents plus filter for large rosters and filters on input", async () => {
+  it("keeps pinned agents first in large scrollable rosters without a filter", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar, context } = await mountSidebar(
       gateway,
@@ -419,51 +543,37 @@ describe("AppSidebar agent chip", () => {
     );
     sidebar.connected = true;
     sidebar.pinnedAgentIds = ["agent-7", "agent-12"];
-    // Two agents pinned while a third is active: the menu must keep all three.
+    // Pins sort first, but the scrollable grid keeps every configured agent reachable.
     context.agentSelection.state.selectedId = "agent-1";
     await sidebar.updateComplete;
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
-    const input = sidebar.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input");
-    expect(input).not.toBeNull();
-    // Pinned agents plus the active one; pinned sort first.
+    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
+    // Pinned agents sort first without hiding the remaining roster.
     const labels = () =>
       [
         ...sidebar.querySelectorAll(
           ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch .agent-select__option-label",
         ),
       ].map((el) => el.textContent?.trim());
-    expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);
-
-    if (!input) {
-      throw new Error("Expected agent menu filter input");
-    }
-    const dropdown = sidebar.querySelector("wa-dropdown");
-    const onDropdownKeydown = vi.fn();
-    dropdown?.addEventListener("keydown", onDropdownKeydown);
-    input.focus();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(onDropdownKeydown).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(
-      sidebar.querySelector(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    );
-    onDropdownKeydown.mockClear();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-    expect(onDropdownKeydown).toHaveBeenCalledOnce();
-    onDropdownKeydown.mockClear();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    expect(onDropdownKeydown).not.toHaveBeenCalled();
-
-    input.value = "agent-11";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    await sidebar.updateComplete;
-    expect(labels()).toEqual(["agent-11"]);
+    expect(labels()).toEqual([
+      "agent-7",
+      "agent-12",
+      "agent-1",
+      "agent-2",
+      "agent-3",
+      "agent-4",
+      "agent-5",
+      "agent-6",
+      "agent-8",
+      "agent-9",
+      "agent-10",
+      "agent-11",
+    ]);
   });
 
-  it("falls back to the first ten agents when nothing is pinned", async () => {
+  it("keeps the full large roster scrollable when nothing is pinned", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
@@ -476,12 +586,13 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(
       sidebar.querySelectorAll(
         ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
       ),
-    ).toHaveLength(10);
+    ).toHaveLength(12);
+    expect(sidebar.querySelector(".sidebar-agent-menu__agent-grid")).not.toBeNull();
   });
 
   it("ignores stale pins when choosing the large-roster fallback", async () => {
@@ -502,31 +613,6 @@ describe("AppSidebar agent chip", () => {
       sidebar.querySelectorAll(
         ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
       ),
-    ).toHaveLength(10);
-  });
-
-  it("keeps an active agent outside the first ten reachable when nothing is pinned", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar, context } = await mountSidebar(
-      gateway,
-      createSessions("agent-12", ["agent:agent-12:main"]),
-      "panel",
-      manyAgents(12),
-    );
-    context.agentSelection.state.selectedId = "agent-12";
-    context.agentSelection.state.scopeId = "agent-12";
-    sidebar.sessionKey = "agent:agent-12:main";
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    const rows = [
-      ...sidebar.querySelectorAll(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    ];
-    expect(rows).toHaveLength(10);
-    expect(rows.some((row) => row.textContent?.includes("agent-12"))).toBe(true);
+    ).toHaveLength(12);
   });
 });

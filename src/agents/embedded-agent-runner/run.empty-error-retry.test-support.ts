@@ -1,17 +1,20 @@
 // Full-entry coverage for retrying empty errored assistant turns.
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
-  overflowBaseRunParams,
+  createOverflowRunParams,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
+let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 type AssistantContent = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>["content"];
@@ -62,10 +65,16 @@ describe("runEmbeddedAgent silent-error retry", () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSharedRunIntegrationHarnessMocks();
+    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
+    state = await createOpenClawTestState({ label: "run.empty-error-retry" });
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
     mockedClassifyFailoverReason.mockReturnValue(null);
+  });
+
+  afterEach(async () => {
+    await state?.cleanup();
   });
 
   it("retries when a turn ends with stopReason=error and zero output tokens", async () => {
@@ -73,7 +82,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("ollama", "glm-5.1:cloud"));
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "ollama",
       model: "glm-5.1:cloud",
       runId: "run-empty-error-retry-basic",
@@ -91,7 +100,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "anthropic",
       model: "claude-opus-4-8",
       runId: "run-empty-error-retry-server-error",
@@ -120,7 +129,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     );
 
     await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "anthropic",
       model: "missing-model",
       runId: "run-empty-error-retry-non-transient",
@@ -136,7 +145,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     }
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "ollama",
       model: "glm-5.1:cloud",
       runId: "run-empty-error-retry-exhausted",
@@ -165,7 +174,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     );
 
     const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
+      ...createOverflowRunParams(state),
       provider: "anthropic",
       model: "claude-opus-4-8",
       runId: "run-terminal-heartbeat-not-fallback-safe",
@@ -175,6 +184,77 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.meta.error).toMatchObject({
       kind: "incomplete_turn",
       fallbackSafe: false,
+    });
+  });
+  describe("current-assistant provenance", () => {
+    it("ignores a historical refusal after compaction", async () => {
+      const refusal = makeAssistantMessageFixture({
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-5",
+        stopReason: "error",
+        content: [],
+        errorMessage: "historical refusal",
+        diagnostics: [{ type: "provider_refusal", timestamp: 1, details: { category: "cyber" } }],
+      });
+      mockedRunEmbeddedAttempt
+        .mockResolvedValueOnce(
+          makeAttemptResult({
+            assistantTexts: [],
+            lastAssistant: refusal,
+            currentAttemptAssistant: undefined,
+            currentAttemptCompletedAssistant: undefined,
+            compactionCount: 1,
+          }),
+        )
+        .mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-5"));
+
+      const result = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "anthropic",
+        model: "claude-opus-5",
+        runId: "run-historical-refusal-after-compaction",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(result.meta.error).toBeUndefined();
+      expect(result.payloads?.some((payload) => payload.text?.includes("refused"))).not.toBe(true);
+    });
+
+    it("preserves a completed current refusal after transcript projection removes its slice", async () => {
+      const refusal = makeAssistantMessageFixture({
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-5",
+        stopReason: "error",
+        content: [],
+        errorMessage: "current refusal",
+        diagnostics: [{ type: "provider_refusal", timestamp: 2, details: { category: "cyber" } }],
+      });
+      mockedRunEmbeddedAttempt
+        .mockResolvedValueOnce(
+          makeAttemptResult({
+            assistantTexts: [],
+            lastAssistant: undefined,
+            currentAttemptAssistant: undefined,
+            currentAttemptCompletedAssistant: refusal,
+            compactionCount: 1,
+          }),
+        )
+        .mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-5"));
+
+      const result = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "anthropic",
+        model: "claude-opus-5",
+        runId: "run-completed-refusal-without-transcript-slice",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]).toMatchObject({
+        isError: true,
+        text: "The provider refused this request (category: cyber). Revise the request and try again.",
+      });
     });
   });
 });

@@ -48,6 +48,11 @@ import {
   type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity-snapshot.js";
 
+export {
+  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+  RUN_STALE_TAKEOVER_MS,
+  resolveRunStaleThresholdMs,
+} from "./diagnostic-run-activity-snapshot.js";
 export type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity-snapshot.js";
 export type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 
@@ -70,7 +75,7 @@ type SessionActivity = DiagnosticArgumentChurnActivity &
 type DiagnosticToolStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
   "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
-> & { seq?: number };
+> & { seq?: number; deadlineAtMs?: number };
 
 type ModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
@@ -81,25 +86,6 @@ type RunProgressEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
   "runId" | "sessionId" | "sessionKey" | "reason"
 > & { progressKind?: "semantic" | "liveness" };
-
-// Quiet-but-alive tools are normal agent behavior; the CLI byte watchdog kills
-// truly silent children within its own deadline. This floor bounds every
-// staleness consumer (diagnostic recovery aborts, reply-run stale takeover,
-// steer gates): lowering it reopens #88870, removing it reopens #96168.
-export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
-
-// Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
-export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
-
-// Quiet-but-alive tool phases get the blocked-tool floor so a human message
-// cannot reclaim a healthy long tool that stuck recovery would not touch yet.
-export function resolveRunStaleThresholdMs(
-  activity: Pick<DiagnosticSessionActivitySnapshot, "activeWorkKind">,
-): number {
-  return activity.activeWorkKind === "tool_call"
-    ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
-    : RUN_STALE_TAKEOVER_MS;
-}
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
@@ -291,22 +277,39 @@ function recordToolStarted(event: DiagnosticToolStartedActivityEvent): void {
     toolCallId: event.toolCallId,
     startedAt: now,
     lastProgressAt: now,
+    deadlineAtMs: event.deadlineAtMs,
   });
   touchSessionActivity(activity, `tool:${event.toolName}:started`, now);
 }
 
-function recordToolEnded(
-  event: Extract<
-    DiagnosticEventPayload,
-    { type: "tool.execution.completed" | "tool.execution.error" | "tool.execution.blocked" }
-  >,
-): void {
+function recordToolEnded(event: DiagnosticToolStartedActivityEvent): void {
   const activity = resolveSessionActivity(event);
   if (!activity) {
     return;
   }
   activity.activeTools.delete(toolKey(event));
   touchSessionActivity(activity, `tool:${event.toolName}:ended`);
+}
+
+export function markDiagnosticOwnedToolActivity(
+  owner: DiagnosticEmbeddedRunOwner,
+  event: Pick<DiagnosticToolStartedActivityEvent, "toolName" | "toolCallId" | "deadlineAtMs"> & {
+    phase: "start" | "end";
+  },
+): void {
+  if (activeDiagnosticOwners.get(owner.generation)?.owner === owner) {
+    const record = event.phase === "start" ? recordToolStarted : recordToolEnded;
+    record({ ...event, ...owner });
+  }
+}
+
+function hasDiagnosticActivityOwner(activity: SessionActivity): boolean {
+  for (const registration of activeDiagnosticOwners.values()) {
+    if (registration.activity === activity) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function recordModelStarted(
@@ -328,13 +331,7 @@ function recordModelStarted(
   if (!activity) {
     return;
   }
-  if (
-    !provenance &&
-    !coreRequestForTest &&
-    [...activeDiagnosticOwners.values()].some(({ activity: ownerActivity }) =>
-      Object.is(ownerActivity, activity),
-    )
-  ) {
+  if (!provenance && !coreRequestForTest && hasDiagnosticActivityOwner(activity)) {
     return;
   }
   if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
@@ -378,12 +375,7 @@ function recordModelEnded(
   if (!activity) {
     return;
   }
-  if (
-    !provenance &&
-    [...activeDiagnosticOwners.values()].some(({ activity: ownerActivity }) =>
-      Object.is(ownerActivity, activity),
-    )
-  ) {
+  if (!provenance && hasDiagnosticActivityOwner(activity)) {
     activity.activeModelCalls.delete(modelCallKey(event));
     return;
   }
@@ -400,10 +392,6 @@ function recordModelEnded(
   }
   activity.activeModelCalls.delete(modelCallKey(event));
   touchSessionActivity(activity, "model_call:ended");
-}
-
-function recordRunProgress(event: RunProgressEvent, coreSemantic: boolean): void {
-  applyRunProgress(event, coreSemantic);
 }
 
 export function markDiagnosticArgumentChurnObservation(
@@ -440,12 +428,10 @@ function recordRunCompleted(
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
-  const hasCoreOwner = [...activeDiagnosticOwners.values()].some(
-    ({ activity: ownerActivity, owner }) =>
-      ownerActivity === activity && owner.runId === event.runId,
-  );
-  if (hasCoreOwner) {
-    return;
+  for (const registration of activeDiagnosticOwners.values()) {
+    if (registration.activity === activity && registration.owner.runId === event.runId) {
+      return;
+    }
   }
   activityByRunId.delete(event.runId);
   if (activity.repeatedRequestOwnerRunId === event.runId) {
@@ -683,16 +669,6 @@ function markDiagnosticRunProgressForTest(params: RunProgressEvent): void {
   applyRunProgress(params, params.progressKind === "semantic");
 }
 
-function markDiagnosticToolStartedForTest(params: {
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  toolName: string;
-  toolCallId?: string;
-}): void {
-  recordToolStarted(params);
-}
-
 function markDiagnosticModelStartedForTest(params: ModelStartedActivityEvent): void {
   recordModelStarted(params, undefined, true);
 }
@@ -708,7 +684,7 @@ function installDiagnosticRunActivityTestApi(): void {
   ] = {
     markDiagnosticModelStartedForTest,
     markDiagnosticRunProgressForTest,
-    markDiagnosticToolStartedForTest,
+    markDiagnosticToolStartedForTest: recordToolStarted,
   };
 }
 
@@ -719,37 +695,49 @@ export function startDiagnosticRunActivityTracking(): void {
     return;
   }
   const startAfterEventSequence = getInternalDiagnosticEventSequence();
-  unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent((event, metadata) => {
-    // A prior lifecycle can leave already-sequenced events in the async queue.
-    // Ignore them so a restart cannot recreate activity that stop cleared.
-    if (event.seq <= startAfterEventSequence) {
-      return;
-    }
-    switch (event.type) {
-      case "tool.execution.started":
-        recordToolStarted(event);
+  unregisterDiagnosticRunActivityListener = onInternalDiagnosticEvent(
+    (event, metadata) => {
+      // A prior lifecycle can leave already-sequenced events in the async queue.
+      // Ignore them so a restart cannot recreate activity that stop cleared.
+      if (event.seq <= startAfterEventSequence) {
         return;
-      case "tool.execution.completed":
-      case "tool.execution.error":
-      case "tool.execution.blocked":
-        recordToolEnded(event);
-        return;
-      case "model.call.started":
-        recordModelStarted(event, resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata));
-        return;
-      case "model.call.completed":
-      case "model.call.error":
-        recordModelEnded(event, resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata));
-        return;
-      case "run.progress":
-        recordRunProgress(event, isCoreSemanticRunProgressDiagnosticMetadata(metadata));
-        return;
-      case "run.completed":
-        recordRunCompleted(event);
-
-      default:
-    }
-  });
+      }
+      switch (event.type) {
+        case "tool.execution.started":
+          return recordToolStarted(event);
+        case "tool.execution.completed":
+        case "tool.execution.error":
+        case "tool.execution.blocked":
+          return recordToolEnded(event);
+        case "model.call.started":
+          recordModelStarted(event, resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata));
+          return;
+        case "model.call.completed":
+        case "model.call.error":
+          recordModelEnded(event, resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata));
+          return;
+        case "run.progress":
+          return applyRunProgress(event, isCoreSemanticRunProgressDiagnosticMetadata(metadata));
+        case "run.completed":
+          return recordRunCompleted(event);
+        default:
+          break;
+      }
+    },
+    {
+      include: [
+        "tool.execution.started",
+        "tool.execution.completed",
+        "tool.execution.error",
+        "tool.execution.blocked",
+        "model.call.started",
+        "model.call.completed",
+        "model.call.error",
+        "run.progress",
+        "run.completed",
+      ],
+    },
+  );
 }
 
 export function stopDiagnosticRunActivityTracking(): void {

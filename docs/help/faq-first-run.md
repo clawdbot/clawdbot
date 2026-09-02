@@ -126,7 +126,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     You rarely need both:
 
     - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
-    - When a supported native channel can infer approvers safely, OpenClaw auto-enables DM-first native approvals if `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - For supported native clients, set `channels.<channel>.execApprovals.enabled: "auto"` or `true` and configure approvers or the channel's supported owner identity. Discord and Slack require explicit enablement; Telegram treats unset as `"auto"`.
     - When native approval cards/buttons are available, that UI is primary; only mention a manual `/approve` command if the tool result says chat approvals are unavailable.
     - Use `approvals.exec` only when prompts must also reach other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you want approval prompts posted back into the originating room/topic.
@@ -138,8 +138,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 26 recommended). `pnpm` is the repo package manager.
-    Bun can install dependencies and run package scripts, but it cannot run the OpenClaw CLI or Gateway because it lacks `node:sqlite`.
+    Node **22.22.3+**, **24.15+**, or **25.9+** is the primary and default runtime (Node 26 recommended). `pnpm` is the repo package manager.
+    Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">
@@ -158,7 +158,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     the Gateway (models call out to cloud APIs), even a modest Pi handles the load.
 
     A small Pi/VPS can also host just the Gateway while you pair **nodes** on your
-    laptop/phone for local screen/camera/canvas or command execution. See [Nodes](/nodes).
+    laptop/phone for local screen/camera or command execution. A paired Mac can
+    also present hosted widgets in its native panel. See [Nodes](/nodes).
 
     Full setup walkthrough: [Raspberry Pi](/install/raspberry-pi).
 
@@ -431,7 +432,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     treat the host as the source of truth and back it up.
 
     Pair **nodes** (Mac/iOS/Android/headless) to that cloud Gateway for local
-    screen/camera/canvas or command execution on your laptop while the Gateway stays in
+    screen/camera or command execution on your laptop while the Gateway stays in
     the cloud.
 
     Hub: [Platforms](/platforms). Remote access: [Gateway remote](/gateway/remote).
@@ -663,7 +664,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   <Accordion title="If I buy a Mac mini to run OpenClaw, can I connect it to my MacBook Pro?">
     Yes. The **Mac mini can run the Gateway**, and your MacBook Pro connects as a **node**
     (companion device). Nodes do not run the Gateway - they add capabilities like
-    screen/camera/canvas and `system.run` on that device.
+    screen/camera and `system.run` on that device. A Mac node can also present
+    hosted widgets in its native panel.
 
     Common pattern: Gateway on the always-on Mac mini; MacBook Pro runs the macOS app or a
     node host and pairs to the Gateway. Check with `openclaw nodes status` / `openclaw nodes list`.
@@ -673,9 +675,10 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I use Bun?">
-    You can use Bun to install dependencies or run package scripts. The OpenClaw CLI and
-    Gateway require **Node** because the canonical state store uses `node:sqlite`; Bun does
-    not provide that API.
+    Yes. Node remains the primary, default, and recommended runtime, but Bun 1.4+
+    with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node
+    host as an explicit opt-in. Bun can also run package scripts; use
+    `pnpm install` for dependency installation.
   </Accordion>
 
   <Accordion title="Telegram: what goes in allowFrom?">

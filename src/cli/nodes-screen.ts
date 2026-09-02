@@ -5,8 +5,12 @@ import {
   parseScreenSnapshotResult,
   type ScreenSnapshotResult,
 } from "../plugins/computer-use-contract.js";
-import { writeBase64ToFile } from "./nodes-camera.js";
 import { asRecord, readStringValue, resolveTempPathParts } from "./nodes-media-utils.js";
+
+export {
+  writeBase64ToFile as writeScreenRecordToFile,
+  writeBase64ToFile as writeScreenSnapshotToFile,
+} from "./nodes-camera.js";
 
 /** Validated payload returned by `nodes screen record` RPC calls. */
 type ScreenRecordPayload = {
@@ -42,15 +46,6 @@ export function screenRecordTempPath(opts: { ext: string; tmpDir?: string; id?: 
   return path.join(tmpDir, `openclaw-screen-record-${id}${ext}`);
 }
 
-/** Decode and write a screen recording payload to disk. */
-export async function writeScreenRecordToFile(
-  filePath: string,
-  base64: string,
-  opts?: { maxBytes?: number },
-) {
-  return writeBase64ToFile(filePath, base64, opts);
-}
-
 /** Validated payload returned by `nodes screen snapshot` RPC calls. */
 /** Validate and normalize an unknown screen-snapshot payload. */
 export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotResult {
@@ -79,13 +74,4 @@ export function screenSnapshotTempPath(opts: { ext: string; tmpDir?: string; id?
   // is how a JPEG snapshot ends up named `.png`.
   const { tmpDir, id, ext } = resolveTempPathParts(opts);
   return path.join(tmpDir, `openclaw-screen-snapshot-${id}${ext}`);
-}
-
-/** Decode and write a screen snapshot payload to disk. */
-export async function writeScreenSnapshotToFile(
-  filePath: string,
-  base64: string,
-  opts?: { maxBytes?: number },
-) {
-  return writeBase64ToFile(filePath, base64, opts);
 }

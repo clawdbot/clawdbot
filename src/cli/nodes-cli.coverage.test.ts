@@ -98,7 +98,7 @@ describe("nodes-cli coverage", () => {
       return;
     }
     sharedProgram.exitOverride();
-    await registerNodesCli(sharedProgram);
+    await registerNodesCli(sharedProgram, ["node", "openclaw", "nodes", "status"]);
   });
 
   beforeEach(() => {
@@ -247,6 +247,108 @@ describe("nodes-cli coverage", () => {
     expect(output).not.toContain("secret-token");
     expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
     expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.reject"]);
+  });
+
+  it.each([
+    {
+      label: "status with an invalid last-connected duration",
+      command: "status",
+      args: ["nodes", "status", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      label: "list with an invalid last-connected duration",
+      command: "list",
+      args: ["nodes", "list", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      label: "status with an empty last-connected duration",
+      command: "status",
+      args: ["nodes", "status", "--last-connected", ""],
+      message: "Invalid --last-connected",
+    },
+    {
+      label: "list with a blank last-connected duration",
+      command: "list",
+      args: ["nodes", "list", "--last-connected", "   "],
+      message: "Invalid --last-connected",
+    },
+    {
+      label: "invoke with a blank node",
+      command: "invoke",
+      args: ["nodes", "invoke", "--node", "   ", "--command", "canvas.eval"],
+      message: "--node and --command required",
+    },
+    {
+      label: "invoke with a blank command",
+      command: "invoke",
+      args: ["nodes", "invoke", "--node", "mac-1", "--command", "   "],
+      message: "--node and --command required",
+    },
+    {
+      label: "rename with a blank name",
+      command: "rename",
+      args: ["nodes", "rename", "--node", "mac-1", "--name", "   "],
+      message: "--name must not be empty",
+    },
+    {
+      label: "push with an invalid environment",
+      command: "push",
+      args: ["nodes", "push", "--node", "mac-1", "--environment", "staging"],
+      message: "invalid --environment (use sandbox|production)",
+    },
+    {
+      label: "notify without a title or body",
+      command: "notify",
+      args: ["nodes", "notify", "--node", "mac-1", "--title", " ", "--body", " "],
+      message: "missing --title or --body",
+    },
+    {
+      label: "camera snap with an invalid facing",
+      command: "camera snap",
+      args: ["nodes", "camera", "snap", "--node", "mac-1", "--facing", "side"],
+      message: "invalid facing: side (expected front|back|both)",
+    },
+    {
+      label: "camera clip with an invalid facing",
+      command: "camera clip",
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--facing", "both"],
+      message: "invalid facing: both (expected front|back)",
+    },
+    {
+      label: "camera clip with an invalid duration",
+      command: "camera clip",
+      args: ["nodes", "camera", "clip", "--node", "mac-1", "--duration", "later"],
+      message: "Invalid duration",
+    },
+    {
+      label: "screen record with an invalid duration",
+      command: "screen record",
+      args: ["nodes", "screen", "record", "--node", "mac-1", "--duration", "later"],
+      message: "Invalid duration",
+    },
+  ])("reports $label once before calling the gateway", async ({ command, args, message }) => {
+    await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([expect.stringContaining(`nodes ${command} failed: ${message}`)]);
+    expect(defaultRuntime.exit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["invoke node", ["nodes", "invoke", "--command", "canvas.eval"]],
+    ["invoke command", ["nodes", "invoke", "--node", "mac-1"]],
+    ["rename name", ["nodes", "rename", "--node", "mac-1"]],
+  ])("preserves Commander validation for a missing %s", async (_label, args) => {
+    await withSuppressedStderr(async () => {
+      await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toMatchObject({
+        code: "commander.missingMandatoryOptionValue",
+      });
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("blocks system.run on nodes invoke", async () => {
@@ -539,9 +641,13 @@ describe("nodes-cli coverage", () => {
       ],
       flag: "--invoke-timeout",
     },
-  ])("rejects partial numeric option for $args", async ({ args, flag }) => {
-    await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
-    expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
-    expect(lastNodeInvokeCall).toBeNull();
-  });
+  ])(
+    "rejects invalid numeric option before calling the gateway for $args",
+    async ({ args, flag }) => {
+      await expect(sharedProgram.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors.at(-1)).toContain(`${flag} must be`);
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(lastNodeInvokeCall).toBeNull();
+    },
+  );
 });

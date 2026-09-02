@@ -126,8 +126,10 @@ function assertNoGenericDuplicate(testInstance: OpenClawTestInstance, approvalId
 }
 
 function requireAllowedOnceReceipt(result: AuditRunInspectResult) {
-  const receipt = result.decisions.find(
-    (candidate) => candidate.source.owner === "operator_approvals",
+  const receipt = result.decisionDisplays.find(
+    (candidate) =>
+      candidate.provenance.state === "verified" &&
+      candidate.provenance.producer === "operator-approval",
   );
   expect(receipt).toMatchObject({
     decision: {
@@ -138,7 +140,7 @@ function requireAllowedOnceReceipt(result: AuditRunInspectResult) {
       coverageState: "enforced",
       contextFieldsUsed: ["contextId", "executionId", "runId"],
     },
-    source: { owner: "operator_approvals" },
+    provenance: { state: "verified", producer: "operator-approval" },
   });
   if (!receipt) {
     throw new Error("audit inspection omitted the operator approval receipt");
@@ -147,11 +149,11 @@ function requireAllowedOnceReceipt(result: AuditRunInspectResult) {
 }
 
 function summarizeAppServerLog(filePath: string) {
-  return readJsonLines(filePath).map((entry) => ({
-    id: entry.id,
-    method: entry.method,
-    ...(entry.id === "approval-private-native-approval" ? { result: entry.result } : {}),
-  }));
+  return readJsonLines(filePath).map((entry) =>
+    entry.id === "approval-private-native-approval"
+      ? { id: entry.id, method: entry.method, result: entry.result }
+      : { id: entry.id, method: entry.method },
+  );
 }
 
 async function connectApprovalReviewer(testInstance: OpenClawTestInstance) {
@@ -217,7 +219,6 @@ describe("Codex native approval receipt", () => {
                     command: process.execPath,
                     args: [fixture],
                     requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                    turnCompletionIdleTimeoutMs: REQUEST_TIMEOUT_MS,
                   },
                 },
               },

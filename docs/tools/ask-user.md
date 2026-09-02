@@ -23,13 +23,20 @@ You can answer from any supported conversation surface:
   multi-question prompts, the panel shows one question at a time and advances
   through a short stepper. After resolution, the panel closes and the chat
   keeps only a compact answer summary.
-- Telegram, Discord, and Slack render native buttons for a single-choice,
-  single-question prompt.
+- Telegram renders each choice as a full-width native button for one
+  single-select question. **Other…** switches to Telegram's reply input without
+  resolving the question.
+- Discord and Slack render native buttons for a single-choice, single-question
+  prompt.
 - A plain-text reply works on any channel. Reply with a number, an option label,
-  or your own answer.
+  or your own answer. For multi-select questions, separate choices with commas.
 
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
+
+Never answer `ask_user` with a credential. When the agent needs an API key it
+uses the [`secrets` tool](/tools/secrets), whose masked prompt stores the value
+without it entering the chat, the transcript, or the model's context.
 
 ## Platform behavior
 
@@ -40,14 +47,15 @@ inline cards; multiple questions stay stacked as an intentional touch-friendly
 idiom. Every platform keeps the question-to-answer summary in the active chat
 timeline without timed eviction, and **Skip** is available everywhere.
 
-Prompts that cannot use native buttons, including multi-question and
-multi-select prompts, degrade to readable text on channels. The Control UI
-keeps the full structured stepper.
+Multi-question and multi-select prompts degrade to readable text on messaging
+channels. The Control UI keeps the full structured stepper.
 
 ## Timeout and no answer
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
-30 through 3600 seconds.
+30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
+run cancellation or the overall run timeout. A pending question does not extend
+an explicit run budget.
 
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
@@ -97,7 +105,10 @@ Example answered result:
 The model-facing contract tells the agent to:
 
 - ask only when blocked on a genuinely user-owned decision;
-- prefer one question and use no more than three;
+- ask exactly one question per call unless several answers must be submitted
+  together, because one-question prompts can use native messaging controls;
+- put every selectable choice in `options`, never only in question prose;
+- use `multiSelect` only when several choices can be selected at once;
 - put the recommended option first and suffix its label with `(Recommended)`;
 - omit an authored `Other` option because free text is added automatically;
 - continue with best judgment after `no_answer`.

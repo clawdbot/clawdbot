@@ -1,5 +1,6 @@
 // Media fetch tests cover remote media download limits and validation.
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -257,6 +258,7 @@ describe("readRemoteMediaBuffer", () => {
       const params = paramsUnknown as {
         url: string;
         fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+        beforeRequest?: () => void;
         init?: RequestInit;
         signal?: AbortSignal;
       };
@@ -267,6 +269,7 @@ describe("readRemoteMediaBuffer", () => {
       if (!fetcher) {
         throw new Error("fetch is not available");
       }
+      params.beforeRequest?.();
       return {
         response: await fetcher(params.url, {
           ...params.init,
@@ -747,6 +750,61 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "buffer reads",
+      fetchMedia: (options: Parameters<ReadRemoteMediaBuffer>[0]) => readRemoteMediaBuffer(options),
+    },
+    {
+      name: "store writes",
+      fetchMedia: (options: Parameters<ReadRemoteMediaBuffer>[0]) => saveRemoteMedia(options),
+    },
+  ])("cancels retry backoff for $name", async ({ fetchMedia }) => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(503).end("busy");
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a local media test server address");
+      }
+      const controller = new AbortController();
+      const operation = fetchMedia({
+        url: `http://127.0.0.1:${address.port}/retry.bin`,
+        requestInit: { signal: controller.signal },
+        retry: {
+          attempts: 2,
+          minDelayMs: 25,
+          maxDelayMs: 25,
+          jitter: 0,
+          onRetry: () => {
+            setImmediate(() => controller.abort());
+          },
+        },
+      });
+
+      await expect(operation).rejects.toMatchObject({
+        name: "MediaFetchError",
+        code: "fetch_failed",
+        cause: { name: "AbortError" },
+      });
+      expect(requests).toBe(1);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("does not retry SSRF guard blocks", async () => {
     const fetchImpl = vi.fn();
 
@@ -861,6 +919,22 @@ describe("readRemoteMediaBuffer", () => {
       url: "https://example.com/file.bin",
       timeoutMs: 1234,
       signal: parent.signal,
+    });
+  });
+
+  it("passes the HTTPS-only redirect policy through the guarded fetch path", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    await readRemoteMediaBuffer({
+      url: "https://example.com/favicon.ico",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      requireHttps: true,
+    });
+
+    expect(requireFetchGuardRequest()).toMatchObject({
+      url: "https://example.com/favicon.ico",
+      requireHttps: true,
     });
   });
 
@@ -1130,43 +1204,42 @@ describe("readRemoteMediaBuffer", () => {
     }
   });
 
-  it("cancels ignored content-length overflow bodies for saved responses", async () => {
-    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
-
-    await expect(
-      saveResponseMedia(
-        new Response(body.stream, {
-          status: 200,
-          headers: { "content-length": "5" },
-        }),
-        {
-          maxBytes: 4,
-          sourceUrl: "https://example.com/file.bin",
-        },
-      ),
-    ).rejects.toThrow("content length 5 exceeds maxBytes 4");
-
-    expect(body.wasCanceled()).toBe(true);
-  });
-
-  it("rejects malformed content-length before saving responses", async () => {
-    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
-
-    await expect(
-      saveResponseMedia(
-        new Response(body.stream, {
-          status: 200,
-          headers: { "content-length": "1e9" },
-        }),
-        {
-          maxBytes: 4,
-          sourceUrl: "https://example.com/file.bin",
-        },
-      ),
-    ).rejects.toThrow("invalid content-length header: 1e9");
-
-    expect(body.wasCanceled()).toBe(true);
-  });
+  it.each([
+    ["5", "content length 5 exceeds maxBytes 4", false],
+    ["5", "content length 5 exceeds maxBytes 4", true],
+    ["1e9", "invalid content-length header: 1e9", false],
+    ["1e9", "invalid content-length header: 1e9", true],
+  ] as const)(
+    "cancels saved-response content-length %s (%s; partially read: %s)",
+    async (contentLength, message, partiallyRead) => {
+      const body = makeCancelableStream([new Uint8Array([1]), new Uint8Array([2, 3, 4, 5])]);
+      const response = new Response(body.stream, {
+        status: 200,
+        headers: { "content-length": contentLength },
+      });
+      try {
+        if (partiallyRead) {
+          const reader = body.stream.getReader();
+          try {
+            expect(await reader.read()).toEqual({ done: false, value: new Uint8Array([1]) });
+          } finally {
+            reader.releaseLock();
+          }
+        }
+        expect(response.bodyUsed).toBe(partiallyRead);
+        await expect(
+          saveResponseMedia(response, {
+            maxBytes: 4,
+            sourceUrl: "https://example.com/file.bin",
+          }),
+        ).rejects.toThrow(message);
+        expect(body.wasCanceled()).toBe(true);
+        expect(body.stream.locked).toBe(false);
+      } finally {
+        await body.stream.cancel();
+      }
+    },
+  );
 
   it("decodes URL path basenames when deriving remote media filenames", async () => {
     const fetchImpl = vi.fn(
@@ -1336,6 +1409,26 @@ describe("readRemoteMediaBuffer", () => {
     {
       name: "malformed extended filename falls back to plain filename",
       header: "attachment; filename=fallback.csv; filename*=UTF-8''%ZZbad.csv",
+      fileName: "fallback.csv",
+    },
+    {
+      name: "unusable extended filename dot before plain",
+      header: "attachment; filename*=UTF-8''.; filename=fallback.csv",
+      fileName: "fallback.csv",
+    },
+    {
+      name: "unusable extended filename dot after plain",
+      header: "attachment; filename=fallback.csv; filename*=UTF-8''.",
+      fileName: "fallback.csv",
+    },
+    {
+      name: "unusable extended filename encoded parent before plain",
+      header: "attachment; filename*=UTF-8''%2E%2E; filename=fallback.csv",
+      fileName: "fallback.csv",
+    },
+    {
+      name: "unusable extended filename encoded parent after plain",
+      header: "attachment; filename=fallback.csv; filename*=UTF-8''%2E%2E",
       fileName: "fallback.csv",
     },
     {
@@ -1619,6 +1712,49 @@ describe("readRemoteMediaBuffer", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["streamed", "content-length"])(
+    "cleans up %s media overflow before a response clone is released",
+    async (kind) => {
+      const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
+      const response = new Response(body.stream, {
+        headers: kind === "content-length" ? { "content-length": "5" } : {},
+      });
+      const capture = response.clone();
+      const subdir = `captured-${kind}`;
+      let completed = false;
+      const operation = saveRemoteMedia({
+        url: "https://example.com/large.bin",
+        fetchImpl: async () => response,
+        lookupFn: makeLookupFn(),
+        maxBytes: 4,
+        subdir,
+      })
+        .catch((error: unknown) => error)
+        .finally(() => {
+          completed = true;
+        });
+      try {
+        await vi.waitFor(() => expect(completed).toBe(true), { timeout: 500 });
+        await expect(operation).resolves.toMatchObject({ code: "max_bytes" });
+        expect(response.body?.locked).toBe(false);
+        expect(body.wasCanceled()).toBe(false);
+        const dir = path.join(tempHome.home, ".openclaw", "media", subdir);
+        await expect(
+          fs.readdir(dir).catch((error: unknown) => {
+            if (hasErrnoCode(error, "ENOENT")) {
+              return [];
+            }
+            throw error;
+          }),
+        ).resolves.toEqual([]);
+      } finally {
+        await capture.body?.cancel();
+        await operation;
+      }
+      expect(body.wasCanceled()).toBe(true);
+    },
+  );
+
   it("retries saveRemoteMedia after a transient fetch failure", async () => {
     const transientError = Object.assign(new TypeError("socket reset"), { code: "ECONNRESET" });
     const fetchImpl = vi
@@ -1631,16 +1767,19 @@ describe("readRemoteMediaBuffer", () => {
         }),
       );
     const onRetry = vi.fn();
+    const beforeRequest = vi.fn();
 
     const saved = await saveRemoteMedia({
       url: "https://example.com/retry.png",
       fetchImpl,
+      beforeRequest,
       lookupFn: makeLookupFn(),
       maxBytes: 8,
       retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0, onRetry },
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(beforeRequest).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(saved.contentType).toBe("image/png");
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([5, 6]));

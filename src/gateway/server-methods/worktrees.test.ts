@@ -102,8 +102,9 @@ describe("worktrees gateway methods", () => {
       undefined,
     ]);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: {},
+      limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
     });
 
     expect(service.create).toHaveBeenCalledWith({
@@ -116,7 +117,7 @@ describe("worktrees gateway methods", () => {
     expect(service.remove).toHaveBeenCalledWith({
       id: record.id,
       reason: "manual-delete",
-      force: true,
+      allowSnapshotLoss: true,
     });
   });
 
@@ -252,8 +253,9 @@ describe("worktrees gateway methods", () => {
     const response = await call(handlers, "worktrees.gc", {}, { context });
     expect(response?.[0]).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
-      limits: {},
+      limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
     });
   });
 

@@ -20,6 +20,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Dispatcher } from "undici";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeHostname } from "./hostname.js";
 import {
   createHttp1Agent,
@@ -64,11 +65,9 @@ export type SsrFPolicy = {
    */
   allowedOrigins?: string[];
   hostnameAllowlist?: string[];
+  /** Deny exact hosts or wildcard subdomains; "*.example.com" excludes the apex. */
+  blockedHostnames?: string[];
 };
-
-function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
-  return normalizePolicyHostnames(values).toSorted();
-}
 
 function normalizePolicyHostnames(values?: string[]): string[] {
   return normalizeUniqueStringEntries(values?.map((value) => normalizeHostname(value)));
@@ -85,9 +84,10 @@ function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
     dangerouslyAllowPrivateNetwork: policy.dangerouslyAllowPrivateNetwork === true,
     allowRfc2544BenchmarkRange: policy.allowRfc2544BenchmarkRange === true,
     allowIpv6UniqueLocalRange: policy.allowIpv6UniqueLocalRange === true,
-    allowedHostnames: normalizeSsrFPolicyHostnames(policy.allowedHostnames),
+    allowedHostnames: normalizePolicyHostnames(policy.allowedHostnames).toSorted(),
     allowedOrigins: normalizeSsrFPolicyOrigins(policy.allowedOrigins),
     hostnameAllowlist: [...normalizeHostnameAllowlist(policy.hostnameAllowlist)].toSorted(),
+    blockedHostnames: normalizeHostnameAllowlist(policy.blockedHostnames).toSorted(),
   };
 }
 
@@ -118,20 +118,15 @@ export function mergeSsrFPolicies(
     if (policy.allowIpv6UniqueLocalRange) {
       merged.allowIpv6UniqueLocalRange = true;
     }
-    if (policy.allowedHostnames?.length) {
-      merged.allowedHostnames = Array.from(
-        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
-      );
-    }
-    if (policy.allowedOrigins?.length) {
-      merged.allowedOrigins = Array.from(
-        new Set([...(merged.allowedOrigins ?? []), ...policy.allowedOrigins]),
-      );
-    }
-    if (policy.hostnameAllowlist?.length) {
-      merged.hostnameAllowlist = Array.from(
-        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
-      );
+    for (const key of [
+      "allowedHostnames",
+      "allowedOrigins",
+      "hostnameAllowlist",
+      "blockedHostnames",
+    ] as const) {
+      if (policy[key]?.length) {
+        merged[key] = Array.from(new Set([...(merged[key] ?? []), ...policy[key]]));
+      }
     }
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
@@ -317,10 +312,7 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
       return true;
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
-    if (embeddedIpv4) {
-      return isBlockedSpecialUseIpv4Address(embeddedIpv4, blockOptions);
-    }
-    return false;
+    return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4, blockOptions) : false;
   }
 
   // Security-critical parse failures should fail closed for any malformed IPv6 literal.
@@ -385,15 +377,22 @@ function resolveHostnamePolicyChecks(
     throw new Error("Invalid hostname");
   }
 
-  const hostnameAllowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
-  const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, policy);
+  // Operator denials take precedence over every trust exception, before DNS side effects.
+  const blockedHostnames = normalizeHostnameAllowlist(policy?.blockedHostnames);
+  if (blockedHostnames.some((pattern) => isHostnameAllowedByPattern(normalized, pattern))) {
+    throw new SsrFBlockedError(
+      `Domain policy: Blocked hostname (configured blocklist): ${hostname}. Try a URL on a different domain or ask the operator to review blockedHostnames.`,
+    );
+  }
 
+  const hostnameAllowlist = normalizeHostnameAllowlist(policy?.hostnameAllowlist);
   if (!matchesHostnameAllowlist(normalized, hostnameAllowlist)) {
     throw new SsrFBlockedError(
       `Domain policy: Blocked hostname (not in allowlist): ${hostname}. Permitted hostname patterns: ${hostnameAllowlist.join(", ")}. Try a URL on a permitted domain.`,
     );
   }
 
+  const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, policy);
   if (!skipPrivateNetworkChecks) {
     // Fail fast for literal hosts/IPs before any DNS lookup side-effects.
     assertAllowedHostOrIpOrThrow(normalized, policy);
@@ -424,8 +423,7 @@ function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
   if (!parsed || isIpv4Address(parsed)) {
     return false;
   }
-  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(parsed);
-  return embeddedIpv4?.range() === "loopback";
+  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "loopback";
 }
 
 function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
@@ -443,6 +441,20 @@ function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
     return false;
   }
   return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "unspecified";
+}
+
+function isBlockedTrustedResolvedIpv6Address(address: string): boolean {
+  const parsed = parseCanonicalIpAddress(address);
+  if (!parsed || isIpv4Address(parsed)) {
+    return false;
+  }
+  // Trusted exact-origin DNS may still allow ULA/private hosts, but policy can
+  // block unicast-shaped IPv6 ranges that narrower rebound helpers cannot see.
+  const range = parsed.range();
+  if (range !== "unicast" && range !== "rfc6052") {
+    return false;
+  }
+  return isBlockedSpecialUseIpv6Address(parsed);
 }
 
 function isExplicitLoopbackHostname(hostname: string): boolean {
@@ -464,6 +476,7 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
     if (
       isUnspecifiedIpAddressIncludingEmbeddedIpv4(entry.address) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
+      isBlockedTrustedResolvedIpv6Address(entry.address) ||
       isLinkLocalIpAddress(entry.address) ||
       isCloudMetadataIpAddress(entry.address)
     ) {
@@ -595,15 +608,19 @@ function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
 
 export async function resolvePinnedHostnameWithPolicy(
   hostname: string,
-  params: { lookupFn?: LookupFn; policy?: SsrFPolicy } = {},
+  params: { lookupFn?: LookupFn; policy?: SsrFPolicy; signal?: AbortSignal } = {},
 ): Promise<PinnedHostname> {
+  params.signal?.throwIfAborted();
   const { normalized, skipPrivateNetworkChecks } = resolveHostnamePolicyChecks(
     hostname,
     params.policy,
   );
 
-  const lookupFn = params.lookupFn ?? dnsLookup;
-  const results = normalizeLookupResults(await lookupFn(normalized, { all: true }));
+  const lookupFn: LookupFn = params.lookupFn ?? dnsLookup;
+  const results = normalizeLookupResults(
+    await runAbortablePreflight(() => lookupFn(normalized, { all: true }), params.signal),
+  );
+  params.signal?.throwIfAborted();
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
@@ -629,6 +646,23 @@ export async function resolvePinnedHostnameWithPolicy(
     addresses,
     lookup: createPinnedLookup({ hostname: normalized, addresses }),
   };
+}
+
+async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await run();
+  }
+  signal.throwIfAborted();
+  const aborted = createDeferredCore<never>();
+  const onAbort = () => aborted.reject(signal.reason);
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    // Node lookup cannot cancel getaddrinfo. Stop waiting, observe late failures,
+    // and remove the listener whether DNS or cancellation settles first.
+    return await Promise.race([aborted.promise, run()]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 export function assertHostnameAllowedWithPolicy(hostname: string, policy?: SsrFPolicy): string {

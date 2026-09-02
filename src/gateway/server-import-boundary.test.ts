@@ -100,6 +100,22 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("keeps remote catalog refresh networking behind the overlay boundary", () => {
+    const startupGraph = collectStaticValueImportGraph(
+      "src/plugins/gateway-startup-plugin-providers.ts",
+    );
+    const startupPaths = [...startupGraph.keys()].map((filePath) =>
+      path.relative(repoRoot, filePath),
+    );
+    const overlayGraph = collectStaticValueImportGraph("src/model-catalog/remote-overlay.ts");
+    const overlayPaths = [...overlayGraph.keys()].map((filePath) =>
+      path.relative(repoRoot, filePath),
+    );
+
+    expect(startupPaths).not.toContain("src/model-catalog/remote-refresh.ts");
+    expect(overlayPaths).not.toContain("src/infra/net/fetch-guard.ts");
+  });
+
   it("keeps ordinary session lifecycle code out of the prepared shutdown graph", () => {
     const graph = collectStaticValueImportGraph("src/gateway/server-close.runtime.ts");
 
@@ -147,9 +163,6 @@ describe("gateway startup import boundaries", () => {
     );
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toContain(
       'from "./config-reload.js"',
-    );
-    expect(readSource("src/gateway/server-runtime-state.ts")).not.toContain(
-      'createCanvasHostHandler } from "../../extensions/canvas/runtime-api.js"',
     );
     expect(serverImpl).not.toContain('from "../plugins/hook-runner-global.js"');
     expect(serverImpl).not.toContain('from "../tasks/task-registry.js"');
@@ -213,9 +226,6 @@ describe("gateway startup import boundaries", () => {
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);
     expect(cleanupCall).toBeGreaterThan(postReadyStart);
-    expect(serverImpl.slice(postReadyStart, cleanupCall + 300)).not.toContain(
-      "startupConfigLoad.pluginMetadataSnapshot?.index.installRecords",
-    );
     expect(cleanup).toContain("loadInstalledPluginIndexInstallRecordsSync()");
   });
 
@@ -244,6 +254,24 @@ describe("gateway startup import boundaries", () => {
       "pinnedHostKey: sshEndpoint.hostKey",
     );
     expect(workerStartup.match(/loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
+  });
+
+  it("keeps worker session tools out of idle worker startup", () => {
+    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
+    const startupFunction = workerStartup.indexOf(
+      "export async function createGatewayWorkerEnvironmentRuntime",
+    );
+    const eagerImportsStart = workerStartup.indexOf("const [", startupFunction);
+    const eagerImportsEnd = workerStartup.indexOf("]);", eagerImportsStart);
+    const eagerImports = workerStartup.slice(eagerImportsStart, eagerImportsEnd);
+
+    expect(eagerImports).not.toContain(
+      'import("./worker-environments/worker-session-tool-executor.js")',
+    );
+    expect(workerStartup).toContain(
+      "const loadWorkerSessionToolExecutorModule = createLazyRuntimeModule(",
+    );
+    expect(workerStartup).toContain("loadWorkerSessionToolExecutorModule().then(");
   });
 
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {

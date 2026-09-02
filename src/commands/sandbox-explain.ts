@@ -13,6 +13,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentConfig,
+  resolveConfiguredAgentId,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
@@ -144,7 +145,11 @@ export async function sandboxExplainCommand(
   const cfg = getRuntimeConfig();
 
   const requestedSession = opts.session?.trim();
-  const requestedAgentId = opts.agent?.trim() ? normalizeAgentId(opts.agent) : undefined;
+  const requestedAgent = opts.agent?.trim();
+  if (opts.agent !== undefined && !requestedAgent) {
+    throw new Error("--agent must not be blank");
+  }
+  const requestedAgentId = requestedAgent ? normalizeAgentId(requestedAgent) : undefined;
   const sessionAgentId =
     requestedSession && requestedSession !== "global" && requestedSession.includes(":")
       ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSession))
@@ -153,6 +158,9 @@ export async function sandboxExplainCommand(
     throw new Error(
       `Sandbox explain agent "${requestedAgentId}" does not match session agent "${sessionAgentId}".`,
     );
+  }
+  if (requestedAgentId) {
+    resolveConfiguredAgentId(cfg, requestedAgentId);
   }
   const resolvedAgentId = resolveSessionAgentId({
     sessionKey: requestedSession,
@@ -166,7 +174,6 @@ export async function sandboxExplainCommand(
     session: opts.session,
   });
 
-  const sandboxCfg = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, resolvedAgentId);
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg,
@@ -174,6 +181,14 @@ export async function sandboxExplainCommand(
     agentId: resolvedAgentId,
     classificationAgentId: resolvedAgentId,
   });
+  const configuredSandbox = resolveSandboxConfigForAgent(cfg, resolvedAgentId);
+  const sandboxCfg = sandboxRuntime.sandboxRequired
+    ? {
+        ...configuredSandbox,
+        scope: "agent" as const,
+        workspaceAccess: sandboxRuntime.workspaceAccess,
+      }
+    : configuredSandbox;
   const mainSessionKey = sandboxRuntime.mainSessionKey;
   const sessionIsSandboxed = sandboxRuntime.sandboxed;
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {
@@ -202,6 +217,7 @@ export async function sandboxExplainCommand(
   const workspaceLayout = resolveSandboxWorkspaceLayoutPaths({
     cfg: sandboxCfg,
     agentId: resolvedAgentId,
+    isolationSubject: sandboxRuntime.isolationSubject,
     rawSessionKey:
       sessionKey === "global"
         ? buildAgentMainSessionKey({

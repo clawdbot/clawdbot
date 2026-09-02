@@ -6,6 +6,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -75,7 +77,14 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       return result;
     };
 
-    const result = await runEmbeddedAgent({ ...laneRunParams(), enqueue });
+    const params = laneRunParams();
+    const sessionEntry: InternalSessionEntry = {
+      sessionId: params.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "cli-dispatch-lifecycle",
+    };
+    await upsertSessionEntryCore(params.sessionTarget, sessionEntry);
+    const result = await runEmbeddedAgent({ ...params, enqueue });
 
     expect(result.payloads?.[0]?.text).toBe("dispatched");
     // Both lane admissions (session, then global) must fully wrap the
@@ -88,5 +97,10 @@ describe("runEmbeddedAgent CLI dispatch lane admission", () => {
       "global-lane-exit",
     ]);
     expect(runEmbeddedAgentViaCliBackendIfEligible).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentViaCliBackendIfEligible.mock.calls[0]?.[0].sessionTarget).toMatchObject({
+      ...params.sessionTarget,
+      expectedWriterRunId: params.runId,
+      expectedLifecycleRevision: sessionEntry.lifecycleRevision,
+    });
   });
 });

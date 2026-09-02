@@ -30,9 +30,12 @@ const feishuIngressIdentity = defineStableChannelIngressIdentity({
   sensitivity: "pii",
   aliases: [
     {
+      // One configured entry is deliberately ambiguous between open_id and
+      // user_id, so it normalizes under both same-kind fields and matches
+      // whichever sender candidate carries the value under exact-field binding.
       key: "feishu-alt-id",
       kind: FEISHU_ID_KIND,
-      normalizeEntry: () => null,
+      normalizeEntry: normalizeFeishuAllowEntry,
       normalizeSubject: normalizeFeishuAllowEntry,
       sensitivity: "pii",
     },

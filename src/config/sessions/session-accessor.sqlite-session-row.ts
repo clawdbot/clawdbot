@@ -6,7 +6,10 @@ import {
 import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import {
+  projectCanonicalSessionEntryShape,
+  stripRuntimeOnlySessionSkillsFields,
+} from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
@@ -85,21 +88,17 @@ export function bindSessionNode(params: {
 }) {
   const canonicalEntry = projectCanonicalSessionEntryShape({ ...params.entry });
   const actor = params.entry.createdActor;
-  const legacyActorId = normalizeText(
-    (params.entry as SessionEntry & { createdBy?: { id?: unknown } }).createdBy?.id,
-  );
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
-    entry_json: JSON.stringify(canonicalEntry),
+    entry_json: JSON.stringify(stripRuntimeOnlySessionSkillsFields(canonicalEntry)),
     entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeStatus(params.entry.status),
     created_at: finiteSqliteNumber(params.entry.createdAt),
     created_via: normalizeSqliteCreatedVia(params.entry.createdVia),
-    created_actor_type:
-      normalizeSqliteCreatedActorType(actor?.type) ?? (legacyActorId ? "human" : null),
-    created_actor_id: normalizeText(actor?.id) ?? legacyActorId,
+    created_actor_type: normalizeSqliteCreatedActorType(actor?.type),
+    created_actor_id: normalizeText(actor?.id),
     project_id: normalizeText(params.entry.projectId),
     parent_session_key:
       normalizeText(params.entry.parentSessionKey) ?? normalizeText(params.entry.spawnedBy),

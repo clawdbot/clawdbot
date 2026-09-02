@@ -9,7 +9,7 @@ import {
   listApplicationCommands,
   overwriteApplicationCommands,
   overwriteGuildApplicationCommands,
-} from "./api.js";
+} from "./api.commands.js";
 import { commandsEqual, stableComparableObject } from "./command-comparison.js";
 import type { BaseCommand } from "./commands.js";
 import type { RequestClient } from "./rest.js";

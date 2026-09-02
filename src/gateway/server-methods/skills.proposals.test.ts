@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readSkillProposalEvents } from "../../skills/workshop/store-evaluation.js";
+import { writeConfigMachineState } from "../../state/config-machine-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -41,7 +42,10 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../skills/lifecycle/clawhub.js", () => ({
   installSkillFromClawHub: vi.fn(),
+  readClawHubSkillsLockfileStatusSync: vi.fn(() => ({ kind: "missing" })),
   readLocalSkillCardContentSync: vi.fn(),
+  resolveClawHubSkillStatusLinkSync: vi.fn(),
+  resolveLocalSkillCardStatusSync: vi.fn(),
   searchSkillsFromClawHub: vi.fn(),
   updateSkillsFromClawHub: vi.fn(),
 }));
@@ -89,6 +93,7 @@ vi.mock("./chat.js", () => ({
 
 vi.mock("./chat-send-handler.js", () => ({
   handleChatSend: mocks.chatSend,
+  handleChatSendWithSkillWorkshopProposalRevision: mocks.chatSend,
 }));
 
 const { skillsHandlers } = await import("./skills.js");
@@ -119,7 +124,11 @@ describe("skills proposal gateway handlers", () => {
       outcomes: [],
     };
     mocks.evaluateSkillProposal.mockResolvedValue({
-      record: { id: "proposal-1", evaluation },
+      record: {
+        id: "proposal-1",
+        draftFile: "generations/123e4567-e89b-42d3-a456-426614174000/PROPOSAL.md",
+        evaluation,
+      },
       evaluation,
     });
     mocks.listSkillProposalEvents.mockReset();
@@ -150,9 +159,10 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(create.ok).toBe(true);
     const created = create.response as {
-      record: { id: string; supportFiles?: Array<{ path: string }> };
+      record: { id: string; draftFile: string; supportFiles?: Array<{ path: string }> };
     };
     expect(created.record.id).toMatch(/^weather-planner-/);
+    expect(created.record.draftFile).toBe("PROPOSAL.md");
     expect(created.record.supportFiles?.[0]?.path).toBe("references/weather.md");
     expect(
       readSkillProposalEvents({
@@ -171,7 +181,11 @@ describe("skills proposal gateway handlers", () => {
       proposalId: created.record.id,
     });
     expect(inspect.ok).toBe(true);
+    const reviewedRevisionHash = (inspect.response as { revisionHash: string }).revisionHash;
     expect((inspect.response as { content: string }).content).toContain("status: proposal");
+    expect((inspect.response as { record: { draftFile: string } }).record.draftFile).toBe(
+      "PROPOSAL.md",
+    );
     expect(
       (
         inspect.response as {
@@ -187,21 +201,32 @@ describe("skills proposal gateway handlers", () => {
 
     const revise = await callHandler("skills.proposals.revise", {
       proposalId: created.record.id,
+      expectedRevisionHash: reviewedRevisionHash,
       description: "Plan with current weather",
       content: "# Weather Planner\n\nUse current weather and alerts.\n",
     });
     expect(revise.ok).toBe(true);
+    const revisedRevisionHash = (revise.response as { revisionHash: string }).revisionHash;
     expect(
-      (revise.response as { record: { id: string; proposedVersion: string } }).record,
+      (
+        revise.response as {
+          record: { id: string; proposedVersion: string; draftFile: string };
+        }
+      ).record,
     ).toMatchObject({
       id: created.record.id,
       proposedVersion: "v2",
+      draftFile: "PROPOSAL.md",
     });
 
     const apply = await callHandler("skills.proposals.apply", {
       proposalId: created.record.id,
+      expectedRevisionHash: revisedRevisionHash,
     });
     expect(apply.ok).toBe(true);
+    expect((apply.response as { record: { draftFile: string } }).record.draftFile).toBe(
+      "PROPOSAL.md",
+    );
     await expect(
       fs.readFile(path.join(mocks.workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
     ).resolves.toContain("Use current weather and alerts.");
@@ -211,7 +236,58 @@ describe("skills proposal gateway handlers", () => {
         "utf8",
       ),
     ).resolves.toContain("Use current weather");
+
+    const update = await callHandler("skills.proposals.update", {
+      skillName: "weather-planner",
+      content: "# Weather Planner\n\nUse weather, alerts, and timing.\n",
+    });
+    expect(update.error).toBeUndefined();
+    expect(update.ok).toBe(true);
+    expect((update.response as { record: { draftFile: string } }).record.draftFile).toBe(
+      "PROPOSAL.md",
+    );
   });
+
+  it("returns the stored review outcomes from curator status", async () => {
+    writeConfigMachineState(
+      "skills.curatorState",
+      {
+        lastAttemptAtMs: 100,
+        lastSuccessAtMs: 100,
+        lastError: null,
+        lastResult: {
+          collectionReviews: { workspace: { attemptedAtMs: 100, succeededAtMs: 101 } },
+          experienceReviews: { workspace: { attemptedAtMs: 102, outcome: "nothing" } },
+        },
+      },
+      { env: testState.env },
+    );
+
+    await expect(callHandler("skills.curator.status", {})).resolves.toMatchObject({
+      ok: true,
+      response: {
+        collectionReview: { workspace: { attemptedAtMs: 100, succeededAtMs: 101 } },
+        experienceReview: { workspace: { attemptedAtMs: 102, outcome: "nothing" } },
+      },
+    });
+  });
+
+  it.each(["pin", "unpin", "restore"])(
+    "returns an explicit retirement error for the registered curator %s method",
+    async (action) => {
+      await expect(
+        callHandler(`skills.curator.${action}`, { skill: "daily-brief" }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining("Skill lifecycle curation is retired"),
+          }),
+        }),
+      );
+    },
+  );
 
   it("marks manually created create targets stale before list and inspect responses", async () => {
     const create = await callHandler("skills.proposals.create", {
@@ -313,7 +389,10 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(evaluate).toMatchObject({
       ok: true,
-      response: { evaluation: { id: "evaluation-1", trigger: "manual" } },
+      response: {
+        record: { draftFile: "PROPOSAL.md" },
+        evaluation: { id: "evaluation-1", trigger: "manual" },
+      },
     });
     expect(mocks.evaluateSkillProposal).toHaveBeenCalledWith({
       workspaceDir: mocks.workspaceDir,
@@ -346,7 +425,11 @@ describe("skills proposal gateway handlers", () => {
   it("passes expected revision hashes through proposal mutations", async () => {
     const expectedRevisionHash = "e".repeat(64);
     const correlationId = "correlation-mutation-1";
-    const record = { id: "proposal-1", draftHash: "d".repeat(64) };
+    const record = {
+      id: "proposal-1",
+      draftFile: "generations/123e4567-e89b-42d3-a456-426614174000/PROPOSAL.md",
+      draftHash: "d".repeat(64),
+    };
     mocks.reviseSkillProposal.mockResolvedValueOnce({
       record,
       revisionHash: expectedRevisionHash,
@@ -356,23 +439,23 @@ describe("skills proposal gateway handlers", () => {
     mocks.rejectSkillProposal.mockResolvedValueOnce(record);
     mocks.quarantineSkillProposal.mockResolvedValueOnce(record);
 
-    await callHandler("skills.proposals.revise", {
+    const revise = await callHandler("skills.proposals.revise", {
       proposalId: "proposal-1",
       expectedRevisionHash,
       correlationId,
       supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
     });
-    await callHandler("skills.proposals.apply", {
+    const apply = await callHandler("skills.proposals.apply", {
       proposalId: "proposal-1",
       expectedRevisionHash,
       correlationId,
     });
-    await callHandler("skills.proposals.reject", {
+    const reject = await callHandler("skills.proposals.reject", {
       proposalId: "proposal-1",
       expectedRevisionHash,
       correlationId,
     });
-    await callHandler("skills.proposals.quarantine", {
+    const quarantine = await callHandler("skills.proposals.quarantine", {
       proposalId: "proposal-1",
       expectedRevisionHash,
       correlationId,
@@ -393,6 +476,52 @@ describe("skills proposal gateway handlers", () => {
         }),
       );
     }
+    expect(revise.response).toMatchObject({ record: { draftFile: "PROPOSAL.md" } });
+    expect(apply.response).toMatchObject({ record: { draftFile: "PROPOSAL.md" } });
+    expect(reject.response).toMatchObject({ draftFile: "PROPOSAL.md" });
+    expect(quarantine.response).toMatchObject({ draftFile: "PROPOSAL.md" });
+  });
+
+  it.each([
+    ["skills.proposals.apply", {}, mocks.applySkillProposal],
+    ["skills.proposals.reject", {}, mocks.rejectSkillProposal],
+    [
+      "skills.proposals.requestRevision",
+      {
+        instructions: "Tighten the examples.",
+        sessionKey: "agent:main:revision",
+        idempotencyKey: "revision-missing-hash",
+      },
+      mocks.chatSend,
+    ],
+  ] as const)("%s refuses missing reviewed revision evidence", async (method, extra, owner) => {
+    const result = await callHandler(method, { proposalId: "proposal-1", ...extra });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("expectedRevisionHash"),
+      },
+    });
+    expect(owner).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["skills.proposals.revise", { description: "Tighter" }, mocks.reviseSkillProposal],
+    ["skills.proposals.quarantine", {}, mocks.quarantineSkillProposal],
+  ] as const)("%s preserves optional revision evidence", async (method, extra, owner) => {
+    owner.mockResolvedValueOnce(
+      method.endsWith("revise")
+        ? { record: { id: "proposal-1" }, revisionHash: "b".repeat(64), content: "# Revised" }
+        : { id: "proposal-1" },
+    );
+
+    await callHandler(method, { proposalId: "proposal-1", ...extra });
+
+    expect(owner).toHaveBeenCalledWith(
+      expect.objectContaining({ proposalId: "proposal-1", expectedRevisionHash: undefined }),
+    );
   });
 
   it("reports empty historical scan coverage and validates scan direction", async () => {
@@ -451,6 +580,7 @@ describe("skills proposal gateway handlers", () => {
       deliver: false,
       idempotencyKey: "revision-run-1",
       message: "Make the support files 5",
+      queueMode: "followup",
       sessionKey: "agent:main:session:skill-workshop",
       suppressCommandInterpretation: true,
     });
@@ -461,11 +591,18 @@ describe("skills proposal gateway handlers", () => {
       "Use `skill_workshop` with `action=inspect` first, then `action=revise`",
     );
     expect(String(forwarded.params?.systemProvenanceReceipt)).toContain(
-      `expected_revision_hash=${expectedRevisionHash}`,
+      "The proposal ID and expected revision hash are bound by this run",
     );
+    expect(String(forwarded.params?.systemProvenanceReceipt)).not.toContain(expectedRevisionHash);
     expect(String(forwarded.params?.systemProvenanceReceipt)).not.toContain(
       "Make the support files 5",
     );
+    expect(mocks.chatSend.mock.calls[0]?.[1]).toEqual({
+      agentId: "main",
+      workspaceDir: mocks.workspaceDir,
+      proposalId: created.record.id,
+      expectedRevisionHash,
+    });
   });
 
   it("does not start revision chat turns from a stale revision hash", async () => {
@@ -476,10 +613,20 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(create.ok).toBe(true);
     const created = create.response as { record: { id: string } };
+    const inspected = await callHandler("skills.proposals.inspect", {
+      proposalId: created.record.id,
+    });
+    const expectedRevisionHash = (inspected.response as { revisionHash: string }).revisionHash;
+    const revised = await callHandler("skills.proposals.revise", {
+      proposalId: created.record.id,
+      expectedRevisionHash,
+      description: "Updated while the operator was reviewing",
+    });
+    const currentRevisionHash = (revised.response as { revisionHash: string }).revisionHash;
 
     const result = await callHandler("skills.proposals.requestRevision", {
       proposalId: created.record.id,
-      expectedRevisionHash: "f".repeat(64),
+      expectedRevisionHash,
       instructions: "Revise this draft",
       sessionKey: "agent:main:session:skill-workshop",
       idempotencyKey: "revision-run-stale",
@@ -489,8 +636,63 @@ describe("skills proposal gateway handlers", () => {
     expect((result.error as { message?: string }).message).toContain(
       "Skill proposal revision changed",
     );
+    expect((result.error as { details?: unknown }).details).toEqual({
+      code: "SKILL_PROPOSAL_REVISION_CHANGED",
+      expectedRevisionHash,
+      currentRevisionHash,
+    });
     expect(mocks.chatSend).not.toHaveBeenCalled();
+    await expect(
+      callHandler("skills.proposals.inspect", { proposalId: created.record.id }),
+    ).resolves.toMatchObject({
+      ok: true,
+      response: {
+        revisionHash: currentRevisionHash,
+        record: { status: "pending" },
+      },
+    });
   });
+
+  it.each(["apply", "reject"])(
+    "returns structured stale details without mutating H2 for %s",
+    async (action) => {
+      const create = await callHandler("skills.proposals.create", {
+        name: `Stale ${action} sampler`,
+        description: `Rejects a stale ${action} decision`,
+        content: `# Stale ${action} sampler\n`,
+      });
+      const proposalId = (create.response as { record: { id: string } }).record.id;
+      const inspected = await callHandler("skills.proposals.inspect", { proposalId });
+      const expectedRevisionHash = (inspected.response as { revisionHash: string }).revisionHash;
+      const revised = await callHandler("skills.proposals.revise", {
+        proposalId,
+        expectedRevisionHash,
+        description: "Changed after operator review",
+      });
+      const currentRevisionHash = (revised.response as { revisionHash: string }).revisionHash;
+
+      const result = await callHandler(`skills.proposals.${action}`, {
+        proposalId,
+        expectedRevisionHash,
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          details: {
+            code: "SKILL_PROPOSAL_REVISION_CHANGED",
+            expectedRevisionHash,
+            currentRevisionHash,
+          },
+        },
+      });
+      await expect(callHandler("skills.proposals.inspect", { proposalId })).resolves.toMatchObject({
+        ok: true,
+        response: { revisionHash: currentRevisionHash, record: { status: "pending" } },
+      });
+    },
+  );
 
   it("does not start revision chat turns for non-pending proposals", async () => {
     const create = await callHandler("skills.proposals.create", {
@@ -500,14 +702,20 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(create.ok).toBe(true);
     const created = create.response as { record: { id: string } };
+    const inspect = await callHandler("skills.proposals.inspect", {
+      proposalId: created.record.id,
+    });
+    const expectedRevisionHash = (inspect.response as { revisionHash: string }).revisionHash;
     const apply = await callHandler("skills.proposals.apply", {
       proposalId: created.record.id,
+      expectedRevisionHash,
     });
     expect(apply.ok).toBe(true);
     mocks.chatSend.mockClear();
 
     const result = await callHandler("skills.proposals.requestRevision", {
       proposalId: created.record.id,
+      expectedRevisionHash,
       instructions: "Make the support files 5",
       sessionKey: "agent:main:session:skill-workshop",
       idempotencyKey: "revision-run-applied",

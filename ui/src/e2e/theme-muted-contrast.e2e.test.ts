@@ -1,14 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { controlUiBundledGatewayUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDirectory = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/theme-muted-contrast",
-);
 
 const themeCases = [
   { family: "claw", mode: "dark", resolved: "dark" },
@@ -17,6 +15,22 @@ const themeCases = [
   { family: "knot", mode: "light", resolved: "openknot-light" },
   { family: "dash", mode: "dark", resolved: "dash" },
   { family: "dash", mode: "light", resolved: "dash-light" },
+  { family: "absolutely", mode: "dark", resolved: "absolutely" },
+  { family: "absolutely", mode: "light", resolved: "absolutely-light" },
+  { family: "tide", mode: "dark", resolved: "tide" },
+  { family: "tide", mode: "light", resolved: "tide-light" },
+  { family: "beacon", mode: "dark", resolved: "beacon" },
+  { family: "beacon", mode: "light", resolved: "beacon-light" },
+  { family: "phosphor", mode: "dark", resolved: "phosphor" },
+  { family: "phosphor", mode: "light", resolved: "phosphor-light" },
+  { family: "crt", mode: "dark", resolved: "crt" },
+  { family: "crt", mode: "light", resolved: "crt-light" },
+  { family: "manuscript", mode: "dark", resolved: "manuscript" },
+  { family: "manuscript", mode: "light", resolved: "manuscript-light" },
+  { family: "rose", mode: "dark", resolved: "rose" },
+  { family: "rose", mode: "light", resolved: "rose-light" },
+  { family: "miami", mode: "dark", resolved: "miami" },
+  { family: "miami", mode: "light", resolved: "miami-light" },
 ] as const;
 
 const textTokens = [
@@ -30,8 +44,25 @@ const textTokens = [
 
 const surfaceTokens = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--panel"] as const;
 
-function themeConfigResponse(family: "claw" | "knot" | "dash", mode: "dark" | "light") {
-  const config = { ui: { prefs: { theme: family, themeMode: mode } } };
+function themeConfigResponse(
+  family:
+    | "claw"
+    | "knot"
+    | "dash"
+    | "absolutely"
+    | "tide"
+    | "beacon"
+    | "phosphor"
+    | "crt"
+    | "manuscript"
+    | "rose"
+    | "miami",
+  mode: "dark" | "light",
+  accent?: string,
+) {
+  const config = {
+    ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode, accent } },
+  };
   const hash = `theme-contrast-${family}-${mode}`;
   return {
     appliedConfigHash: hash,
@@ -42,49 +73,6 @@ function themeConfigResponse(family: "claw" | "knot" | "dash", mode: "dark" | "l
     raw: JSON.stringify(config),
     valid: true,
   };
-}
-
-type RenderedColor = {
-  red: number;
-  green: number;
-  blue: number;
-  alpha: number;
-};
-
-function parseRenderedColor(color: string): RenderedColor {
-  const trimmed = color.trim();
-  const shortHex = /^#([a-f\d])([a-f\d])([a-f\d])$/iu.exec(trimmed);
-  const hex = shortHex ?? /^#([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/iu.exec(trimmed);
-  if (hex) {
-    const channels = hex
-      .slice(1)
-      .map((channel) => Number.parseInt(shortHex ? channel.repeat(2) : channel, 16));
-    const [red, green, blue] = channels;
-    if (red !== undefined && green !== undefined && blue !== undefined) {
-      return { alpha: 1, blue, green, red };
-    }
-  }
-
-  const rgb =
-    /^rgba?\(\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)(?:\s*,\s*(\d*\.?\d+))?\s*\)$/u.exec(
-      trimmed,
-    );
-  if (rgb) {
-    const [red, green, blue] = rgb.slice(1, 4).map(Number);
-    const alpha = rgb[4] === undefined ? 1 : Number(rgb[4]);
-    if (
-      red !== undefined &&
-      green !== undefined &&
-      blue !== undefined &&
-      [red, green, blue].every((channel) => channel >= 0 && channel <= 255) &&
-      alpha >= 0 &&
-      alpha <= 1
-    ) {
-      return { alpha, blue, green, red };
-    }
-  }
-
-  throw new Error(`Expected a browser-rendered RGB or theme hex color, received ${color}`);
 }
 
 function compositeColor(foreground: RenderedColor, background: RenderedColor): RenderedColor {
@@ -101,8 +89,7 @@ function compositeColor(foreground: RenderedColor, background: RenderedColor): R
   };
 }
 
-function relativeLuminance(color: string | RenderedColor): number {
-  const resolved = typeof color === "string" ? parseRenderedColor(color) : color;
+function relativeLuminance(resolved: RenderedColor): number {
   if (resolved.alpha !== 1) {
     throw new Error("Composite a translucent rendered color before calculating contrast");
   }
@@ -117,7 +104,7 @@ function relativeLuminance(color: string | RenderedColor): number {
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 
-function contrastRatio(foreground: string | RenderedColor, background: string | RenderedColor) {
+function contrastRatio(foreground: RenderedColor, background: RenderedColor) {
   const first = relativeLuminance(foreground);
   const second = relativeLuminance(background);
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
@@ -131,9 +118,36 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it.each(themeCases)(
-    "keeps the real $resolved appearance selection at WCAG AA",
-    async ({ family, mode, resolved }) => {
+  it("measures modern rendered colors in sRGB", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const rendered = await page.evaluate(() => {
+        const probe = document.createElement("span");
+        document.body.append(probe);
+        // Captured from an actual theme transition; its negative Oklab channel
+        // cannot be interpreted as an RGB component.
+        probe.style.color = "oklab(0.731043 0.00229835 -0.00707035)";
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      expect(
+        (await page.evaluate(resolveRenderedColors, { transition: rendered })).transition,
+      ).toEqual({ red: 167, green: 167, blue: 173, alpha: 1 });
+    });
+  });
+
+  it.each(
+    themeCases.flatMap(({ family, mode, resolved }) =>
+      (family === "claw" ? [undefined, "#000000", "#ffffff"] : [undefined]).map((accent) => ({
+        family,
+        mode,
+        resolved,
+        accent,
+      })),
+    ),
+  )(
+    "keeps $resolved appearance and picker states legible (accent $accent)",
+    async ({ family, mode, resolved, accent }) => {
       const context = await suite.newBrowserContext({
         colorScheme: mode,
         locale: "en-US",
@@ -158,7 +172,7 @@ suite.define(() => {
       const page = await context.newPage();
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "config.get": themeConfigResponse(initialFamily, mode),
+          "config.get": themeConfigResponse(initialFamily, mode, accent),
         },
       });
 
@@ -170,13 +184,15 @@ suite.define(() => {
         await selectedCard.waitFor({ state: "visible" });
         await gateway.waitForRequest("config.get");
         const initialConfigGets = (await gateway.getRequests("config.get")).length;
-        const committed = themeConfigResponse(family, mode);
+        const committed = themeConfigResponse(family, mode, accent);
         await gateway.deferNext("config.patch");
         await selectedCard.click();
         const patch = await gateway.waitForRequest("config.patch");
         const raw = (patch.params as { raw?: unknown } | undefined)?.raw;
         expect(typeof raw).toBe("string");
-        expect(JSON.parse(String(raw))).toMatchObject({ ui: { prefs: { theme: family } } });
+        expect(JSON.parse(String(raw))).toMatchObject({
+          ui: { prefs: { theme: family === "claw" ? null : family } },
+        });
 
         // Theme clicks apply immediately; the eventual Gateway acknowledgement must not revert them.
         await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
@@ -232,6 +248,15 @@ suite.define(() => {
           { foregroundNames: [...textTokens], surfaceNames: [...surfaceTokens] },
         );
 
+        const colors = await page.evaluate(resolveRenderedColors, {
+          ...rendered.foregrounds,
+          ...rendered.surfaces,
+          description: rendered.descriptionColor,
+          ...Object.fromEntries(
+            rendered.backgroundLayers.map((color, index) => [`layer-${index}`, color]),
+          ),
+        });
+
         const pairings = textTokens.flatMap((textToken) =>
           surfaceTokens.map((surfaceToken) => {
             const foreground = rendered.foregrounds[textToken];
@@ -239,7 +264,7 @@ suite.define(() => {
             if (!foreground || !background) {
               throw new Error(`Missing browser-resolved ${textToken} or ${surfaceToken}`);
             }
-            const contrast = contrastRatio(foreground, background);
+            const contrast = contrastRatio(colors[textToken]!, colors[surfaceToken]!);
             expect(
               contrast,
               `${resolved}: ${textToken} ${foreground} on ${surfaceToken} ${background}`,
@@ -254,14 +279,11 @@ suite.define(() => {
           }),
         );
 
-        let descriptionBackground = parseRenderedColor(rendered.surfaces["--bg"] ?? "");
-        for (const backgroundLayer of rendered.backgroundLayers.toReversed()) {
-          descriptionBackground = compositeColor(
-            parseRenderedColor(backgroundLayer),
-            descriptionBackground,
-          );
+        let descriptionBackground = colors["--bg"]!;
+        for (let index = rendered.backgroundLayers.length - 1; index >= 0; index--) {
+          descriptionBackground = compositeColor(colors[`layer-${index}`]!, descriptionBackground);
         }
-        const descriptionColor = parseRenderedColor(rendered.descriptionColor);
+        const descriptionColor = colors.description!;
         const descriptionForeground = compositeColor(
           {
             ...descriptionColor,
@@ -275,17 +297,83 @@ suite.define(() => {
           `${resolved}: actual rendered muted Appearance description, including ancestor backgrounds and opacity`,
         ).toBeGreaterThanOrEqual(4.5);
 
+        const picker = page.locator("#settings-font-chat");
+        await picker.click();
+        const selected = picker.locator("wa-option:state(selected)");
+        await selected.waitFor({ state: "visible" });
+        const optionPaint = async (option: typeof selected) => {
+          await option.evaluate(finishElementAnimations);
+          return option.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return {
+              background: style.backgroundColor,
+              label: getComputedStyle(element.querySelector(".picker-select__label")!).color,
+              description: getComputedStyle(element.querySelector(".picker-select__description")!)
+                .color,
+              outline: style.outlineStyle,
+              outlineWidth: Number.parseFloat(style.outlineWidth),
+              outlineColor: style.outlineColor,
+            };
+          });
+        };
+        // Options are slotted into a shadow listbox: light-DOM ancestors miss its painted surface.
+        const listboxBackground = await picker
+          .locator('[part="listbox"]')
+          .evaluate((element) => getComputedStyle(element).backgroundColor);
+        const assertOptionContrast = async (option: typeof selected) => {
+          const paint = await optionPaint(option);
+          const optionColors = await page.evaluate(resolveRenderedColors, {
+            background: paint.background,
+            listbox: listboxBackground,
+            label: paint.label,
+            description: paint.description,
+            outline: paint.outlineColor,
+          });
+          const background = compositeColor(optionColors.background!, optionColors.listbox!);
+          for (const text of [optionColors.label!, optionColors.description!]) {
+            expect(
+              contrastRatio(text, background),
+              `${resolved} picker text`,
+            ).toBeGreaterThanOrEqual(4.5);
+          }
+          return { paint, background, outline: optionColors.outline! };
+        };
+        const selectedValue = await selected.getAttribute("value");
+        const initialPaint = await optionPaint(selected);
+        await page.keyboard.press("ArrowDown");
+        const current = picker.locator("wa-option:state(current)");
+        await expect.poll(() => current.getAttribute("value")).not.toBe(selectedValue);
+        expect(await selected.getAttribute("value")).toBe(selectedValue);
+        await expect
+          .poll(async () => (await optionPaint(selected)).background)
+          .toBe(initialPaint.background);
+        await assertOptionContrast(selected);
+        const focused = await assertOptionContrast(current);
+        expect(focused.paint.outline).not.toBe("none");
+        expect(focused.paint.outlineWidth).toBeGreaterThanOrEqual(2);
+        expect(contrastRatio(focused.outline, focused.background)).toBeGreaterThanOrEqual(3);
+        await picker.locator('wa-option[value="system"]').hover();
+        await assertOptionContrast(picker.locator('wa-option[value="system"]'));
+        await page.keyboard.press("Escape");
+        expect(new URL(page.url()).pathname).toBe("/settings/appearance");
+        expect(await selected.getAttribute("value")).toBe(selectedValue);
+
         if (captureUiProof) {
-          await mkdir(proofDirectory, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });
+          const proofName = accent ? `${resolved}-${accent.slice(1)}` : resolved;
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDirectory, `${resolved}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "theme-muted-contrast"),
+              `${proofName}.png`,
+            ),
           });
           await writeFile(
-            path.join(proofDirectory, `${resolved}.json`),
+            path.join(path.join(suite.artifactDir, "theme-muted-contrast"), `${proofName}.json`),
             `${JSON.stringify(
               {
+                accent,
                 description: {
                   background: descriptionBackground,
                   contrast: Number(descriptionContrast.toFixed(3)),
@@ -385,14 +473,20 @@ suite.define(() => {
         expect(rendered.bodyWidth).toBeLessThanOrEqual(rendered.viewportWidth);
 
         if (captureUiProof) {
-          await mkdir(proofDirectory, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
-            path: path.join(proofDirectory, "skill-workshop-today-mobile.png"),
+            path: path.join(
+              path.join(suite.artifactDir, "theme-muted-contrast"),
+              "skill-workshop-today-mobile.png",
+            ),
           });
           await writeFile(
-            path.join(proofDirectory, "skill-workshop-today-mobile.json"),
+            path.join(
+              path.join(suite.artifactDir, "theme-muted-contrast"),
+              "skill-workshop-today-mobile.json",
+            ),
             `${JSON.stringify(rendered, null, 2)}\n`,
           );
         }

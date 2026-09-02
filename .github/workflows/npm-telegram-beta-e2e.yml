@@ -60,6 +60,36 @@ on:
         required: false
         default: ""
         type: string
+      prepublish_plugin_registry_artifact_name:
+        description: Immutable prerelease plugin registry artifact name
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_id:
+        description: Immutable prerelease plugin registry artifact id
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_digest:
+        description: Prerelease plugin registry artifact service digest
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_run_id:
+        description: Prerelease plugin registry artifact producer run id
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_run_attempt:
+        description: Prerelease plugin registry artifact producer run attempt
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_manifest_sha256:
+        description: Prerelease plugin registry manifest SHA-256
+        required: false
+        default: ""
+        type: string
       harness_ref:
         description: Source ref for the private QA harness; defaults to the dispatched workflow ref
         required: false
@@ -77,6 +107,16 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
+      rtt_scenario:
+        description: Optional Telegram QA scenario id for repeated RTT sampling
+        required: false
+        default: ""
+        type: string
+      allow_older_binary_destructive_actions:
+        description: Allow destructive actions for intentional historical downgrade or recovery proof
+        required: false
+        default: false
+        type: boolean
       advisory:
         description: Treat package Telegram failures as advisory for the caller
         required: false
@@ -143,6 +183,36 @@ on:
         required: false
         default: ""
         type: string
+      prepublish_plugin_registry_artifact_name:
+        description: Immutable prerelease plugin registry artifact name
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_id:
+        description: Immutable prerelease plugin registry artifact id
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_digest:
+        description: Prerelease plugin registry artifact service digest
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_run_id:
+        description: Prerelease plugin registry artifact producer run id
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_artifact_run_attempt:
+        description: Prerelease plugin registry artifact producer run attempt
+        required: false
+        default: ""
+        type: string
+      prepublish_plugin_registry_manifest_sha256:
+        description: Prerelease plugin registry manifest SHA-256
+        required: false
+        default: ""
+        type: string
       package_label:
         description: Optional display label for an artifact-backed package candidate
         required: false
@@ -163,6 +233,16 @@ on:
         required: false
         default: ""
         type: string
+      rtt_scenario:
+        description: Optional Telegram QA scenario id for repeated RTT sampling
+        required: false
+        default: ""
+        type: string
+      allow_older_binary_destructive_actions:
+        description: Allow destructive actions for intentional historical downgrade or recovery proof
+        required: false
+        default: false
+        type: boolean
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -185,12 +265,12 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 60
     environment: qa-live-shared
@@ -202,19 +282,19 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout dispatch ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.harness_ref || github.sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Blacksmith Docker Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@a5256a73e30f09e37e3eceb8ca36043d17621d24 # v2.1.0
         with:
-          max-cache-size-mb: 800000
+          cache-key: scripts/e2e/Dockerfile
 
       - name: Build Docker E2E image
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
+        uses: useblacksmith/build-push-action@9b0579bbec7a6cad2f171596c57e7ac1e7658850 # v2.3.0
         with:
           context: .
           file: ./scripts/e2e/Dockerfile
@@ -228,6 +308,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -253,6 +334,12 @@ jobs:
           PACKAGE_SHA256: ${{ inputs.package_sha256 || '' }}
           PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha || '' }}
           PACKAGE_VERSION: ${{ inputs.package_version || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST: ${{ inputs.prepublish_plugin_registry_artifact_digest || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID: ${{ inputs.prepublish_plugin_registry_artifact_id || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: ${{ inputs.prepublish_plugin_registry_artifact_name || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT: ${{ inputs.prepublish_plugin_registry_artifact_run_attempt || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID: ${{ inputs.prepublish_plugin_registry_artifact_run_id || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ inputs.prepublish_plugin_registry_manifest_sha256 || '' }}
           PROVIDER_MODE: ${{ inputs.provider_mode }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -276,9 +363,25 @@ jobs:
               artifact_tuple_present=1
             fi
           done
+          registry_tuple_fields=0
+          for value in \
+            "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST" \
+            "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID" \
+            "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" \
+            "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" \
+            "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" \
+            "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"; do
+            if [[ -n "${value// }" ]]; then
+              ((registry_tuple_fields += 1))
+            fi
+          done
           if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
             if [[ "$artifact_tuple_present" == "1" ]]; then
               echo "Artifact-backed Telegram E2E requires all artifact identity fields or none." >&2
+              exit 1
+            fi
+            if [[ "$registry_tuple_fields" -ne 0 ]]; then
+              echo "Prerelease plugin registry inputs require an artifact-backed OpenClaw package." >&2
               exit 1
             fi
             if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
@@ -295,6 +398,26 @@ jobs:
                   -z "${PACKAGE_VERSION// }" ]]; then
             echo "Artifact-backed Telegram E2E requires the complete immutable artifact and package identity tuple." >&2
             exit 1
+          fi
+          if [[ "$registry_tuple_fields" -ne 0 ]]; then
+            if [[ "$registry_tuple_fields" -ne 6 ||
+                  ! "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ||
+                  ! "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ||
+                  ! "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ||
+                  ! "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ ||
+                  ! "$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple." >&2
+              exit 1
+            fi
+            expected_registry_suffix="-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}"
+            case "$PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME" in
+              "docker-e2e-prepublish-plugin-registry${expected_registry_suffix}" | \
+                "package-acceptance-telegram-plugin-registry${expected_registry_suffix}") ;;
+              *)
+                echo "Prerelease plugin registry artifact name does not match its producer run." >&2
+                exit 1
+                ;;
+            esac
           fi
           case "${PROVIDER_MODE}" in
             mock-openai | live-frontier) ;;
@@ -402,11 +525,54 @@ jobs:
           run-id: ${{ inputs.package_artifact_run_id }}
           github-token: ${{ github.token }}
 
+      - name: Validate prerelease plugin registry artifact binding
+        if: inputs.prepublish_plugin_registry_artifact_name != ''
+        env:
+          ARTIFACT_DIGEST: ${{ inputs.prepublish_plugin_registry_artifact_digest }}
+          ARTIFACT_ID: ${{ inputs.prepublish_plugin_registry_artifact_id }}
+          ARTIFACT_NAME: ${{ inputs.prepublish_plugin_registry_artifact_name }}
+          ARTIFACT_RUN_ATTEMPT: ${{ inputs.prepublish_plugin_registry_artifact_run_attempt }}
+          ARTIFACT_RUN_ID: ${{ inputs.prepublish_plugin_registry_artifact_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/docker/shared-image-artifact.sh \
+            verify-upload "Prerelease plugin registry" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
+
+      - name: Download prerelease plugin registry artifact
+        if: inputs.prepublish_plugin_registry_artifact_name != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ inputs.prepublish_plugin_registry_artifact_id }}
+          path: .artifacts/telegram-prepublish-plugin-registry
+          run-id: ${{ inputs.prepublish_plugin_registry_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Validate prerelease plugin registry contents
+        if: inputs.prepublish_plugin_registry_artifact_name != ''
+        env:
+          CANDIDATE_VERSION: ${{ inputs.package_version }}
+          EXPECTED_MANIFEST_SHA256: ${{ inputs.prepublish_plugin_registry_manifest_sha256 }}
+          SELECTED_SHA: ${{ inputs.package_source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/prepublish-plugin-registry-artifact.mjs verify \
+            --artifact-dir .artifacts/telegram-prepublish-plugin-registry \
+            --source-sha "$SELECTED_SHA" \
+            --candidate-version "$CANDIDATE_VERSION" \
+            --manifest-sha256 "$EXPECTED_MANIFEST_SHA256" \
+            --required-packages-json '["@openclaw/codex"]'
+
       - name: Run package Telegram E2E
         id: run_lane
         shell: bash
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: ${{ inputs.allow_older_binary_destructive_actions && '1' || '' }}
           OPENCLAW_SKIP_DOCKER_BUILD: "1"
           OPENCLAW_DOCKER_E2E_IMAGE: openclaw-docker-e2e:local
           OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.package_spec }}
@@ -414,9 +580,9 @@ jobs:
           OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.provider_mode }}
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: convex
           OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: ci
+          OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: ${{ inputs.rtt_scenario }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           OPENCLAW_QA_SUITE_PROGRESS: "1"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           INPUT_SCENARIO: ${{ inputs.scenario }}
@@ -425,6 +591,8 @@ jobs:
           PACKAGE_SHA256: ${{ inputs.package_sha256 || '' }}
           PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha || '' }}
           PACKAGE_VERSION: ${{ inputs.package_version || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME: ${{ inputs.prepublish_plugin_registry_artifact_name || '' }}
+          PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: ${{ inputs.prepublish_plugin_registry_manifest_sha256 || '' }}
         run: |
           set -euo pipefail
 
@@ -594,6 +762,12 @@ jobs:
               exit 1
             }
             export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgz}"
+            if [[ -n "${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_NAME// }" ]]; then
+              export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=".artifacts/telegram-prepublish-plugin-registry"
+              export OPENCLAW_DOCKER_E2E_SELECTED_SHA="$PACKAGE_SOURCE_SHA"
+              export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="$PACKAGE_VERSION"
+              export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="$PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"
+            fi
             if [[ -z "${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL// }" ]]; then
               export OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$(basename "${package_tgz}")"
             fi
@@ -606,6 +780,24 @@ jobs:
           fi
 
           pnpm test:docker:npm-telegram-live
+
+      - name: Summarize Telegram attempt
+        if: always()
+        env:
+          ADVISORY: ${{ inputs.advisory }}
+          LANE_OUTCOME: ${{ steps.run_lane.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Package Telegram attempt"
+            echo
+            echo "- Telegram attempt: ${LANE_OUTCOME}"
+            echo "- Advisory: ${ADVISORY}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$ADVISORY" == "true" && "$LANE_OUTCOME" != "success" ]]; then
+            echo "::warning::Package Telegram attempt: ${LANE_OUTCOME}; release testing is best effort."
+          fi
 
       - name: Upload npm Telegram E2E artifacts
         if: always()

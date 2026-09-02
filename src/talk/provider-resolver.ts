@@ -36,6 +36,10 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   agentId?: string;
   /** Test/runtime override for the provider list. */
   providers?: RealtimeVoiceProviderPlugin[];
+  /** Availability gate checked before auto-candidate config normalization. */
+  isProviderAvailable?: (provider: RealtimeVoiceProviderPlugin) => boolean;
+  /** Raises the capability-specific error when no automatic provider is available. */
+  assertProviderAvailable?: (provider: RealtimeVoiceProviderPlugin) => void;
   /** Model injected before provider-specific resolveConfig runs. */
   defaultModel?: string;
   /** Runtime surface being selected. Defaults to the provider bridge path. */
@@ -96,7 +100,6 @@ export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {
   const cfgForResolve = params.cfgForResolve ?? params.cfg ?? ({} as OpenClawConfig);
-  const providers = params.providers ?? listRealtimeVoiceProviders(params.cfg);
   const resolution = resolveConfiguredCapabilityProvider({
     configuredProviderId: params.configuredProviderId,
     providerConfigs: params.providerConfigs,
@@ -105,7 +108,12 @@ export function resolveConfiguredRealtimeVoiceProvider(
     getConfiguredProvider: (providerId) =>
       params.providers?.find((entry) => entry.id === providerId) ??
       getRealtimeVoiceProvider(providerId, params.cfg),
-    listProviders: () => providers,
+    listProviders: () =>
+      params.providers ??
+      listRealtimeVoiceProviders(params.cfg, Object.keys(params.providerConfigs ?? {})),
+    isProviderAvailable: params.isProviderAvailable
+      ? ({ provider }) => params.isProviderAvailable?.(provider) === true
+      : undefined,
     resolveProviderConfig: ({ provider, cfg, rawConfig }) => {
       // Provider config resolution should see the default model as if it came
       // from config, while explicit provider config still wins.
@@ -141,6 +149,10 @@ export function resolveConfiguredRealtimeVoiceProvider(
   }
   if (!resolution.ok && resolution.code === "no-registered-provider") {
     throw new Error(params.noRegisteredProviderMessage ?? "No realtime voice provider registered");
+  }
+  if (!resolution.ok && resolution.code === "provider-unavailable" && resolution.provider) {
+    params.assertProviderAvailable?.(resolution.provider);
+    throw new Error(`Realtime voice provider "${resolution.provider.id}" is unavailable`);
   }
   if (!resolution.ok) {
     throw new Error(`Realtime voice provider "${resolution.provider?.id}" is not configured`);

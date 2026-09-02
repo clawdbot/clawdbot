@@ -6,20 +6,20 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   listAgentEntries,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   tryResolveLegacyCompatibilityAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
-import type { AgentIdentityFile } from "../agents/identity-file.js";
-import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
+import { loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
 import { pinLegacyInheritedAuthOwnerForRosterTransition } from "../agents/legacy-inherited-auth-dir.js";
 import { pinSurvivorWorkspaceForRosterCollapse } from "../config/agent-workspace-roster-transition.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 
 export type AgentSummary = {
   id: string;
@@ -43,33 +43,12 @@ export type AgentSummary = {
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
-export type AgentIdentity = AgentIdentityFile;
 export { listAgentEntries };
 
 /** Find a configured agent entry by normalized id. */
 export function findAgentEntryIndex(list: AgentEntry[], agentId: string): number {
   const id = normalizeAgentId(agentId);
   return list.findIndex((entry) => normalizeAgentId(entry.id) === id);
-}
-
-function resolveAgentModel(cfg: OpenClawConfig, agentId: string) {
-  const entry = listAgentEntries(cfg).find(
-    (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
-  );
-  const entryPrimary = resolvePrimaryStringValue(entry?.model);
-  if (entryPrimary) {
-    return entryPrimary;
-  }
-  return resolvePrimaryStringValue(cfg.agents?.defaults?.model);
-}
-
-/** Load non-empty identity metadata from a workspace identity file. */
-export function loadAgentIdentity(workspace: string): AgentIdentity | null {
-  const parsed = loadAgentIdentityFromWorkspace(workspace);
-  if (!parsed) {
-    return null;
-  }
-  return identityHasValues(parsed) ? parsed : null;
 }
 
 /** Build config-derived summaries for text/JSON agent listing. */
@@ -92,33 +71,27 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
 
   return ordered.map((id) => {
     const workspace = resolveAgentWorkspaceDir(cfg, id);
-    const identity = loadAgentIdentity(workspace);
-    const configIdentity = configuredAgents.find(
-      (agent) => normalizeAgentId(agent.id) === id,
-    )?.identity;
-    const identityName = identity?.name ?? configIdentity?.name?.trim();
-    const identityEmoji = identity?.emoji ?? configIdentity?.emoji?.trim();
-    const identityAvatarUrl = resolveAgentAvatarUrlFromSource(
-      cfg,
-      id,
-      identity?.avatar ?? configIdentity?.avatar,
-    );
-    const identitySource = identity
-      ? "identity"
-      : configIdentity && (identityName || identityEmoji || identityAvatarUrl)
-        ? "config"
-        : undefined;
+    const identity = loadAgentIdentityFromWorkspace(workspace);
+    const agentConfig = resolveAgentConfig(cfg, id);
+    const configName = normalizeOptionalString(agentConfig?.identity?.name);
+    const configEmoji = normalizeOptionalString(agentConfig?.identity?.emoji);
+    const configAvatarUrl = resolveAgentAvatarUrlFromSource(cfg, id, agentConfig?.identity?.avatar);
+    // Validate each avatar before choosing so a stale path cannot hide the workspace image.
+    const identityAvatarUrl =
+      configAvatarUrl ?? resolveAgentAvatarUrlFromSource(cfg, id, identity?.avatar);
+    const identitySource =
+      configName || configEmoji || configAvatarUrl ? "config" : identity ? "identity" : undefined;
     const summary: AgentSummary = {
       id,
-      name: normalizeOptionalString(
-        configuredAgents.find((agent) => normalizeAgentId(agent.id) === id)?.name,
-      ),
-      identityName,
-      identityEmoji,
+      name: normalizeOptionalString(agentConfig?.name),
+      identityName: configName ?? identity?.name,
+      identityEmoji: configEmoji ?? identity?.emoji,
       identitySource,
       workspace,
       agentDir: resolveAgentDir(cfg, id),
-      model: resolveAgentModel(cfg, id),
+      model:
+        resolvePrimaryStringValue(agentConfig?.model) ??
+        resolvePrimaryStringValue(cfg.agents?.defaults?.model),
       bindings: bindingCounts.get(id) ?? 0,
       isDefault: defaultAgentId !== undefined && id === normalizeAgentId(defaultAgentId),
     };
@@ -207,6 +180,10 @@ export function pruneAgentConfig(
 } {
   const id = normalizeAgentId(agentId);
   const clearedOwnerRefs: string[] = [];
+  const targetsDeletedAgent = (candidate: string) => {
+    const normalized = normalizeAgentIdStrict(candidate);
+    return normalized.ok && normalized.value === id;
+  };
   const clearOwnerRef = <T extends { agentId?: string }>(value: T | undefined, path: string) => {
     const owner = normalizeOptionalString(value?.agentId);
     if (!value || !owner || normalizeAgentId(owner) !== id) {
@@ -220,7 +197,7 @@ export function pruneAgentConfig(
   const pruneAllowAgents = (allowAgents: string[] | undefined) =>
     allowAgents?.filter((entry) => {
       const trimmed = entry.trim();
-      return !trimmed || trimmed === "*" || normalizeAgentId(trimmed) !== id;
+      return !trimmed || !targetsDeletedAgent(trimmed);
     });
   const nextAgentsList = [];
   for (const entry of agents) {
@@ -277,6 +254,23 @@ export function pruneAgentConfig(
       }
     : undefined;
   const nextTalk = clearOwnerRef(cfg.talk, "talk.agentId");
+  const nextBroadcast = cfg.broadcast
+    ? Object.fromEntries(
+        Object.entries(cfg.broadcast).map(([peerId, value]) => [
+          peerId,
+          Array.isArray(value) ? value.filter((entry) => !targetsDeletedAgent(entry)) : value,
+        ]),
+      )
+    : undefined;
+  const nextHooks = cfg.hooks
+    ? {
+        ...cfg.hooks,
+        allowedAgentIds: cfg.hooks.allowedAgentIds?.filter((entry) => !targetsDeletedAgent(entry)),
+        mappings: cfg.hooks.mappings?.filter(
+          (mapping) => !mapping.agentId || !targetsDeletedAgent(mapping.agentId),
+        ),
+      }
+    : undefined;
   const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
     ? {
@@ -305,6 +299,8 @@ export function pruneAgentConfig(
     ...cfg,
     agents: nextAgentsConfig,
     bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
+    broadcast: nextBroadcast,
+    hooks: nextHooks,
     talk: nextTalk,
     tools: nextTools,
   };

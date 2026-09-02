@@ -111,7 +111,7 @@ jobs:
       candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -132,14 +132,18 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -147,7 +151,7 @@ jobs:
         run: pnpm build
 
       - name: Cache Mantis candidate pnpm store
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.local/share/pnpm/store
@@ -157,7 +161,7 @@ jobs:
             mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
           cache: false
@@ -168,10 +172,13 @@ jobs:
           set -euo pipefail
           install_dir="${RUNNER_TEMP}/crabbox"
           mkdir -p "$install_dir" "$HOME/.local/bin"
-          git init "$install_dir/src"
-          git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
-          timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
-          git -C "$install_dir/src" checkout --detach FETCH_HEAD
+          python3 -I -S "$CI_GIT_OWNER" --git 0 init "$install_dir/src"
+          (
+            cd "$install_dir/src"
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 remote add origin https://github.com/openclaw/crabbox.git
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 120 fetch --depth 1 origin "$CRABBOX_REF"
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 checkout --detach FETCH_HEAD
+          )
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version
@@ -187,7 +194,7 @@ jobs:
           set -euo pipefail
           worktree_root=".artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees"
           mkdir -p "$worktree_root"
-          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+          python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
           pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
           pnpm --dir "$worktree_root/candidate" build
 
@@ -410,13 +417,14 @@ jobs:
             --argjson screenshot_required "$screenshot_required" \
             --argjson desktop_capture_inline "$desktop_capture_inline" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               id: "slack-desktop-smoke",
               title: "Mantis Slack Desktop Smoke QA",
               summary: $summary,
               scenario: $scenario,
               comparison: {
-                candidate: { sha: $candidate_sha, expected: $expected, status: $status, fixed: ($status == "pass") },
+                candidate: { sha: $candidate_sha, expected: $expected, expectationMet: ($status == "pass"), status: $status, fixed: ($status == "pass") },
+                outcome: (if $status == "pass" then "pass" else "fail" end),
                 pass: ($status == "pass")
               },
               artifacts: ([

@@ -2,7 +2,13 @@
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyMediaFailure,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
@@ -65,29 +71,51 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       continue;
     }
     const mergedMediaUrls: string[] = [];
-    const text = payload.text;
-    for (const mediaUrl of mediaUrls) {
+    const mergedAttachments: NonNullable<ReplyPayload["attachments"]> = [];
+    const previousMediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
+    const mediaFailures: ReplyMediaFailure[] = [...previousMediaFailures];
+    let text = payload.text;
+    for (const [index, mediaUrl] of mediaUrls.entries()) {
+      const attachment = payload.attachments?.[index];
       if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);
+        mergedAttachments.push(attachment ?? {});
         continue;
       }
       const normalizedPayload = await normalizeMediaPaths({
         ...payload,
+        text,
         mediaUrl,
         mediaUrls: [mediaUrl],
+        attachments: attachment ? [attachment] : undefined,
       });
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
+      mediaFailures.push(
+        ...(getReplyPayloadMetadata(normalizedPayload)?.assistantMediaFailures ?? []).slice(
+          previousMediaFailures.length,
+        ),
+      );
+      text = normalizedPayload.text;
       if (normalizedMediaUrls.length === 0) {
         continue;
       }
       mergedMediaUrls.push(...normalizedMediaUrls);
+      mergedAttachments.push(
+        ...(normalizedPayload.attachments ?? normalizedMediaUrls.map(() => ({}))),
+      );
     }
-    normalized.push({
+    const merged = copyReplyPayloadMetadata(payload, {
       ...payload,
       text,
       mediaUrl: mergedMediaUrls[0],
       mediaUrls: mergedMediaUrls,
+      attachments: mergedAttachments,
     });
+    normalized.push(
+      mediaFailures.length > 0
+        ? setReplyPayloadMetadata(merged, { assistantMediaFailures: mediaFailures })
+        : merged,
+    );
   }
   return normalized;
 }

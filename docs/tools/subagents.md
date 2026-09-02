@@ -10,7 +10,7 @@ sidebarTitle: "Sub-agents"
 
 Sub-agents are background agent runs spawned from an existing agent run.
 Each one runs in its own session (`agent:<agentId>:subagent:<uuid>`) and,
-when finished, **announces** its result back to the requester chat channel.
+by default, **announces** its result back to the requester for review.
 Every sub-agent run is tracked as a [background task](/automation/tasks).
 
 Goals:
@@ -58,8 +58,7 @@ These commands work on channels with persistent thread bindings. See
 [Thread supporting channels](#thread-supporting-channels) below.
 
 ```text
-/focus <subagent-label|session-key|session-id|session-label>
-/unfocus
+/session unbind
 /agents
 /session idle <duration|off>
 /session max-age <duration|off>
@@ -67,9 +66,16 @@ These commands work on channels with persistent thread bindings. See
 
 ### Spawn behavior
 
-Agents start background sub-agents with the `sessions_spawn` tool.
-Completions return as internal parent-session events; the parent/requester
-agent decides whether a user-facing update is needed.
+Agents start background sub-agents with the `sessions_spawn` tool. Follow the
+completion path described in the accepted receipt:
+
+- Ordinary announcing runs return an internal completion event to the requester,
+  which reviews the result and decides whether a user-facing update is needed.
+- [Swarm collectors](/tools/swarm) return results through explicit collection,
+  not completion notifications.
+- Thread-bound session runs with a deliverable bound route reply directly to that
+  thread, without a separate parent announcement.
+- Caller-managed quiet runs send no completion notification.
 
 When [execution identity auditing](/gateway/audit#run-identity-inspection) is
 enabled, each native or ACP child receives a new immutable identity context.
@@ -82,10 +88,10 @@ explicitly unsupported even though the ACP spawn and child are observable.
 
 <AccordionGroup>
   <Accordion title="Non-blocking, push-based completion">
-    - `sessions_spawn` is non-blocking; it returns a run id immediately.
-    - On completion, the sub-agent reports back to the parent/requester session.
-    - Agent turns that need child results should call `sessions_yield` after spawning required work. That ends the current turn and lets the completion event arrive as the next model-visible message.
-    - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
+    - `sessions_spawn` returns a run id after startup is accepted, without waiting for the child task to finish. Spawns from an OpenClaw cloud worker can first wait for child provisioning and node enrollment.
+    - Announcing sub-agents report back to the parent/requester session on completion.
+    - Agent turns that need those announced results should call `sessions_yield` when available. That ends the current turn and lets the completion event arrive as the next model-visible message. Collectors instead require explicit result collection.
+    - Announced completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
     - Child output is a report/evidence for the requester agent to synthesize. It is not user-authored instruction text and cannot override system, developer, or user policy.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 
@@ -93,13 +99,15 @@ explicitly unsupported even though the ACP spawn and child are observable.
   <Accordion title="Completion delivery">
     - OpenClaw hands completions back to the requester session through an `agent` turn with a stable idempotency key.
     - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
-    - If an active requester cannot be woken, OpenClaw falls back to a requester-agent handoff with the same completion context instead of dropping the announce.
-    - A successful parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed.
+    - If an active requester cannot accept steering, including a busy CLI run, the handoff waits in the same session lane and starts after the current turn releases its claim. A failed wake does not start a competing turn or discard the completion.
+    - A successful in-session parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed. External completion delivery requires a confirmed send, not merely an answer saved in the requester transcript.
     - Native sub-agents do not get the message tool. They return plain assistant text to the parent/requester agent; human-visible replies stay owned by the parent/requester agent's normal delivery policy.
-    - If direct handoff cannot be used, delivery falls back to queue routing. A queued completion remains `session_queued`, rather than delivered, until the durable queue settles.
+    - Queue acceptance is not delivery. If direct handoff cannot be used, delivery falls back to queue routing; the completion remains `session_queued`, rather than delivered, until the durable queue settles.
     - Automatic completion delivery retries for up to 30 minutes, starting around 15 seconds and capping the backoff at 5 minutes. Permanent failure or deadline expiry leaves the successful child task visibly blocked instead of discarding its result.
+    - Missing or empty external delivery receipts remain unconfirmed and follow that bounded retry policy. An adapter-reported unconfirmed send remains ambiguous, never intentional suppression. Empty requester output still uses the existing completion fallback; it is not an outbound-hook cancellation. A confirmed message-tool send to the requester still counts as delivery.
+    - If an outbound hook intentionally suppresses a completion, the child can remain completed while its task delivery is marked `failed` with the suppression reason. OpenClaw does not retry or start another requester turn to bypass that decision. Inspect the task error and hook policy before manually retrying.
     - Blocked canonical results are retained for 7 days. Operators can retry or intentionally dismiss them from the Tasks page or with `openclaw tasks retry` / `openclaw tasks dismiss`; retry can duplicate a visible result after an ambiguous provider acknowledgement.
-    - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
+    - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's recorded delivery context so direct delivery still works.
 
   </Accordion>
   <Accordion title="Completion handoff metadata">
@@ -107,6 +115,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
     internal context (not user-authored text) and includes:
 
     - `Result` — the latest visible `assistant` reply text from the child. Tool/toolResult output is not promoted into child results. Terminal failed runs do not reuse captured reply text.
+    - `Model route change` — when the terminal producer proves that fallback changed the requested model, one bounded and redacted route fact is carried separately from `Result`. Local and nested parents preserve it in their update. External channel parents keep it as private orchestration context, and raw direct-delivery fallback sends only `Result`.
     - `Status` — `completed; ready for parent review` / `failed` / `timed out` / `unknown`.
     - Compact runtime/token stats.
     - A review instruction telling the requester agent to verify the result before deciding whether the original task is done.
@@ -127,22 +136,24 @@ explicitly unsupported even though the ACP spawn and child are observable.
 
 ## Context modes
 
-Native sub-agents start isolated unless the caller explicitly asks to fork
-the current transcript.
+Non-thread native sub-agents start isolated unless the caller explicitly asks
+to fork the current transcript. Thread-bound spawns follow
+`threadBindings.defaultSpawnContext`, which defaults to `fork`. Pass
+`context: "isolated"` explicitly when the child must start with clean context.
 
-| Mode       | When to use it                                                                                                                         | Behavior                                                                          |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                           | Creates a clean child transcript. This is the default and keeps token use lower.  |
-| `fork`     | Work that depends on the current conversation, prior tool results, or nuanced instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts. |
+| Mode       | When to use it                                                                                                                         | Behavior                                                                                |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                           | Creates a clean child transcript. Default for non-thread spawns; keeps token use lower. |
+| `fork`     | Work that depends on the current conversation, prior tool results, or nuanced instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts.       |
 
 Use `fork` sparingly. It is for context-sensitive delegation, not a
 replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
-Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
-then runs an announce step and posts the announce reply to the requester
-chat channel.
+Starts a sub-agent run on the global `subagent` lane. Ordinary one-shot runs
+use `deliver: false` and return through an announce step; collectors, quiet
+runs, and direct thread replies use the completion paths above.
 
 Availability depends on the caller's effective tool policy. The built-in
 `coding` and `messaging` profiles include `sessions_spawn`,
@@ -157,14 +168,16 @@ session to confirm the effective tool list.
 **Defaults:**
 
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
-- **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
+- **Thinking:** native sub-agents inherit the caller's active turn, including one-shot thinking overrides, unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
-- **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
+- **Task delivery:** native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. Inherited task envelopes are context, not the current child's assignment. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
-Accepted native sub-agent spawns include the resolved child model metadata
-in the tool result: `resolvedModel` contains the applied model ref and
-`resolvedProvider` contains the provider prefix when the ref has one.
+Accepted native sub-agent spawns report their actual initialized `context`
+(`fork` or `isolated`), including `isolated` when a requested fork exceeds the
+parent-context size cap. They also include resolved child model metadata:
+`resolvedModel` contains the applied model ref and `resolvedProvider` contains
+the provider prefix when the ref has one.
 
 ### Delegation prompt mode
 
@@ -211,7 +224,7 @@ In `prefer` mode, hidden sub-agents are for internal legwork that the user does 
   Spawn under another configured agent id when allowed by `subagents.allowAgents`.
 </ParamField>
 <ParamField path="cwd" type="string">
-  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. For visible sessions, paths outside configured agent workspaces require `operator.admin`; omit `cwd` to use the target agent workspace.
+  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd` inherits the same-agent parent's managed repository when available; otherwise the target agent workspace is used.
 </ParamField>
 <ParamField path="runtime" type='"subagent" | "acp"' default="subagent">
   `acp` is only for external ACP harnesses (`claude`, `droid`, `gemini`, `opencode`, or explicitly requested Codex ACP/acpx) and for `agents.entries.*` entries whose `runtime.type` is `acp`.
@@ -237,19 +250,25 @@ In `prefer` mode, hidden sub-agents are for internal legwork that the user does 
 <ParamField path="mode" type='"run" | "session"' default="run">
   If `thread: true` and `mode` is omitted, default becomes `session`. `mode: "session"` requires `thread: true`.
   If thread binding is unavailable for the requester channel, use `mode: "run"` instead.
-  With `visible: true`, omit `mode`; visible sessions are persistent and do not support `mode: "run"`.
+  With `visible: true`, omit `mode` or use the default `"run"`; the visible session remains persistent. `mode: "session"` is unavailable on this path.
 </ParamField>
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
   `"delete"` archives the session immediately after announce (still keeps the transcript via rename).
 </ParamField>
+<ParamField path="expectsCompletionMessage" type="boolean" default="true">
+  Set `false` for fire-and-forget children. When the child finishes, OpenClaw skips the completion handoff to the requester (no announce or steer turn), records the delivery as not required, and still runs child cleanup. Inspect such children with `subagents` or `sessions_history`. `collect: true` always uses `false`.
+</ParamField>
 <ParamField path="sandbox" type='"inherit" | "require"' default="inherit">
   `require` rejects the spawn unless the target child runtime is sandboxed.
 </ParamField>
-<ParamField path="context" type='"isolated" | "fork"' default="isolated">
-  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`. A visible fork must target the same agent as the requester.
+<ParamField path="context" type='"isolated" | "fork"'>
+  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Non-thread spawns default to `isolated`; thread-bound spawns follow `threadBindings.defaultSpawnContext`, which defaults to `fork`. Pass `isolated` explicitly to guarantee clean context. All native forks, hidden or visible, must target the same agent as the requester.
 </ParamField>
 <ParamField path="visible" type="boolean" default="false">
   Create a persistent dashboard session for work the user will watch or return to, or when they ask for a thread. Visible spawns support only `runtime: "subagent"` and always keep the created session.
+</ParamField>
+<ParamField path="group" type="string">
+  Optional custom sidebar group for a visible session; a new name creates the group. Omitted, empty, and whitespace-only values mean ungrouped and are also accepted for hidden or ACP runs. A nonempty group requires `visible: true`.
 </ParamField>
 <ParamField path="worktree" type="boolean" default="false">
   Provision a managed git worktree for the new dashboard session. Requires `visible: true`.
@@ -268,7 +287,9 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this durable mode for coding, multi-step work, or results the user may revisit, steer, or keep; it appears in the sidebar when the web UI is available and still works without it. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. Omit `cwd` to use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree, while the main session can reach every same-agent session unless `self` or the sandbox spawned-only clamp applies. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
+With `visible: true`, `group`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this durable mode for coding, multi-step work, or results the user may revisit, steer, or keep; it appears in the sidebar when the web UI is available and still works without it. Pass `group` to place the new session in that sidebar group atomically; omitted or blank values leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. With `worktree: true`, omitting `cwd` inherits the same-agent parent's live managed repository and creates a separate worktree. Other spawns use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode: "session"`, thinking overrides, `lightContext`, and attachment staging are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The default `mode: "run"`, empty `attachments`, and an empty `attachAs.mountPath` are accepted without changing that behavior. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `agent` scope covers all same-agent sessions for unsandboxed callers. Set `tree` explicitly for current plus spawned scope (main retains its same-agent exception), or `self` for current-session-only access. Sandbox spawned-only clamps still apply. Cross-agent owned children are included by `tree`, not `agent`; preserve explicit `tree` for that workflow. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
+
+If a call fails with `Parameters require visible=true`, omit the named group or worktree options to keep the hidden or ACP runtime. To create a visible session instead, use `visible: true` with `runtime: "subagent"` and omit `mode`, `thread`, `thinking`, `lightContext`, `attachments`, `attachAs`, swarm options, and the ACP-only `streamTo` and `resumeSessionId`. Worktree names and base refs also require `worktree: true`. Adding `visible: true` alone does not make an ACP call compatible.
 
 A visible spawn is attributed to the requesting agent: the new session's creator and initial owner is that agent, shown with its configured identity name and avatar in the sidebar. The accepted result doubles as a receipt with `childSessionKey`, `runId`, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second so the user can open the session and see who is responsible. Owners can be reassigned later; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
@@ -291,12 +312,13 @@ because they already have control meanings.
 
 ## Tool: `sessions_yield`
 
-Ends the current model turn and waits for runtime events, primarily
-sub-agent completion events, to arrive as the next message. Use it after
-spawning required child work when the requester cannot produce a final
-answer until those completions arrive.
+Ends the current model turn and waits for announced child completion events
+to arrive as the next message. Use it when the requester needs results from
+announcing children before answering. It does not collect Swarm results:
+collectors require `agents_wait`, or an awaited `agents.run()` in OpenClaw
+Code Mode, and do not send completion notifications.
 
-`sessions_yield` is the waiting primitive. Do not replace it with polling
+`sessions_yield` is the waiting primitive for announced completions. Do not replace it with polling
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 
@@ -329,9 +351,7 @@ waiting.
 
 Automatic continuation is specific to the plugin runtime API above. Ordinary
 follow-ups through routes not tracked as sub-agent runs neither continue the
-paused run nor announce its requester. Explicit `subagents` steering is
-different: it deliberately replaces the yielded run and continues the same
-child session.
+paused run nor announce its requester.
 
 Among plugin runtime follow-ups, continuation applies to those that use default
 delivery. A follow-up that supplies its own requester or completion-delivery
@@ -389,11 +409,11 @@ enablement, timeouts, and `spawnSessions`.
     Replies and follow-up messages in that thread route to the bound session.
   </Step>
   <Step title="Inspect timeouts">
-    Use `/session idle` to inspect/update inactivity auto-unfocus and
+    Use `/session idle` to inspect/update inactivity expiry and
     `/session max-age` to control the hard cap.
   </Step>
   <Step title="Detach">
-    Use `/unfocus` to detach manually.
+    Use `/session unbind` to detach without closing the agent session.
   </Step>
 </Steps>
 
@@ -401,11 +421,10 @@ enablement, timeouts, and `spawnSessions`.
 
 | Command            | Effect                                                                                    |
 | ------------------ | ----------------------------------------------------------------------------------------- |
-| `/focus <target>`  | Bind the current thread (or create one) to a sub-agent/session target                     |
-| `/unfocus`         | Remove the binding for the current bound thread                                           |
+| `/session unbind`  | Remove the current conversation binding without closing the agent session                 |
 | `/agents`          | List active runs and binding state (`binding:<id>`, `unbound`, or `bindings unavailable`) |
-| `/session idle`    | Inspect/update idle auto-unfocus (focused bound threads only)                             |
-| `/session max-age` | Inspect/update hard cap (focused bound threads only)                                      |
+| `/session idle`    | Inspect/update inactivity expiry for the current binding                                  |
+| `/session max-age` | Inspect/update the maximum age of the current binding                                     |
 
 ### Config switches
 
@@ -427,7 +446,7 @@ See [Configuration reference](/gateway/configuration-reference) and
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.entries.*.subagents.requireAgentId`.
 </ParamField>
 <ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
-  Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout.
+  Timeout for gateway `agent` announce delivery attempts. Once a handoff is accepted, waiting for the parent session's turn does not consume this budget; the timer starts again when execution begins. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Queue waits and transient retries can make total delivery time longer than one configured timeout.
 </ParamField>
 
 If the requester session is sandboxed, `sessions_spawn` rejects targets
@@ -457,6 +476,9 @@ remain spawnable while inheriting defaults.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
+The `subagent_ended` plugin hook is best-effort. Hook execution or plugin runtime
+loading failures are logged and do not abort sub-agent cleanup.
+
 ## Nested sub-agents
 
 By default, sub-agents cannot spawn their own sub-agents
@@ -473,7 +495,7 @@ worker sub-sub-agents.
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
-        announceTimeoutMs: 120000, // per-call gateway announce timeout
+        announceTimeoutMs: 120000, // gateway announce timeout, excluding accepted queue waits
       },
     },
   },
@@ -528,10 +550,9 @@ from a single orchestrator.
 
 ### Cascade stop
 
-Stopping a depth-1 orchestrator automatically stops all its depth-2
-children:
-
-- `/stop` in the main chat stops all depth-1 agents and cascades to their depth-2 children.
+Explicit cancellation of a depth-1 orchestrator cascades to its depth-2
+children. `/stop` in the main chat applies to that requester's child tree.
+See [Stopping](/tools/subagents#stopping) for scope and incomplete-cancellation behavior.
 
 ## Authentication
 
@@ -549,6 +570,7 @@ fallbacks. Fully isolated auth per agent is not supported yet.
 Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
+- Runs spawned with `expectsCompletionMessage: false` skip the announce step entirely; the run registry records their delivery as not required.
 - An exact `ANNOUNCE_SKIP` response suppresses announce output.
 - For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
 - Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
@@ -605,9 +627,9 @@ transcript from within an agent turn:
 
 - Redacts credential/token-like text even when general-purpose log redaction is disabled.
 - Truncates long text blocks (4000 chars per block) and drops thinking signatures, reasoning replay payloads, and inline image data.
-- Enforces an 80 KB response cap; oversized rows are replaced with `[sessions_history omitted: message too large]`.
+- Caps returned messages at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`.
 - Use `nextOffset` when present to page backward through older transcript windows.
-- `sessions_history` does **not** strip reasoning tags, `<relevant-memories>` scaffolding, or tool-call XML from message text — it returns structured content blocks close to the raw transcript shape, just redacted and size-bounded. `/subagents log` applies the heavier prose sanitizer (strips reasoning tags, memory scaffolding, and tool-call XML) because it renders plain chat lines instead of structured blocks.
+- Returns structured history rather than `/subagents log`'s plain chat lines. Reasoning tags, `<relevant-memories>` / `<relevant_memories>` scaffolding, and tool-call XML can remain in message text: `sessions_history` does not apply the log command's assistant prose sanitizer. See [Session tools](/concepts/session-tool#listing-and-reading-sessions) for the recall guarantees.
 - Raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript.
 
 ## Tool policy
@@ -627,8 +649,8 @@ depth. Leaf sub-agents (default depth-1 behavior, and always at depth 2)
 additionally lose `subagents`, `sessions_list`, `sessions_history`, and
 `sessions_spawn`, so sub-agent communication stays on the announce chain.
 
-`sessions_history` remains a bounded, sanitized recall view here too — it
-is not a raw transcript dump.
+`sessions_history` remains a bounded, redacted recall view here too — it
+is neither a raw transcript dump nor a prose-only rendering.
 
 When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally
 receive `sessions_spawn`, `subagents`, `sessions_list`, and
@@ -727,13 +749,37 @@ still need normal device approval for scope upgrades.
 
 ## Stopping
 
-- Sending `/stop` in the requester chat aborts the requester session and stops any active sub-agent runs spawned from it, cascading to nested children.
+An explicit Stop targeting a parent run cancels the children associated with that
+run and their descendants, including ordinary sub-agents and [Swarm](/tools/swarm)
+collectors. Successful cancellation keeps selected queued collectors from
+starting while running children stop. Exact-run cancellation does not cancel
+unrelated turns or clear unrelated session-wide queues.
+
+For Gateway callers, `chat.abort` with a `runId` uses this exact-parent scope.
+`sessions.abort` with a `runId` also targets that run. When it resolves a recovered
+native run without a chat controller, it cancels children only if the captured
+active parent accepts Stop; a declined or no-active-run result, including an
+already-finalizing parent, leaves those children alone.
+
+Sending `/stop` in the requester chat has broader scope: it aborts requester
+session work, clears its queues, and cancels its active child tree. Session-wide
+`sessions.abort` also requests descendant cancellation; clearing queued follow-ups
+requires `clearQueued: true`. Ordinary `chat.abort` without a `runId` does not
+cascade to children. These operations retain their normal authorization checks.
+
+Incomplete cancellation is reported as an error, not a clean success. `/stop`
+reports actual stopped and failed child counts. Inspect the remaining
+[background tasks](/automation/tasks#control-ui) and retry their cancellation;
+request acknowledgment does not mean all runtime cleanup is instantaneous.
+
+Accepted children remain independent after ordinary parent completion, yield, or
+timeout. Those events do not automatically cancel them.
 
 ## Limitations
 
 - Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
-- `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
+- `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1-5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default `5`, range `1-20`).

@@ -4,21 +4,23 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { resolveApiKeyForProviderCore as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callback.js";
 import { escapeHtml } from "../shared/html-escape.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
+export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
 export { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 export {
+  isProviderAuthError,
   requireApiKey,
   resolveAwsSdkEnvVarName,
   type ResolvedProviderAuth,
@@ -300,7 +302,7 @@ export async function resolveApiKeyForProvider(
   const resolveApiKeyForProviderLocal =
     typeof runtimeAuth.resolveProviderRuntimeApiKey === "function"
       ? runtimeAuth.resolveProviderRuntimeApiKey
-      : resolveModelApiKeyForProvider;
+      : (await import("../agents/model-auth.js")).resolveApiKeyForProviderCore;
   return resolveApiKeyForProviderLocal(params);
 }
 

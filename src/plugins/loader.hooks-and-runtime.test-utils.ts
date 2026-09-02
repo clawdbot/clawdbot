@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { createHookRunner } from "./hooks.js";
+import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   EMPTY_PLUGIN_SCHEMA,
@@ -20,59 +21,17 @@ import {
   globalAfterEach0,
   globalAfterAll1,
   updatePluginManifest,
+  writeFixtureText,
+  writeFixtureJson,
+  pluginManifest,
+  channelPluginSource,
 } from "./loader.test-harness.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
-
-function writeFixtureText(rootDir: string, relativePath: string, body: string) {
-  const filePath = path.join(rootDir, relativePath);
-  mkdirSafe(path.dirname(filePath));
-  fs.writeFileSync(filePath, body, "utf-8");
-}
-
-function writeFixtureJson(rootDir: string, relativePath: string, value: unknown) {
-  writeFixtureText(rootDir, relativePath, JSON.stringify(value, null, 2));
-}
-
-function pluginManifest(id: string, channels?: string[]) {
-  return {
-    id,
-    configSchema: EMPTY_PLUGIN_SCHEMA,
-    ...(channels ? { channels } : {}),
-  };
-}
-
-function channelPluginSource(params: {
-  pluginId: string;
-  channelId?: string;
-  label: string;
-  docsPath: string;
-  blurb: string;
-}) {
-  const channelId = params.channelId ?? params.pluginId;
-  return `module.exports = { id: ${JSON.stringify(params.pluginId)}, register(api) {
-    api.registerChannel({
-      plugin: {
-        id: ${JSON.stringify(channelId)},
-        meta: {
-          id: ${JSON.stringify(channelId)},
-          label: ${JSON.stringify(params.label)},
-          selectionLabel: ${JSON.stringify(params.label)},
-          docsPath: ${JSON.stringify(params.docsPath)},
-          blurb: ${JSON.stringify(params.blurb)},
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
-        },
-        outbound: { deliveryMode: "direct" },
-      },
-    });
-  } };`;
-}
 
 function createSetupFailureFixture(params: {
   id: string;
@@ -172,6 +131,11 @@ function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
       ? path.join(repoRoot, "dist-runtime", "extensions", scenario.id)
       : path.join(pluginDir, "dist");
   writeFixtureText(artifactDir, scenario.artifactEntry, scenario.artifactBody);
+  if (scenario.artifactLocation === "core") {
+    writeFixtureJson(artifactDir, "package.json", {
+      openclaw: { extensions: [`./${scenario.artifactEntry}`] },
+    });
+  }
 
   const load = () =>
     loadOpenClawPlugins({
@@ -205,11 +169,20 @@ function loadSourceExternalArtifactScenario(params: {
   packageLocalBody: string;
   rootBuildBody?: string;
   runtimeOverlayBody?: string;
+  loadOptions?: Parameters<typeof loadOpenClawPlugins>[0];
+  sourceSelection?: "file" | "directory" | "symlink" | "plugin-mount" | "parent-mount";
+  fromInstalledIndex?: boolean;
 }) {
   const id = "source-external-artifact-test";
   const repoRoot = makePluginLoaderTempDir();
   const sourceDir = path.join(repoRoot, "extensions", id);
   const rootBuildDir = path.join(repoRoot, "dist", "extensions", id);
+  const mountPoint =
+    params.sourceSelection === "plugin-mount"
+      ? sourceDir
+      : params.sourceSelection === "parent-mount"
+        ? path.dirname(sourceDir)
+        : undefined;
   mkdirSafe(path.join(repoRoot, ".git"));
   mkdirSafe(path.join(repoRoot, "src"));
   writeFixtureText(repoRoot, "pnpm-workspace.yaml", "packages: []\n");
@@ -241,32 +214,67 @@ function loadSourceExternalArtifactScenario(params: {
     );
   }
 
+  const sourceAlias = path.join(repoRoot, "selected-source");
+  if (params.sourceSelection === "symlink" || (params.fromInstalledIndex && mountPoint)) {
+    fs.symlinkSync(sourceDir, sourceAlias, process.platform === "win32" ? "junction" : "dir");
+  }
+  const configuredPath =
+    params.sourceSelection === "symlink"
+      ? sourceAlias
+      : params.sourceSelection === "file"
+        ? path.join(sourceDir, "index.ts")
+        : params.sourceSelection === "directory"
+          ? sourceDir
+          : undefined;
   const config = {
     plugins: {
       allow: [id],
       entries: { [id]: { enabled: true } },
+      ...(configuredPath ? { load: { paths: [configuredPath] } } : {}),
     },
   };
-  const registry = withEnv(
-    {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: params.rootBuildBody
-        ? path.join(repoRoot, "dist", "extensions")
-        : path.join(repoRoot, "extensions"),
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
-    () => {
-      const manifestRegistry = loadPluginManifestRegistryCore({ config });
-      return loadOpenClawPlugins({
-        cache: false,
-        preferBuiltPluginArtifacts: true,
-        onlyPluginIds: [id],
-        config,
-        manifestRegistry,
-      });
-    },
-  );
-  return registry.plugins.find((entry) => entry.id === id)?.status;
+  const cache = createPluginCache();
+  cache.metadata.discoveryMountPoints = new Set(mountPoint ? [mountPoint] : []);
+  try {
+    return withPluginCache(cache, () => {
+      const registry = withEnv(
+        {
+          OPENCLAW_BUNDLED_PLUGINS_DIR: params.rootBuildBody
+            ? path.join(repoRoot, "dist", "extensions")
+            : path.join(repoRoot, "extensions"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS: undefined,
+        },
+        () => {
+          let index = params.fromInstalledIndex ? loadInstalledPluginIndex({ config }) : undefined;
+          if (index && mountPoint) {
+            // Installed roots can retain lexical aliases while mount facts are canonical.
+            index = {
+              ...index,
+              plugins: index.plugins.map((plugin) =>
+                plugin.pluginId === id ? { ...plugin, rootDir: sourceAlias } : plugin,
+              ),
+            };
+          }
+          const manifestRegistry = index
+            ? loadPluginManifestRegistryForInstalledIndex({ index, config })
+            : loadPluginManifestRegistryCore({ config });
+          return loadOpenClawPlugins({
+            cache: false,
+            preferBuiltPluginArtifacts: true,
+            onlyPluginIds: [id],
+            config,
+            manifestRegistry,
+            ...params.loadOptions,
+          });
+        },
+      );
+      return registry.plugins.find((entry) => entry.id === id)?.status;
+    });
+  } finally {
+    cache.disposeModules?.();
+  }
 }
 
 describe("loadOpenClawPlugins", () => {
@@ -636,12 +644,19 @@ ${channelPluginSource({
       ids: ["setup-runtime-error-test", "setup-runtime-helper-test"],
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.status).toBe(
-      "error",
+    expect(registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")).toMatchObject(
+      {
+        status: "error",
+        failurePhase: "load",
+        error: expect.stringContaining("broken setup runtime setter"),
+      },
     );
-    expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-error-test")?.error,
-    ).toContain("broken setup runtime setter");
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "setup-runtime-error-test",
+        code: "channel-setup-failure",
+      }),
+    );
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-helper-test")?.status).toBe(
       "loaded",
     );
@@ -671,11 +686,18 @@ ${channelPluginSource({
     });
 
     expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.status,
-    ).toBe("error");
-    expect(
-      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.error,
-    ).toContain("broken setup-runtime registrar");
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test"),
+    ).toMatchObject({
+      status: "error",
+      failurePhase: "register",
+      error: expect.stringContaining("broken setup-runtime registrar"),
+    });
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        pluginId: "setup-runtime-route-error-test",
+        code: "channel-setup-failure",
+      }),
+    );
     expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-route-error")).toBe(
       false,
     );
@@ -835,7 +857,7 @@ ${channelPluginSource({
     });
   });
 
-  it("records a diagnostic when registerChannel throws in the setup-entry path", () => {
+  it("rolls back setup registrations and records a diagnostic when registerChannel throws", () => {
     useNoBundledPlugins();
     const brokenDir = createSetupFailureFixture({
       id: "register-channel-throws-test",
@@ -849,6 +871,13 @@ ${channelPluginSource({
   });
   module.exports = {
     kind: "bundled-channel-setup-entry",
+    registerSetupRuntime(api) {
+      api.registerHttpRoute({
+        path: "/register-channel-throws-route",
+        auth: "gateway",
+        handler: async () => true,
+      });
+    },
     loadSetupPlugin: () => ({
       id: "register-channel-throws-test",
       meta: {
@@ -890,6 +919,9 @@ ${channelPluginSource({
       pluginId: "register-channel-throws-test",
       message: "failed to register setup channel",
     });
+    expect(
+      registry.httpRoutes.some((route) => route.path === "/register-channel-throws-route"),
+    ).toBe(false);
     // The healthy plugin loaded AFTER the broken one must still be present.
     const healthyChannel = registry.channels.find(
       (entry) => entry.plugin.id === "healthy-after-register-throw-chat",
@@ -949,6 +981,40 @@ ${channelPluginSource({
         rootBuildBody: 'module.exports = { id: "source-external-artifact-test", register() {} };\n',
         runtimeOverlayBody:
           'throw new Error("staged runtime should canonicalize to the root build");\n',
+      }),
+    ).toBe("loaded");
+  });
+
+  it.each([
+    { name: "source host", loadOptions: { preferBuiltPluginArtifacts: undefined } },
+    { name: "explicit false", loadOptions: { preferBuiltPluginArtifacts: false } },
+    { name: "configured file", sourceSelection: "file" as const },
+    { name: "configured directory", sourceSelection: "directory" as const },
+    { name: "configured symlink", sourceSelection: "symlink" as const },
+    { name: "individual overlay", sourceSelection: "plugin-mount" as const },
+    { name: "parent overlay", sourceSelection: "parent-mount" as const },
+    {
+      name: "rehydrated overlay",
+      sourceSelection: "parent-mount" as const,
+      fromInstalledIndex: true,
+    },
+    {
+      name: "rehydrated configured alias",
+      sourceSelection: "file" as const,
+      fromInstalledIndex: true,
+    },
+    {
+      name: "rehydrated configured symlink",
+      sourceSelection: "symlink" as const,
+      fromInstalledIndex: true,
+    },
+  ])("preserves $name execution instead of its built peer", (scenario) => {
+    expect(
+      loadSourceExternalArtifactScenario({
+        ...scenario,
+        sourceBody: 'export default { id: "source-external-artifact-test", register() {} };\n',
+        packageLocalBody: 'throw new Error("package-local output should not load");\n',
+        rootBuildBody: 'throw new Error("source selection must remain authoritative");\n',
       }),
     ).toBe("loaded");
   });
@@ -1109,7 +1175,8 @@ ${channelPluginSource({
       filename: "next-turn-policy.cjs",
       body: `module.exports = { id: "next-turn-policy", register(api) {
     void api.session.workflow.enqueueNextTurnInjection({
-      sessionKey: "agent:main:main",
+      sessionKey: "global",
+      agentId: "work",
       text: "blocked context",
     });
   } };`,

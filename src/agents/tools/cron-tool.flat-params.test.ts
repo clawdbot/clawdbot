@@ -288,19 +288,28 @@ describe("cron tool flat-params", () => {
     expect(prepared.job?.payload?.toolsAllow).toBe("");
   });
 
-  it("rejects wake-only mode on add and update calls", async () => {
+  it("rejects non-stream top-level mode on add and update calls", async () => {
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
     for (const action of ["add", "update"] as const) {
-      expect(() => tool.prepareArguments?.({ action, mode: "now" })).toThrow(
-        '"mode" is only valid for action="wake"',
-      );
+      for (const mode of ["now", "next-heartbeat"] as const) {
+        expect(() => tool.prepareArguments?.({ action, mode })).toThrow(
+          '"mode" is only valid for action="wake"',
+        );
+      }
+    }
+    for (const args of [
+      { action: "add", everyMs: 3_600_000, message: "Run the report", mode: "line" },
+      { action: "add", expr: "0 9 * * *", message: "Run the report", mode: "match" },
+      { action: "update", id: "job-1", mode: "line" },
+    ] as const) {
+      expect(() => tool.prepareArguments?.(args)).toThrow('"mode" is only valid for action="wake"');
     }
 
     const nestedCalls = [
       {
         action: "add",
-        mode: "now",
+        mode: "match",
         job: {
           schedule: { kind: "every", everyMs: 60_000 },
           payload: { kind: "agentTurn", message: "Run the report" },
@@ -320,6 +329,46 @@ describe("cron tool flat-params", () => {
       );
     }
     expect(callGatewayToolMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves unadvertised flat stream recovery without leaking wake mode", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+    for (const mode of ["line", "match"] as const) {
+      callGatewayToolMock.mockClear();
+      // Stream fields are deliberately absent from the ten-field advertised
+      // flat contract. Keep accepting this pre-existing recoverable shape so
+      // the mode guard does not regress compatibility providers that emit it.
+      const args = {
+        action: "add",
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        mode,
+        ...(mode === "match" ? { match: "^ready:" } : {}),
+        message: "handle events",
+      };
+      const expectedSchedule = {
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        mode,
+        ...(mode === "match" ? { match: "^ready:" } : {}),
+      };
+
+      const prepared = tool.prepareArguments?.(args) as Record<string, unknown>;
+      expect(prepared).not.toHaveProperty("mode");
+      expect(prepared.job).toMatchObject({
+        schedule: expectedSchedule,
+        payload: { kind: "agentTurn", message: "handle events" },
+      });
+
+      await tool.execute(`call-flat-stream-${mode}`, args);
+      const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+        schedule?: unknown;
+        mode?: unknown;
+      }>();
+      expect(method).toBe("cron.add");
+      expect(params).not.toHaveProperty("mode");
+      expect(params.schedule).toEqual(expectedSchedule);
+    }
   });
 
   it("rejects conflicting flat schedule fields on add", () => {

@@ -3,9 +3,9 @@ import {
   prepareHostChannelContextAdmissionEvidence,
   readChannelContextAdmissionEvidence,
   recordChannelIngressResolution,
-  registerChannelAdmissionEvidenceOwner,
   type ChannelAdmissionEvidence,
 } from "../../src/channels/message-access/admission-evidence.js";
+import { registerChannelIngressHostOwner } from "../../src/channels/message-access/ingress-host-owner.js";
 import type { ResolvedChannelMessageIngress } from "../../src/channels/message-access/runtime-types.js";
 
 /** Build test evidence through the same host-owned binding path used by channel resolvers. */
@@ -13,6 +13,7 @@ export function createChannelParticipantAdmissionEvidence(params: {
   channelId: string;
   accountId?: string;
   participantId: string | number;
+  identifierAuthentication?: "affected" | "evaluated" | "not-evaluated";
 }): ChannelAdmissionEvidence | undefined {
   return bindTestChannelParticipantAdmissionEvidence({ ...params, context: {} });
 }
@@ -23,6 +24,7 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
   channelId: string;
   accountId?: string;
   participantId: string | number;
+  identifierAuthentication?: "affected" | "evaluated" | "not-evaluated";
 }): ChannelAdmissionEvidence | undefined {
   const result = {
     state: {
@@ -40,7 +42,7 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
     epoch,
     isLive: () => true,
   };
-  const dispose = registerChannelAdmissionEvidenceOwner(owner);
+  const dispose = registerChannelIngressHostOwner(owner);
   try {
     recordChannelIngressResolution({
       result,
@@ -48,6 +50,7 @@ export function bindTestChannelParticipantAdmissionEvidence(params: {
       accountId: params.accountId,
       rawPrincipalRef: params.participantId,
       participantOutcomeAffecting: false,
+      identifierAuthentication: params.identifierAuthentication ?? "not-evaluated",
       scope: {
         conversation: { kind: "direct", id: "test-conversation" },
         contextBinding: {

@@ -1,17 +1,27 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
+import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
+import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import type { PreparedWorkerComputer } from "./computer-transport.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import { transferSkillResources } from "./skill-resource-transfer.js";
+import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { latestDurableWorkspaceConflict, waitForTurnOperation } from "./worker-turn-admission.js";
+import { prepareWorkerTurnAttachments } from "./worker-turn-attachments.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 import {
   formatWorkspaceConflictSummary,
@@ -32,9 +42,12 @@ import {
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 type OwnedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
-type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
+  Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
 
-export class WorkerWorkspaceReconciliationError extends Error {}
+export class WorkerWorkspaceReconciliationError extends Error {
+  override name = "WorkerWorkspaceReconciliationError";
+}
 
 type WorkspaceConflictReport = {
   paths: string[];
@@ -48,6 +61,25 @@ function workspaceError(error: unknown): string {
     .replace(/\s+/gu, " ")
     .trim();
   return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
+}
+
+function remoteExecWorkspaceFailure(executionError: unknown, reconciliationError: unknown): Error {
+  const executionMessage = formatErrorMessage(executionError);
+  const reconciliationDetail =
+    reconciliationError instanceof WorkerWorkspaceReconciliationError &&
+    reconciliationError.cause !== undefined
+      ? reconciliationError.cause
+      : reconciliationError;
+  const reconciliationFailure = new WorkerWorkspaceReconciliationError(
+    workspaceError(reconciliationDetail),
+    { cause: reconciliationDetail },
+  );
+  return new Error(
+    `${executionMessage}\n\nWorkspace recovery also failed: ${reconciliationFailure.message}. ` +
+      "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
+    // Keep the typed reconciliation failure discoverable so model fallback cannot replay the turn.
+    { cause: reconciliationFailure },
+  );
 }
 
 function workspaceJournal(params: {
@@ -115,6 +147,8 @@ export async function reconcileWorkspaceAfterTurn(params: {
   localWorkspaceDir: string;
   transcriptTarget: Parameters<typeof SessionManager.open>[0];
   tunnel: WorkerTunnelHandle;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
   const currentPlacement = params.placements.get(params.placement.sessionId);
   const generationMatches =
@@ -175,6 +209,9 @@ export async function reconcileWorkspaceAfterTurn(params: {
         if (!journal.wasAccepted()) {
           throw new Error("Cloud worker workspace reconciliation was not durably accepted");
         }
+        if (params.prepareAcceptedWorkspacePublication) {
+          await params.prepareAcceptedWorkspacePublication(params.turnClaim).catch(() => undefined);
+        }
         params.placements.acceptWorkspaceResult(params.turnClaim);
         const recordedStagedResultRef = params.placements
           .listPendingWorkspaceResults()
@@ -223,6 +260,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
             );
           },
         });
+        await params.publishAcceptedWorkspace?.(params.turnClaim);
         await settleStagedWorkspaceResult({
           placements: params.placements,
           turnClaim: params.turnClaim,
@@ -279,6 +317,8 @@ export async function executeRemoteExecTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   localWorkspaceDir: string;
   runLocal: () => Promise<EmbeddedAgentRunResult>;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<EmbeddedAgentRunResult> {
   const environment = params.environments.get(params.placement.environmentId);
   if (
@@ -301,14 +341,120 @@ export async function executeRemoteExecTurn(params: {
     timeoutMs: params.turn.timeoutMs,
   });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(params.turn);
+  const attachmentNote = await prepareWorkerTurnAttachments({
+    turn: params.turn,
+    tunnel,
+    remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
+    assertCurrent: () => {
+      if (!params.placements.validateTurnClaim(params.turnClaim)) {
+        throw new Error("Cloud attachment transfer lost its turn claim");
+      }
+    },
+  });
   params.placements.markWorkspaceResultPending(params.turnClaim);
   params.onHandoff();
   let result: EmbeddedAgentRunResult | undefined;
   let executionError: unknown;
+  let executionActive = true;
+  const originalPrompt = params.turn.prompt;
+  const originalTranscriptPrompt = params.turn.transcriptPrompt;
+  let computer: PreparedWorkerComputer | undefined;
+  let skillResources: Awaited<ReturnType<typeof transferSkillResources>>;
   try {
-    result = await params.runLocal();
+    skillResources = await transferSkillResources({
+      snapshot: params.turn.skillsSnapshot,
+      explicitSelections: params.turn.explicitSkillSelections,
+      tunnel,
+      signal: params.turn.abortSignal,
+      assertCurrent: () => {
+        const current = params.environments.get(environment.environmentId);
+        if (
+          !params.placements.validateTurnClaim(params.turnClaim) ||
+          current?.state !== "attached" ||
+          current.ownerEpoch !== environment.ownerEpoch ||
+          current.leaseId !== environment.leaseId
+        ) {
+          throw new Error("Skill transfer lost its exact placement authority.");
+        }
+      },
+    });
+    computer = await params.environments.prepareComputer?.(params.turnClaim);
+    const sandboxToolPolicy = resolveSandboxToolPolicyForAgent(
+      params.turn.config,
+      params.placement.agentId,
+      {
+        containedToolNames: computer ? ["computer"] : [],
+      },
+    );
+    if (attachmentNote) {
+      params.turn.transcriptPrompt ??= originalPrompt;
+      params.turn.prompt = `${originalPrompt}\n\n${attachmentNote}`;
+    }
+    result = await withPluginRuntimeGatewayRequestScope(
+      {
+        isWebchatConnect: () => false,
+        ...getPluginRuntimeGatewayRequestScope(),
+        assertNodeExecutionCurrent: (request) => {
+          const placement = params.placements.get(params.placement.sessionId);
+          const currentEnvironment = params.environments.get(environment.environmentId);
+          if (
+            !executionActive ||
+            params.turn.abortSignal?.aborted ||
+            !params.placements.validateTurnClaim(params.turnClaim) ||
+            request.runId !== params.turnClaim.runId ||
+            request.agentId !== params.placement.agentId ||
+            request.workspace.sessionId !== params.placement.sessionId ||
+            request.workspace.sessionKey !== params.placement.sessionKey ||
+            request.workspace.environmentId !== params.placement.environmentId ||
+            request.workspace.ownerEpoch !== params.placement.activeOwnerEpoch ||
+            request.workspace.workspaceDir !== params.placement.remoteWorkspaceDir ||
+            placement?.state !== "active" ||
+            placement.executionMode !== "remote-exec" ||
+            placement.generation !== params.turnClaim.placementGeneration ||
+            placement.sessionKey !== params.placement.sessionKey ||
+            placement.agentId !== params.placement.agentId ||
+            placement.environmentId !== params.placement.environmentId ||
+            placement.activeOwnerEpoch !== params.placement.activeOwnerEpoch ||
+            placement.remoteWorkspaceDir !== params.placement.remoteWorkspaceDir ||
+            currentEnvironment?.state !== "attached" ||
+            currentEnvironment.ownerEpoch !== environment.ownerEpoch ||
+            currentEnvironment.leaseId !== environment.leaseId ||
+            currentEnvironment.nodeDeviceId !== environment.nodeDeviceId ||
+            currentEnvironment.nodeDeviceId !== request.nodeId ||
+            currentEnvironment.attachedSessionIds.length !== 1 ||
+            currentEnvironment.attachedSessionIds[0] !== params.placement.sessionId
+          ) {
+            throw new Error("node execution placement authority is no longer current");
+          }
+        },
+      },
+      () =>
+        withSessionPlacementComputer(
+          {
+            runId: params.turnClaim.runId,
+            agentId: params.placement.agentId,
+            isActive: () => executionActive,
+            sandboxToolPolicy: computer ? sandboxToolPolicy : undefined,
+            bind: (run) => (computer ? computer.bind(run) : null),
+          },
+          () =>
+            skillResources
+              ? withSessionSkillResources(skillResources, params.runLocal)
+              : params.runLocal(),
+        ),
+    );
   } catch (error) {
     executionError = error;
+  } finally {
+    await skillResources?.cleanup().catch(() => undefined);
+    executionActive = false;
+    params.turn.prompt = originalPrompt;
+    params.turn.transcriptPrompt = originalTranscriptPrompt;
+    try {
+      await computer?.close("turn-complete");
+    } catch (error) {
+      executionError ??= error;
+    }
   }
   const workspaceConflict = await reconcileWorkspaceAfterTurn({
     placement: params.placement,
@@ -318,6 +464,35 @@ export async function executeRemoteExecTurn(params: {
     localWorkspaceDir: params.localWorkspaceDir,
     transcriptTarget,
     tunnel,
+    ...(params.prepareAcceptedWorkspacePublication
+      ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
+      : {}),
+    ...(params.publishAcceptedWorkspace
+      ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
+      : {}),
+  }).catch((reconciliationError: unknown) => {
+    const currentEnvironment = params.environments.get(params.placement.environmentId);
+    if (
+      environment.nodeDeviceId &&
+      currentEnvironment?.state === "attached" &&
+      currentEnvironment.providerId === environment.providerId &&
+      currentEnvironment.environmentId === environment.environmentId &&
+      currentEnvironment.ownerEpoch === environment.ownerEpoch &&
+      currentEnvironment.nodeDeviceId === environment.nodeDeviceId &&
+      currentEnvironment.attachedSessionIds.length === 1 &&
+      currentEnvironment.attachedSessionIds[0] === params.placement.sessionId &&
+      reconciliationError instanceof WorkerWorkspaceReconciliationError &&
+      reconciliationError.cause instanceof WorkerTunnelOwnerDisconnectedError
+    ) {
+      // Offline nodes keep their exact lease; the next turn reconciles its dirty workspace.
+      params.placements.cancelWorkspaceResultAndReleaseTurn(params.turnClaim, {
+        reason: "node-disconnect",
+      });
+    }
+    if (executionError) {
+      throw remoteExecWorkspaceFailure(executionError, reconciliationError);
+    }
+    throw reconciliationError;
   });
   if (executionError) {
     throw executionError instanceof Error

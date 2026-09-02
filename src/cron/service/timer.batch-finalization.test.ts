@@ -20,11 +20,12 @@ import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
 import { createCronServiceState } from "./state.js";
+import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import {
   createCompletedCronRunOutcomeDrain,
   finalizeCompletedCronRunOutcomes,
 } from "./timer-outcome-finalization.js";
-import { runMissedJobs } from "./timer.js";
+import { authorCronRunCompletion, runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
 
 const fixtures = setupCronRegressionFixtures({
@@ -74,6 +75,13 @@ function findCronTask(jobId: string) {
   return listTaskRecordsUnsorted().find(
     (task) => task.runtime === "cron" && task.sourceId === jobId,
   );
+}
+
+function authorOutcome(
+  state: ReturnType<typeof createCronServiceState>,
+  outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">,
+) {
+  return authorCronRunCompletion(state, outcome.job, outcome);
 }
 
 describe("cron batch outcome finalization", () => {
@@ -360,14 +368,16 @@ describe("cron batch outcome finalization", () => {
     const outcomeDrain = createCompletedCronRunOutcomeDrain(state);
 
     for (const job of jobs) {
-      outcomeDrain.enqueue({
-        jobId: job.id,
-        job,
-        activeJobMarker: markCronJobActive(job.id),
-        status: "ok",
-        startedAt: dueAt,
-        endedAt: dueAt,
-      });
+      outcomeDrain.enqueue(
+        authorOutcome(state, {
+          jobId: job.id,
+          job,
+          activeJobMarker: markCronJobActive(job.id),
+          status: "ok",
+          startedAt: dueAt,
+          endedAt: dueAt,
+        }),
+      );
     }
 
     expect(await outcomeDrain.flush()).toHaveLength(jobs.length);
@@ -425,7 +435,7 @@ describe("cron batch outcome finalization", () => {
       runIsolatedAgentJob: vi.fn(),
     });
     await finalizeCompletedCronRunOutcomes(state, [
-      {
+      authorOutcome(state, {
         jobId: job.id,
         job: structuredClone(job),
         activeJobMarker: markCronJobActive(job.id),
@@ -433,7 +443,7 @@ describe("cron batch outcome finalization", () => {
         error: "cron: job execution timed out at /private/agent/work",
         startedAt: dueAt,
         endedAt: dueAt + 10,
-      },
+      }),
     ]);
 
     expect(order).toEqual(["notify", "heartbeat"]);
@@ -457,7 +467,12 @@ describe("cron batch outcome finalization", () => {
       sessionKey: undefined,
     });
     expect(requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: `cron:${job.id}:auto-disabled`, agentId: "main" }),
+      expect.objectContaining({
+        source: "notifications-event",
+        intent: "immediate",
+        reason: "wake",
+        agentId: "main",
+      }),
     );
     expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
       enabled: false,
@@ -507,7 +522,7 @@ describe("cron batch outcome finalization", () => {
       runIsolatedAgentJob: vi.fn(),
     });
     const finalized = await finalizeCompletedCronRunOutcomes(state, [
-      {
+      authorOutcome(state, {
         jobId: job.id,
         job: structuredClone(job),
         activeJobMarker: markCronJobActive(job.id),
@@ -515,7 +530,7 @@ describe("cron batch outcome finalization", () => {
         startedAt: dueAt,
         endedAt: dueAt + 10,
         nextCheck: { delayMs: MAX_DATE_TIMESTAMP_MS },
-      },
+      }),
     ]);
 
     expect(finalized).toHaveLength(1);
@@ -578,7 +593,7 @@ describe("cron batch outcome finalization", () => {
     try {
       await expect(
         finalizeCompletedCronRunOutcomes(state, [
-          {
+          authorOutcome(state, {
             jobId: job.id,
             job: structuredClone(job),
             activeJobMarker: markCronJobActive(job.id),
@@ -586,7 +601,7 @@ describe("cron batch outcome finalization", () => {
             error: "tenth failure",
             startedAt: dueAt,
             endedAt: dueAt + 10,
-          },
+          }),
         ]),
       ).rejects.toThrow("terminal write failed");
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -622,7 +637,7 @@ describe("cron batch outcome finalization", () => {
       await finalizeCompletedCronRunOutcomes(
         state,
         [
-          {
+          authorOutcome(state, {
             jobId: job.id,
             job,
             activeJobMarker,
@@ -630,7 +645,7 @@ describe("cron batch outcome finalization", () => {
             error: "setup timed out before runner start",
             startedAt: dueAt,
             endedAt: dueAt,
-          },
+          }),
         ],
         { clearOnFailure: false, discardWhenStopped: true },
       ),

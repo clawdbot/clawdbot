@@ -2,6 +2,7 @@
 export {
   defaultRuntime,
   formatErrorMessage,
+  getMemoryEmbeddingCommandSecretTargetIds,
   resolveCommandSecretRefsViaGateway,
   setVerbose,
   shortenHomeInString,
@@ -14,11 +15,6 @@ export {
 export {
   getRuntimeConfig,
   resolveDefaultAgentId,
-  resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-export {
-  listMemoryFiles,
-  normalizeExtraMemoryPaths,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 export { getMemorySearchManager } from "./memory/index.js";

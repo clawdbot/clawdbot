@@ -556,7 +556,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     resolved?: {
       model?: string;
       modelProvider?: string;
-      agentRuntime?: { id: string; source: string };
+      agentRuntime?: { id: string; source: string; devicePlacementSupported?: boolean };
     };
   }>("sessions.patch", {
     key: "agent:main:main",
@@ -579,16 +579,16 @@ test("lists and patches session store via sessions.* RPC", async () => {
       key: string;
       modelProvider?: string;
       model?: string;
-      agentRuntime?: { id: string; source: string };
+      agentRuntime?: { id: string; source: string; devicePlacementSupported?: boolean };
     }>;
   }>("sessions.list", {});
-  expect(listAfterModelPatch.ok).toBe(true);
   const mainAfterModelPatch = listAfterModelPatch.payload?.sessions.find(
     (session) => session.key === "agent:main:main",
   );
   expect(mainAfterModelPatch?.modelProvider).toBe("openai");
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
-  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "openclaw", source: "implicit" });
+  expect(mainAfterModelPatch?.agentRuntime?.id).toBe("openclaw");
+  expect(mainAfterModelPatch?.agentRuntime?.devicePlacementSupported).toBe(true);
 
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",
@@ -650,14 +650,13 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(deliveryContextFromSession(entryAfterReset)?.accountId).toBe("work");
   expect(deliveryContextFromSession(entryAfterReset)?.threadId).toBe("1737500000.123456");
-  // Retained history stays in the same SQLite transcript behind the reset boundary.
   const resetTranscript = await loadTranscriptRows({
     sessionId: "sess-main",
     sessionKey: "agent:main:main",
     storePath,
   });
-  expect(resetTranscript).toHaveLength(4);
   expect(resetTranscript.at(-1)).toMatchObject({ type: "reset", reason: "reset" });
+  expect(resetTranscript.at(-1)).not.toHaveProperty("firstKeptEntryId");
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",

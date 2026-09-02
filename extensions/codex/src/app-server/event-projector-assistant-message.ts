@@ -28,6 +28,10 @@ export type AssistantMessageOptions = {
   promptError: unknown;
 };
 
+export type CodexAsyncAssistantMessage = AssistantMessage & {
+  openclawAsyncDelivery: { itemId: string };
+};
+
 const ZERO_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -125,15 +129,35 @@ export function createAssistantCommentaryMessage(
   return message;
 }
 
-export function createAssistantMirrorMessage(
+export function createAssistantAsyncMessage(
   params: CodexAssistantMessageParams,
-  title: string,
+  text: string,
+  itemId: string,
+  timestamp: number,
+): CodexAsyncAssistantMessage {
+  const attribution = resolveCodexLocalRuntimeAttribution(params);
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: attribution.api ?? "openai-chatgpt-responses",
+    provider: attribution.provider,
+    model: params.modelId,
+    usage: ZERO_USAGE,
+    stopReason: "stop",
+    timestamp,
+    openclawAsyncDelivery: { itemId },
+  };
+}
+
+export function createAssistantReasoningMessage(
+  params: CodexAssistantMessageParams,
   text: string,
 ): AssistantMessage {
   const attribution = resolveCodexLocalRuntimeAttribution(params);
   return {
     role: "assistant",
-    content: [{ type: "text", text: `${title}:\n${text}` }],
+    // Shared history and visibility controls need reasoning, not final-answer text.
+    content: [{ type: "thinking", thinking: text }],
     api: attribution.api ?? "openai-chatgpt-responses",
     provider: attribution.provider,
     model: params.modelId,

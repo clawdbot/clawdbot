@@ -152,6 +152,11 @@ test("webchat session mutations follow operator scope policy", async () => {
     {
       method: "sessions.dispatch",
       params: { key: "agent:main:main", profileId: "test" },
+      missingScope: "operator.admin",
+    },
+    {
+      method: "sessions.dispatch",
+      params: { key: "agent:main:main", deviceId: "device-1" },
       missingScope: "operator.write",
     },
     {

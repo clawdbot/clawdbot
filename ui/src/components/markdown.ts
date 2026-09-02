@@ -1,8 +1,9 @@
 // Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
+import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
-import { resolveControlUiBasePath } from "../app/browser.ts";
+import { resolveControlUiPaths } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
 import { renderAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
@@ -75,6 +76,7 @@ const allowedAttrs = [
   "data-file-kind",
   "data-file-line",
   "data-file-path",
+  "data-link-favicon-host",
   "data-session-key",
   "data-table-interactions",
   "type",
@@ -308,20 +310,15 @@ const APP_RESOURCE_ROOT_SEGMENTS = new Set([
   "__openclaw__",
   "_next",
   "api",
-  "apple-touch-icon.png",
   "assets",
   "avatar",
-  "favicon-32.png",
-  "favicon.ico",
-  "favicon.svg",
   "manifest.json",
-  "manifest.webmanifest",
   "media",
   "res",
   "socket.io",
-  "sw.js",
   "static",
   "ws",
+  ...CONTROL_UI_ROOT_PUBLIC_ASSETS,
 ]);
 const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],
@@ -368,7 +365,7 @@ function currentControlUiBasePath(): string {
   if (typeof window === "undefined") {
     return "";
   }
-  return resolveControlUiBasePath(window.location.pathname);
+  return resolveControlUiPaths(window.location.pathname)[0];
 }
 
 function pathSegments(pathname: string): string[] {
@@ -486,11 +483,6 @@ function installHooks() {
   });
 }
 
-function formatTruncatedMarkdownInput(input: string): string {
-  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated);
-}
-
 function appendMarkdownTruncationNotice(truncated: {
   text: string;
   truncated: boolean;
@@ -558,18 +550,16 @@ export function toSanitizedMarkdownHtml(
     return "";
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
-  const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
-  if (cacheable) {
-    const cached = getCachedMarkdown(cacheKey);
-    if (cached !== null) {
-      return cached;
-    }
+  if (input.length > MARKDOWN_CACHE_MAX_CHARS) {
+    return renderSanitizedMarkdown(renderInput, renderOptions);
+  }
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
+  const cached = getCachedMarkdown(cacheKey);
+  if (cached !== null) {
+    return cached;
   }
   const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
-  if (cacheable) {
-    setCachedMarkdown(cacheKey, sanitized);
-  }
+  setCachedMarkdown(cacheKey, sanitized);
   return sanitized;
 }
 
@@ -582,37 +572,43 @@ function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): stri
   );
 }
 
-export function toStreamingMarkdownHtml(
+export function toStreamingMarkdownParts(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
-): string {
+  streamKey?: string,
+): [stableHtml: string, tailHtml: string] {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const rawInput = normalizeMarkdownLineBreaks(
     stripUnsupportedCitationControlMarkers(markdownLocal),
   );
   if (isMarkdownBlockArtText(rawInput)) {
-    return renderSanitizedMarkdown(rawInput, renderOptions);
+    return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
 
   const trimmedInput = rawInput.trim();
   if (!trimmedInput) {
-    return "";
+    return ["", ""];
   }
-  const input = formatTruncatedMarkdownInput(trimmedInput);
+  const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
+  const input = appendMarkdownTruncationNotice(truncated);
 
-  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(
+    input,
+    streamKey,
+    truncated.text.length,
+  );
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
   if (!streamingTail.trim()) {
-    return stableHtml;
+    return [stableHtml, ""];
   }
   const tailHtml =
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, renderOptions)
+      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
       : renderSanitizedMarkdown(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,
         );
-  return `${stableHtml}${tailHtml}`;
+  return [stableHtml, tailHtml];
 }

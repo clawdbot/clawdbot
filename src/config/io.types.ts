@@ -6,7 +6,7 @@ import type {
   RuntimeConfigSnapshotRefreshOptions,
   RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot, ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
@@ -45,6 +45,8 @@ export type ConfigWriteOptions = {
   explicitSetPaths?: readonly (readonly string[])[];
   /** Source-shaped values paired with explicitSetPaths. */
   explicitSetValueSource?: OpenClawConfig;
+  /** Persist roster format without treating every leaf as an explicit value edit. */
+  persistCanonicalAgentRoster?: boolean;
   /** Agent ids that this write intentionally removes from the canonical roster. */
   allowedAgentRosterRemovals?: readonly string[];
   /** Permit explicit local overrides below an ancestor $include without flattening it. */
@@ -149,6 +151,7 @@ export type ReadConfigFileSnapshotWithPluginMetadataResult = {
 export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
+  configDiagnostics: { path: string; issues: ConfigValidationIssue[] } | null;
 };
 
 export type ConfigRecoveryCandidate = {

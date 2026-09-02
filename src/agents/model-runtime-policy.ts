@@ -11,8 +11,8 @@ import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type { AgentRuntimePolicyConfig } from "../config/types.agents-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 
 /** Config surface that supplied a resolved model runtime policy. */
 type ModelRuntimePolicySource = "model" | "provider";
@@ -22,6 +22,7 @@ type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
   source?: ModelRuntimePolicySource;
   matchedProvider?: string;
+  forcedByEnvironment?: true;
 };
 
 type ModelEntryMatchKind = "none" | "exact" | "provider-wildcard";
@@ -161,9 +162,10 @@ function resolveAgentModelEntryRuntimePolicy(params: {
         sessionKey: params.sessionKey,
       }).sessionAgentId
     : tryResolveLegacyCompatibilityAgentId(params.config);
-  const agentEntry = sessionAgentId
-    ? listAgentEntries(params.config).find((entry) => normalizeAgentId(entry.id) === sessionAgentId)
-    : undefined;
+  // Point lookup: projecting the whole roster per model ref made runtime
+  // collection O(agents² × models) on large fleets (#135743).
+  const agentEntry =
+    sessionAgentId && params.config ? resolveAgentEntry(params.config, sessionAgentId) : undefined;
   const modelMaps: Array<Record<string, AgentModelEntryConfig> | undefined> = [
     agentEntry?.models,
     params.config.agents?.defaults?.models,
@@ -222,7 +224,7 @@ export function resolveModelRuntimePolicy(params: {
   if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
     const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
     if (forcedRuntime === "openclaw" || forcedRuntime === "codex") {
-      return { policy: { id: forcedRuntime }, source: "model" };
+      return { policy: { id: forcedRuntime }, source: "model", forcedByEnvironment: true };
     }
   }
 

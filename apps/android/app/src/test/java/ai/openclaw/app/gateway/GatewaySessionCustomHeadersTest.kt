@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
@@ -32,6 +33,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -66,8 +68,18 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
 @Config(sdk = [34])
 class GatewaySessionCustomHeadersTest {
   @Test
-  fun managedMediaDownload_usesArtifactTicketWithoutGatewayBearer() =
+  fun managedMediaDownload_usesArtifactTicketWithoutGatewayBearer() = runBlocking { assertManagedMediaDownload(contextPath = "") }
+
+  @Test
+  fun managedMediaDownload_preservesGatewayContextPathForEveryMediaType() =
     runBlocking {
+      for (contextPath in listOf("/tenant/gw", "/tenant%2Fgw", "/tenant%20gw", "//tenant/gw")) {
+        assertManagedMediaDownload(contextPath)
+      }
+    }
+
+  private suspend fun assertManagedMediaDownload(contextPath: String) =
+    coroutineScope {
       val app = RuntimeEnvironment.getApplication()
       val json = Json { ignoreUnknownKeys = true }
       val connected = CompletableDeferred<Unit>()
@@ -79,30 +91,52 @@ class GatewaySessionCustomHeadersTest {
       val videoAttachmentId = "22222222-2222-4222-8222-222222222222"
       val videoArtifactId = "artifact_managed_media_$videoAttachmentId"
       val videoPath = "/api/chat/media/outgoing/main/$videoAttachmentId/full?mediaTicket=video-ticket"
+      val videoBytes = byteArrayOf(9, 10, 11, 12)
       val audioAttachmentId = "33333333-3333-4333-8333-333333333333"
       val audioArtifactId = "artifact_managed_media_$audioAttachmentId"
       val audioPath = "/api/chat/media/outgoing/main/$audioAttachmentId/full?mediaTicket=audio-ticket"
       val audioPlaybackPath = "$audioPath&playback=1"
       val audioBytes = byteArrayOf(5, 6, 7, 8)
       val audioRequestCount = AtomicInteger()
+      val mediaRequests = ConcurrentLinkedQueue<RecordedRequest>()
+      val invalidMediaPaths =
+        mapOf(
+          "invalid-absolute" to "https://attacker.invalid$imagePath",
+          "invalid-authority" to "//attacker.invalid$imagePath",
+          "invalid-fragment" to "$imagePath#fragment",
+          "invalid-missing-ticket" to imagePath.substringBefore('?'),
+          "invalid-empty-ticket" to "${imagePath.substringBefore('?')}?mediaTicket=",
+          "invalid-prefix" to "/other/path?mediaTicket=ticket",
+        )
       val server =
         MockWebServer().apply {
           dispatcher =
             object : Dispatcher() {
               override fun dispatch(request: RecordedRequest): MockResponse {
-                if (request.path == imagePath) {
+                if (request.path == "$contextPath$imagePath") {
+                  mediaRequests.add(request)
                   imageRequest.complete(request)
                   return MockResponse()
                     .setHeader("Content-Type", "image/png")
                     .setBody(Buffer().write(imageBytes))
                 }
-                if (request.path == audioPlaybackPath) {
+                if (request.path == "$contextPath$videoPath") {
+                  mediaRequests.add(request)
+                  return MockResponse()
+                    .setHeader("Content-Type", "video/mp4")
+                    .setBody(Buffer().write(videoBytes))
+                }
+                if (request.path == "$contextPath$audioPlaybackPath") {
+                  mediaRequests.add(request)
                   if (audioRequestCount.incrementAndGet() == 1) {
                     return MockResponse().setResponseCode(202).setBody("""{"status":"preparing"}""")
                   }
                   return MockResponse()
                     .setHeader("Content-Type", "audio/mp4")
                     .setBody(Buffer().write(audioBytes))
+                }
+                if (request.path != contextPath.ifEmpty { "/" }) {
+                  return MockResponse().setResponseCode(404)
                 }
                 return MockResponse().withWebSocketUpgrade(
                   object : WebSocketListener() {
@@ -121,26 +155,29 @@ class GatewaySessionCustomHeadersTest {
                       if (frame["type"]?.jsonPrimitive?.content != "req") return
                       val id = frame["id"]?.jsonPrimitive?.content ?: return
                       when (frame["method"]?.jsonPrimitive?.content) {
-                        "connect" ->
+                        "connect" -> {
                           webSocket.send(
                             """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
                           )
-                        "artifacts.download" ->
-                          if (frame["params"]
+                        }
+
+                        "artifacts.download" -> {
+                          val requestedArtifactId =
+                            frame["params"]
                               ?.jsonObject
                               ?.get("artifactId")
                               ?.jsonPrimitive
-                              ?.content == videoArtifactId
-                          ) {
+                              ?.content
+                          val invalidMediaPath = invalidMediaPaths[requestedArtifactId]
+                          if (invalidMediaPath != null) {
+                            webSocket.send(
+                              """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$requestedArtifactId","type":"video","mimeType":"video/mp4","download":{"mode":"url"}},"url":"$invalidMediaPath"}}""",
+                            )
+                          } else if (requestedArtifactId == videoArtifactId) {
                             webSocket.send(
                               """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$videoArtifactId","type":"video","mimeType":"video/mp4","download":{"mode":"url"}},"url":"$videoPath"}}""",
                             )
-                          } else if (frame["params"]
-                              ?.jsonObject
-                              ?.get("artifactId")
-                              ?.jsonPrimitive
-                              ?.content == audioArtifactId
-                          ) {
+                          } else if (requestedArtifactId == audioArtifactId) {
                             webSocket.send(
                               """{"type":"res","id":"$id","ok":true,"payload":{"artifact":{"id":"$audioArtifactId","type":"audio","mimeType":"audio/mp4","download":{"mode":"url"}},"url":"$audioPath"}}""",
                             )
@@ -149,6 +186,7 @@ class GatewaySessionCustomHeadersTest {
                               """{"type":"res","id":"$id","ok":true,"payload":{"url":"$imagePath"}}""",
                             )
                           }
+                        }
                       }
                     }
                   },
@@ -167,11 +205,12 @@ class GatewaySessionCustomHeadersTest {
           onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
           onDisconnected = {},
           onEvent = { _, _ -> },
+          customHeadersProvider = { error("Cleartext transport must not read custom headers") },
         )
 
       try {
         session.connect(
-          endpoint = GatewayEndpoint(stableId, "test", "127.0.0.1", server.port, tlsEnabled = false),
+          endpoint = GatewayEndpoint(stableId, "test", "127.0.0.1", server.port, tlsEnabled = false, contextPath = contextPath),
           token = "bootstrap-token",
           bootstrapToken = null,
           password = null,
@@ -207,20 +246,38 @@ class GatewaySessionCustomHeadersTest {
 
         val streamed =
           session.loadMediaArtifact(stableId, "main", "main", videoArtifactId, GatewayMediaKind.Video) as GatewayLoadedMedia.Streaming
-        assertEquals("http://127.0.0.1:${server.port}$videoPath", streamed.url)
+        assertEquals("http://127.0.0.1:${server.port}$contextPath$videoPath", streamed.url)
         assertEquals("video/*", streamed.headers["Accept"])
         assertEquals("video/mp4", streamed.mimeType)
         assertEquals(false, streamed.retryPreparingPlayback)
+        val videoRequest =
+          Request
+            .Builder()
+            .url(streamed.url)
+            .apply {
+              for ((name, value) in streamed.headers) header(name, value)
+            }.build()
+        streamed.client.newCall(videoRequest).execute().use { response ->
+          assertEquals(200, response.code)
+          assertArrayEquals(videoBytes, response.body.bytes())
+        }
 
         val transcodedVideo =
           session.loadMediaArtifact(stableId, "main", "main", videoArtifactId, GatewayMediaKind.Video, true) as GatewayLoadedMedia.Streaming
-        assertEquals("http://127.0.0.1:${server.port}$videoPath&playback=1", transcodedVideo.url)
+        assertEquals("http://127.0.0.1:${server.port}$contextPath$videoPath&playback=1", transcodedVideo.url)
         assertTrue(transcodedVideo.retryPreparingPlayback)
 
         val audio =
           session.loadMediaArtifact(stableId, "main", "main", audioArtifactId, GatewayMediaKind.Audio, true) as GatewayLoadedMedia.Buffered
         assertArrayEquals(audioBytes, audio.bytes)
         assertEquals(2, audioRequestCount.get())
+
+        val validMediaRequestCount = mediaRequests.size
+        for (artifactId in invalidMediaPaths.keys) {
+          assertNull(session.loadMediaArtifact(stableId, "main", "main", artifactId, GatewayMediaKind.Video))
+        }
+        assertEquals(validMediaRequestCount, mediaRequests.size)
+        assertTrue(mediaRequests.all { it.getHeader("Authorization") == null })
       } finally {
         session.disconnectAndJoin()
         scope.cancel()

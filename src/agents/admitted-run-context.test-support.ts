@@ -25,24 +25,24 @@ export function withTestAdmittedRunContext<T extends { runId: string }>(
   };
 }
 
-/** Adapts a production runner only at a test boundary; production stays fail-closed. */
-export function wrapRunWithTestAdmission<P extends { runId: string }, R>(
-  run: (params: P) => R,
-): (params: Omit<P, "admittedRunContext" | "preparedRunAdmission">) => R {
-  return (params) =>
-    run({
-      ...params,
-      admittedRunContext: createTestAdmittedRunContext(params.runId),
-    } as unknown as P);
-}
-
 /** Exercises the real post-selection admission boundary without enabling audit collection. */
-export function wrapRunWithTestPreparedAdmission<P extends { runId: string }, R>(
-  run: (params: P) => R,
-): (params: Omit<P, "admittedRunContext" | "preparedRunAdmission">) => R {
-  return (params) =>
-    run({
-      ...params,
-      preparedRunAdmission: createTestPreparedRunAdmission(params.runId),
-    } as unknown as P);
+export function wrapRunWithTestPreparedAdmission<P extends { runId: string; agentId?: string }, R>(
+  run: (params: P) => Promise<R>,
+): (params: Omit<P, "admittedRunContext" | "preparedRunAdmission">) => Promise<R> {
+  return async (params) => {
+    // Fixtures reset modules before loading runners; authority must use that same
+    // module instance and remain owned until the complete runner call settles.
+    const { prepareSystemAgentRunAdmission } = await import("./admitted-run-context.js");
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      params.runId,
+      params.agentId ?? "test",
+      "runner-fixture",
+    );
+    try {
+      return await run({ ...params, preparedRunAdmission: admission } as unknown as P);
+    } finally {
+      admission.close();
+    }
+  };
 }

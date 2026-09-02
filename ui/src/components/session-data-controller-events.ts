@@ -1,30 +1,105 @@
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
-import type { SessionCapability, SessionListSnapshot } from "../lib/sessions/index.ts";
+import type { AgentCapability } from "../lib/agents/index.ts";
+import type {
+  SessionCapability,
+  SessionListOptions,
+  SessionListSnapshot,
+} from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import {
-  SIDEBAR_AGENT_SESSION_LIST_LIMIT,
-  type SidebarSessionStatusFilter,
+import type {
+  SidebarSessionOwnerFilter,
+  SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 
 type SidebarSessionListOwner = {
   readonly context: ApplicationContext<RouteId> | undefined;
-  readonly sessionCreatedOrder: Map<string, number>;
   sessionResultsByAgent: Record<string, NonNullable<SessionListSnapshot["result"]>>;
   sessionsResult: SessionListSnapshot["result"];
   sessionsAgentId: SessionListSnapshot["agentId"];
   sessionsLoading: boolean;
   sessionMutationError: string | null;
   expandedAgentId(): string;
+  sessionListQuery(agentId: string): SessionListOptions;
   requestSessionDataUpdate(): void;
 };
 
-function filteredSidebarSessionQuery(agentId: string, archivedFilter: SidebarSessionStatusFilter) {
+const sidebarSessionErrorOwners = new WeakMap<SidebarSessionListOwner, "list" | "action">();
+
+export function publishSidebarSessionError(
+  owner: SidebarSessionListOwner,
+  error: string | null,
+  source: "list" | "action",
+): void {
+  if (source === "list" && sidebarSessionErrorOwners.get(owner) === "action") {
+    return;
+  }
+  owner.sessionMutationError = error;
+  if (error === null) {
+    sidebarSessionErrorOwners.delete(owner);
+  } else {
+    sidebarSessionErrorOwners.set(owner, source);
+  }
+}
+
+function pruneSidebarAgentSessionCaches(
+  owner: SidebarSessionListOwner,
+  agentIds: readonly string[],
+): void {
+  const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
+  for (const agentId of Object.keys(owner.sessionResultsByAgent)) {
+    if (!retainedAgentIds.has(agentId)) {
+      delete owner.sessionResultsByAgent[agentId];
+    }
+  }
+  if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
+    owner.sessionsResult = null;
+    owner.sessionsAgentId = null;
+  }
+}
+
+export function subscribeSidebarAgentSessionCaches(
+  agents: AgentCapability,
+  owner: SidebarSessionListOwner,
+  notify: () => void,
+): () => void {
+  const synchronize = () => {
+    const roster = agents.state.agentsList;
+    // A null roster is transient during reconnect; only a concrete list can evict agent caches.
+    if (roster) {
+      pruneSidebarAgentSessionCaches(
+        owner,
+        roster.agents.map((agent) => agent.id),
+      );
+    }
+  };
+  synchronize();
+  return agents.subscribe(() => {
+    synchronize();
+    notify();
+  });
+}
+
+type SidebarSessionQueryOwner = {
+  sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+  sidebarSessionStatusFilter(): SidebarSessionStatusFilter;
+};
+
+export function hasSidebarListFilter(owner: SidebarSessionQueryOwner): boolean {
+  const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
+  return owner.sidebarSessionStatusFilter() !== "active" || Boolean(ownerId || involvingMe);
+}
+
+export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId: string) {
+  const { ownerId, involvingMe } = owner.sidebarSessionOwnerFilter();
   return {
+    ownerId: involvingMe ? undefined : ownerId || undefined,
+    involvingMe: involvingMe || undefined,
     agentId,
-    archivedFilter,
-    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    archivedFilter: owner.sidebarSessionStatusFilter(),
+    limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     includeDerivedTitles: true,
     includeLastMessage: true,
   } as const;
@@ -36,11 +111,6 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
-  for (const row of snapshot.result?.sessions ?? []) {
-    if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
-      owner.sessionCreatedOrder.set(row.key, owner.sessionCreatedOrder.size);
-    }
-  }
   if (snapshot.result && snapshot.agentId) {
     owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
   }
@@ -49,11 +119,9 @@ export function publishSidebarSessionList(
 export function subscribeFilteredSidebarSessions(
   owner: SidebarSessionListOwner,
   sessions: SessionCapability,
-  agentId: string,
-  archivedFilter: Exclude<SidebarSessionStatusFilter, "active">,
+  scope: SessionListOptions,
   isCurrent: () => boolean,
 ): () => void {
-  const scope = filteredSidebarSessionQuery(agentId, archivedFilter);
   const apply = (snapshot: SessionListSnapshot) => {
     if (!isCurrent()) {
       return;
@@ -64,20 +132,20 @@ export function subscribeFilteredSidebarSessions(
     }
     publishSidebarSessionList(owner, snapshot);
     owner.sessionsLoading = snapshot.loading;
-    if (snapshot.error) {
-      owner.sessionMutationError = snapshot.error;
-    }
+    publishSidebarSessionError(owner, snapshot.error, "list");
     owner.requestSessionDataUpdate();
   };
   const unsubscribe = sessions.subscribeList(scope, apply);
   apply(sessions.listSnapshot(scope));
-  return unsubscribe;
+  return () => {
+    unsubscribe();
+    publishSidebarSessionError(owner, null, "list");
+  };
 }
 
 export function refreshSidebarSessionList(
   owner: SidebarSessionListOwner,
   agentId: string | null,
-  archivedFilter: SidebarSessionStatusFilter,
   append = false,
 ): Promise<void> {
   const result = owner.sessionsResult;
@@ -95,7 +163,7 @@ export function refreshSidebarSessionList(
     return Promise.resolve();
   }
   return owner.context.sessions.refreshList({
-    ...filteredSidebarSessionQuery(agentId, archivedFilter),
+    ...owner.sessionListQuery(agentId),
     ...(append && typeof offset === "number" ? { offset, append: true } : {}),
     force: true,
   });

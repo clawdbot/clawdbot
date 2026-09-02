@@ -94,7 +94,8 @@ public actor GatewayChannelActor {
     private var keepaliveTask: Task<Void, Never>?
     private var pendingDeviceTokenRetry = false
     private var deviceTokenRetryBudgetUsed = false
-    private var issuedDeviceAuthRoles = Set<String>()
+    private var receivedDeviceAuthRoles = Set<String>()
+    private var persistedDeviceAuthRoles = Set<String>()
     private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
     private let extraHeadersProvider: (@Sendable () -> [String: String])?
@@ -221,7 +222,14 @@ public actor GatewayChannelActor {
     /// Operator-supplied proxy credentials (Cloudflare Access-style) ride on the upgrade
     /// request. Read from the provider at connect time so edits apply on the next reconnect
     /// without re-pairing. Values are credentials: never log them.
+    private var workerEdgeCredentials: [String: String]?
+
+    func currentWorkerEdgeCredentials() -> [String: String]? {
+        self.workerEdgeCredentials
+    }
+
     private func makeUpgradeRequest() -> URLRequest {
+        self.workerEdgeCredentials = nil
         var request = URLRequest(url: self.url)
         // Custom headers can contain service tokens or Authorization values. Do not even read
         // the provider for cleartext routes, where credentials would be exposed in transit.
@@ -229,6 +237,11 @@ public actor GatewayChannelActor {
         guard let headers = self.extraHeadersProvider?(), !headers.isEmpty else { return request }
         for (name, value) in GatewayCustomHeaders.sanitized(headers) {
             request.setValue(value, forHTTPHeaderField: name)
+        }
+        if let clientID = request.value(forHTTPHeaderField: "CF-Access-Client-Id"),
+           let clientSecret = request.value(forHTTPHeaderField: "CF-Access-Client-Secret")
+        {
+            self.workerEdgeCredentials = ["clientId": clientID, "clientSecret": clientSecret]
         }
         return request
     }
@@ -545,8 +558,9 @@ public actor GatewayChannelActor {
                 deviceAuthGatewayID: deviceAuthGatewayID,
                 deviceIdentityProfile: deviceIdentityProfile,
                 connectionGeneration: connectionGeneration)
-            self.issuedDeviceAuthRoles.formUnion(outcome.issuedRoles)
-            if outcome.issuedRoles.contains(role) {
+            self.receivedDeviceAuthRoles.formUnion(outcome.receivedRoles)
+            self.persistedDeviceAuthRoles.formUnion(outcome.persistedRoles)
+            if outcome.persistedRoles.contains(role) {
                 // Only a token persisted from this endpoint may unlock stored auth for its role.
                 self.connectOptions?.allowStoredDeviceAuth = true
             }
@@ -885,7 +899,8 @@ extension GatewayChannelActor {
         role: String,
         deviceAuthGatewayID: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile,
-        connectionGeneration: UInt64) async throws -> (issuedRoles: Set<String>, hello: HelloOk)
+        connectionGeneration: UInt64) async throws
+        -> (receivedRoles: Set<String>, persistedRoles: Set<String>, hello: HelloOk)
     {
         if res.ok == false {
             let error = res.error
@@ -940,16 +955,38 @@ extension GatewayChannelActor {
             self.tickIntervalMs = tick
         }
         let auth = ok.auth
-        var issuedRoles = Set<String>()
-        if let identity {
-            if let deviceToken = auth["deviceToken"]?.stringValue {
-                let authRole = auth["role"]?.stringValue ?? role
-                let helloScopes = auth["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
-                let sameStoredToken = authRole == role && deviceToken == selectedAuth.storedToken
-                // Hello scopes describe this socket. Reissuing the stored token must not narrow its reusable grant.
-                let scopes = sameStoredToken ? (selectedAuth.storedScopes ?? helloScopes) : helloScopes
-                if self.persistIssuedDeviceToken(
-                    authSource: self.lastAuthSource,
+        var receivedRoles = Set<String>()
+        var persistedRoles = Set<String>()
+        if let deviceToken = auth["deviceToken"]?.stringValue {
+            let authRole = auth["role"]?.stringValue ?? role
+            receivedRoles.insert(authRole)
+            let helloScopes = auth["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            let sameStoredToken = authRole == role && deviceToken == selectedAuth.storedToken
+            // Hello scopes describe this socket. Reissuing the stored token must not narrow its reusable grant.
+            let scopes = sameStoredToken ? (selectedAuth.storedScopes ?? helloScopes) : helloScopes
+            if let identity, self.persistIssuedDeviceToken(
+                authSource: self.lastAuthSource,
+                deviceId: identity.deviceId,
+                role: authRole,
+                token: deviceToken,
+                scopes: scopes,
+                deviceAuthGatewayID: deviceAuthGatewayID,
+                deviceIdentityProfile: deviceIdentityProfile)
+            {
+                persistedRoles.insert(authRole)
+            }
+        }
+        if let tokenEntries = auth["deviceTokens"]?.arrayValue {
+            for entry in tokenEntries {
+                guard let rawEntry = entry.dictionaryValue,
+                      let deviceToken = rawEntry["deviceToken"]?.stringValue,
+                      let authRole = rawEntry["role"]?.stringValue
+                else {
+                    continue
+                }
+                let scopes = rawEntry["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
+                receivedRoles.insert(authRole)
+                if let identity, self.shouldPersistBootstrapHandoffTokens(), self.persistBootstrapHandoffToken(
                     deviceId: identity.deviceId,
                     role: authRole,
                     token: deviceToken,
@@ -957,30 +994,7 @@ extension GatewayChannelActor {
                     deviceAuthGatewayID: deviceAuthGatewayID,
                     deviceIdentityProfile: deviceIdentityProfile)
                 {
-                    issuedRoles.insert(authRole)
-                }
-            }
-            if self.shouldPersistBootstrapHandoffTokens(),
-               let tokenEntries = auth["deviceTokens"]?.arrayValue
-            {
-                for entry in tokenEntries {
-                    guard let rawEntry = entry.dictionaryValue,
-                          let deviceToken = rawEntry["deviceToken"]?.stringValue,
-                          let authRole = rawEntry["role"]?.stringValue
-                    else {
-                        continue
-                    }
-                    let scopes = rawEntry["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
-                    if self.persistBootstrapHandoffToken(
-                        deviceId: identity.deviceId,
-                        role: authRole,
-                        token: deviceToken,
-                        scopes: scopes,
-                        deviceAuthGatewayID: deviceAuthGatewayID,
-                        deviceIdentityProfile: deviceIdentityProfile)
-                    {
-                        issuedRoles.insert(authRole)
-                    }
+                    persistedRoles.insert(authRole)
                 }
             }
         }
@@ -992,7 +1006,7 @@ extension GatewayChannelActor {
         {
             await self.connectSnapshotAdmissionHandler?(ok, connectionGeneration)
         }
-        return (issuedRoles, ok)
+        return (receivedRoles, persistedRoles, ok)
     }
 
     private func deliverPushIfCurrent(
@@ -1005,8 +1019,10 @@ extension GatewayChannelActor {
         await self.pushHandler?(push, connectionGeneration)
     }
 
-    public func currentIssuedDeviceAuthRoles() -> Set<String> {
-        self.issuedDeviceAuthRoles
+    public func currentDeviceAuthRoles() -> (received: Set<String>, persisted: Set<String>) {
+        // Missing issuance and failed storage need different recovery guidance. Only
+        // persisted roles may authorize reconnecting with stored device credentials.
+        (self.receivedDeviceAuthRoles, self.persistedDeviceAuthRoles)
     }
 }
 

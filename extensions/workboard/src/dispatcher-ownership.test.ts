@@ -84,6 +84,36 @@ describe("Workboard dispatcher ownership", () => {
     await expect(store.get(unassigned.id)).resolves.toMatchObject({ status: "ready" });
   });
 
+  it("keeps an active blank-assignment card in the default worker slot", async () => {
+    const keyed = createMemoryStore();
+    const store = new WorkboardStore(keyed);
+    const active = await store.create({
+      title: "Active default worker",
+      status: "running",
+      workspaceAccess: { unrestricted: true },
+    });
+    await keyed.register(active.id, {
+      version: 1,
+      card: { ...active, agentId: "" },
+    });
+    const queued = await store.create({
+      title: "Queued default worker",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "unexpected-second-worker" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 1 },
+    });
+
+    expect(result.started).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(queued.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
   it("bounds failed worker attempts without draining the ready queue", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const cards = [];
@@ -424,42 +454,49 @@ describe("Workboard dispatcher ownership", () => {
     },
   );
 
-  it("replaces an expired ready-card claim without waiting for stale-claim cleanup", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const now = Date.now();
-    const card = await store.create({
-      title: "Ready with an expired lease",
-      status: "ready",
-      agentId: "shared-worker",
-      workspaceAccess: { unrestricted: true },
-      metadata: {
-        claim: {
-          ownerId: "retired-worker",
-          token: "expired-token",
-          claimedAt: now - 60_000,
-          lastHeartbeatAt: now - 60_000,
-          expiresAt: now - 1_000,
+  it.each([
+    { agentId: "shared-worker", ownerId: "shared-worker" },
+    { agentId: undefined, ownerId: "workboard-dispatcher" },
+  ])(
+    "replaces an expired ready-card claim with the $ownerId slot",
+    async ({ agentId, ownerId }) => {
+      const store = new WorkboardStore(createMemoryStore());
+      const now = Date.now();
+      const card = await store.create({
+        title: "Ready with an expired lease",
+        status: "ready",
+        agentId,
+        workspaceAccess: { unrestricted: true },
+        metadata: {
+          claim: {
+            ownerId: "retired-worker",
+            token: "expired-token",
+            claimedAt: now - 60_000,
+            lastHeartbeatAt: now - 60_000,
+            expiresAt: now - 1_000,
+          },
         },
-      },
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-reclaimed" });
+      });
+      const run = vi.fn().mockResolvedValue({ runId: "run-reclaimed" });
 
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { maxStarts: 1 },
-    });
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { maxStarts: 1 },
+      });
 
-    expect(result.started).toEqual([
-      expect.objectContaining({ cardId: card.id, runId: "run-reclaimed" }),
-    ]);
-    expect(run).toHaveBeenCalledOnce();
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "running",
-      metadata: { claim: { ownerId: "shared-worker" } },
-    });
-    expect((await store.get(card.id))?.metadata?.claim?.token).not.toBe("expired-token");
-  });
+      expect(result.started).toEqual([
+        expect.objectContaining({ cardId: card.id, runId: "run-reclaimed" }),
+      ]);
+      expect(run).toHaveBeenCalledOnce();
+      await expect(store.get(card.id)).resolves.toMatchObject({
+        status: "running",
+        metadata: { claim: { ownerId } },
+      });
+      expect((await store.get(card.id))?.agentId).toBe(agentId);
+      expect((await store.get(card.id))?.metadata?.claim?.token).not.toBe("expired-token");
+    },
+  );
 
   it("serializes concurrent board dispatches for the same worker", async () => {
     const store = new WorkboardStore(createMemoryStore());
@@ -567,7 +604,7 @@ describe("Workboard dispatcher ownership", () => {
         status: "ready",
         workspaceAccess: { unrestricted: true },
       });
-      vi.spyOn(store, "enrichExecutionAssociation").mockRejectedValue(
+      vi.spyOn(store, "acceptExecutionLaunch").mockRejectedValue(
         new Error("execution enrichment unavailable"),
       );
       let provisionalRunId = "";
@@ -583,6 +620,15 @@ describe("Workboard dispatcher ownership", () => {
             status: "running",
             sessionKey: input.sessionKey,
             runId: provisionalRunId,
+          },
+          metadata: {
+            automation: {
+              launch: {
+                phase: "prepared",
+                requestedSessionKey: input.sessionKey,
+                provisionalRunId,
+              },
+            },
           },
         });
         return { sessionKey: canonicalSessionKey, runId: "accepted-run" };
@@ -619,6 +665,7 @@ describe("Workboard dispatcher ownership", () => {
         runId: provisionalRunId,
         execution: { status: "running", runId: provisionalRunId },
         metadata: {
+          automation: { launch: { phase: "prepared", provisionalRunId } },
           claim: { ownerId: "workboard-dispatcher" },
           workerLogs: [expect.objectContaining({ runId: "accepted-run" })],
         },
@@ -641,6 +688,56 @@ describe("Workboard dispatcher ownership", () => {
       expect(run).toHaveBeenCalledOnce();
     },
   );
+
+  it("marks a prepared launch accepted after Gateway acceptance", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Worker with durable acceptance",
+      status: "ready",
+      workspaceAccess: { unrestricted: true },
+    });
+    const canonicalSessionKey = `agent:worker:subagent:workboard-default-${card.id}`;
+    let provisionalRunId = "";
+    const run = vi.fn().mockImplementation(async (input) => {
+      provisionalRunId = input.idempotencyKey;
+      await expect(store.get(card.id)).resolves.toMatchObject({
+        sessionKey: input.sessionKey,
+        runId: provisionalRunId,
+        metadata: {
+          automation: {
+            launch: {
+              phase: "prepared",
+              requestedSessionKey: input.sessionKey,
+              provisionalRunId,
+            },
+          },
+        },
+      });
+      return { sessionKey: canonicalSessionKey, runId: "accepted-run" };
+    });
+
+    await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { maxStarts: 1 },
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      sessionKey: canonicalSessionKey,
+      runId: "accepted-run",
+      metadata: {
+        automation: {
+          launch: {
+            phase: "accepted",
+            requestedSessionKey: expect.any(String),
+            provisionalRunId,
+            acceptedSessionKey: canonicalSessionKey,
+            acceptedRunId: "accepted-run",
+          },
+        },
+      },
+    });
+  });
 
   it.each(["backlog", "todo", "ready"] as const)(
     "starts an exact dashboard card from %s",

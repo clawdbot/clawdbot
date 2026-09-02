@@ -217,7 +217,6 @@ describe("config form scalar integrity", () => {
     expect(textInput.value).toBe("");
     expect(textInput.placeholder).toBe("Default: balanced");
     expect(container.textContent).toContain("Using default: balanced");
-    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
     expect(onPatch).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
 
@@ -252,7 +251,27 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["retries"], 4);
   });
 
-  it("restores scalar and select defaults by removing optional overrides", () => {
+  it("shows the default description without a reset button on an overridden row", () => {
+    const container = document.createElement("div");
+    render(
+      renderTextInput({
+        schema: { type: "string", default: "balanced" },
+        value: "custom",
+        path: ["mode"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Default: balanced");
+    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
+  });
+
+  it("restores scalar and select defaults through clearing and default selection", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const onRemove = vi.fn();
@@ -271,14 +290,16 @@ describe("config form scalar integrity", () => {
       container,
     );
     expect(container.textContent).toContain("Default: 3");
-    expectElement(
-      container.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']"),
-      "number reset",
-    ).click();
-    expect(onRemove).toHaveBeenCalledWith(["retries"]);
-    expect(onPatch).not.toHaveBeenCalled();
+    const numberInput = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "number input",
+    );
+    numberInput.value = "";
+    numberInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["retries"], undefined);
+    expect(onRemove).not.toHaveBeenCalled();
 
-    onRemove.mockClear();
+    onPatch.mockClear();
     render(
       renderSelect({
         schema: { type: "string", default: "balanced" },
@@ -327,6 +348,246 @@ describe("config form scalar integrity", () => {
     ).toBe("Default: balanced");
   });
 
+  it("commits the valid branch type for constrained text unions", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderTextInput({
+        schema: {
+          anyOf: [
+            { type: "string", const: "auto" },
+            { type: "integer", minimum: 0 },
+          ],
+        },
+        value: "auto",
+        path: ["mode"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='text']"),
+      "constrained union input",
+    );
+
+    input.value = "42";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["mode"], 42);
+    expect(input.getAttribute("aria-invalid")).toBe("false");
+
+    input.value = "auto";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["mode"], "auto");
+
+    onPatch.mockClear();
+    input.value = "invalid";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+  });
+
+  it("commits explicit boolean branches without retyping numeric strings", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderTextInput({
+        schema: {
+          anyOf: [{ type: "string" }, { type: "number" }, { const: false }],
+        },
+        value: "500mb",
+        path: ["maxDiskBytes"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='text']"),
+      "string-number-boolean union input",
+    );
+
+    input.value = "false";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], false);
+
+    input.value = "true";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], "true");
+
+    const identifier = "1048113311314608148";
+    input.value = identifier;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["maxDiskBytes"], identifier);
+  });
+
+  it("preserves the current branch type in unconstrained primitive unions", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const schema = {
+      anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
+    };
+    const renderValue = (value: unknown, defaultValue?: unknown) => {
+      render(
+        renderTextInput({
+          schema: defaultValue === undefined ? schema : { ...schema, default: defaultValue },
+          value,
+          path: ["providerOptions", "deepgram", "temperature"],
+          hints: {},
+          unsupported: new Set(),
+          disabled: false,
+          inputType: "text",
+          onPatch,
+        }),
+        container,
+      );
+      return expectElement(
+        container.querySelector<HTMLInputElement>("input[type='text']"),
+        "mixed primitive union input",
+      );
+    };
+
+    let input = renderValue(42);
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+    onPatch.mockClear();
+    input = renderValue(1);
+    input.value = "1.0000000000000001";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.value).toBe("1.0000000000000001");
+
+    onPatch.mockClear();
+    input = renderValue("42");
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], "43");
+
+    onPatch.mockClear();
+    input = renderValue(undefined);
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+    onPatch.mockClear();
+    input = renderValue(undefined, 42);
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], 43);
+
+    onPatch.mockClear();
+    input = renderValue(undefined, "42");
+    input.value = "43";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], "43");
+
+    onPatch.mockClear();
+    input = renderValue("false");
+    input.value = "true";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(
+      ["providerOptions", "deepgram", "temperature"],
+      "true",
+    );
+
+    onPatch.mockClear();
+    input = renderValue(false);
+    input.value = "true";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(["providerOptions", "deepgram", "temperature"], true);
+
+    onPatch.mockClear();
+    const identifier = "1048113311314608148";
+    input = renderValue(undefined);
+    input.value = identifier;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenLastCalledWith(
+      ["providerOptions", "deepgram", "temperature"],
+      identifier,
+    );
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["number", 0],
+  ] as const)(
+    "keeps an initial %s branch stable while an identifier is typed",
+    (_name, initial) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      const identifier = "1048113311314608148";
+      const schema = {
+        anyOf: [{ type: "string", pattern: "^[0-9]{19}$" }, { type: "number" }],
+      };
+      const patches: unknown[] = [];
+      let persisted: unknown = initial;
+      let value: unknown = initial;
+
+      const renderValue = () => {
+        render(
+          renderTextInput({
+            schema,
+            value,
+            path: ["allowFrom"],
+            hints: {},
+            unsupported: new Set(),
+            disabled: false,
+            inputType: "text",
+            onPatch: (_path, nextValue) => {
+              patches.push(nextValue);
+              persisted = nextValue;
+              value = nextValue;
+              // Model application immediately refreshes the rendered field.
+              renderValue();
+            },
+          }),
+          container,
+        );
+      };
+
+      try {
+        renderValue();
+        let input = expectElement(
+          container.querySelector<HTMLInputElement>("input[type='text']"),
+          "incremental string-number input",
+        );
+        input.focus();
+        input.value = "";
+        for (const [index, digit] of Array.from(identifier).entries()) {
+          input.value += digit;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          // A background refresh can land even when the prefix is not yet a
+          // valid string branch; the focused edit must survive that repaint.
+          renderValue();
+          input = expectElement(
+            container.querySelector<HTMLInputElement>("input[type='text']"),
+            `incremental string-number input ${index + 1}`,
+          );
+        }
+
+        expect(patches.length).toBeGreaterThan(1);
+        expect(patches.slice(0, -1).every((candidate) => typeof candidate === "number")).toBe(true);
+        expect(patches.at(-1)).toBe(identifier);
+        expect(persisted).toBe(identifier);
+        expect(value).toBe(identifier);
+        expect(input.value).toBe(identifier);
+        input.blur();
+      } finally {
+        container.remove();
+      }
+    },
+  );
+
   it("does not commit a clear while a number input holds partial numeric text", () => {
     // Browsers report value === "" with validity.badInput while the user is
     // mid-keystroke ("0." on the way to "0.5"). Committing undefined here
@@ -373,7 +634,106 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["sampleRate"], undefined);
   });
 
-  it("keeps restore disabled while a sensitive value is concealed", () => {
+  it.each([
+    ["unsafe integer", { type: "integer" }, "9007199254740993"],
+    ["lossy decimal", { type: "number" }, "1.0000000000000001"],
+    ["underflow", { type: "number" }, "1e-324"],
+  ])("rejects %s text before a pure numeric input can round it", (_name, schema, raw) => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderNumberInput({
+        schema,
+        value: 0,
+        path: ["numeric"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "lossless number input",
+    );
+
+    input.value = raw;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.value).toBe(raw);
+  });
+
+  it("accepts an exactly represented integer above the safe-integer range", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderNumberInput({
+        schema: { type: "integer" },
+        value: 0,
+        path: ["numeric"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        onPatch,
+      }),
+      container,
+    );
+    const input = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "exact large number input",
+    );
+
+    input.value = "9007199254740992";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    expect(onPatch).toHaveBeenCalledWith(["numeric"], 9_007_199_254_740_992);
+    expect(input.getAttribute("aria-invalid")).toBe("false");
+  });
+
+  it.each(["mixed", "number"] as const)(
+    "renders an exact large integer as parser-valid text in a %s input",
+    (kind) => {
+      const container = document.createElement("div");
+      const onPatch = vi.fn();
+      const exactValue = Number("1000000000000000128");
+      const params = {
+        value: exactValue,
+        path: ["numeric"],
+        hints: {},
+        unsupported: new Set<string>(),
+        disabled: false,
+        onPatch,
+      };
+      render(
+        kind === "mixed"
+          ? renderTextInput({
+              ...params,
+              schema: { anyOf: [{ type: "string" }, { type: "number" }] },
+              inputType: "text",
+            })
+          : renderNumberInput({ ...params, schema: { type: "integer" } }),
+        container,
+      );
+      const input = expectElement(
+        container.querySelector<HTMLInputElement>(
+          `input[type='${kind === "mixed" ? "text" : "number"}']`,
+        ),
+        `${kind} exact large number input`,
+      );
+
+      expect(input.value).toBe("1000000000000000128");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+
+      expect(onPatch).toHaveBeenCalledWith(["numeric"], exactValue);
+      expect(input.getAttribute("aria-invalid")).toBe("false");
+    },
+  );
+
+  it("conceals the default description while a sensitive value is concealed", () => {
     const container = document.createElement("div");
 
     render(
@@ -392,11 +752,6 @@ describe("config form scalar integrity", () => {
       container,
     );
 
-    const reset = expectElement(
-      container.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']"),
-      "concealed sensitive reset",
-    );
-    expect(reset.disabled).toBe(true);
     expect(container.textContent).not.toContain("inherited");
   });
 

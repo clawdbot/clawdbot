@@ -98,6 +98,42 @@ beforeEach(() => {
 });
 
 describe("installPluginFromPath", () => {
+  it.each(["native plugin", "bundle"] as const)(
+    "does not publish an archived %s after authority closes during artifact review",
+    async (kind) => {
+      const { pluginDir, extensionsDir } =
+        kind === "native plugin"
+          ? setupNativePluginInstallFixture()
+          : setupBundleInstallFixture({ bundleFormat: "claude", name: "Guarded Bundle" });
+      const pluginId = kind === "native plugin" ? "symlink-plugin" : "guarded-bundle";
+      const archivePath = await packToArchive({
+        pkgDir: pluginDir,
+        outDir: suiteTempRootTracker.makeTempDir(),
+        outName: "guarded-plugin.tgz",
+      });
+      let authorityActive = true;
+      const result = await installPluginFromPath({
+        path: archivePath,
+        extensionsDir,
+        onBeforePluginArtifactCommit: async () => {
+          authorityActive = false;
+        },
+        beforePersistentApply: () => {
+          if (!authorityActive) {
+            throw new Error("plugin installation authority closed");
+          }
+        },
+      });
+
+      expect(authorityActive).toBe(false);
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("plugin installation authority closed"),
+      });
+      expect(fs.existsSync(path.join(extensionsDir, pluginId))).toBe(false);
+    },
+  );
+
   it("rejects managed plain file plugin installs through path install", async () => {
     const baseDir = suiteTempRootTracker.makeTempDir();
     const extensionsDir = path.join(baseDir, "extensions");

@@ -2,6 +2,11 @@
 import { resolveBasicAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   createSetupTranslator,
+  patchChannelConfigForAccount,
+  promptResolvedAllowFrom,
+  resolveEntriesWithOptionalToken,
+  resolveSetupAccountId,
+  splitSetupEntries,
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
@@ -15,13 +20,6 @@ import {
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
 import { createDiscordSetupWizardBase, parseDiscordAllowFromId } from "./setup-core.js";
-import {
-  patchChannelConfigForAccount,
-  promptResolvedAllowFrom,
-  resolveEntriesWithOptionalToken,
-  resolveSetupAccountId,
-  splitSetupEntries,
-} from "./setup-runtime-helpers.js";
 import { resolveDiscordToken } from "./token.js";
 
 const t = createSetupTranslator();

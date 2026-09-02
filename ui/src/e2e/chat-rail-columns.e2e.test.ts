@@ -1,9 +1,10 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -16,7 +17,22 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:rail-tabs";
-const proofDir = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+const proofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = proofDirParent
+    ? createControlUiE2eArtifactDir("chat-rail-columns", proofDirParent)
+    : undefined;
+});
+const videoDirParent = process.env.OPENCLAW_UI_RAIL_VIDEO_DIR?.trim();
+let videoDir: string | undefined;
+beforeEach(() => {
+  videoDir = videoDirParent
+    ? proofDir && proofDirParent && path.resolve(videoDirParent) === path.resolve(proofDirParent)
+      ? proofDir
+      : createControlUiE2eArtifactDir("chat-rail-columns", videoDirParent)
+    : undefined;
+});
 
 const historyMessages = Array.from({ length: 10 }, (_, index) => ({
   id: `rail-tabs-${index}`,
@@ -48,6 +64,13 @@ function scenario(): ControlUiMockGatewayScenario {
       "artifacts.list": { artifacts: [] },
       "browser.request": {
         cases: [{ match: { method: "GET", path: "/tabs" }, response: { running: true, tabs: [] } }],
+      },
+      "desktop.observe": {
+        transport: "rfb",
+        wsPath: "/desktop/observe?token=rail-tabs",
+        expiresAtMs: 60_000,
+        control: false,
+        auth: "vnc-password",
       },
       "environments.list": {
         environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
@@ -244,11 +267,29 @@ async function narrowestRailTabLabel(page: Page): Promise<number> {
     );
 }
 
+async function expectExpandedSidePanelFillsRegion(page: Page): Promise<void> {
+  const geometry = await sidePanel(page).evaluate((element) => {
+    const panel = element.getBoundingClientRect();
+    const region = element.closest(".sidebar-region")?.getBoundingClientRect();
+    if (!region) {
+      throw new Error("Expanded side panel has no sidebar region");
+    }
+    return {
+      bottom: Math.abs(panel.bottom - region.bottom),
+      left: Math.abs(panel.left - region.left),
+      right: Math.abs(panel.right - region.right),
+      top: Math.abs(panel.top - region.top),
+    };
+  });
+  for (const delta of Object.values(geometry)) {
+    expect(delta).toBeLessThanOrEqual(1);
+  }
+}
+
 async function captureRichPanel(page: Page, name: string) {
   if (!proofDir) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   const clip = await page.evaluate(() => {
     const elements = [
       document.querySelector<HTMLElement>(".chat-pane__header"),
@@ -282,7 +323,7 @@ suite.define(() => {
         async ({ page }) => {
           await seedDockReservationRegression(page, dock);
           await installMockGateway(page, scenario());
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".chat-group").first().waitFor();
 
           await page.locator(".chat-browser-panel-toggle").click();
@@ -342,13 +383,16 @@ suite.define(() => {
         {
           colorScheme: themeMode,
           locale: "en-US",
+          ...(videoDir && themeMode === "light"
+            ? { recordVideo: { dir: videoDir, size: { height: 900, width: 1600 } } }
+            : {}),
           serviceWorkers: "block",
           viewport: { height: 900, width: 1600 },
         },
         async ({ page }) => {
           await seedSettings(page, themeMode);
           const gateway = await installMockGateway(page, scenario());
-          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           await page.locator(".chat-group").first().waitFor();
 
           const topbarButtons = page.locator(".chat-pane__actions .chat-icon-btn");
@@ -434,7 +478,9 @@ suite.define(() => {
           await sidePanel(page).locator('[data-panel-slot="companion"]:not([hidden])').waitFor();
           await openFromPlus(page, "Desktop");
           await sidePanel(page).locator('[data-panel-slot="desktop"]:not([hidden])').waitFor();
-          await sidePanel(page).getByText("Desktop sources", { exact: true }).waitFor();
+          const desktopObserve = await gateway.waitForRequest("desktop.observe");
+          expect(desktopObserve.params).toEqual({ source: { kind: "host" }, control: false });
+          await sidePanel(page).getByLabel("VNC password", { exact: true }).waitFor();
           await captureRichPanel(page, `rails-tabs-desktop-${themeMode}`);
           expect(await tabLabels(page)).toEqual([
             "Files",
@@ -736,6 +782,8 @@ suite.define(() => {
                 .evaluate((element) => getComputedStyle(element).display),
             )
             .toBe("none");
+          await expectExpandedSidePanelFillsRegion(page);
+          await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
           await sidePanel(page).getByRole("button", { name: "Restore side panel" }).click();
 
           await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
@@ -775,30 +823,67 @@ suite.define(() => {
           await page.keyboard.press("Meta+Shift+B");
           await expect.poll(async () => (await tabLabels(page)).at(-1)).toBe("Files");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
+          await expect
+            .poll(() =>
+              sidePanel(page)
+                .locator(":scope > .side-panel__header wa-tab[active] .tabstrip-tab__label")
+                .textContent(),
+            )
+            .toContain("Terminal");
           await page.keyboard.press("Control+Backquote");
-          await expect.poll(async () => (await tabLabels(page)).at(-1)).toBe("Terminal");
+          await expect.poll(async () => (await tabLabels(page)).includes("Terminal")).toBe(false);
 
-          for (const label of [
-            "Review",
-            "Tasks",
-            "Browser",
-            "Side chat",
-            "Desktop",
-            "Files",
-            "Terminal",
-          ]) {
+          for (const label of ["Review", "Tasks", "Browser", "Side chat", "Desktop", "Files"]) {
             await sidePanel(page)
               .locator(":scope > .side-panel__header")
               .getByRole("button", { name: `Close ${label}`, exact: true })
               .click();
           }
-          await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
-          await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
+          await expect.poll(() => sidePanel(page).count()).toBe(0);
+          await page.reload();
+          await page.locator(".chat-group").first().waitFor();
+          await expect.poll(() => sidePanel(page).count()).toBe(0);
           await page.locator(".chat-side-panel-toggle").click();
           await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
           expect(await sidePanel(page).locator("wa-tab").count()).toBe(0);
+          const emptyDividerBox = await divider.boundingBox();
+          expect(emptyDividerBox).not.toBeNull();
+          await page.mouse.move(
+            emptyDividerBox!.x + 1,
+            emptyDividerBox!.y + emptyDividerBox!.height / 2,
+          );
+          await page.mouse.down();
+          await page.mouse.move(
+            emptyDividerBox!.x - 70,
+            emptyDividerBox!.y + emptyDividerBox!.height / 2,
+          );
+          await page.mouse.up();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+            )
+            .toBeGreaterThan(resizedWidth + 50);
+          const emptyResizedWidth = await sidePanel(page).evaluate(
+            (element) => element.getBoundingClientRect().width,
+          );
+          await divider.evaluate((element) => element.blur());
+          await captureRichPanel(page, `rails-tabs-empty-resized-${themeMode}`);
+
+          await page.reload();
+          await page.locator(".chat-group").first().waitFor();
+          await sidePanel(page).locator(".side-panel-empty--selector").waitFor();
+          expect(await divider.boundingBox()).not.toBeNull();
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+            )
+            .toBeCloseTo(emptyResizedWidth, 0);
           await openFromEmpty(page, "Terminal");
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((element) => element.getBoundingClientRect().width),
+            )
+            .toBeCloseTo(emptyResizedWidth, 0);
           const terminalLabel = sidePanel(page)
             .locator(sidePanelTabLabelSelector)
             .filter({ hasText: "Terminal" });
@@ -879,10 +964,9 @@ suite.define(() => {
       async ({ page }) => {
         await seedSettings(page, "light");
         const gateway = await installMockGateway(page, scenario());
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.locator(".chat-group").first().waitFor();
-        await page.locator(".chat-side-panel-toggle").click();
-        await openFromEmpty(page, "Files");
+        await activateChatHeaderPanelAction(page, "Show session files");
         await openFromPlus(page, "Terminal");
         await openFromPlus(page, "Side chat");
         await selectTab(page, "Side chat");
@@ -912,12 +996,12 @@ suite.define(() => {
         expect(companionGeometry.railTop).toBeGreaterThanOrEqual(companionGeometry.bodyTop - 1);
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
-        const mainComposer = page.locator(".agent-chat__composer-combobox > textarea");
+        const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,
         );
-        const input = companion.getByRole("textbox", { name: "Ask the session companion" });
+        const input = companion.getByRole("textbox", { name: "Ask in side chat" });
         await input.fill("Can I use side chat here?");
         await companion.getByRole("button", { name: "Ask", exact: true }).click();
         const request = await gateway.waitForRequest("sessions.companion.ask");
@@ -929,14 +1013,9 @@ suite.define(() => {
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
-        const companionActions = sidePanel(page).getByRole("button", {
-          name: "More companion actions",
-        });
-        await companionActions.click();
         await sidePanel(page)
-          .locator('wa-dropdown-item[value="clear"]')
-          .waitFor({ state: "visible" });
-        await page.keyboard.press("Escape");
+          .getByRole("button", { name: "Clear side chat", exact: true })
+          .waitFor();
         await captureRichPanel(page, "rails-side-chat-mobile-light");
 
         await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();
@@ -947,6 +1026,7 @@ suite.define(() => {
               .evaluate((element) => getComputedStyle(element).display),
           )
           .toBe("none");
+        await expectExpandedSidePanelFillsRegion(page);
         await captureRichPanel(page, "rails-tabs-mobile-light");
       },
     );

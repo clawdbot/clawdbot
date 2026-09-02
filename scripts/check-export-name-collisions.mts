@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
-import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import {
-  collectTypeScriptFilesFromRoots,
   isTestLikeTypeScriptFile,
-  resolveSourceRoots,
   runAsScript,
   toLine,
   unwrapExpression,
@@ -684,39 +682,41 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
 }
 
 async function collectRepositoryModules(repoRoot: string) {
-  const sourceCollectOptions = {
-    fileExtensions: [".ts", ".mts", ".js", ".mjs"],
-    includeTests: true,
-    skipDirectories: ["test", "__fixtures__"],
-  };
-  const supportCollectOptions = {
-    ...sourceCollectOptions,
-    fileExtensions: [".ts", ".mts"],
-  };
+  const ignoredDirNames = new Set(["node_modules", "test", "__fixtures__"]);
   const [collectedFiles, collectedSupportFiles] = await Promise.all([
-    collectTypeScriptFilesFromRoots(resolveSourceRoots(repoRoot, ["src"]), sourceCollectOptions),
+    collectSourceFileContents({
+      repoRoot,
+      scanRoots: ["src"],
+      scanExtensions: new Set([".ts", ".mts", ".js", ".mjs"]),
+      ignoredDirNames,
+    }),
     // Package modules are resolution-only: Plugin SDK barrels can export their
     // names, but the collision rule itself remains scoped to src/ definitions.
-    collectTypeScriptFilesFromRoots(
-      resolveSourceRoots(repoRoot, ["packages"]),
-      supportCollectOptions,
-    ),
+    collectSourceFileContents({
+      repoRoot,
+      scanRoots: ["packages"],
+      scanExtensions: new Set([".ts", ".mts"]),
+      ignoredDirNames,
+    }),
   ]);
-  const files = collectedFiles.filter((filePath) => !isExcludedExportCollisionSource(filePath));
+  const files = collectedFiles.filter(
+    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
+  );
   const supportFiles = collectedSupportFiles.filter(
-    (filePath) => !isExcludedExportCollisionSource(filePath),
+    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
   );
-  const modules = await Promise.all(
-    [
-      ...files.map((filePath) => ({ filePath, includeDefinitions: true })),
-      ...supportFiles.map((filePath) => ({ filePath, includeDefinitions: false })),
-    ].map(async ({ filePath, includeDefinitions }) => ({
-      content: await fs.readFile(filePath, "utf8"),
-      includeDefinitions,
-      path: normalizeRelativePath(path.relative(repoRoot, filePath)),
+  return [
+    ...files.map(({ content, relativeFile }) => ({
+      content,
+      includeDefinitions: true,
+      path: relativeFile,
     })),
-  );
-  return modules;
+    ...supportFiles.map(({ content, relativeFile }) => ({
+      content,
+      includeDefinitions: false,
+      path: relativeFile,
+    })),
+  ];
 }
 
 async function collectRepositoryExportAnalysis(repoRoot: string) {

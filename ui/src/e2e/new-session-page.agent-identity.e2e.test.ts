@@ -12,12 +12,6 @@ const suite = createNewSessionPageE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofStage = process.env.OPENCLAW_AGENT_IDENTITY_PROOF_STAGE ?? "after";
 const captureBefore = proofStage === "before";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "new-session-agent-identity",
-);
 
 const agentsList = {
   agents: [
@@ -87,11 +81,16 @@ async function capture(page: Page, name: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "new-session-agent-identity", proofStage), {
+    recursive: true,
+  });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(proofDir, `${proofStage}-${name}`),
+    path: path.join(
+      path.join(suite.artifactDir, "new-session-agent-identity", proofStage),
+      `${proofStage}-${name}`,
+    ),
   });
 }
 
@@ -99,14 +98,73 @@ async function captureElement(locator: Locator, name: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "new-session-agent-identity", proofStage), {
+    recursive: true,
+  });
   await locator.screenshot({
     animations: "disabled",
-    path: path.join(proofDir, `${proofStage}-${name}`),
+    path: path.join(
+      path.join(suite.artifactDir, "new-session-agent-identity", proofStage),
+      `${proofStage}-${name}`,
+    ),
   });
 }
 
 suite.define(() => {
+  it("drops a pending skill completion after an agent switch", async () => {
+    const context = await suite.browser.newContext(CONTEXT);
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      defaultAgentId: "main",
+      deferredMethods: ["commands.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "commands.list",
+        "sessions.create",
+        "sessions.dispatch",
+      ],
+      methodResponses: {
+        "agent.identity.get": agentIdentities,
+        "agents.list": agentsList,
+        "chat.metadata": { models: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await gateway.waitForRequest("agent.identity.get");
+      const composer = page.locator(".new-session-page__composer textarea");
+      await composer.fill("$");
+      await composer.press("End");
+      await composer.dispatchEvent("select");
+      await gateway.waitForRequest("commands.list");
+
+      const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      await picker.evaluate((element) => {
+        (element as HTMLElement & { onSelect: (agentId: string) => void }).onSelect("research");
+      });
+      await gateway.resolveDeferred("commands.list", {
+        commands: [
+          {
+            description: "Only available to the previous agent.",
+            name: "main_only",
+            source: "skill",
+            skillModelVisible: true,
+          },
+        ],
+      });
+
+      await pollLocatorText(picker.locator(".agent-select__label")).toBe("research");
+      await expect
+        .poll(() => page.getByRole("listbox", { name: "Skill references" }).count())
+        .toBe(0);
+      await expect.poll(() => composer.inputValue()).toBe("$");
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each(["dark", "light"] as const)(
     "uses resolved identity in the New Session hero and picker in %s mode",
     async (theme) => {
@@ -151,6 +209,10 @@ suite.define(() => {
         await pollLocatorText(sidebar.locator(".sidebar-agent-card__name")).toContain("Pacino");
         await hero.waitFor();
         await picker.locator(".agent-select__label").waitFor();
+        await page.waitForLoadState("networkidle");
+        const identityRequests = await gateway.getRequests("agent.identity.get");
+        expect(identityRequests).toHaveLength(1);
+        expect(identityRequests[0]).toMatchObject({ params: { agentId: "main" } });
         await picker.locator(".agent-select__trigger").click();
         await capture(page, `${theme}-named-picker-open.png`);
         await captureElement(

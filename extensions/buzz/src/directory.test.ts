@@ -1,6 +1,6 @@
 import { getPublicKey, type Event, type Filter } from "nostr-tools";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
   auth: vi.fn(async () => "ok"),
@@ -88,13 +88,12 @@ describe("Buzz live directory", () => {
     gatewayMocks.activeBus = undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
+      vi.fn(async () =>
+        Response.json({
           self: RELAY_PUBLIC_KEY,
           software: "https://github.com/block/buzz",
         }),
-      })),
+      ),
     );
     relayMocks.subscribe.mockImplementation(
       (
@@ -146,6 +145,11 @@ describe("Buzz live directory", () => {
     );
   });
 
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it("loads current room membership and member profiles in one authenticated snapshot", async () => {
     const { listBuzzDirectoryPeersLive } = await import("./directory.js");
     const cfg = {
@@ -191,6 +195,93 @@ describe("Buzz live directory", () => {
     ]);
     expect(relayMocks.auth).toHaveBeenCalledOnce();
     expect(relayMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { rootEnabled: false, accountEnabled: true, active: false, unavailable: false },
+    { rootEnabled: false, accountEnabled: true, active: false, unavailable: true },
+    { rootEnabled: true, accountEnabled: false, active: false, unavailable: false },
+    { rootEnabled: true, accountEnabled: false, active: false, unavailable: true },
+    { rootEnabled: false, accountEnabled: true, active: true, unavailable: false },
+    { rootEnabled: false, accountEnabled: true, active: true, unavailable: true },
+    { rootEnabled: true, accountEnabled: false, active: true, unavailable: false },
+    { rootEnabled: true, accountEnabled: false, active: true, unavailable: true },
+  ])(
+    "returns static rooms without network for disabled identities: %j",
+    async ({ rootEnabled, accountEnabled, active, unavailable }) => {
+      const refreshDirectory = vi.fn(async () => {});
+      if (active) {
+        gatewayMocks.activeBus = {
+          directory: {
+            self: () => null,
+            listPeers: () => [],
+            listGroupMembers: () => [],
+            listGroups: () => [],
+          },
+          refreshDirectory,
+        };
+      }
+      const cfg = {
+        channels: {
+          buzz: {
+            enabled: rootEnabled,
+            accounts: {
+              ada: {
+                enabled: accountEnabled,
+                relayUrl: "wss://buzz.example.com",
+                privateKey: unavailable
+                  ? { source: "env", provider: "default", id: "UNAVAILABLE_KEY" }
+                  : PRIVATE_KEY,
+                groups: { [ROOM_ID]: {} },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const {
+        listBuzzDirectoryGroupsLive,
+        listBuzzDirectoryPeersLive,
+        listBuzzDirectoryGroupMembers,
+        getBuzzDirectorySelf,
+      } = await import("./directory.js");
+      await expect(
+        listBuzzDirectoryGroupsLive({ cfg, accountId: "ada", query: ROOM_ID, limit: 1 }),
+      ).resolves.toEqual([expect.objectContaining({ id: `buzz:${ROOM_ID}` })]);
+      await expect(listBuzzDirectoryPeersLive({ cfg, accountId: "ada" })).resolves.toEqual([]);
+      await expect(
+        listBuzzDirectoryGroupMembers({ cfg, accountId: "ada", groupId: ROOM_ID }),
+      ).resolves.toEqual([]);
+      const self = await getBuzzDirectorySelf({ cfg, accountId: "ada" });
+      expect(self?.id ?? null).toBe(unavailable ? null : BOT_PUBLIC_KEY);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(relayMocks.connect).not.toHaveBeenCalled();
+      expect(refreshDirectory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not open a relay for live directory reads when an auth-tag SecretRef is unavailable", async () => {
+    vi.stubEnv("BUZZ_AUTH_TAG", '["auth","owner","kind=9","signature"]');
+    const cfg = {
+      channels: {
+        buzz: {
+          relayUrl: "wss://buzz.example.com",
+          privateKey: PRIVATE_KEY,
+          authTag: { source: "env", provider: "default", id: "MISSING_BUZZ_AUTH_TAG" },
+          groups: { [ROOM_ID]: {} },
+        },
+      },
+    } as OpenClawConfig;
+    const { listBuzzDirectoryGroupsFromConfig } = await import("./directory-config.js");
+    const { listBuzzDirectoryGroupsLive } = await import("./directory.js");
+
+    await expect(listBuzzDirectoryGroupsFromConfig({ cfg, accountId: "default" })).resolves.toEqual(
+      [expect.objectContaining({ id: `buzz:${ROOM_ID}` })],
+    );
+    await expect(listBuzzDirectoryGroupsLive({ cfg, accountId: "default" })).rejects.toThrow(
+      /configured.*unavailable|unresolved/i,
+    );
+    expect(relayMocks.connect).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("does not load peers or memberships from archived rooms", async () => {

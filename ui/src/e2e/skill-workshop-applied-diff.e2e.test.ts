@@ -1,7 +1,7 @@
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chromium, type Browser, type Page } from "playwright";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -15,7 +15,8 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/applied-revision-diff");
+const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+let artifactDir: string;
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -59,13 +60,27 @@ function inspectedProposalId(request: MockGatewayRequest): unknown {
   return params.proposalId;
 }
 
+async function screenshot(page: Page, fileName: string): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(artifactDir, fileName),
+  });
+}
+
 describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", () => {
+  beforeEach(() => {
+    if (captureUiProofEnabled) {
+      artifactDir = createControlUiE2eArtifactDir("applied-revision-diff");
+    }
+  });
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -82,9 +97,11 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
     const latestBody = "# Deploy review\n\n## Steps\n1. Verify package.\n2. Publish package.";
     const context = await browser.newContext({
       locale: "en-US",
-      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -127,11 +144,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
       expect(new Set(inspectRequests.map(inspectedProposalId))).toEqual(
         new Set([latest.id, previous.id]),
       );
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(artifactDir, "01-changes.png"),
-      });
+      await screenshot(page, "01-changes.png");
 
       await page.getByRole("button", { name: "Full body", exact: true }).click();
       await page.getByText("Publish package.", { exact: true }).waitFor();
@@ -139,11 +152,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
       expect(await gateway.getRequests("skills.proposals.inspect")).toHaveLength(
         inspectRequests.length,
       );
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(artifactDir, "02-full-body.png"),
-      });
+      await screenshot(page, "02-full-body.png");
     } finally {
       await context.close();
     }
@@ -161,9 +170,11 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
     latestLines[scenario.changedIndex] = changedText;
     const context = await browser.newContext({
       locale: "en-US",
-      recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } },
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -203,11 +214,7 @@ describeControlUiE2e("Skill Workshop applied revision diff mocked Gateway E2E", 
       expect((await page.locator(".sw-diff__row--add").count()) > 0).toBe(
         scenario.hasVisibleChange,
       );
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(artifactDir, `03-${scenario.label}-change.png`),
-      });
+      await screenshot(page, `03-${scenario.label}-change.png`);
 
       await page.getByRole("button", { name: "Full body", exact: true }).click();
       await expect.poll(() => page.locator(".sw-body-card").textContent()).toContain(changedText);

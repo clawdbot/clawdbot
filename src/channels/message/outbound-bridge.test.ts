@@ -33,6 +33,28 @@ function requireFirstCallArg(mock: {
 }
 
 describe("createChannelMessageAdapterFromOutbound", () => {
+  it("preserves explicit no-send facts in progress and final results", async () => {
+    const notSent = { outcome: "not_sent" as const, messageId: "" };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: async ({ onDeliveryResult }) => {
+          await onDeliveryResult?.(notSent);
+          return notSent;
+        },
+      },
+    });
+    const onDeliveryResult = vi.fn();
+    const result = await adapter.send?.text?.({ cfg, to: "room-1", text: "---", onDeliveryResult });
+
+    for (const delivery of [result, onDeliveryResult.mock.calls[0]?.[0]]) {
+      expect(delivery).toMatchObject({
+        outcome: "not_sent",
+        receipt: { platformMessageIds: [], parts: [] },
+      });
+      expect(delivery).not.toHaveProperty("messageId");
+    }
+  });
+
   it("wraps outbound text sends with a message receipt", async () => {
     const sendText = vi.fn(async (_request: ChannelMessageSendTextContext) => ({
       channel: "demo",
@@ -113,6 +135,37 @@ describe("createChannelMessageAdapterFromOutbound", () => {
         platformMessageIds: ["chunk-1"],
       }),
     });
+  });
+
+  it("preserves route-only final and progress metadata without fabricating message ids", async () => {
+    const sendText = vi.fn(
+      async (request: {
+        onDeliveryResult?: (result: ChannelMessageOutboundBridgeResult) => Promise<void> | void;
+      }) => {
+        await request.onDeliveryResult?.({ messageId: "", toJid: "progress-route" });
+        return { chatId: "final-route" };
+      },
+    );
+    const onDeliveryResult = vi.fn();
+    const adapter = createChannelMessageAdapterFromOutbound({ outbound: { sendText } });
+
+    const result = await adapter.send?.text?.({
+      cfg,
+      to: "room-1",
+      text: "hello",
+      onDeliveryResult,
+    });
+
+    expect(onDeliveryResult).toHaveBeenCalledWith({
+      toJid: "progress-route",
+      receipt: expect.objectContaining({ platformMessageIds: [], parts: [] }),
+    });
+    expect(onDeliveryResult.mock.calls[0]?.[0]).not.toHaveProperty("messageId");
+    expect(result).toMatchObject({
+      chatId: "final-route",
+      receipt: { platformMessageIds: [], parts: [] },
+    });
+    expect(result).not.toHaveProperty("messageId");
   });
 
   it("preserves target-only routing metadata without fabricating delivery identity", async () => {
@@ -232,6 +285,24 @@ describe("createChannelMessageAdapterFromOutbound", () => {
         mediaUrl: "file:///tmp/a.png",
       }),
     ).resolves.toEqual({ messageId: "legacy-id", receipt });
+  });
+
+  it("preserves an authoritative empty receipt with routing metadata", async () => {
+    const receipt: MessageReceipt = {
+      platformMessageIds: [],
+      parts: [],
+      threadId: "canonical-thread",
+      sentAt: 123,
+    };
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        sendText: vi.fn(async () => ({ messageId: "", toJid: "route-only", receipt })),
+      },
+    });
+
+    await expect(
+      adapter.send?.text?.({ cfg, to: "room-1", text: "hello", threadId: "requested-thread" }),
+    ).resolves.toEqual({ toJid: "route-only", receipt });
   });
 
   it.each([

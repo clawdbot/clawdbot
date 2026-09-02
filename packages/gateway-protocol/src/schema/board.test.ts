@@ -70,6 +70,44 @@ describe("BoardSnapshotSchema", () => {
     expect(
       Value.Check(BoardSnapshotSchema, {
         ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], contentOwner: "html" }],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [
+          {
+            ...snapshot.widgets[0],
+            contentKind: "plugin",
+            pluginKind: "diagrams:diagram",
+            contentOwner: "registered",
+            registeredContentKind: "diagram",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [{ ...snapshot.widgets[0], contentOwner: "unknown" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
+        widgets: [
+          {
+            ...snapshot.widgets[0],
+            contentOwner: "registered",
+            registeredContentKind: "Invalid Kind",
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardSnapshotSchema, {
+        ...snapshot,
         widgets: [{ ...snapshot.widgets[0], frameUrl: 42 }],
       }),
     ).toBe(false);

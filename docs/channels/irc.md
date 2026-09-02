@@ -60,7 +60,10 @@ IRC does not provide a replayable delivery ID or resend messages missed by a dis
 | `realname`                    | `OpenClaw`                    | Realname/GECOS field                                        |
 | `password` / `passwordFile`   | none                          | Server password; file must be a regular file                |
 | `channels`                    | none                          | Channels to join (`["#openclaw"]`)                          |
+| `replyToMode`                 | `all`                         | Reply-reference mode: `off`, `first`, `all`, or `batched`   |
 | `accounts` / `defaultAccount` | none                          | Multi-account setup; env vars fill only the default account |
+
+Named accounts inherit the channel-wide reply mode; override it with `channels.irc.accounts.<id>.replyToMode`.
 
 ## Security defaults
 

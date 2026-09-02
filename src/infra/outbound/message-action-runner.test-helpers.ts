@@ -37,6 +37,7 @@ const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   isCurrentSourceReplyActionName: vi.fn(() => false),
   isDeliveredCurrentSourceReply: vi.fn(() => false),
   isDeliveredCurrentSourceReplyAction: vi.fn(() => false),
+  isThreadPlacementSourceReplyActionName: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
   loadWebMedia: vi.fn<typeof import("../../media/web-media.js").loadWebMedia>(),
 }));
@@ -71,6 +72,8 @@ vi.mock("./source-reply-mirror.js", () => ({
   isCurrentSourceReplyActionName: messageActionRunnerMocks.isCurrentSourceReplyActionName,
   isDeliveredCurrentSourceReply: messageActionRunnerMocks.isDeliveredCurrentSourceReply,
   isDeliveredCurrentSourceReplyAction: messageActionRunnerMocks.isDeliveredCurrentSourceReplyAction,
+  isThreadPlacementSourceReplyActionName:
+    messageActionRunnerMocks.isThreadPlacementSourceReplyActionName,
   reconcileTerminalSourceReplyDelivery:
     messageActionRunnerMocks.reconcileTerminalSourceReplyDelivery,
 }));
@@ -99,10 +102,8 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
       : undefined,
 }));
 
-vi.mock("./message-action-threading.js", async () => {
-  const { createOutboundThreadingMock } =
-    await import("./message-action-threading.test-helpers.js");
-  const threading = createOutboundThreadingMock();
+vi.mock("./message-action-threading.js", async (importOriginal) => {
+  const threading = await importOriginal<typeof import("./message-action-threading.js")>();
   messageActionRunnerMocks.prepareOutboundMirrorRoute.mockImplementation(
     threading.prepareOutboundMirrorRoute,
   );
@@ -112,7 +113,8 @@ vi.mock("./message-action-threading.js", async () => {
   };
 });
 
-vi.mock("../../media/web-media.js", () => ({
+vi.mock("../../media/web-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../media/web-media.js")>()),
   loadWebMedia: messageActionRunnerMocks.loadWebMedia,
 }));
 

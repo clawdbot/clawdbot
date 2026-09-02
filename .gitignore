@@ -205,6 +205,7 @@ changelog/fragments/
 .mypy_cache/
 .vmux*
 .artifacts/
+.amp/portals/
 .openclaw-config-doc-cache/
 openclaw-path-alias-*/
 /.pi/
@@ -232,3 +233,6 @@ extensions/discord/assets/embedded-app-sdk.mjs
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+
+# Pinned Swift lint/format tools installed by scripts/install-swift-tools.sh
+.build/

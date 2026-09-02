@@ -1,26 +1,37 @@
 // Memory Core plugin module owns ranked search-window filtering and diagnostics.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type {
-  MemorySearchManager,
-  MemorySearchRuntimeDebug,
-  MemorySource,
+import {
+  formatMemoryIndexRebuildGuidance,
+  resolveMemoryIndexIdentityDiagnostic,
+  type MemoryIndexIdentityDiagnostic,
+  type MemoryProviderStatus,
+  type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 
 const MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES = 200;
-const PAUSED_MEMORY_INDEX_WARNING =
-  "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.";
-const PAUSED_MEMORY_INDEX_ACTION =
-  "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
 
-export function buildPausedMemoryIndexUnavailableResult(reason: string) {
-  return buildMemorySearchUnavailableResult(reason, {
-    warning: PAUSED_MEMORY_INDEX_WARNING,
-    action: PAUSED_MEMORY_INDEX_ACTION,
+export function buildPausedMemoryIndexUnavailableResult(
+  diagnostic: MemoryIndexIdentityDiagnostic,
+  params: {
+    agentId: string;
+    status: Pick<MemoryProviderStatus, "provider" | "requestedProvider">;
+  },
+) {
+  const cause =
+    diagnostic.owner === "configuration"
+      ? `the current memory configuration no longer matches the index (${diagnostic.reason})`
+      : diagnostic.code === "metadata_missing"
+        ? `the memory index metadata is missing (${diagnostic.reason}); no configuration change is needed`
+        : `this OpenClaw version changed the memory index format (${diagnostic.reason}); no configuration change is needed`;
+  return buildMemorySearchUnavailableResult(diagnostic.reason, {
+    warning: `Tell the user: memory search is paused because ${cause}.`,
+    action: `Tell the user to run: ${formatMemoryIndexRebuildGuidance(params.status, params.agentId)}`,
   });
 }
 
@@ -60,12 +71,12 @@ export async function executeMemorySearchToolQuery(params: {
   refreshManager: () => Promise<ManagerState | null>;
   query: MemorySearchToolQuery;
   visibility: MemorySearchToolVisibility;
-  runWithDeadline: <T>(task: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  signal: AbortSignal;
 }) {
   const startedAt = Date.now();
   const runtimeDebug: MemorySearchRuntimeDebug[] = [];
   let active = params.initialManager;
-  const { query, runWithDeadline, visibility } = params;
+  const { query, signal, visibility } = params;
   // Product recall may index transcripts without adding them to ordinary model search.
   // Explicit corpus selection is authorized by the tool owner before this point.
   const searchSources =
@@ -93,18 +104,15 @@ export async function executeMemorySearchToolQuery(params: {
     const searchWindow = searchesSessions
       ? Math.min(MEMORY_SEARCH_POST_FILTER_MAX_CANDIDATES, availableCandidates)
       : query.resultLimit;
-    const candidates = await runWithDeadline(
-      async (signal) =>
-        await active.manager.search(query.text, {
-          maxResults: searchWindow,
-          minScore: query.minScore,
-          sessionKey: query.sessionKey,
-          activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
-          signal,
-          onDebug: (debug) => runtimeDebug.push(debug),
-          ...(searchSources ? { sources: searchSources } : {}),
-        }),
-    );
+    const candidates = await active.manager.search(query.text, {
+      maxResults: searchWindow,
+      minScore: query.minScore,
+      sessionKey: query.sessionKey,
+      activeProjectKeys: query.activeProjectKeys ? [...query.activeProjectKeys] : undefined,
+      signal,
+      onDebug: (debug) => runtimeDebug.push(debug),
+      ...(searchSources ? { sources: searchSources } : {}),
+    });
     return { candidates, searchWindow };
   };
 
@@ -124,34 +132,25 @@ export async function executeMemorySearchToolQuery(params: {
   }
 
   const status = active.manager.status();
-  const indexIdentity = asNullableRecord(asNullableRecord(status.custom)?.indexIdentity);
-  const pausedIndexIdentityReason =
-    indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing"
-      ? typeof indexIdentity.reason === "string" && indexIdentity.reason.trim()
-        ? indexIdentity.reason.trim()
-        : "memory index identity is missing or mismatched"
-      : undefined;
-  if (pausedIndexIdentityReason) {
+  const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
+  if (pausedIndexIdentity) {
     return {
       status,
       rawResults: [],
-      pausedIndexIdentityReason,
+      pausedIndexIdentity,
       searchMode: undefined,
       debug: undefined,
     };
   }
 
-  let filtered = await runWithDeadline(
-    async () =>
-      await filterMemorySearchHitsBySessionVisibility({
-        cfg: visibility.cfg,
-        agentId: visibility.agentId,
-        requesterSessionKey: query.sessionKey,
-        sandboxed: visibility.sandboxed,
-        hits: searched.candidates,
-        conversationRecall: query.conversationRecall,
-      }),
-  );
+  let filtered = await filterMemorySearchHitsBySessionVisibility({
+    cfg: visibility.cfg,
+    agentId: visibility.agentId,
+    requesterSessionKey: query.sessionKey,
+    sandboxed: visibility.sandboxed,
+    hits: searched.candidates,
+    conversationRecall: query.conversationRecall,
+  });
   if (searchSources) {
     const allowedSources = new Set(searchSources);
     filtered = filtered.filter((hit) => allowedSources.has(hit.source));
@@ -168,7 +167,7 @@ export async function executeMemorySearchToolQuery(params: {
   return {
     status,
     rawResults,
-    pausedIndexIdentityReason: undefined,
+    pausedIndexIdentity: undefined,
     searchMode: latestDebug?.effectiveMode,
     debug: {
       backend: status.backend,

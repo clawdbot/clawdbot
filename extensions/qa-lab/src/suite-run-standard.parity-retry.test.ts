@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { runQaFlowSuiteStandard } from "./suite-run-standard.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
@@ -8,6 +11,7 @@ import type {
   QaSuiteScenarioRunner,
 } from "./suite-types.js";
 import type { runQaFlowSuiteCleanupPlan } from "./suite.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const mocks = vi.hoisted(() => ({
   captureRuntimeParityCell: vi.fn(async (params: { runtime: "codex"; wallClockMs: number }) => ({
@@ -28,7 +32,7 @@ const mocks = vi.hoisted(() => ({
     wallClockMs: params.wallClockMs,
     bootStateLines: [],
   })),
-  startQaGatewayChild: vi.fn(async () => ({
+  startQaGatewayChild: vi.fn(async (_params: unknown) => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
     cfg: {},
@@ -36,6 +40,7 @@ const mocks = vi.hoisted(() => ({
     getProcessRssBytes: () => null,
     stop: vi.fn(async () => {}),
   })),
+  stopQaGatewayChild: vi.fn<QaGatewayChildLifecycle["stop"]>(),
   writeQaSuiteArtifacts: vi.fn(async () => ({
     evidence: undefined,
     evidencePath: "/qa-output/qa-evidence.json",
@@ -53,7 +58,10 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   disposeRegisteredAgentHarnesses: vi.fn(async () => {}),
 }));
 vi.mock("./gateway-child.js", () => ({
-  startQaGatewayChild: mocks.startQaGatewayChild,
+  createQaGatewayChild: () => ({
+    start: (params: unknown) => mocks.startQaGatewayChild(params),
+    stop: mocks.stopQaGatewayChild,
+  }),
 }));
 vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer: vi.fn(async () => undefined),
@@ -129,9 +137,21 @@ function makeRetryTestResult(status: "pass" | "fail"): QaSuiteScenarioResult {
   };
 }
 
+const tempDirs = createTempDirHarness();
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.runQaFlowSuiteCleanupPlan.mockResolvedValue([]);
+  mocks.stopQaGatewayChild.mockReset().mockResolvedValue({
+    process: "confirmed-stopped",
+    errors: [],
+  });
+  mocks.runQaFlowSuiteCleanupPlan.mockReset().mockResolvedValue([]);
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  await tempDirs.cleanup();
 });
 
 describe("QA suite Control UI ownership", () => {
@@ -200,7 +220,98 @@ describe("QA suite Control UI ownership", () => {
 });
 
 describe("QA runtime parity scenario retry isolation", () => {
-  it("does not report terminal success when cleanup fails after writing artifacts", async () => {
+  it.each([false, true])(
+    "preserves runner progress through cleanup (failFast=%s)",
+    async (failFast) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const at = (second: number) => new Date(Date.UTC(2026, 7, 4, 0, 0, second));
+      vi.setSystemTime(at(0));
+      const lab = makeRetryTestLab();
+      const context = makeRetryTestContext();
+      context.selectedScenarios = ["first", "second", "tail"].map((id) => {
+        const scenario = makeQaSuiteTestScenario(id);
+        scenario.title = `Catalog ${id}`;
+        if (scenario.execution.kind === "flow") {
+          scenario.execution.retryCount = 0;
+        }
+        return scenario;
+      });
+      const snapshots: Parameters<QaLabServerHandle["setScenarioRun"]>[0][] = [];
+      vi.mocked(lab.setScenarioRun).mockImplementation((next) =>
+        snapshots.push(structuredClone(next)),
+      );
+      const results: QaSuiteScenarioResult[] = [
+        {
+          name: "result first",
+          status: "pass",
+          details: "",
+          steps: [{ name: "check", status: "pass" }],
+        },
+        { name: "result second", status: "fail", steps: [] },
+        { name: "result tail", status: "skip", details: "not applicable", steps: [] },
+      ];
+      const runScenario = vi.fn<QaSuiteScenarioRunner>().mockImplementation(async () => {
+        const index = runScenario.mock.calls.length - 1;
+        vi.setSystemTime(at(index + 1));
+        return results[index]!;
+      });
+      mocks.runQaFlowSuiteCleanupPlan.mockImplementationOnce(async () => {
+        expect(snapshots.every((snapshot) => snapshot?.status === "running")).toBe(true);
+        expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+        vi.setSystemTime(at(10));
+        return [];
+      });
+
+      await runQaFlowSuiteStandard({ lab, failFast }, context, runScenario);
+
+      const finishedCount = failFast ? 2 : 3;
+      const finalStatuses = failFast ? ["pass", "fail", "pending"] : ["pass", "fail", "skip"];
+      expect(
+        snapshots.map((snapshot) => snapshot?.scenarios.map((scenario) => scenario.status)),
+      ).toEqual([
+        ["pending", "pending", "pending"],
+        ["running", "pending", "pending"],
+        ["pass", "pending", "pending"],
+        ["pass", "running", "pending"],
+        ["pass", "fail", "pending"],
+        ...(failFast
+          ? []
+          : [
+              ["pass", "fail", "running"],
+              ["pass", "fail", "skip"],
+            ]),
+        finalStatuses,
+      ]);
+      expect(snapshots.at(-1)).toStrictEqual({
+        kind: "suite",
+        status: "completed",
+        startedAt: at(0).toISOString(),
+        finishedAt: at(10).toISOString(),
+        scenarios: context.selectedScenarios.map((scenario, index) =>
+          Object.assign(
+            { id: scenario.id, name: scenario.title, status: finalStatuses[index] },
+            index < finishedCount
+              ? {
+                  details: results[index]!.details,
+                  steps: results[index]!.steps,
+                  startedAt: at(index).toISOString(),
+                  finishedAt: at(index + 1).toISOString(),
+                }
+              : {},
+          ),
+        ),
+      });
+      expect(runScenario).toHaveBeenCalledTimes(finishedCount);
+      expect(mocks.writeQaSuiteArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]!,
+      );
+      expect(vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(lab.setScenarioRun).mock.invocationCallOrder.at(-1)!,
+      );
+    },
+  );
+
+  it("does not publish terminal artifacts when cleanup fails", async () => {
     const lab = makeRetryTestLab();
     const cleanupError = Object.assign(new Error("gateway shutdown socket reset"), {
       code: "ECONNRESET",
@@ -225,12 +336,11 @@ describe("QA runtime parity scenario retry isolation", () => {
     expect((thrown as Error).message).toContain(
       "failed cleanup phases: gateway stop: gateway shutdown socket reset",
     );
-    expect((thrown as Error).message).toContain(
-      "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
-    );
     expect((thrown as Error).cause).toBe(cleanupError);
-    expect(lab.setLatestReport).toHaveBeenCalledWith(
-      expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
+    expect(mocks.writeQaSuiteArtifacts).not.toHaveBeenCalled();
+    expect(lab.setLatestReport).not.toHaveBeenCalled();
+    expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" }),
     );
     expect(
       mocks.writeQaSuiteProgress.mock.calls.filter(([, message]) =>
@@ -306,20 +416,61 @@ describe("QA runtime parity scenario retry isolation", () => {
     });
   });
 
-  it("preserves the existing single flake retry outside runtime parity", async () => {
-    const runScenario = vi
-      .fn<QaSuiteScenarioRunner>()
-      .mockResolvedValueOnce(makeRetryTestResult("fail"))
-      .mockResolvedValueOnce(makeRetryTestResult("pass"));
+  it.each(["pass", "fail"] as const)(
+    "retains sanitized logs after an initial %s only when the scenario retried",
+    async (firstStatus) => {
+      vi.stubEnv("OPENCLAW_QA_KEEP_TEMP", undefined);
+      const root = await tempDirs.makeTempDir("qa-retry-artifacts-");
+      const tempRoot = path.join(root, "runtime");
+      await fs.mkdir(tempRoot);
+      const stderrPath = path.join(tempRoot, "gateway.stderr.log");
+      const gateway = new QaGatewayChildLifecycle();
+      gateway.repoRoot = root;
+      gateway.tempRoot = tempRoot;
+      mocks.stopQaGatewayChild.mockImplementation((options) => gateway.stop(options));
+      mocks.runQaFlowSuiteCleanupPlan.mockImplementation(async ({ stopGateway }) => {
+        const stopped = await stopGateway();
+        return stopped.errors.map((error) => ({ phase: "gateway stop", error }));
+      });
+      let attempts = 0;
+      const runScenario = vi.fn<QaSuiteScenarioRunner>().mockImplementation(async () => {
+        attempts += 1;
+        await fs.appendFile(
+          stderrPath,
+          attempts === 1
+            ? "FIRST_ATTEMPT apiKey=synthetic-fixture-secret\n"
+            : "SECOND_ATTEMPT_PASS\n",
+        );
+        return makeRetryTestResult(attempts === 1 ? firstStatus : "pass");
+      });
+      const context = {
+        ...makeRetryTestContext(),
+        repoRoot: root,
+        outputDir: path.join(root, "output"),
+      };
 
-    const result = await runQaFlowSuiteStandard(
-      { lab: makeRetryTestLab() },
-      makeRetryTestContext(),
-      runScenario,
-    );
+      const result = await runQaFlowSuiteStandard(
+        { lab: makeRetryTestLab() },
+        context,
+        runScenario,
+      );
 
-    expect(runScenario).toHaveBeenCalledTimes(2);
-    expect(result.scenarios[0]).toMatchObject({ status: "pass" });
-    expect(mocks.captureRuntimeParityCell).not.toHaveBeenCalled();
-  });
+      expect(runScenario).toHaveBeenCalledTimes(firstStatus === "fail" ? 2 : 1);
+      expect(result.scenarios[0]).toMatchObject({ status: "pass" });
+      expect(mocks.captureRuntimeParityCell).not.toHaveBeenCalled();
+      await expect(fs.stat(tempRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      const artifactDir = path.join(context.outputDir, "artifacts", "gateway-runtime");
+      if (firstStatus === "fail") {
+        expect(result.scenarios[0]?.details).toContain(
+          "passed on retry; first attempt: expected 100 persisted user turns, got 101",
+        );
+        const log = await fs.readFile(path.join(artifactDir, "gateway.stderr.log"), "utf8");
+        expect(log).toContain("FIRST_ATTEMPT apiKey=<redacted>");
+        expect(log).toContain("SECOND_ATTEMPT_PASS");
+        expect(log).not.toContain("synthetic-fixture-secret");
+      } else {
+        await expect(fs.stat(artifactDir)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
 });

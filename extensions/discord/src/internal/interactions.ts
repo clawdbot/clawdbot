@@ -19,7 +19,7 @@ import {
   deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
-} from "./api.js";
+} from "./api.interactions.js";
 import { OptionsHandler } from "./interaction-options.js";
 import {
   InteractionResponseController,
@@ -121,6 +121,7 @@ class BaseInteraction {
   message: Message | null = null;
   private readonly response = new InteractionResponseController();
   private pendingResponse: Promise<void> = Promise.resolve();
+  private sentFollowUp = false;
 
   constructor(
     public client: InteractionClient,
@@ -147,6 +148,15 @@ class BaseInteraction {
 
   set responseState(nextState: InteractionResponseState) {
     this.response.state = nextState;
+  }
+
+  /**
+   * True once a follow-up message has been delivered. Follow-ups are visible to
+   * the user but never advance `responseState`, so this is the only record that
+   * the interaction has already produced output.
+   */
+  get hasSentFollowUp(): boolean {
+    return this.sentFollowUp;
   }
 
   private enqueueResponse<T>(operation: () => Promise<T>): Promise<T> {
@@ -208,6 +218,27 @@ class BaseInteraction {
     return await this.enqueueResponse(() => this.performReplyEdit(payload));
   }
 
+  /**
+   * Edits the deferred placeholder only if this interaction is still an
+   * unanswered spinner when the queue reaches this operation.
+   *
+   * Both conditions are re-read inside the queue. A follow-up that was still in
+   * flight when the caller decided to report will have settled — and recorded
+   * itself in `sentFollowUp` — by the time this runs, so the decision cannot be
+   * made against state that is about to change.
+   *
+   * Resolves true when the edit was sent.
+   */
+  async editDeferredPlaceholderIfUnanswered(payload: MessagePayload): Promise<boolean> {
+    return await this.enqueueResponse(async () => {
+      if (this.responseState !== "deferred" || this.sentFollowUp) {
+        return false;
+      }
+      await this.performReplyEdit(payload);
+      return true;
+    });
+  }
+
   private async performReplyEdit(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
     const query = needsComponentsV2Query(body) ? { with_components: true } : undefined;
@@ -266,13 +297,15 @@ class BaseInteraction {
 
   private async performFollowUp(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
-    return await createWebhookMessage(
+    const result = await createWebhookMessage(
       this.client.rest,
       this.client.options.clientId,
       this.token,
       { body },
       needsComponentsV2Query(body) ? { with_components: true } : undefined,
     );
+    this.sentFollowUp = true;
+    return result;
   }
 }
 

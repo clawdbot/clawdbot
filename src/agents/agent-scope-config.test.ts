@@ -6,19 +6,49 @@ import {
   AgentSelectionRequiredError,
   listAgentEntriesWithSource,
   listAgentIds,
+  resolveConfiguredAgentId,
   resolveAgentConfig,
+  resolveAgentOperationAgentId,
   resolveAgentWorkspaceDir,
+  resolveAmbientOwnerAgentId,
+  resolveDefaultAgentDir,
   resolveDefaultAgentId,
   resolveSoleAgentId,
-  resolveSystemAgentTargetAgentId,
+  tryResolveAmbientOwnerAgentId,
   tryResolveDefaultAgentId,
   tryResolveSoleAgentId,
-  tryResolveSystemAgentTargetAgentId,
 } from "./agent-scope-config.js";
 
 vi.unmock("./agent-scope-config.js");
 
 describe("agent roster resolution", () => {
+  it("rejects unknown configured-agent selections with canonical CLI guidance", () => {
+    const cfg = { agents: { entries: { main: {}, ops: {} } } };
+
+    expect(resolveConfiguredAgentId(cfg, "ops")).toBe("ops");
+    expect(() => resolveConfiguredAgentId(cfg, "nope-zzz")).toThrow(
+      'Unknown agent id "nope-zzz". Run openclaw agents list to see configured agents.',
+    );
+  });
+
+  it("keeps the guidance runnable under a profile", () => {
+    const cfg = { agents: { entries: { main: {}, ops: {} } } };
+    const previous = process.env.OPENCLAW_PROFILE;
+    process.env.OPENCLAW_PROFILE = "testprof";
+    try {
+      // A hint the operator cannot paste back is worse than none, so the profile must survive.
+      expect(() => resolveConfiguredAgentId(cfg, "nope-zzz")).toThrow(
+        "Run openclaw --profile testprof agents list to see configured agents.",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_PROFILE;
+      } else {
+        process.env.OPENCLAW_PROFILE = previous;
+      }
+    }
+  });
+
   it("preserves the Plugin SDK fallback only when the roster property is absent", () => {
     expect(listAgentIds({})).toEqual(["main"]);
     expect(listAgentIds({ agents: { entries: {} } })).toEqual([]);
@@ -62,33 +92,140 @@ describe("agent roster resolution", () => {
     );
   });
 
-  it("requires an explicit system owner when a roster has multiple agents", () => {
-    expect(
-      resolveSystemAgentTargetAgentId({
+  const ambientOwnerCases: Array<{
+    name: string;
+    config: OpenClawConfig;
+    requestedAgentId?: string;
+    expected: string;
+  }> = [
+    {
+      name: "configured system agent before a legacy marker",
+      config: {
         agents: {
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { main: { default: true }, ops: {} },
+          defaults: { systemAgent: { agentId: "beta" } },
+          entries: { alpha: { default: true }, beta: {} },
         },
-      }),
-    ).toBe("ops");
-    expect(resolveSystemAgentTargetAgentId({ agents: { entries: { ops: {} } } })).toBe("ops");
-    expect(
-      tryResolveSystemAgentTargetAgentId({
+      } satisfies OpenClawConfig,
+      expected: "beta",
+    },
+    {
+      name: "configured system agent before a retained migrated legacy owner",
+      config: migratePersistedImplicitMainRoster({
         agents: {
-          defaults: { systemAgent: { agentId: "ops" } },
-          entries: { main: {}, ops: {} },
+          defaults: { systemAgent: { agentId: "beta" } },
+          entries: { alpha: { default: true }, beta: {} },
         },
-      }),
-    ).toBe("ops");
-    expect(tryResolveSystemAgentTargetAgentId({ agents: { entries: { ops: {} } } })).toBe("ops");
-    expect(
-      tryResolveSystemAgentTargetAgentId({ agents: { entries: { main: {}, ops: {} } } }),
-    ).toBeUndefined();
+      }).config as OpenClawConfig,
+      expected: "beta",
+    },
+    {
+      name: "legacy marker without a configured system agent",
+      config: {
+        agents: { entries: { alpha: { default: true }, beta: {} } },
+      } satisfies OpenClawConfig,
+      expected: "alpha",
+    },
+    {
+      name: "sole agent",
+      config: { agents: { entries: { solo: {} } } } satisfies OpenClawConfig,
+      expected: "solo",
+    },
+    {
+      name: "explicit requested agent before every configured owner",
+      config: {
+        agents: {
+          defaults: { systemAgent: { agentId: "beta" } },
+          entries: { alpha: { default: true }, beta: {}, gamma: {} },
+        },
+      } satisfies OpenClawConfig,
+      requestedAgentId: " GAMMA ",
+      expected: "gamma",
+    },
+  ];
+
+  it.each(ambientOwnerCases)(
+    "resolves ambient owner: $name",
+    ({ config, requestedAgentId, expected }) => {
+      expect(tryResolveAmbientOwnerAgentId(config, requestedAgentId)).toBe(expected);
+      expect(resolveAmbientOwnerAgentId(config, requestedAgentId)).toBe(expected);
+    },
+  );
+
+  it("fails closed with context when an ambient owner is ambiguous", () => {
+    const ownerlessFleet = {
+      agents: { ownership: "explicit" as const, entries: { ops: {}, research: {} } },
+    } satisfies OpenClawConfig;
+
+    expect(tryResolveAmbientOwnerAgentId(ownerlessFleet)).toBeUndefined();
+    expect(() => resolveAmbientOwnerAgentId(ownerlessFleet)).toThrow(AgentSelectionRequiredError);
     expect(() =>
-      resolveSystemAgentTargetAgentId({
-        agents: { entries: { main: { default: true }, ops: {} } },
+      resolveAmbientOwnerAgentId(ownerlessFleet, undefined, {
+        surface: "Talk relay ownership",
+        hint: "Set talk.agentId.",
       }),
-    ).toThrow("Set agents.defaults.systemAgent.agentId");
+    ).toThrow("Talk relay ownership");
+    expect(() =>
+      resolveAmbientOwnerAgentId(ownerlessFleet, undefined, {
+        surface: "Talk relay ownership",
+        hint: "Set talk.agentId.",
+      }),
+    ).toThrow("Set talk.agentId.");
+  });
+
+  it("resolves the default agent directory through the ambient owner", () => {
+    const config = {
+      agents: {
+        defaults: { systemAgent: { agentId: "beta" } },
+        entries: { alpha: { default: true }, beta: { agentDir: "/tmp/openclaw-beta-agent" } },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveDefaultAgentDir(config)).toBe("/tmp/openclaw-beta-agent");
+  });
+
+  it("preserves legacy default ownership for non-explicit CLI operations", () => {
+    const config = {
+      agents: {
+        entries: { main: {}, ops: { default: true } },
+      },
+    };
+
+    expect(resolveAgentOperationAgentId(config)).toBe("ops");
+    expect(
+      resolveAgentOperationAgentId({
+        ...config,
+        agents: {
+          ...config.agents,
+          ownership: "explicit" as const,
+          defaults: { systemAgent: { agentId: "main" } },
+        },
+      }),
+    ).toBe("main");
+  });
+
+  it("preserves retained legacy ownership for migrated CLI operations", () => {
+    const cfg = migratePersistedImplicitMainRoster({
+      agents: {
+        entries: { ops: { default: true }, research: {} },
+      },
+    }).config as OpenClawConfig;
+
+    expect(cfg.agents?.entries?.ops?.default).toBeUndefined();
+    expect(resolveAgentOperationAgentId(cfg)).toBe("ops");
+  });
+
+  it("prefers a per-agent toolProgressDetail over the roster default", () => {
+    const defaults = { toolProgressDetail: "explain" as const };
+    const entries = { main: { toolProgressDetail: "raw" as const } };
+
+    expect(resolveAgentConfig({ agents: { defaults, entries } }, "main")?.toolProgressDetail).toBe(
+      "raw",
+    );
+    expect(resolveAgentConfig({ agents: { entries } }, "main")?.toolProgressDetail).toBe("raw");
+    expect(
+      resolveAgentConfig({ agents: { defaults, entries: { main: {} } } }, "main")
+        ?.toolProgressDetail,
+    ).toBe("explain");
   });
 
   it("resolves defaults only for the rosterless implicit main agent", () => {
@@ -98,6 +235,25 @@ describe("agent roster resolution", () => {
     expect(resolveAgentConfig({ agents: { defaults } }, "work")).toBeUndefined();
     expect(resolveAgentConfig({ agents: { defaults, entries: {} } }, "main")).toBeUndefined();
     expect(resolveAgentConfig({ agents: { defaults, list: [] } }, "main")).toBeUndefined();
+  });
+
+  it("does not project unrelated keyed entries while resolving one agent", () => {
+    let unrelatedEntryReads = 0;
+    const entries = new Proxy(
+      { main: { name: "Primary" }, worker: { name: "Worker" } },
+      {
+        get(target, property, receiver) {
+          if (property === "worker") {
+            unrelatedEntryReads += 1;
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const config = { agents: { ownership: "explicit" as const, entries } };
+
+    expect(resolveAgentConfig(config, "main")?.name).toBe("Primary");
+    expect(unrelatedEntryReads).toBe(0);
   });
 
   it("keeps the retained legacy owner on the inherited workspace before config write", () => {

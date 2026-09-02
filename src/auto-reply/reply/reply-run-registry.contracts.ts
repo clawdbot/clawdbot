@@ -1,6 +1,7 @@
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -63,6 +64,8 @@ export type ReplyToolAuthorityRoute = Readonly<{
 
 /** Per-message authority facts projected against an active run's frozen owner state. */
 export type ReplyToolAuthorityOverlay = Readonly<{
+  permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
   originatingChannel?: OriginatingChannelType;
   messageProvider?: string;
   chatType?: ChatType;
@@ -146,6 +149,11 @@ export const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectio
 export type ReplyMessageInjectionTarget = {
   readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
   readonly runId?: string;
+};
+
+export const replyRunInterruptTargetOperation = Symbol("replyRunInterruptTargetOperation");
+export type ReplyRunInterruptTarget = {
+  readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
 type ReplyMessageInjectionRejectionReason =
@@ -307,7 +315,7 @@ export type ReplyOperation = {
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): boolean;
   abortForRestart(): boolean;
-  supersede(): boolean;
+  supersede(beforeSupersede?: () => void): boolean;
 };
 
 export type ReplyRunRegistry = {
@@ -323,6 +331,8 @@ export type ReplyRunRegistry = {
   isActive(sessionKey: string): boolean;
   /** Captures the current direct owner without requiring client-supplied run identity. */
   resolveCurrentMessageInjectionTarget(sessionKey: string): ReplyMessageInjectionTarget | undefined;
+  /** Captures the current direct owner for exact-instance interruption. */
+  resolveCurrentInterruptTarget(sessionKey: string): ReplyRunInterruptTarget | undefined;
   abort(sessionKey: string): boolean;
   waitForIdle(
     sessionKey: string,

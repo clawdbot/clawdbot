@@ -32,14 +32,15 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: readonly string[];
   contract: PluginManifestContractListKey;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): PluginManifestRecord[] {
   if (params.config?.plugins?.enabled === false) {
     return [];
   }
-  let manifestRecords: readonly PluginManifestRecord[] | undefined;
-  const loadManifestRecords = (config?: OpenClawConfig) => {
+  let manifestRecords = params.manifestRecords;
+  const loadManifestRecords = () => {
     manifestRecords ??= loadManifestContractSnapshot({
-      config,
+      config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
     }).plugins;
@@ -54,13 +55,13 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
     applyAutoEnable: true,
     resolveBundledPluginIds: (compatParams) =>
       listBundledManifestContractPluginIds({
-        plugins: loadManifestRecords(compatParams.config),
+        plugins: loadManifestRecords(),
         contract: params.contract,
         onlyPluginIds: compatParams.onlyPluginIds,
       }),
   });
   const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
-  return loadManifestRecords(activation.config).filter((plugin) => {
+  return loadManifestRecords().filter((plugin) => {
     if (
       plugin.origin !== "bundled" ||
       (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) ||
@@ -71,6 +72,7 @@ export function resolveEnabledBundledManifestContractPlugins(params: {
     return resolveEffectivePluginActivationState({
       id: plugin.id,
       origin: plugin.origin,
+      channelIds: plugin.channels,
       config: activation.normalized,
       rootConfig: activation.config,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),

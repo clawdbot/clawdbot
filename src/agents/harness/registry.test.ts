@@ -2,13 +2,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRegistrationContext } from "../../plugins/runtime.js";
+import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+  withPluginRegistrationContext,
+} from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   clearAgentHarnesses,
   disposeRegisteredAgentHarnesses,
   getRegisteredAgentHarness,
   listRegisteredAgentHarnesses,
   registerAgentHarness,
+  resolveAgentHarnessOwnerPluginId,
   resolveCodexAgentHarnessNativeCompaction,
   resetRegisteredAgentHarnessSessions,
 } from "./registry.js";
@@ -137,6 +145,75 @@ describe("agent harness registry", () => {
     expect(listRegisteredAgentHarnesses()).toEqual([]);
   });
 
+  it.each(["active", "request", "registration"] as const)(
+    "rejects retired %s harnesses without falling through to another registry",
+    async (context) => {
+      const snapshot = captureActivePluginRegistrySnapshot();
+      const active = createEmptyPluginRegistry();
+      const selected = context === "active" ? active : createEmptyPluginRegistry();
+      const dispose = vi.fn(async () => {});
+      const reset = vi.fn(async () => {});
+      const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
+      const inContext = <T>(run: () => T): T =>
+        context === "registration"
+          ? withPluginRegistrationContext(selected, "codex", run)
+          : context === "request"
+            ? withPluginRuntimeRegistryScope(selected, run)
+            : run();
+      try {
+        setActivePluginRegistry(active);
+        registerAgentHarness(makeHarness("codex"), { ownerPluginId: "codex" });
+        withPluginRegistrationContext(selected, "codex", () =>
+          registerAgentHarness({ ...makeHarness("codex"), dispose, reset }, { nativeCompaction }),
+        );
+        const registered = inContext(() => getRegisteredAgentHarness("codex"))!;
+        const read = () => {
+          expect(getRegisteredAgentHarness("codex")).toEqual(registered);
+          expect(listRegisteredAgentHarnesses()).toEqual([registered]);
+          expect(resolveAgentHarnessOwnerPluginId(registered.harness)).toBe("codex");
+          expect(resolveCodexAgentHarnessNativeCompaction(registered.harness)).toBe(
+            nativeCompaction,
+          );
+        };
+        inContext(read);
+        await inContext(() => resetRegisteredAgentHarnessSessions({ reason: "reset" }));
+        await inContext(disposeRegisteredAgentHarnesses);
+        expect(reset).toHaveBeenCalledOnce();
+        expect(dispose).toHaveBeenCalledOnce();
+
+        markPluginRegistryRetired(selected);
+        inContext(() => {
+          expect.soft(getRegisteredAgentHarness("codex")).toBeUndefined();
+          expect.soft(listRegisteredAgentHarnesses()).toEqual([]);
+          expect
+            .soft(() => resolveAgentHarnessOwnerPluginId(registered.harness))
+            .toThrow("changed during owner resolution");
+          expect
+            .soft(() => resolveCodexAgentHarnessNativeCompaction(registered.harness))
+            .toThrow("changed during native compaction resolution");
+          expect
+            .soft(() =>
+              selectAgentHarness({
+                provider: "synthetic",
+                agentHarnessId: "codex",
+              }),
+            )
+            .toThrow('Requested agent harness "codex" is not registered');
+        });
+        await inContext(() => resetRegisteredAgentHarnessSessions({ reason: "reset" }));
+        await inContext(disposeRegisteredAgentHarnesses);
+        expect.soft(reset).toHaveBeenCalledOnce();
+        expect.soft(dispose).toHaveBeenCalledOnce();
+        if (selected !== active) {
+          expect(getRegisteredAgentHarness("codex")?.harness).not.toBe(registered.harness);
+          expect(getRegisteredAgentHarness("codex")).toBeDefined();
+        }
+      } finally {
+        restoreActivePluginRegistrySnapshot(snapshot);
+      }
+    },
+  );
+
   it("uses builder ownership and preserves a harness registered by another plugin", () => {
     const building = createEmptyPluginRegistry();
     const original = makeHarness("shared");
@@ -159,6 +236,33 @@ describe("agent harness registry", () => {
       registerAgentHarness(makeHarness("owned"));
     });
     expect(building.agentHarnesses[1]?.pluginId).toBe("builder-plugin");
+  });
+
+  it("keeps harness reads in registration, request, then active registry order", () => {
+    registerAgentHarness(makeHarness("shared"), { ownerPluginId: "active-plugin" });
+    const request = createEmptyPluginRegistry();
+    const building = createEmptyPluginRegistry();
+    const expectOwner = (ownerPluginId: string) => {
+      expect(getRegisteredAgentHarness("shared")?.ownerPluginId).toBe(ownerPluginId);
+      expect(listRegisteredAgentHarnesses().map((entry) => entry.ownerPluginId)).toEqual([
+        ownerPluginId,
+      ]);
+    };
+
+    withPluginRuntimeRegistryScope(request, () => {
+      expect(getRegisteredAgentHarness("shared")).toBeUndefined();
+      expect(listRegisteredAgentHarnesses()).toEqual([]);
+      registerAgentHarness(makeHarness("shared"), { ownerPluginId: "request-plugin" });
+      expectOwner("request-plugin");
+      withPluginRegistrationContext(building, "builder-plugin", () => {
+        expect(getRegisteredAgentHarness("shared")).toBeUndefined();
+        expect(listRegisteredAgentHarnesses()).toEqual([]);
+        registerAgentHarness(makeHarness("shared"));
+        expectOwner("builder-plugin");
+      });
+      expectOwner("request-plugin");
+    });
+    expectOwner("active-plugin");
   });
 
   it("dispatches generic session reset to registered harnesses", async () => {

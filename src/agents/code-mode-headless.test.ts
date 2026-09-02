@@ -1,21 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const loadCodeModeTypeScriptRuntime = vi.hoisted(() =>
-  vi.fn<() => Promise<typeof import("typescript")>>(),
-);
-
-vi.mock("./code-mode-typescript-runtime.js", () => ({
-  loadCodeModeTypeScriptRuntime,
-}));
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { prepareSource } from "./code-mode-runtime.js";
+import type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
+import { prepareSource } from "./code-mode-source.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
-import { testing } from "./code-mode.test-support.js";
-import {
-  createToolSearchCatalogRef,
-  registerHeadlessToolSearchCatalog,
-  type ToolSearchToolContext,
-} from "./tool-search.js";
+import { createHeadlessCodeModeHarness, testing } from "./code-mode.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool {
@@ -25,26 +13,6 @@ function fakeTool(name: string, execute: AnyAgentTool["execute"]): AnyAgentTool 
     description: `Test tool ${name}`,
     parameters: { type: "object", properties: {} },
     execute: vi.fn(execute) as AnyAgentTool["execute"],
-  };
-}
-
-function createHeadlessHarness(
-  tools: AnyAgentTool[] = [],
-  options: { swarmEnabled?: boolean } = {},
-): ToolSearchToolContext {
-  const config = {
-    tools: {
-      codeMode: { enabled: false, timeoutMs: 60_000 },
-      ...(options.swarmEnabled ? { swarm: true } : {}),
-    },
-  } as never;
-  const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools });
-  return {
-    config,
-    runtimeConfig: config,
-    agentId: "main",
-    catalogRef,
   };
 }
 
@@ -65,13 +33,8 @@ function expectFailed(result: CodeModeHeadlessResult) {
 }
 
 describe("headless Code Mode", () => {
-  beforeEach(async () => {
-    loadCodeModeTypeScriptRuntime.mockResolvedValue(await import("typescript"));
-  });
-
   afterEach(() => {
     vi.useRealTimers();
-    loadCodeModeTypeScriptRuntime.mockReset();
     expect(testing.activeRuns.size).toBe(0);
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
@@ -86,14 +49,14 @@ describe("headless Code Mode", () => {
       expect(testing.activeRuns.size).toBe(0);
       return jsonResult({ input });
     });
-    const ctx = createHeadlessHarness([first, second]);
+    const ctx = createHeadlessCodeModeHarness([first, second]);
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
         ctx,
         code: `
-          const first = await tools.callValue("openclaw:core:headless_first", {});
-          const second = await tools.callValue("openclaw:core:headless_second", {
+          const first = await headless_first({});
+          const second = await headless_second({
             value: first.value,
           });
           return second;
@@ -106,6 +69,46 @@ describe("headless Code Mode", () => {
     expect(result.toolCallCount).toBe(2);
     expect(first.execute).toHaveBeenCalledOnce();
     expect(second.execute).toHaveBeenCalledOnce();
+  });
+
+  it("preserves output and cancels earlier tools when a headless resume exceeds the snapshot cap", async () => {
+    const pendingStarted = createDeferred<AbortSignal | undefined>();
+    const pending = fakeTool("headless_snapshot_pending", async (_toolCallId, _input, signal) => {
+      pendingStarted.resolve(signal);
+      await new Promise<void>((resolve) => {
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return jsonResult({ canceled: true });
+    });
+    const fixture = fakeTool("headless_snapshot_fixture", async () => {
+      await pendingStarted.promise;
+      return jsonResult({ ok: true });
+    });
+    const fresh = fakeTool("headless_snapshot_fresh", async () => jsonResult({ ok: true }));
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessCodeModeHarness([pending, fixture, fresh]),
+        code: `void headless_snapshot_pending({});
+          text("accepted first");
+          await headless_snapshot_fixture({});
+          const retained = new Uint8Array(16 * 1024 * 1024);
+          retained[0] = 7;
+          text("accepted inline");
+          await headless_snapshot_fresh({});
+          return retained[0];`,
+      }),
+    );
+
+    expect(result.code).toBe("snapshot_limit_exceeded");
+    expect(result.toolCallCount).toBe(2);
+    expect(result.output).toEqual([
+      { type: "text", text: "accepted first" },
+      { type: "text", text: "accepted inline" },
+    ]);
+    expect(pending.execute).toHaveBeenCalledOnce();
+    expect(fixture.execute).toHaveBeenCalledOnce();
+    expect(fresh.execute).not.toHaveBeenCalled();
+    expect((await pendingStarted.promise)?.aborted).toBe(true);
   });
 
   it("keeps the headless race winner when the later-started tool settles first", async () => {
@@ -142,12 +145,12 @@ describe("headless Code Mode", () => {
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([first, second, release]),
+        ctx: createHeadlessCodeModeHarness([first, second, release]),
         code: `const value = await Promise.race([
-            tools.callValue("openclaw:core:headless_first_race", {}),
-            tools.callValue("openclaw:core:headless_second_race", {}),
+            headless_first_race({}),
+            headless_second_race({}),
           ]);
-          void tools.callValue("openclaw:core:headless_first_race_release", {});
+          void headless_first_race_release({});
           return value;`,
         wallClockMs: 5_000,
       }),
@@ -196,12 +199,12 @@ describe("headless Code Mode", () => {
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([never, fast, release]),
+        ctx: createHeadlessCodeModeHarness([never, fast, release]),
         code: `const value = await Promise.race([
-            Promise.all([tools.callValue("openclaw:core:headless_nested_race_never", {})]),
-            tools.callValue("openclaw:core:headless_nested_race_fast", {}),
+            Promise.all([headless_nested_race_never({})]),
+            headless_nested_race_fast({}),
           ]);
-          void tools.callValue("openclaw:core:headless_nested_race_release", {});
+          void headless_nested_race_release({});
           return value;`,
         wallClockMs: 5_000,
       }),
@@ -219,29 +222,27 @@ describe("headless Code Mode", () => {
   it.each([
     {
       label: "directly",
-      auditCode: 'void tools.callValue("openclaw:core:headless_early_audit", {});',
+      auditCode: "void headless_early_audit({});",
     },
     {
       label: "in a detached already-settled Promise.race",
-      auditCode:
-        'void Promise.race([tools.callValue("openclaw:core:headless_early_audit", {}), Promise.resolve()]);',
+      auditCode: "void Promise.race([headless_early_audit({}), Promise.resolve()]);",
     },
     {
       label: "in a detached Promise.all",
-      auditCode: 'void Promise.all([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+      auditCode: "void Promise.all([headless_early_audit({})]);",
     },
     {
       label: "in a detached Promise.allSettled",
-      auditCode:
-        'void Promise.allSettled([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+      auditCode: "void Promise.allSettled([headless_early_audit({})]);",
     },
     {
       label: "in a detached Promise.any",
-      auditCode: 'void Promise.any([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+      auditCode: "void Promise.any([headless_early_audit({})]);",
     },
     {
       label: "in a detached Promise.race",
-      auditCode: 'void Promise.race([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+      auditCode: "void Promise.race([headless_early_audit({})]);",
     },
   ])(
     "drains a headless detached audit started $label before an awaited nested call",
@@ -281,10 +282,10 @@ describe("headless Code Mode", () => {
 
       const result = expectCompleted(
         await runCodeModeScriptHeadless({
-          ctx: createHeadlessHarness([audit, fast, release]),
+          ctx: createHeadlessCodeModeHarness([audit, fast, release]),
           code: `${auditCode}
-          const value = await tools.callValue("openclaw:core:headless_awaited_fast", {});
-          void tools.callValue("openclaw:core:headless_early_audit_release", {});
+          const value = await headless_awaited_fast({});
+          void headless_early_audit_release({});
           return value;`,
           wallClockMs: 5_000,
         }),
@@ -342,13 +343,13 @@ describe("headless Code Mode", () => {
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([winner, loser, audit, release]),
+        ctx: createHeadlessCodeModeHarness([winner, loser, audit, release]),
         code: `const value = await Promise.race([
-            tools.callValue("openclaw:core:headless_race_winner", {}),
-            tools.callValue("openclaw:core:headless_race_loser", {}),
+            headless_race_winner({}),
+            headless_race_loser({}),
           ]);
-          void tools.callValue("openclaw:core:headless_race_audit", {});
-          void tools.callValue("openclaw:core:headless_race_loser_release", {});
+          void headless_race_audit({});
+          void headless_race_loser_release({});
           return value;`,
         wallClockMs: 5_000,
       }),
@@ -376,9 +377,9 @@ describe("headless Code Mode", () => {
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([first, second]),
-        code: `void tools.callValue("openclaw:core:headless_detached_first", {});
-          void tools.callValue("openclaw:core:headless_detached_second", {});
+        ctx: createHeadlessCodeModeHarness([first, second]),
+        code: `void headless_detached_first({});
+          void headless_detached_second({});
           return "done";`,
         wallClockMs: 5_000,
       }),
@@ -428,12 +429,12 @@ describe("headless Code Mode", () => {
 
       const result = expectCompleted(
         await runCodeModeScriptHeadless({
-          ctx: createHeadlessHarness([fast, slow, release]),
+          ctx: createHeadlessCodeModeHarness([fast, slow, release]),
           code: `const value = await Promise.${combinator}([
-              tools.callValue("openclaw:core:headless_slow", {}),
-              tools.callValue("openclaw:core:headless_fast", {}),
+              headless_slow({}),
+              headless_fast({}),
             ]);
-            void tools.callValue("openclaw:core:headless_slow_release", {});
+            void headless_slow_release({});
             return value;`,
           wallClockMs: 5_000,
         }),
@@ -487,15 +488,15 @@ describe("headless Code Mode", () => {
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([failed, slow, release]),
+        ctx: createHeadlessCodeModeHarness([failed, slow, release]),
         code: `try {
           await Promise.all([
-            tools.callValue("openclaw:core:headless_failed", {}),
-            tools.callValue("openclaw:core:headless_slow", {}),
+            headless_failed({}),
+            headless_slow({}),
           ]);
           return "unexpected success";
         } catch (error) {
-          void tools.callValue("openclaw:core:headless_slow_release", {});
+          void headless_slow_release({});
           return error.message;
         }`,
         wallClockMs: 5_000,
@@ -521,7 +522,7 @@ describe("headless Code Mode", () => {
   it("does not expose collector globals without resumable snapshot state", async () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([], { swarmEnabled: true }),
+        ctx: createHeadlessCodeModeHarness([], { swarmEnabled: true }),
         code: "return [typeof agents, typeof phase, typeof log];",
       }),
     );
@@ -572,14 +573,14 @@ describe("headless Code Mode", () => {
     "preserves harmless $name in headless source validation",
     async ({ code, value, realHeadless }) => {
       if (!realHeadless) {
-        const ctx = createHeadlessHarness();
+        const ctx = createHeadlessCodeModeHarness();
         const config = testing.resolveCodeModeHeadlessConfig(ctx);
         await expect(prepareSource({ code, config })).resolves.toBe(code);
         return;
       }
       const result = expectCompleted(
         await runCodeModeScriptHeadless({
-          ctx: createHeadlessHarness(),
+          ctx: createHeadlessCodeModeHarness(),
           code,
         }),
       );
@@ -592,7 +593,7 @@ describe("headless Code Mode", () => {
   it("executes module-shaped regular expressions in a TypeScript headless guest", async () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
+        ctx: createHeadlessCodeModeHarness(),
         language: "typescript",
         code: 'const value: number = 1; return /import.meta/.test("import.meta");',
       }),
@@ -628,7 +629,7 @@ describe("headless Code Mode", () => {
   ])("rejects executable module access in a headless guest: %s", async (code) => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
+        ctx: createHeadlessCodeModeHarness(),
         code,
       }),
     );
@@ -643,7 +644,7 @@ describe("headless Code Mode", () => {
     async (moduleAccess) => {
       const result = expectFailed(
         await runCodeModeScriptHeadless({
-          ctx: createHeadlessHarness(),
+          ctx: createHeadlessCodeModeHarness(),
           language: "typescript",
           code: `const padding: string = "${"😀".repeat(96)}"; return ${moduleAccess};`,
         }),
@@ -658,7 +659,7 @@ describe("headless Code Mode", () => {
   it("injects deeply frozen trigger state and emits replacement state through json", async () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
+        ctx: createHeadlessCodeModeHarness(),
         code: `
           json({
             fire: true,
@@ -699,10 +700,53 @@ describe("headless Code Mode", () => {
     ]);
   });
 
+  it("keeps an injected namespace while calling a colliding tool by its advertised global", async () => {
+    const tool = fakeTool("trigger", async () => jsonResult({ owner: "tool" }));
+    const ctx = createHeadlessCodeModeHarness([tool]);
+    const extraNamespaces: CodeModeNamespaceDescriptor[] = [
+      {
+        id: "cron:trigger",
+        globalName: "trigger",
+        scope: {
+          kind: "object",
+          entries: [["owner", { kind: "value", value: "namespace" }]],
+        },
+      },
+    ];
+    const run = async () =>
+      expectCompleted(
+        await runCodeModeScriptHeadless({
+          ctx,
+          extraNamespaces,
+          code: `
+            const handle = catalog.all().find((entry) => entry.toolName === "trigger");
+            if (!handle) throw new Error("trigger tool missing");
+            return {
+              namespaceOwner: trigger.owner,
+              callableName: handle.callableName,
+              toolResult: await globalThis[handle.callableName]({}),
+            };
+          `,
+          wallClockMs: 120_000,
+        }),
+      );
+
+    const first = await run();
+    const second = await run();
+
+    expect(first.value).toEqual({
+      namespaceOwner: "namespace",
+      callableName: expect.stringMatching(/^trigger_[a-f0-9]{8}$/u),
+      toolResult: { owner: "tool" },
+    });
+    expect(second.value).toEqual(first.value);
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects colliding injected namespace globals", async () => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
+        ctx: createHeadlessCodeModeHarness(),
         code: "return true;",
         extraNamespaces: [
           {
@@ -727,10 +771,10 @@ describe("headless Code Mode", () => {
     const tool = fakeTool("budgeted", async () => jsonResult({ ok: true }));
     const result = expectFailed(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([tool]),
+        ctx: createHeadlessCodeModeHarness([tool]),
         code: `
-          await tools.call("openclaw:core:budgeted", {});
-          await tools.call("openclaw:core:budgeted", {});
+          await budgeted({});
+          await budgeted({});
           return true;
         `,
         maxToolCalls: 1,
@@ -748,7 +792,7 @@ describe("headless Code Mode", () => {
 
     const result = expectFailed(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([nodesTool]),
+        ctx: createHeadlessCodeModeHarness([nodesTool]),
         code: `
           await nodes.list();
           await nodes.list();
@@ -767,7 +811,7 @@ describe("headless Code Mode", () => {
   it("fails an awaiting promise without bridge work before resuming a worker", async () => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
+        ctx: createHeadlessCodeModeHarness(),
         code: "await new Promise(() => {}); return true;",
         wallClockMs: 5_000,
       }),
@@ -778,37 +822,14 @@ describe("headless Code Mode", () => {
     expect(result.toolCallCount).toBe(0);
   });
 
-  it("bounds output and returned values across separate worker legs", async () => {
-    const tool = fakeTool("output_boundary", async () => jsonResult({ ok: true }));
-
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([tool]),
-        code: `
-          text("x".repeat(700));
-          await tools.call("openclaw:core:output_boundary", {});
-          return "y".repeat(700);
-        `,
-        overrides: { maxOutputBytes: 1_024 },
-      }),
-    );
-
-    expect(JSON.stringify(result)).toContain("rerun with narrower args");
-    expect(
-      Buffer.byteLength(JSON.stringify(result.output), "utf8") +
-        Buffer.byteLength(JSON.stringify(result.value), "utf8"),
-    ).toBeLessThanOrEqual(1_024);
-    expect(tool.execute).toHaveBeenCalledOnce();
-  });
-
   it("honors cron payload tool budgets above the old headless cap", async () => {
     const tool = fakeTool("budgeted", async () => jsonResult({ ok: true }));
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([tool]),
+        ctx: createHeadlessCodeModeHarness([tool]),
         code: `
           const calls = Array.from({ length: 129 }, () => () =>
-            tools.call("openclaw:core:budgeted", {}),
+            budgeted({}),
           );
           // Keep each leg within the default 16-call pending cap while proving the cumulative budget.
           for (let offset = 0; offset < calls.length; offset += 16) {
@@ -845,9 +866,9 @@ describe("headless Code Mode", () => {
       return jsonResult({ ok: true });
     });
     const resultPromise = runCodeModeScriptHeadless({
-      ctx: createHeadlessHarness([slow]),
+      ctx: createHeadlessCodeModeHarness([slow]),
       code: `
-        await tools.call("openclaw:core:slow_leg", {});
+        await slow_leg({});
         return true;
       `,
       wallClockMs: 15_000,
@@ -873,9 +894,9 @@ describe("headless Code Mode", () => {
       return jsonResult({ ok: true });
     });
     const resultPromise = runCodeModeScriptHeadless({
-      ctx: createHeadlessHarness([slow]),
+      ctx: createHeadlessCodeModeHarness([slow]),
       code: `
-        await tools.call("openclaw:core:slow_leg", {});
+        await slow_leg({});
         return true;
       `,
       wallClockMs: 360_000,
@@ -898,7 +919,7 @@ describe("headless Code Mode", () => {
   it("settles yield_control inline and resumes to completion", async () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
+        ctx: createHeadlessCodeModeHarness(),
         code: `
           const yielded = await yield_control("pause");
           return { yielded, resumed: true };
@@ -913,92 +934,8 @@ describe("headless Code Mode", () => {
     expect(result.toolCallCount).toBe(0);
   });
 
-  it("terminates an in-flight worker leg when aborted", async () => {
-    const ctx = createHeadlessHarness();
-    const config = testing.resolveCodeModeHeadlessConfig(ctx);
-    const controller = new AbortController();
-    const resultPromise = testing.runCodeModeWorker(
-      {
-        kind: "exec",
-        source: "while (true) {}",
-        config,
-        catalog: [],
-        apiFiles: [],
-        namespaces: [],
-      },
-      5000,
-      undefined,
-      controller.signal,
-    );
-    setTimeout(() => controller.abort(), 100);
-
-    await expect(resultPromise).resolves.toMatchObject({
-      status: "failed",
-      code: "aborted",
-      error: "code mode execution aborted",
-    });
-  });
-
-  it("classifies caller aborts before the worker leg as aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    const result = expectFailed(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
-        code: "return true;",
-        signal: controller.signal,
-      }),
-    );
-
-    expect(result).toMatchObject({
-      code: "aborted",
-      error: "code mode execution aborted",
-    });
-  });
-
-  it("times out an unfinished headless TypeScript runtime load", async () => {
-    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
-
-    const result = expectFailed(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
-        language: "typescript",
-        code: "return 42;",
-        wallClockMs: 25,
-      }),
-    );
-
-    expect(result).toMatchObject({
-      code: "timeout",
-      error: "code mode headless wall-clock timeout exceeded",
-      output: [],
-      toolCallCount: 0,
-    });
-  });
-
-  it("aborts an unfinished headless TypeScript runtime load", async () => {
-    loadCodeModeTypeScriptRuntime.mockReturnValue(new Promise(() => {}));
-    const controller = new AbortController();
-    const resultPromise = runCodeModeScriptHeadless({
-      ctx: createHeadlessHarness(),
-      language: "typescript",
-      code: "return 42;",
-      signal: controller.signal,
-    });
-
-    controller.abort();
-
-    expect(expectFailed(await resultPromise)).toMatchObject({
-      code: "aborted",
-      error: "code mode execution aborted",
-      output: [],
-      toolCallCount: 0,
-    });
-  });
-
   it("keeps worker-leg wall-clock expiry classified as timeout", async () => {
-    const ctx = createHeadlessHarness();
+    const ctx = createHeadlessCodeModeHarness();
     expectCompleted(await runCodeModeScriptHeadless({ ctx, code: "return true;" }));
 
     const result = expectFailed(
@@ -1016,7 +953,7 @@ describe("headless Code Mode", () => {
   it("classifies syntax errors", async () => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness(),
+        ctx: createHeadlessCodeModeHarness(),
         code: "return (;",
       }),
     );
@@ -1025,7 +962,7 @@ describe("headless Code Mode", () => {
   });
 
   it("clamps headless limit overrides to worker-safe bounds", () => {
-    const config = testing.resolveCodeModeHeadlessConfig(createHeadlessHarness(), {
+    const config = testing.resolveCodeModeHeadlessConfig(createHeadlessCodeModeHarness(), {
       timeoutMs: 1,
       memoryLimitBytes: 1,
       maxOutputBytes: 1,

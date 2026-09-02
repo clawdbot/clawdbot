@@ -362,6 +362,149 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
+  it.each([
+    { name: "default delivery failure", bestEffort: undefined, expectedCompletion: "failed" },
+    { name: "required delivery failure", bestEffort: false, expectedCompletion: "failed" },
+    {
+      name: "transport hook suppression",
+      bestEffort: undefined,
+      error: "delivery suppressed by message_sending hook",
+      expectedCompletion: "failed",
+    },
+    { name: "best-effort delivery failure", bestEffort: true, expectedCompletion: "succeeded" },
+    {
+      name: "unknown delivery",
+      bestEffort: undefined,
+      unknown: true,
+      expectedCompletion: "unknown",
+    },
+    {
+      name: "best-effort unknown delivery",
+      bestEffort: true,
+      unknown: true,
+      expectedCompletion: "succeeded",
+    },
+    ...(["empty", "silent", "heartbeat", "channel_transform"] as const).map((reason) => ({
+      name: `${reason} suppression`,
+      bestEffort: false,
+      reason,
+      expectedCompletion: "succeeded",
+    })),
+  ])("cleans up $name once across restart", async (testCase) => {
+    const unknown = "unknown" in testCase && testCase.unknown;
+    const reason = "reason" in testCase ? testCase.reason : undefined;
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "payload completed",
+      delivered: unknown ? undefined : false,
+      deliveryError:
+        unknown || reason ? undefined : "error" in testCase ? testCase.error : "delivery rejected",
+      deliverySuppressionReason: reason,
+    }));
+    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const runAt = new Date("2025-12-13T00:00:03.000Z");
+    const job = await cron.add({
+      name: "required one-shot",
+      enabled: true,
+      schedule: { kind: "at", at: runAt.toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "do it once" },
+      delivery: { mode: "announce", bestEffort: testCase.bestEffort },
+    });
+
+    vi.setSystemTime(runAt);
+    await vi.runOnlyPendingTimersAsync();
+    const event = await events.waitFor(
+      (candidate) => candidate.jobId === job.id && candidate.action === "finished",
+    );
+    const retained = cron.getJob(job.id);
+
+    expect(event).toMatchObject({
+      status: "ok",
+      completionStatus: testCase.expectedCompletion,
+      deliveryStatus: unknown ? "unknown" : "not-delivered",
+      ...(reason ? { deliverySuppressionReason: reason } : {}),
+    });
+    const shouldDelete = testCase.expectedCompletion === "succeeded";
+    if (shouldDelete) {
+      expect(retained).toBeUndefined();
+    } else {
+      expect(retained).toMatchObject({
+        enabled: false,
+        state: {
+          lastRunStatus: "ok",
+          consecutiveErrors: 0,
+        },
+      });
+    }
+    expect(retained?.state.nextRunAtMs).toBeUndefined();
+    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+
+    cron.stop();
+    const restartedRun = vi.fn(async () => ({ status: "ok" as const }));
+    const restarted = createStartedCronService(store.storePath, restartedRun);
+    await restarted.start();
+    await vi.runOnlyPendingTimersAsync();
+    expect(restartedRun).not.toHaveBeenCalled();
+    if (shouldDelete) {
+      expect(restarted.getJob(job.id)).toBeUndefined();
+    } else {
+      expect(restarted.getJob(job.id)).toMatchObject({ enabled: false });
+    }
+
+    await stopCronAndCleanup(restarted, store);
+  });
+
+  it("counts the next execution error from one after a delivery-only failure", async () => {
+    const runIsolatedAgentJob = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "ok" as const,
+        delivered: false,
+        deliveryError: "delivery rejected",
+      })
+      .mockResolvedValueOnce({
+        status: "error" as const,
+        error: "provider overloaded",
+      });
+    const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    const job = await cron.add({
+      name: "delivery then execution error",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "run" },
+      delivery: { mode: "announce", bestEffort: false },
+    });
+
+    const firstAt = job.state.nextRunAtMs!;
+    vi.setSystemTime(firstAt);
+    await vi.runOnlyPendingTimersAsync();
+    await events.waitFor(
+      (candidate) => candidate.jobId === job.id && candidate.action === "finished",
+    );
+    const secondAt = cron.getJob(job.id)?.state.nextRunAtMs;
+    expect(secondAt).toBeTypeOf("number");
+    expect(cron.getJob(job.id)?.state.consecutiveErrors).toBe(0);
+
+    vi.setSystemTime(secondAt!);
+    await vi.runOnlyPendingTimersAsync();
+    await vi.waitFor(() => expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2));
+    const updated = cron.getJob(job.id);
+    expect(updated).toMatchObject({
+      enabled: true,
+      state: {
+        lastRunStatus: "error",
+        consecutiveErrors: 1,
+      },
+    });
+    expect(updated?.state.nextRunAtMs).toBeGreaterThan(secondAt!);
+
+    await stopCronAndCleanup(cron, store);
+  });
+
   it("deletes a recurring job converted to at when retention is omitted", async () => {
     const { store, cron, events } = await createMainOneShotHarness();
     const job = await cron.add({

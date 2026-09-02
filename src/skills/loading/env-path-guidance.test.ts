@@ -13,23 +13,18 @@ type GuidanceCase = {
 
 const CASES: GuidanceCase[] = [
   {
-    file: "skills/session-logs/SKILL.md",
-    required: ["OPENCLAW_STATE_DIR"],
-    forbidden: [
-      "for f in ~/.openclaw/agents/<agentId>/sessions/*.jsonl",
-      'rg -l "phrase" ~/.openclaw/agents/<agentId>/sessions/*.jsonl',
-      "~/.openclaw/agents/<agentId>/sessions/<id>.jsonl",
-    ],
-  },
-  {
     file: "skills/gh-issues/SKILL.md",
     required: ["OPENCLAW_CONFIG_PATH"],
     forbidden: ["cat ~/.openclaw/openclaw.json"],
   },
   {
     file: "extensions/canvas/skills/canvas/SKILL.md",
-    required: ["OPENCLAW_CONFIG_PATH"],
-    forbidden: ["cat ~/.openclaw/openclaw.json"],
+    forbidden: [
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_STATE_DIR",
+      "~/.openclaw/canvas",
+      "cat ~/.openclaw/openclaw.json",
+    ],
   },
   {
     file: "skills/openai-whisper-api/SKILL.md",

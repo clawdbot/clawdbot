@@ -1,5 +1,8 @@
 // Subagent announce format e2e tests exercise the full announce flow with
 // channel fixtures, session stores, hooks, and gateway calls wired together.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
@@ -8,6 +11,7 @@ import {
   type OpenClawConfig,
 } from "../../../config/config.js";
 import * as configSessions from "../../../config/sessions.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
@@ -68,7 +72,7 @@ type MockSubagentRun = {
   };
   cleanupCompletedAt?: number;
   label?: string;
-  frozenResultText?: string | null;
+  completion?: { required: boolean; resultText?: string | null };
 };
 type SessionEntryFixture = Partial<Omit<SessionEntry, "updatedAt">> & {
   updatedAt?: number;
@@ -588,6 +592,30 @@ describe("subagent announce formatting", () => {
     expect(call.params?.internalEvents?.[0]?.result).toBe(fullResult);
   });
 
+  it("carries a producer route fact to a local parent without changing child result text", async () => {
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-local-route-change",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = getAgentCall();
+    const message = typeof call.params?.message === "string" ? call.params.message : "";
+    expect(message).toContain(modelRouteChange);
+    expect(message).toContain(
+      "Preserve any runtime-authored model-route change notice in your update.",
+    );
+    expect(call.params?.internalEvents?.[0]?.result).toBe("child result");
+  });
+
   it("includes success status when outcome is ok", async () => {
     // Use waitForCompletion: false so it uses the provided outcome instead of calling agent.wait
     await runSubagentAnnounceFlow({
@@ -783,6 +811,77 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("step-139");
   });
 
+  // These two cases deliberately drop the readSubagentSessionEntry stub and read
+  // a real agent session store on disk, so the Stats: clause in the parent-facing
+  // announcement is produced by the production read path rather than a fixture.
+  async function withRealChildSessionStore(
+    entryPatch: Record<string, unknown>,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "announce-real-store-")),
+    );
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const childSessionKey = "agent:main:subagent:test";
+    try {
+      await patchSessionEntryCore(
+        { agentId: "main", sessionKey: childSessionKey, storePath },
+        () => ({ sessionId: "child-session-real-store", ...entryPatch }),
+        {
+          fallbackEntry: { sessionId: "child-session-real-store", updatedAt: Date.now() },
+          replaceEntry: true,
+          skipMaintenance: true,
+        },
+      );
+      // readSubagentSessionEntry is intentionally omitted so the real reader runs.
+      subagentAnnounceOutputTesting.setDepsForTest({
+        callGateway: async <T = Record<string, unknown>>(
+          req: Parameters<typeof gatewayCall.callGateway>[0],
+        ) => (await callGatewaySpy(req)) as T,
+        getRuntimeConfig: () => configOverride,
+        resolveAgentIdFromSessionKey: () => "main",
+        resolveSessionStorePathCore: () => storePath,
+      });
+      await run();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("announces tokens unknown when child usage never landed on the real session store", async () => {
+    await withRealChildSessionStore({}, async () => {
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-real-store-absent",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...defaultOutcomeAnnounce,
+      });
+
+      const msg = getAgentCall().params?.message as string;
+      expect(msg).toContain("Stats:");
+      expect(msg).toContain("tokens unknown");
+      expect(msg).not.toContain("tokens 0 (in 0 / out 0)");
+    });
+  });
+
+  it("announces a genuine zero-usage reading from the real session store", async () => {
+    await withRealChildSessionStore({ inputTokens: 0, outputTokens: 0 }, async () => {
+      await runSubagentAnnounceFlow({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-real-store-zero",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        ...defaultOutcomeAnnounce,
+      });
+
+      const msg = getAgentCall().params?.message as string;
+      expect(msg).toContain("Stats:");
+      expect(msg).toContain("tokens 0 (in 0 / out 0)");
+      expect(msg).not.toContain("tokens unknown");
+    });
+  });
+
   it("routes manual spawn completion through a parent-agent announce turn", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
@@ -825,12 +924,18 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps completion delivery enabled for extension channels captured from requester origin", async () => {
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-completion-imessage",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       requesterOrigin: { channel: "imessage", to: "+1234567890", accountId: "acct-bb" },
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
     });
@@ -838,11 +943,16 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const call = getAgentCall() as { params?: Record<string, unknown> };
+    const call = getAgentCall();
     expect(call?.params?.deliver).toBe(true);
     expect(call?.params?.channel).toBe("imessage");
     expect(call?.params?.to).toBe("+1234567890");
     expect(call?.params?.accountId).toBe("acct-bb");
+    expect(call?.params?.message).toContain(modelRouteChange);
+    expect(call?.params?.message).toContain(
+      "Keep runtime-authored model-route change notices internal on this shared surface.",
+    );
+    expect(call?.params?.internalEvents?.[0]?.result).toBe("child result");
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
@@ -968,12 +1078,6 @@ describe("subagent announce formatting", () => {
     {
       name: "silent",
       terminalReply: { disposition: "silent" } as const,
-      expectedAgentCalls: 1,
-      expectedMessage: "(no output)",
-    },
-    {
-      name: "empty",
-      terminalReply: { disposition: "empty" } as const,
       expectedAgentCalls: 1,
       expectedMessage: "(no output)",
     },
@@ -1456,6 +1560,15 @@ describe("subagent announce formatting", () => {
         expectedStatus: "timed out",
         spawnMode: undefined,
       },
+      {
+        childSessionId: "child-session-direct-timeout-cause",
+        requesterSessionId: "requester-session-timeout-cause",
+        childRunId: "run-direct-completion-timeout-cause",
+        replyText: "partial output",
+        outcome: { status: "timeout", error: "child run failed before completing" } as const,
+        expectedStatus: "timed out: child run failed before completing",
+        spawnMode: undefined,
+      },
     ] as const;
 
     for (const testCase of cases) {
@@ -1923,8 +2036,16 @@ describe("subagent announce formatting", () => {
     });
 
     expect(delivery.delivered).toBe(false);
+    expect(delivery.reason).toBe("steer_dropped");
+    expect(delivery.terminal).toBeUndefined();
     expect(delivery.phases).toEqual([
-      { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+      {
+        phase: "steer-primary",
+        delivered: false,
+        path: "none",
+        reason: "steer_dropped",
+        error: undefined,
+      },
     ]);
     expect(direct).not.toHaveBeenCalled();
   });
@@ -2391,6 +2512,7 @@ describe("subagent announce formatting", () => {
   it("keeps completion-mode announce internal for nested requester subagent sessions", async () => {
     embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:orchestrator:subagent:worker",
@@ -2399,6 +2521,11 @@ describe("subagent announce formatting", () => {
       requesterOrigin: { channel: "whatsapp", accountId: "acct-123", to: "+1555" },
       requesterDisplayKey: "agent:main:subagent:orchestrator",
       expectsCompletionMessage: true,
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
       ...defaultOutcomeAnnounce,
     });
 
@@ -2413,6 +2540,10 @@ describe("subagent announce formatting", () => {
     const message = typeof call?.params?.message === "string" ? call.params.message : "";
     expect(message).toContain(
       "Convert this completion into a concise internal orchestration update for your parent agent",
+    );
+    expect(message).toContain(modelRouteChange);
+    expect(message).toContain(
+      "Preserve any runtime-authored model-route change notice in your update.",
     );
   });
 
@@ -2586,7 +2717,7 @@ describe("subagent announce formatting", () => {
               createdAt: 1,
               execution: { endedAt: 2, outcome: { status: "ok" } },
               cleanupCompletedAt: 3,
-              frozenResultText: "stale result that should be filtered",
+              completion: { required: true, resultText: "stale result that should be filtered" },
             },
           ];
         }
@@ -2602,7 +2733,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "result from child a",
+            completion: { required: true, resultText: "result from child a" },
           },
           {
             runId: "run-child-b",
@@ -2615,7 +2746,7 @@ describe("subagent announce formatting", () => {
             createdAt: 11,
             execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
-            frozenResultText: "result from child b",
+            completion: { required: true, resultText: "result from child b" },
           },
         ];
       },
@@ -2671,7 +2802,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "stale result from child a",
+            completion: { required: true, resultText: "stale result from child a" },
           },
           {
             runId: "run-child-current",
@@ -2684,7 +2815,7 @@ describe("subagent announce formatting", () => {
             createdAt: 11,
             execution: { endedAt: 22, outcome: { status: "ok" } },
             cleanupCompletedAt: 23,
-            frozenResultText: "current result from child a",
+            completion: { required: true, resultText: "current result from child a" },
           },
           {
             runId: "run-child-b",
@@ -2697,7 +2828,7 @@ describe("subagent announce formatting", () => {
             createdAt: 12,
             execution: { endedAt: 24, outcome: { status: "ok" } },
             cleanupCompletedAt: 25,
-            frozenResultText: "result from child b",
+            completion: { required: true, resultText: "result from child b" },
           },
         ];
       },
@@ -2744,7 +2875,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "stale old parent result",
+            completion: { required: true, resultText: "stale old parent result" },
           },
         ];
       },
@@ -2765,7 +2896,7 @@ describe("subagent announce formatting", () => {
           createdAt: 11,
           execution: { endedAt: 22, outcome: { status: "ok" } },
           cleanupCompletedAt: 23,
-          frozenResultText: "current new parent result",
+          completion: { required: true, resultText: "current new parent result" },
         };
       },
     );
@@ -2817,7 +2948,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "result from child a",
+            completion: { required: true, resultText: "result from child a" },
           },
           {
             runId: "run-child-b",
@@ -2830,7 +2961,7 @@ describe("subagent announce formatting", () => {
             createdAt: 11,
             execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
-            frozenResultText: "result from child b",
+            completion: { required: true, resultText: "result from child b" },
           },
         ];
       },
@@ -2869,6 +3000,71 @@ describe("subagent announce formatting", () => {
     });
   });
 
+  it("terminates an accepted descendant wake after completion delivery closes", async () => {
+    sessionStore = {
+      "agent:main:subagent:parent": {
+        sessionId: "session-parent",
+      },
+    };
+    subagentRegistryMock.listSubagentRunsForRequester.mockReturnValue([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:main:subagent:parent:subagent:child",
+        requesterSessionKey: "agent:main:subagent:parent",
+        requesterDisplayKey: "parent",
+        task: "child task",
+        cleanup: "keep",
+        createdAt: 10,
+        execution: { endedAt: 20, outcome: { status: "ok" } },
+        cleanupCompletedAt: 21,
+        completion: { required: true, resultText: "child result" },
+      },
+    ]);
+    let releaseWake: (() => void) | undefined;
+    agentSpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseWake = () => resolve(visibleAgentResponse("run-parent-phase-2"));
+        }),
+    );
+    callGatewaySpy.mockImplementation(async (req: unknown) => {
+      const typed = req as { method?: string; params?: { runId?: string } };
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "chat.abort") {
+        return { aborted: true, runIds: [typed.params?.runId] };
+      }
+      return {};
+    });
+    let completionDeliveryAllowed = true;
+
+    const announce = runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-phase-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      wakeOnDescendantSettle: true,
+      roundOneReply: "waiting for child",
+      isCompletionDeliveryAllowed: () => completionDeliveryAllowed,
+    });
+    await vi.waitFor(() => expect(agentSpy).toHaveBeenCalledOnce());
+
+    completionDeliveryAllowed = false;
+    releaseWake?.();
+
+    await expect(announce).resolves.toBe("intentional_non_delivery");
+    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(callGatewaySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "chat.abort",
+        params: expect.objectContaining({ runId: "run-parent-phase-2" }),
+      }),
+    );
+  });
+
   it("does not re-wake an already woken run id", async () => {
     sessionStore = {
       "agent:main:subagent:parent": {
@@ -2897,7 +3093,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "result from child a",
+            completion: { required: true, resultText: "result from child a" },
           },
         ];
       },
@@ -2952,7 +3148,7 @@ describe("subagent announce formatting", () => {
             createdAt: 10,
             execution: { endedAt: 20, outcome: { status: "ok" } },
             cleanupCompletedAt: 21,
-            frozenResultText: "grandchild final output",
+            completion: { required: true, resultText: "grandchild final output" },
           },
         ];
       }
@@ -2969,7 +3165,7 @@ describe("subagent announce formatting", () => {
             createdAt: 11,
             execution: { endedAt: 21, outcome: { status: "ok" } },
             cleanupCompletedAt: 22,
-            frozenResultText: "child synthesized output from grandchild",
+            completion: { required: true, resultText: "child synthesized output from grandchild" },
           },
         ];
       }
@@ -3266,7 +3462,7 @@ describe("subagent announce formatting", () => {
       requesterSessionKey: string;
       task: string;
       createdAt: number;
-      frozenResultText: string;
+      resultText: string;
       outcome?: { status: "ok" | "error" | "timeout"; error?: string };
       endedAt?: number;
       cleanupCompletedAt?: number;
@@ -3286,7 +3482,7 @@ describe("subagent announce formatting", () => {
           outcome: params.outcome ?? ({ status: "ok" } as const),
         },
         cleanupCompletedAt: params.cleanupCompletedAt ?? params.createdAt + 2,
-        frozenResultText: params.frozenResultText,
+        completion: { required: true, resultText: params.resultText },
       };
     }
 
@@ -3322,7 +3518,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-2-level",
                 task: "child task",
                 createdAt: 10,
-                frozenResultText: "child final answer",
+                resultText: "child final answer",
               }),
             ]
           : [],
@@ -3361,7 +3557,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-fanout",
                 task: "child a",
                 createdAt: 10,
-                frozenResultText: "result A",
+                resultText: "result A",
               }),
               makeChildCompletion({
                 runId: "run-fanout-b",
@@ -3369,7 +3565,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-fanout",
                 task: "child b",
                 createdAt: 11,
-                frozenResultText: "result B",
+                resultText: "result B",
               }),
             ]
           : [],
@@ -3419,7 +3615,7 @@ describe("subagent announce formatting", () => {
                 task: "fast child",
                 createdAt: 10,
                 endedAt: 11,
-                frozenResultText: "fast child result",
+                resultText: "fast child result",
               }),
               makeChildCompletion({
                 runId: "run-slow",
@@ -3428,7 +3624,7 @@ describe("subagent announce formatting", () => {
                 task: "slow child",
                 createdAt: 11,
                 endedAt: 40,
-                frozenResultText: "slow child result",
+                resultText: "slow child result",
               }),
             ]
           : [],
@@ -3480,7 +3676,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: middleSessionKey,
               task: "middle child a",
               createdAt: 10,
-              frozenResultText: "middle child result A",
+              resultText: "middle child result A",
             }),
             makeChildCompletion({
               runId: "run-middle-b",
@@ -3488,7 +3684,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: middleSessionKey,
               task: "middle child b",
               createdAt: 11,
-              frozenResultText: "middle child result B",
+              resultText: "middle child result B",
             }),
           ];
         }
@@ -3500,7 +3696,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: "agent:main:subagent:parent-nested",
               task: "middle orchestrator",
               createdAt: 12,
-              frozenResultText: "middle synthesized output from A and B",
+              resultText: "middle synthesized output from A and B",
             }),
           ];
         }
@@ -3555,7 +3751,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-sequential",
                 task: "step one",
                 createdAt: 10,
-                frozenResultText: "result one",
+                resultText: "result one",
               }),
               makeChildCompletion({
                 runId: "run-seq-2",
@@ -3563,7 +3759,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-sequential",
                 task: "step two",
                 createdAt: 20,
-                frozenResultText: "result two",
+                resultText: "result two",
               }),
               makeChildCompletion({
                 runId: "run-seq-3",
@@ -3571,7 +3767,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-sequential",
                 task: "step three",
                 createdAt: 30,
-                frozenResultText: "result three",
+                resultText: "result three",
               }),
             ]
           : [],
@@ -3609,7 +3805,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-error",
                 task: "error child",
                 createdAt: 10,
-                frozenResultText: "traceback: child exploded",
+                resultText: "traceback: child exploded",
                 outcome: { status: "error", error: "child exploded" },
               }),
             ]
@@ -3647,7 +3843,7 @@ describe("subagent announce formatting", () => {
                 requesterSessionKey: "agent:main:subagent:parent-gated",
                 task: "gated child",
                 createdAt: 10,
-                frozenResultText: "gated child output",
+                resultText: "gated child output",
               }),
             ]
           : [],
@@ -3702,7 +3898,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: childSessionKey,
               task: "grandchild task",
               createdAt: 10,
-              frozenResultText: "grandchild settled output",
+              resultText: "grandchild settled output",
             }),
           ];
         }
@@ -3714,7 +3910,7 @@ describe("subagent announce formatting", () => {
               requesterSessionKey: parentSessionKey,
               task: "child task",
               createdAt: 20,
-              frozenResultText: "child synthesized from grandchild",
+              resultText: "child synthesized from grandchild",
             }),
           ];
         }

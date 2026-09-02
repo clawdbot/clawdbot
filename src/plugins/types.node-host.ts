@@ -11,7 +11,20 @@ export type OpenClawPluginNodeHostCommandAvailabilityContext = {
 export type OpenClawPluginNodeHostCommandIo = {
   emitChunk(chunk: string): Promise<void>;
   onInput(callback: (payloadJSON: string) => void): void;
+  /** Complete binary messages; available when the node host dispatches a duplex command. */
+  frames?: {
+    send(message: Uint8Array): Promise<void>;
+    onMessage(listener: (message: Uint8Array) => void | Promise<void>): () => void;
+  };
   signal: AbortSignal;
+};
+
+export type OpenClawPluginNodeWorkspace = {
+  workspaceDir: string;
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
+  sessionKey: string;
 };
 
 export type OpenClawPluginNodeHostCommandContext = {
@@ -21,12 +34,21 @@ export type OpenClawPluginNodeHostCommandContext = {
   sessionKey?: string;
   /** Aborts when the Gateway cancels this specific node-host invocation. */
   signal?: AbortSignal;
+  /** Prepare local exec policy; call the returned guard synchronously immediately before spawn. */
+  prepareExecAuthorization?: (source: "human-approved" | "session-full") => () => void;
+  /** Protect one exact node-owned placement workspace for this invocation's lifetime. */
+  acquireManagedWorkspace?: (request: OpenClawPluginNodeWorkspace) => {
+    workspaceDir: string;
+    release: () => void;
+  };
 };
 
 type OpenClawPluginNodeHostCommandBase = {
   command: string;
   cap?: string;
   dangerous?: boolean;
+  /** Settle node-local startup before the initial capability declaration; registration stays synchronous. */
+  prepare?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => Promise<void> | void;
   /** Return false to omit this command and capability from the node declaration. */
   isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
   /** Watch node-local availability and request a fresh Gateway declaration. */

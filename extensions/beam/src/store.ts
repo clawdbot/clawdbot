@@ -16,9 +16,7 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
     defaultTtlMs: BEAM_RETENTION_MS,
   });
   return {
-    put: async (session) => {
-      await store.register(session.beamId, session);
-    },
+    put: (session) => store.register(session.beamId, session),
     get: (beamId) => store.lookup(beamId),
     list: async () => (await store.entries()).map((entry) => entry.value),
   };

@@ -1,6 +1,7 @@
 /** Process-local active-turn registry for ACP maintenance and recovery decisions. */
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { normalizeActorKey } from "./manager.utils.js";
+import type { AcpSessionTarget } from "./manager.types.js";
+import { acpSessionActorKey } from "./manager.utils.js";
 
 // Process-local liveness signal for in-flight ACP prompt turns, kept off the
 // SDK-exported AcpSessionManager so plugins cannot read this maintenance-only
@@ -22,25 +23,25 @@ function getAcpActiveTurnState(): AcpActiveTurnState {
 }
 
 /** Marks a session as currently running an ACP turn. */
-export function markAcpTurnActive(sessionKey: string) {
-  if (!sessionKey) {
+export function markAcpTurnActive(target: AcpSessionTarget) {
+  if (!target.sessionKey) {
     return;
   }
-  getAcpActiveTurnState().activeTurnKeys.add(normalizeActorKey(sessionKey));
+  getAcpActiveTurnState().activeTurnKeys.add(acpSessionActorKey(target));
 }
 
 /** Clears the active-turn marker for a session. */
-export function clearAcpTurnActive(sessionKey: string) {
-  if (!sessionKey) {
+export function clearAcpTurnActive(target: AcpSessionTarget) {
+  if (!target.sessionKey) {
     return;
   }
-  getAcpActiveTurnState().activeTurnKeys.delete(normalizeActorKey(sessionKey));
+  getAcpActiveTurnState().activeTurnKeys.delete(acpSessionActorKey(target));
 }
 
 /** Returns whether the process currently owns an in-flight ACP turn for a session. */
-export function isAcpTurnActive(sessionKey: string): boolean {
-  if (!sessionKey) {
+export function isAcpTurnActive(target: AcpSessionTarget): boolean {
+  if (!target.sessionKey) {
     return false;
   }
-  return getAcpActiveTurnState().activeTurnKeys.has(normalizeActorKey(sessionKey));
+  return getAcpActiveTurnState().activeTurnKeys.has(acpSessionActorKey(target));
 }

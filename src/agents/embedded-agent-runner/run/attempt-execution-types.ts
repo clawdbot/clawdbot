@@ -7,6 +7,7 @@ import type {
   EmbeddedAttemptAbortStatePort,
 } from "./attempt-finalize.js";
 import type { prepareEmbeddedAttemptHistory } from "./attempt-history.js";
+import type { createPromptBuildToolPolicy } from "./attempt-prompt-support.js";
 import type { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import type { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
@@ -15,6 +16,7 @@ import type { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt
 import type { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type Prepared<T extends (...args: never[]) => unknown> = Awaited<ReturnType<T>>;
@@ -27,6 +29,7 @@ type AttemptContextEngine = NonNullable<HistoryInput["activeContextEngine"]>;
 
 export type EmbeddedAttemptExecutionState = {
   beforeAgentRunBlockedBy: string | undefined;
+  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
   terminal: AgentRunAttemptTerminal;
   trajectoryEndRecorded: boolean;
 };
@@ -50,6 +53,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
     systemPrompt: Prepared<typeof prepareEmbeddedAttemptSystemPrompt>;
     toolBase: ReturnType<typeof prepareEmbeddedAttemptToolBase>;
     toolCatalog: ReturnType<typeof prepareEmbeddedAttemptToolCatalog>;
+    promptToolPolicy: ReturnType<typeof createPromptBuildToolPolicy>;
   };
   sessionLock: Pick<
     PreparedTranscriptLifecycle,
@@ -71,6 +75,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
   };
   state: EmbeddedAttemptExecutionState;
   lifecycle: {
+    applyPermissionMode?: NonNullable<StreamInput["applyPermissionMode"]>;
     readYieldState: () => {
       yieldAbortSettled: Promise<void> | null;
       yieldDetected: boolean;

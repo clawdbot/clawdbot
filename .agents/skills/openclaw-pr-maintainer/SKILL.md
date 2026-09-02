@@ -37,6 +37,11 @@ Choose the outcome from live GitHub state, current `main`, affected source and t
 2. **Confirmed issue:** Reproduce or otherwise prove the defect, trace the violated invariant to its producer or lifecycle owner, and implement the architectural root-cause fix when repair is authorized. Cover the original failure and affected sibling paths with focused regression tests and realistic behavior proof. Do not settle for a downstream guard, workaround, speculative fallback, or passing test that leaves the owner broken.
 3. **Confirmed bug-fix PR:** Independently prove both the defect and whether the proposed change repairs the root cause without regressions. If the PR is already the clean owner-boundary fix, verify and land it when authorized. If it is incomplete, in the wrong layer, needlessly complex, or only masks symptoms, rewrite/refactor the editable PR into the correct fix; verify the rewritten head and then land it. If the source branch cannot safely be edited, create an authorized replacement PR, preserve the original author's credit, and close the source only after the replacement exists. Never merge a speculative or merely plausible patch.
 
+Never squash a contributor-owned PR after maintainers replace its ancestry.
+Create a maintainer-owned replacement PR, link the original, and credit
+contributors with their public GitHub noreply address. Merge and rebase are not
+policy escapes.
+
 Prefer cleanup, deletion, coherent refactoring, and one canonical flow over additional branches, wrappers, fallbacks, or compatibility shims. Target net-neutral or net-negative **production** LOC; tests are counted separately and useful regression tests may grow freely. Inspect `git diff --numstat` before landing, report production and test deltas separately, and justify any unavoidable production growth with a concrete capability, ownership boundary, security invariant, or public/dependency contract.
 
 Honor the requested action boundary: a fix request authorizes scoped investigation, local edits, and verification; an explicit ship/land/merge request or autonomous repair sweep also authorizes the scoped publication, closing, and landing needed to finish it. An explicit request to autonomously process, resolve, or fix-and-land a named maintainer issue/PR queue is an authorized autonomous repair sweep, including necessary evidence-backed comments, closures, root-cause fixes, pushes, and landing for those items. Ordinary review-only, triage-only, listing, or landable-shortlist requests are read-only: they authorize neither local source edits nor GitHub writes, including labels, assignments, public comments, closures, pushes, or landing, unless separately authorized. For authorized end-to-end landing work, a review summary or unlanded local patch is not completion: finish with a proven already-fixed close, a verified root-cause repair landed, or a specific evidence, ownership, product, safety, or authorization blocker.
@@ -93,8 +98,8 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 - For every reviewed, triaged, closed, or landed issue/PR, show the opener's human name when available, GitHub login, and account age.
 - Get the login from `gh issue view` / `gh pr view` (`author.login`), then fetch profile metadata once with `gh api users/<login> --jq '{login,name,created_at,type}'`.
 - Report opener identity as one compact line:
-  `By: Jane Doe (@jane, acct 2021-04-03) | OpenClaw: 4 PRs, 2 issues, 11 commits/12mo | GitHub: 9 repos, 86 commits, 9 PRs, 3 issues, 12 reviews`
-- Always show recent activity in two lanes: OpenClaw-local PRs, issues, and commits in the last 12 months; and general public GitHub activity over the same window. For linked issue-fixing PRs, include both the PR author and issue opener when they differ.
+  `By: Jane Doe (@jane, acct 2021-04-03) | OpenClaw: 4 PRs, 2 issues, 11 commits/12mo | GitHub contributions: 86 commits, 9 PRs, 3 issues, 12 reviews/12mo`
+- Show activity in two separate lanes: repo search totals for authored PRs/issues and commits, and GitHub contribution-graph totals. State each interval; neither lane is an exhaustive activity history. For linked issue-fixing PRs, include both the PR author and issue opener when they differ.
 - Prefer the bundled helper for activity lookups:
 
 ```bash
@@ -102,11 +107,11 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 .agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh --global <login>
 ```
 
-- The helper reports repo-local activity first and can fetch public GitHub contribution totals for the same window with `--global`; run the global form by default for review/triage identity summaries.
-- If the global contribution graph reports zero or looks inconsistent with visible public activity, sanity-check with `gh api users/<login>`, `gh api 'users/<login>/events/public?per_page=100'`, and recent public repo commits before calling the account inactive.
-- The helper is intentionally cache-friendly for gitcrawl-backed `gh`: it rounds repo-local windows to the UTC day, rounds global contribution windows to the UTC hour, and counts PRs/issues from one paginated issues response before fetching commits separately. Prefer reusing the helper instead of hand-rolling several `gh api` loops.
-- If the contribution graph is misleading or zero but public events/repos show activity, keep it one line, for example:
-  `By: pickaxe (@ProspectOre, acct 2019-08-24) | OpenClaw: 5 PRs, 0 issues, 5 commits/12mo | GitHub: 5 repos, 29 recent events, 100 public own-repo commits; graph=0`
+- Run `--global` by default for review/triage identity summaries. The helper prints canonical profile identity before requesting activity, then makes three single-page REST searches (`per_page=1`) for repo totals and one optional GraphQL contribution aggregate: at most five `gh` calls per resolved login, independent of activity volume. It uses `total_count`, never fetched row counts or pagination.
+- Keep bare PATH `gh` with native `--cache 1h` for profile, search, and GraphQL reads. Octopool delegates author/date-filtered searches and GraphQL, so bare `gh` alone does not guarantee fleet-cache coverage. Native caching keeps repeated lookups bounded without a custom store; do not source `plain-gh.sh`, force fresh reads, or query private cache databases.
+- Windows use completed UTC days with calendar-month subtraction clamped at month ends. Repo search uses PR/issue creation time and default-branch commit committer date. `--months` controls the repo interval; global contributions cap at 12 months because GitHub accepts at most one year. The helper prints both intervals and explicitly labels a global cap for longer requests.
+- Search totals reflect GitHub's index and may be cached or lag recent changes. Printed intervals are query bounds, not proof of live freshness. Incomplete search results, malformed/missing data, request failures, and unresolved identity are not zero. The helper labels those outcomes, continues later logins, and exits nonzero if identity or requested activity is unavailable or incomplete.
+- Contribution totals follow GitHub's contribution rules and token visibility; they may include private repositories. Do not call them public-only or infer inactivity from a zero graph. Do not automatically scan events or repositories as a fallback; report the limitation and inspect specific evidence separately only when needed.
 - If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
 - Use identity and activity as triage signal, not proof by itself: new, low-activity, or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
 
@@ -209,11 +214,11 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 - Then list findings first. If none, say `No blocking findings` or `No findings`.
 - Show size near the top as `Production LOC: +<additions>/-<deletions> (net <delta>) | Tests: +<additions>/-<deletions>`, classifying per-file `git diff --numstat` or live PR file stats. Optional aggregate PR totals never replace the production/test split; justify positive production growth.
 - Always answer: bug/behavior being fixed, PR/issue URL and affected surface, provenance for regressions when traceable, and best-fix verdict.
-- For bug/regression fixes, include a compact `Provenance:` line after cause/root-cause when a bounded history pass can identify it. Use `git log -S/-G`, `git blame`, linked PRs/issues, and tests.
-- Provenance must separate roles when they differ: blamed code author username, blamed PR author username, blamed PR merger/committer username, automerge trigger when known, current PR author username, PR number, and date. Do not collapse them into one "introduced by" actor.
-- If the blamed PR was merged by `clawsweeper[bot]` or another automation, identify the human trigger when practical. Check live PR timeline/comments first; if rate-limited, use gitcrawl/cache or public PR HTML. Look for maintainer command comments such as `@clawsweeper automerge`, `/landpr`, labels/events that armed automerge, and ClawSweeper status comments. Report `automerge triggered by @login`; if not found, say trigger unknown rather than naming the bot as the human decision-maker.
-- For any confirmed bug, run `git blame` on the implicated line(s) after identifying the root cause. Report who broke it as the blamed PR merger/committer, and also name the blamed code author. Include the PR number. If no PR is traceable, use the blamed commit as the provenance: commit SHA, date, and author username. Do not guess a merger or frame missing PR metadata as a separate finding.
-- Phrase provenance as `introduced by`, `made visible by`, or `carried forward by`, with confidence (`clear`, `likely`, `unknown`). If unclear, say what evidence is missing instead of guessing. For features, docs, and refactors, use `Provenance: N/A` or omit it when no broken behavior is being fixed.
+- For bug/regression fixes, include a compact `Provenance:` line after root cause. Use `git log -S/-G`, `git blame` on implicated lines, and linked PRs/issues to locate candidates, not prove introduction. Before saying `introduced by`, inspect raw parents with `git --no-replace-objects cat-file -p <sha>` and verify that `git --no-replace-objects diff --no-ext-diff --no-textconv <raw-parent> <sha> -- <path>` changed the implicated behavior, using tests/repro when feasible. A genuine root needs raw-header proof that it has no parents.
+- Blame `^sha`, porcelain `boundary`, and shallow/grafted history alone are not introduction proof. `--root` can hide boundary markers; `git show` and `rev-list --parents` can disguise a shallow boundary as a root. An available raw parent permits explicit comparison even at a shallow boundary; missing parents or an unverifiable patch require `unknown` with the gap. Apply this bar to summaries and owner hints as well as structured provenance.
+- Keep code author, introducing PR author, merger, committer, automerge trigger, and current PR author separate; none of those roles alone proves who introduced a bug. Cite the verified commit/PR/date. If no PR is traceable, use the verified commit and known author identity; leave unverified identities unknown, and do not make missing PR metadata a separate finding.
+- For automation merges, identify the human trigger only from explicit timeline/comment/event evidence, such as `@clawsweeper automerge`, `/landpr`, or an arming label. Check live evidence first, then gitcrawl/cache when needed. Report `automerge triggered by @login` only when verified; otherwise say trigger unknown. Triggering or merging is not proof of authorship or introduction.
+- Use `made visible by` only for a verified trigger and `carried forward by` only for verified preexisting behavior, with confidence (`clear`, `likely`, `unknown`). Unknown provenance does not invalidate an independently proven bug. For features, docs, and refactors, use `Provenance: N/A` or omit it when no broken behavior is being fixed.
 - Keep summaries compact, but include enough proof that the verdict is auditable without rereading the PR.
 
 LOC proof:
@@ -276,7 +281,7 @@ If the best-fix answer is only "maybe", keep reading or state the missing eviden
 - Before landing, require:
   1. symptom evidence such as a repro, logs, or a failing test
   2. a verified root cause in code with file/line
-  3. blame-backed provenance for regressions when traceable, including blamed PR merger and automerge trigger when known, or commit SHA/date when no PR is traceable
+  3. patch-verified regression provenance when traceable, with author, merger, committer, and trigger roles separate; otherwise explicit `unknown` and the evidence gap
   4. a fix that touches the implicated code path
   5. a regression test when feasible, or explicit manual verification plus a reason no test was added
 - If the claim is unsubstantiated or likely wrong, obtain the missing evidence or make authorized owner-boundary repairs; never merge without proof.
@@ -325,6 +330,41 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   --jq '.[] | "\(.number) | \(.state) | \(.title) | \(.url)"'
 ```
 
+## Choose a writable landing checkout
+
+Before `review-init`, compare the editor's writable workspace with the Git
+common-directory parent. `scripts/pr` intentionally creates its worktree at
+`<canonical-repo>/.worktrees/pr-<PR>`; running it from a linked checkout does not
+put review artifacts under that caller. Shell access or a directory grant alone
+may not make those artifacts editable in an isolated session.
+
+When the canonical PR worktree lies outside the permitted workspace, start from
+a fresh ordinary checkout **inside** that workspace. Use the verified repository
+URL and normal Git, not another linked worktree pointing at the same outside
+common directory. Keep full history and blobs: shallow history breaks provenance
+checks, and blob filters can turn journaled historical restores into serial
+network fetches.
+
+```bash
+git clone --single-branch <verified-repository-url> <permitted-workspace>/landing-checkout
+```
+
+Verify its origin and Git root, then use that checkout's trusted `main` wrapper
+for the unchanged review/prepare/merge sequence. Its native PR worktrees now stay
+inside the permitted tree. Initialize review templates and verify editor access
+before investing in proof. Preserve the original checkout and unique work; never
+use symlinks, shell-mediated writes to denied paths, or weaker isolation flags.
+
+This is fresh workspace selection, not recovery: if another checkout has an
+active operation, uncertain merge capture/outcome, or pending auto/queue request
+for this PR, reconcile that original state first. Never clone away retained evidence or retry
+an uncertain dispatch from a new repository's independent lock/ref namespace.
+
+Keep the generated first line of `review.md` byte-for-byte, and keep `review.json`
+`pr.number`/`pr.headSha` aligned with the initialized metadata. Put descriptive
+prose below that line. Run native artifact validation before calling the review
+ready; regenerated templates, not hand-edited stamps, own head changes.
+
 ## Follow PR review and landing hygiene
 
 - `scripts/pr` requires `git`, `gh`, `jq`, `rg` (ripgrep), `pnpm`, and `node`
@@ -355,6 +395,9 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   or release-generation mechanics, not a correctness finding.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
+- Separate repository authorization from GitHub merge enforcement. `CODEOWNERS` routes review requests; a pending request or zero submitted reviews does not prove that approval is mandatory. Restricted/security paths require listed-owner authorship, review, or direction. For governance changes to ownership/review policy itself, explicit direction from an organization owner also satisfies repository policy only when live `GET /orgs/{org}/memberships/{username}` evidence shows `state: active` and `role: admin`. Repository `ADMIN`, `viewerCanAdminister`, and bypass permission do not establish organization ownership. Neither route waives a live GitHub-enforced review rule.
+- Before reporting a mandatory approval blocker, inspect live branch protection and every matching ruleset, the PR review decision/requests, and the authenticated actor's permission and bypass state. If using the organization-owner governance route, record the live organization-membership result separately. Name the exact enforced rule and whether it is satisfied. Bypass state is evidence about the likely server outcome, never authorization. If no review rule is enforced, do not stop before native prepare/merge solely because a requested team has not reviewed.
+- Explicit user direction resolves this repository-policy question only from the applicable listed owner or through the verified organization-owner governance route; it cannot override server enforcement. If GitHub requires an independent approval and it remains unsatisfied, stop with the exact blocker even when the actor has bypass permission. Otherwise continue through the native landing flow and let its verified merge command exercise the live rule.
 - Before landing any PR with non-trivial code changes, run fresh `$autoreview` until no accepted/actionable findings remain; prior CI, ClawSweeper, or manual review is not a substitute. Skip only for truly trivial/docs-only changes or when the user explicitly opts out.
 - When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents: it verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full `pnpm` gates locally. `prepare-run` fails fast; invoke only after exact-head CI is complete and green, and do not idle on `auto-response` or `check-docs`. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; behind-main drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts.
 - `scripts/pr` gotchas: subcommands require a PR number (no subcommand `--help` placeholder). Artifacts preserve template enum values with evidence detail in summaries; validate before prepare, from PR-head mode (moving main invalidates the main-baseline guard). Review flow: checkout main baseline, then PR, before artifact validation. After every PR push, rerun `scripts/pr review-init`; checkout alone leaves a stale guard SHA. Locally unset `GITHUB_TOKEN`, `GH_TOKEN`, `HOMEBREW_GITHUB_API_TOKEN`; ambient tokens can select an exhausted or wrong identity. Review JSON: land-ready recommendation `READY FOR /prepare-pr`, `issueValidation.status=valid`; never `APPROVE`. After `scripts/pr merge-run` removes its worktree, `cd` to a persistent repo before follow-up commands.
@@ -362,7 +405,9 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 - Stacked branches over a squash-merged parent: rebase with `git rebase --onto origin/main <landed-branch>`; a plain `git rebase origin/main` replays the parent's already-squashed commits and manufactures conflicts.
 - Non-main PRs: do not run `scripts/pr prepare-run` or `merge-run`; they diff against `main`. Use review artifacts, exact base-head CI, revalidate `headRefOid`, then `gh pr merge --match-head-commit <verified-sha>`.
 - PR-create merge-ref race recognition: the dropped/killed pull_request CI run appears as `startup_failure`/`BuildFailed` (`(Unknown event)`) and is not rerunnable — close/reopen or wait for the hourly `pr-ci-sweeper`; rerun attempts are wasted.
-- PR/issue media upload: 422 = unsupported type; 404 = bad repo id/no push. Video: `content_type` `video/mp4` or `video/webm`; embed the returned URL on its own bare line — GitHub renders a player, `![]()` does not; transcode Playwright webm via `ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4` for broad playback. Non-media artifacts or endpoint failure: Crabbox artifact publishing plus the manifest URL.
+- Preferred PR/issue media upload: when the command help exposes `--attach`, use the repeatable flag on `gh issue create`, `gh issue edit`, `gh issue comment`, and the matching `gh pr` commands. Example: `gh pr comment <pr> --repo openclaw/openclaw --body-file <comment.md> --attach <proof.mp4>`.
+- `gh --attach` video rules: accepted extensions are `.mp4`, `.mov`, and `.webm`; the local maximum is 100 MB, while GitHub's account limit may be lower. Do not add `#alt` to a video path. `gh` inserts a bare URL so GitHub renders a player, and the uploaded asset cannot be deleted.
+- Compatibility fallback: if the installed `gh` lacks `--attach`, upload directly with `curl -s "https://uploads.github.com/user-attachments/assets?name=<file>&content_type=<mime>&repository_id=$(gh api repos/<owner>/<repo> --jq .id)" -X POST -H "Authorization: Bearer $(gh auth token)" -H "Accept: application/json" --data-binary @<file>`, then embed the returned `.url`: images as `![alt](url)`, video as a bare line so GitHub renders a player. For that endpoint, 422 = unsupported type and 404 = bad repo id/no push. Use `content_type` `video/mp4`, `video/quicktime`, or `video/webm`; `![]()` does not render the player. Transcode Playwright webm via `ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4` for broad playback. Both paths use the same drag-drop CDN, inherit repository visibility, and need no browser/computer use. Non-media artifacts or endpoint failure: Crabbox artifact publishing plus the manifest URL.
 - Use standard Git commands and stage only the files intended for each commit.
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.

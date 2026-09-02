@@ -31,6 +31,7 @@ describe("reactivateCompletedSubagentSession", () => {
 
   it("reactivates the newest ended row even when stale active rows still exist for the same child session", async () => {
     const childSessionKey = "agent:main:subagent:followup-race";
+    const resolveGatewayContext = vi.fn(() => ({ owner: "gateway-b" }) as never);
     const latestEndedRun = {
       runId: "run-current-ended",
       childSessionKey,
@@ -54,6 +55,7 @@ describe("reactivateCompletedSubagentSession", () => {
       reactivateCompletedSubagentSession({
         sessionKey: childSessionKey,
         runId: "run-next",
+        gatewayContextResolver: resolveGatewayContext,
       }),
     ).resolves.toBe(true);
 
@@ -63,7 +65,28 @@ describe("reactivateCompletedSubagentSession", () => {
       nextRunId: "run-next",
       fallback: latestEndedRun,
       runTimeoutSeconds: 0,
+      gatewayContextResolver: resolveGatewayContext,
     });
+  });
+
+  it("does not replace an ended row after its Gateway owner retires", async () => {
+    getLatestSubagentRunByChildSessionKeyMock.mockReturnValue({
+      runId: "run-ended",
+      runTimeoutSeconds: 0,
+      execution: { endedAt: 1 },
+    });
+    const resolveGatewayContext = vi.fn(() => undefined);
+
+    await expect(
+      reactivateCompletedSubagentSession({
+        sessionKey: "agent:main:subagent:retired-owner",
+        runId: "run-next",
+        gatewayContextResolver: resolveGatewayContext,
+      }),
+    ).resolves.toBe(false);
+
+    expect(resolveGatewayContext).toHaveBeenCalledOnce();
+    expect(replaceSubagentRunAfterSteerMock).not.toHaveBeenCalled();
   });
 
   it("threads the exact follow-up task into the replacement so restart redispatch rewraps the new prompt instead of the stale original", async () => {

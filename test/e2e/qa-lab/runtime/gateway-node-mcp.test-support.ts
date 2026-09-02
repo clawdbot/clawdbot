@@ -1,14 +1,19 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { watch } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
-import type { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
+import { hasErrnoCode } from "../../../../src/infra/errno.js";
+import { signalProcessTree } from "../../../../src/process/kill-tree.js";
 
 export const TEST_TIMEOUT_MS = 180_000;
 const WAIT_TIMEOUT_MS = 30_000;
@@ -20,11 +25,12 @@ export const MCP_SERVERS = ["sse", "stdio", "streamableHttp"] as const;
 const MCP_LABELS = { sse: "sse", stdio: "stdio", streamableHttp: "streamable-http" } as const;
 type McpServerName = keyof typeof MCP_LABELS;
 
-export type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+export type GatewayHandle = QaGatewayChild;
 export type CapturedChild = {
   child: ChildProcess;
   exited: Promise<void>;
   logs: () => string;
+  signalTree: (signal: "SIGTERM" | "SIGKILL") => Promise<void>;
 };
 export type HttpFixture = CapturedChild & {
   pid: number;
@@ -57,6 +63,51 @@ export type ToolsEffectiveResult = {
 
 const CHILD_ENV_KEYS = ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec"] as const;
 
+export async function waitForMcpFixtureGate(filePath: string): Promise<void> {
+  try {
+    await fs.access(filePath);
+    return;
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+  await new Promise<void>((resolve, reject) => {
+    const finish = (error?: Error) => {
+      clearTimeout(timeout);
+      watcher.close();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const inspect = () => {
+      void fs.access(filePath).then(
+        () => finish(),
+        (error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            finish(toErrorObject(error, "Fixture gate inspection failed"));
+          }
+        },
+      );
+    };
+    const watcher = watch(path.dirname(filePath), (_event, filename) => {
+      if (!filename || filename === path.basename(filePath)) {
+        inspect();
+      }
+    });
+    // watch() can throw synchronously; only a constructed watcher owns a deadline.
+    const timeout = setTimeout(() => {
+      watcher.close();
+      reject(new Error(`timed out waiting for fixture gate: ${path.basename(filePath)}`));
+    }, WAIT_TIMEOUT_MS);
+    timeout.unref();
+    watcher.once("error", finish);
+    inspect();
+  });
+}
+
 function captureChild(child: ChildProcess): CapturedChild {
   let stdout = "";
   let stderr = "";
@@ -66,10 +117,41 @@ function captureChild(child: ChildProcess): CapturedChild {
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-200_000);
   });
+  const pid = child.pid;
+  let termPromise: Promise<void> | undefined;
+  let killPromise: Promise<void> | undefined;
+  const signalTree = (signal: "SIGTERM" | "SIGKILL") => {
+    const existing = signal === "SIGKILL" ? killPromise : termPromise;
+    if (existing) {
+      return existing;
+    }
+    const signaled = new Promise<void>((resolve) => {
+      if (pid === undefined) {
+        resolve();
+        return;
+      }
+      signalProcessTree(pid, signal, {
+        detached: process.platform !== "win32",
+        onComplete: resolve,
+      });
+    });
+    if (signal === "SIGKILL") {
+      killPromise = signaled;
+    } else {
+      termPromise = signaled;
+    }
+    return signaled;
+  };
+  const exited = once(child, "exit").then(async () => {
+    // The root PID still identifies this task-owned tree at exit delivery. Reap
+    // descendants before any retained numeric process-group authority can age.
+    await signalTree("SIGKILL");
+  });
   return {
     child,
-    exited: once(child, "exit").then(() => {}),
+    exited,
     logs: () => `stdout:\n${stdout}\nstderr:\n${stderr}`,
+    signalTree,
   };
 }
 
@@ -107,6 +189,7 @@ export async function startHttpFixture(params: {
   const captured = captureChild(
     spawn(process.execPath, [params.fixturePath, "http", "--label-prefix", params.labelPrefix], {
       cwd: process.cwd(),
+      detached: process.platform !== "win32",
       env: params.env,
       stdio: ["ignore", "pipe", "pipe"],
     }),
@@ -174,6 +257,7 @@ export function startNodeProcess(gatewayPort: number, nodeEnv: NodeJS.ProcessEnv
       ],
       {
         cwd: process.cwd(),
+        detached: process.platform !== "win32",
         env: nodeEnv,
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -186,15 +270,15 @@ export async function stopChild(captured: CapturedChild | undefined): Promise<vo
     await captured?.exited.catch(() => {});
     return;
   }
-  captured.child.kill("SIGTERM");
+  await captured.signalTree("SIGTERM");
   const graceful = await Promise.race([
     captured.exited.then(() => true),
     delay(10_000, false, { ref: false }),
   ]);
   if (!graceful) {
-    captured.child.kill("SIGKILL");
-    await captured.exited;
+    await captured.signalTree("SIGKILL");
   }
+  await captured.exited;
 }
 
 export function processIsAlive(pid: number): boolean {

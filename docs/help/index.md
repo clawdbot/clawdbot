@@ -24,7 +24,7 @@ Fastest path to unstuck, by symptom:
 
 - [Environment variables](/help/environment) - where OpenClaw loads env vars and precedence
 - [Diagnostics flags](/diagnostics/flags) - runtime diagnostics and verbose modes
-- [Node + tsx crash](/debug/node-issue) - specific Node / tsx runtime crash scenarios
+- [Node and tsx startup errors](/help/debugging#node-and-tsx-startup-errors) - capture runtime versions and the stack trace for startup failures
 
 ## Testing
 

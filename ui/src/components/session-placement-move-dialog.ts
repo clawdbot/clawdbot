@@ -7,8 +7,8 @@ import {
   renderCloudProfileMenuItems,
   renderSessionMenuItem,
 } from "../pages/new-session/cloud-target.ts";
-import type { DraftCloudProfile, DraftNode } from "../pages/new-session/discovery.ts";
-import { isDraftNodeSessionEligible } from "../pages/new-session/discovery.ts";
+import type { DevicePlacementOption } from "../pages/new-session/device-placement.ts";
+import type { DraftCloudProfile } from "../pages/new-session/discovery.ts";
 import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine-state.ts";
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
@@ -16,18 +16,24 @@ import "./modal-dialog.ts";
 
 type Catalog = {
   profiles: readonly DraftCloudProfile[];
-  nodes: readonly DraftNode[];
+  devices: readonly DevicePlacementOption[];
 };
 
 type Options = {
+  mode: "move" | "restart";
   sessionLabel: string;
   activeRun: boolean;
+  deviceDisabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   loadCatalog: () => Promise<Catalog>;
 };
 
 let active = false;
 
-function targetKey(target: SessionMoveTarget): string {
+function targetKey(target: SessionMoveTarget | null): string {
+  if (!target) {
+    return "";
+  }
   switch (target.kind) {
     case "gateway":
       return "gateway";
@@ -39,7 +45,7 @@ function targetKey(target: SessionMoveTarget): string {
   throw new Error("Unknown session placement move target");
 }
 
-export function showSessionPlacementMoveDialog(
+export function showSessionPlacementTargetDialog(
   options: Options,
 ): Promise<SessionMoveTarget | null> {
   if (active) {
@@ -51,8 +57,8 @@ export function showSessionPlacementMoveDialog(
   return new Promise((resolve) => {
     let loading = true;
     let loadError: string | null = null;
-    let catalog: Catalog = { profiles: [], nodes: [] };
-    let selected: SessionMoveTarget = { kind: "gateway" };
+    let catalog: Catalog = { profiles: [], devices: [] };
+    let selected: SessionMoveTarget | null = options.mode === "move" ? { kind: "gateway" } : null;
     const cloudMachines = new DraftCloudMachineState();
 
     const finish = (result: SessionMoveTarget | null) => {
@@ -69,6 +75,9 @@ export function showSessionPlacementMoveDialog(
 
     const submit = (event: Event) => {
       event.preventDefault();
+      if (!selected) {
+        return;
+      }
       if (selected.kind !== "profile") {
         finish(selected);
         return;
@@ -82,59 +91,87 @@ export function showSessionPlacementMoveDialog(
 
     function paint() {
       const selectedKey = targetKey(selected);
-      const nodes = catalog.nodes.filter(isDraftNodeSessionEligible);
+      const restart = options.mode === "restart";
       render(
         html`
           <openclaw-modal-dialog
-            label=${t("sessionsView.moveSessionTitle")}
+            label=${t(
+              restart ? "sessionsView.restartSessionTitle" : "sessionsView.moveSessionTitle",
+            )}
             @modal-cancel=${() => finish(null)}
           >
             <form class="exec-approval-card" @submit=${submit}>
               <div class="exec-approval-header">
-                <div class="exec-approval-title">${t("sessionsView.moveSessionTitle")}</div>
+                <div class="exec-approval-title">
+                  ${t(
+                    restart ? "sessionsView.restartSessionTitle" : "sessionsView.moveSessionTitle",
+                  )}
+                </div>
                 <div class="muted">
-                  ${t("sessionsView.moveSessionDescription", { session: options.sessionLabel })}
+                  ${t(
+                    restart
+                      ? "sessionsView.restartSessionDescription"
+                      : "sessionsView.moveSessionDescription",
+                    { session: options.sessionLabel },
+                  )}
                 </div>
               </div>
-              ${options.activeRun
+              ${restart
                 ? html`<div class="exec-approval-error" role="alert">
-                    ${t("sessionsView.moveSessionActiveRunWarning")}
+                    ${t("sessionsView.restartSessionWarning")}
                   </div>`
-                : html`<div class="callout">${t("sessionsView.moveSessionNoReplayWarning")}</div>`}
+                : options.activeRun
+                  ? html`<div class="exec-approval-error" role="alert">
+                      ${t("sessionsView.moveSessionActiveRunWarning")}
+                    </div>`
+                  : html`<div class="callout">
+                      ${t("sessionsView.moveSessionNoReplayWarning")}
+                    </div>`}
               ${loading
                 ? html`<div class="muted">${t("common.loading")}</div>`
                 : loadError
                   ? html`<div class="exec-approval-error" role="alert">${loadError}</div>`
                   : html`
                       <div class="new-session-page__picker-root">
-                        ${renderSessionMenuItem(
-                          {
-                            value: "gateway",
-                            label: t("newSession.gateway"),
-                            icon: icons.monitor,
-                            checked: selectedKey === "gateway",
-                            onSelect: () => select({ kind: "gateway" }),
-                          },
-                          false,
-                        )}
-                        ${nodes.length > 0
+                        ${restart
+                          ? nothing
+                          : renderSessionMenuItem(
+                              {
+                                value: "gateway",
+                                label: t("newSession.gateway"),
+                                icon: icons.monitor,
+                                checked: selectedKey === "gateway",
+                                onSelect: () => select({ kind: "gateway" }),
+                              },
+                              false,
+                            )}
+                        ${catalog.devices.length > 0
                           ? html`
                               <div class="new-session-page__menu-title">
                                 ${t("newSession.yourDevices")}
                               </div>
-                              ${nodes.map((node) =>
-                                renderSessionMenuItem(
+                              ${catalog.devices.map((device) => {
+                                const disabledReason =
+                                  options.deviceDisabledReason ?? device.disabledReason;
+                                return renderSessionMenuItem(
                                   {
-                                    value: `device:${node.nodeId}`,
-                                    label: node.displayName,
+                                    value: `device:${device.deviceId}`,
+                                    label: device.label,
+                                    sub: device.subtitle,
                                     icon: icons.monitor,
-                                    checked: selectedKey === `device:${node.nodeId}`,
+                                    facts: options.deviceDisabledReason
+                                      ? [options.deviceDisabledReason]
+                                      : device.facts,
+                                    checked: selectedKey === `device:${device.deviceId}`,
+                                    disabled:
+                                      Boolean(options.deviceDisabledReason) || !device.selectable,
+                                    title: disabledReason,
                                     onSelect: () =>
-                                      select({ kind: "device", deviceId: node.nodeId }),
+                                      select({ kind: "device", deviceId: device.deviceId }),
                                   },
                                   false,
-                                ),
-                              )}
+                                );
+                              })}
                             `
                           : nothing}
                         ${catalog.profiles.length > 0
@@ -144,7 +181,7 @@ export function showSessionPlacementMoveDialog(
                               </div>
                               ${catalog.profiles.map((profile) => {
                                 const profileSelected =
-                                  selected.kind === "profile" && selected.profileId === profile.id;
+                                  selected?.kind === "profile" && selected.profileId === profile.id;
                                 const machines = profile.machines ?? [];
                                 const selectedMachineId =
                                   cloudMachines.resolve(profile.id) ||
@@ -156,6 +193,7 @@ export function showSessionPlacementMoveDialog(
                                     selectedId: profileSelected ? profile.id : "",
                                     submitting: false,
                                     icon: icons.server,
+                                    profileDisabledReason: options.profileDisabledReason,
                                     onSelect: (profileId) => select({ kind: "profile", profileId }),
                                   })}
                                   ${profileSelected && machines.length > 0
@@ -188,9 +226,13 @@ export function showSessionPlacementMoveDialog(
                 <button
                   type="submit"
                   class="btn primary"
-                  ?disabled=${loading || Boolean(loadError)}
+                  ?disabled=${loading || Boolean(loadError) || !selected}
                 >
-                  ${t("sessionsView.moveSessionAction")}
+                  ${t(
+                    restart
+                      ? "sessionsView.restartSessionAction"
+                      : "sessionsView.moveSessionAction",
+                  )}
                 </button>
                 <button type="button" class="btn" @click=${() => finish(null)}>
                   ${t("common.cancel")}

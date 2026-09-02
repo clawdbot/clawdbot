@@ -4,11 +4,13 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -20,10 +22,11 @@ import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export async function runEmbeddedAttemptExecutionPhase(
-  input: EmbeddedAttemptExecutionPhaseInput,
+  input: EmbeddedAttemptExecutionPhaseInput & { attempt: EmbeddedRunAttemptInternalParams },
 ): Promise<EmbeddedRunAttemptResult> {
   const { attempt, state } = input;
   const { sessionRuntime, systemPrompt, toolBase, toolCatalog } = input.prepared;
@@ -32,13 +35,14 @@ export async function runEmbeddedAttemptExecutionPhase(
       activeSession,
       allCustomTools,
       builtinToolNames,
+      coreBuiltinToolNames,
       clientToolCallSlots,
-      clientToolLoopDetection,
       hasDeliveredSourceReply,
       hookRunner,
       markSourceReplyDelivered,
       replaySafeToolNames,
       replaySafeTools,
+      codeModeExecToolNames,
       sideEffectToolOwners,
       setActiveSessionSystemPrompt,
       settingsManager,
@@ -56,7 +60,20 @@ export async function runEmbeddedAttemptExecutionPhase(
   const { capabilityToolNames, liveAllowedToolNames, replayAllowedToolNames } =
     toolCatalog.toolSearchRunPlan;
   const { runtimeChannel } = systemPrompt;
-  const { toolSearchTargetTranscriptProjections } = toolBase;
+  const { nestedToolActivities } = toolBase;
+  // Preparation can retire admission; never install an unfenced memory compactor.
+  const assertActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    input.runAbortController.signal,
+  );
+  if (!assertActive) {
+    input.runAbortController.signal.throwIfAborted();
+    throw new Error("embedded attempt requires an active admitted run");
+  }
+  activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    toolBase.skillInstructionDeliveryCache.clear();
+    attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
+  }, assertActive);
   const hookAgentId = input.setup.sessionAgentId;
   let repairedRejectedProviderReplay = false;
   const diagnosticOwner = createDiagnosticEmbeddedRunOwner({
@@ -81,8 +98,8 @@ export async function runEmbeddedAttemptExecutionPhase(
     isOpenAIResponsesApi,
     replayAllowedToolNames,
     liveAllowedToolNames,
-    clientToolLoopDetection,
     anthropicPayloadLogger,
+    codeModeExecToolNames,
     effectiveAgentTransport,
     providerTextTransforms,
     runTrace: input.diagnostics.runTrace,
@@ -106,6 +123,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),
       cacheTrace,
       capabilityToolNames,
+      compactionReplayEnabled: sessionRuntime.transport.compactionReplayEnabled,
       effectiveWorkspace: input.setup.effectiveWorkspace,
       isOpenAIResponsesApi,
       isRawModelRun: input.isRawModelRun,
@@ -143,7 +161,15 @@ export async function runEmbeddedAttemptExecutionPhase(
   });
   input.externalAbortController.setRunAbort(abortRun);
   idleTimeoutTriggerRef.current = (error) => {
-    mergeTerminal({ kind: "timeout", phase: "prompt", source: "idle" });
+    // Caller cancellation owns the terminal outcome when it beats a late watchdog callback.
+    if (input.runAbortController.signal.aborted) {
+      return;
+    }
+    mergeTerminal({
+      kind: "timeout",
+      phase: activeSession.isCompacting ? "compaction" : "prompt",
+      source: "idle",
+    });
     abortRun(true, error);
   };
   const abortable = <T>(promise: Promise<T>): Promise<T> =>
@@ -174,6 +200,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     : undefined;
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
+    applyPermissionMode: input.lifecycle.applyPermissionMode,
     activeSession,
     runAbortController: input.runAbortController,
     abortRun,
@@ -194,16 +221,20 @@ export async function runEmbeddedAttemptExecutionPhase(
     hookAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
     clientToolCallSlots,
-    toolSearchTargetTranscriptProjections,
+    nestedToolActivities,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
     hasDeliveredSourceReply,
     markSourceReplyDelivered,
     sandboxSessionKey: input.setup.sandboxSessionKey,
     builtinToolNames,
+    coreBuiltinToolNames,
     replaySafeToolNames,
+    codeModeExecToolNames,
     sideEffectToolOwners,
     diagnosticOwner,
+    trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });
+  state.deferredLifecycleOwner = preparedStream.deferredLifecycleOwner;
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
     isPendingOrRetrying: preparedStream.subscription.isCompacting,
@@ -214,6 +245,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const attemptTimeout = prepareEmbeddedAttemptTimeout({
     attempt,
     activeSession,
+    runAbortSignal: input.runAbortController.signal,
     compactionState: preparedStream.subscription,
     compactionTimeoutMs: input.sessionLock.compactionTimeoutMs,
     isProbeSession,

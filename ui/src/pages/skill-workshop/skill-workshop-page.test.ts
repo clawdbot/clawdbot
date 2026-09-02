@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { SkillWorkshopRevisionAdmissionOutcome } from "../../app/skill-workshop-revision-admissions.ts";
 import type { SkillWorkshopProposal } from "../../lib/skill-workshop/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createSkillWorkshopState, skillWorkshopRouteData } from "./proposals.ts";
@@ -18,7 +19,8 @@ type SkillWorkshopPageTestElement = HTMLElement & {
     instructions: string,
     proposal: SkillWorkshopProposal,
     proposalAgentId: string,
-  ) => Promise<void>;
+    expectedRevisionHash?: string,
+  ) => Promise<SkillWorkshopRevisionAdmissionOutcome>;
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
 };
@@ -106,7 +108,6 @@ function createContext(
       subscribe,
     },
     sessions: options?.sessions ?? { state: { result: null, loading: false } },
-    skillWorkshopRevision: { prepare: vi.fn() },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
@@ -447,7 +448,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     page.requestUpdate();
     await page.updateComplete;
 
-    const revision = page.handleRevisionRequest("revise it", proposal, "research");
+    const revision = page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64));
     await waitForSkillWorkshop(() => expect(oldSessions.list).toHaveBeenCalledTimes(1));
 
     const newContext = createContext(
@@ -467,15 +468,13 @@ describe("SkillWorkshopPage lifecycle", () => {
         },
       ],
     } as SessionsListResult);
-    await revision;
+    await expect(revision).resolves.toMatchObject({ status: "retryable-failed" });
 
-    expect(oldContext.skillWorkshopRevision.prepare).not.toHaveBeenCalled();
     expect(oldContext.navigate).not.toHaveBeenCalled();
-    expect(newContext.skillWorkshopRevision.prepare).not.toHaveBeenCalled();
     expect(newContext.navigate).not.toHaveBeenCalled();
   });
 
-  it("binds a prepared revision handoff to the initiating gateway client", async () => {
+  it("admits a revision with the initiating gateway client and observed revision hash", async () => {
     const sessions = {
       state: {
         agentId: "research",
@@ -494,10 +493,8 @@ describe("SkillWorkshopPage lifecycle", () => {
       list: vi.fn(),
       create: vi.fn(),
     } as unknown as ApplicationContext["sessions"];
-    const context = createContext(
-      vi.fn(async () => ({})),
-      { sessions },
-    );
+    const request = vi.fn(async () => ({ status: "started" }));
+    const context = createContext(request, { sessions });
     const loadedState = createSkillWorkshopState();
     loadedState.skillWorkshopAgentId = "research";
     loadedState.skillWorkshopLoaded = true;
@@ -519,14 +516,21 @@ describe("SkillWorkshopPage lifecycle", () => {
     document.body.append(page);
     await page.updateComplete;
 
-    await page.handleRevisionRequest("revise it", proposal, "research");
-
-    expect(context.skillWorkshopRevision.prepare).toHaveBeenCalledWith({
+    await expect(
+      page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64)),
+    ).resolves.toMatchObject({
       sessionKey: "agent:research:revision",
-      instructions: "revise it",
-      owner: context.gateway.snapshot.hello,
+      status: "admitted",
+    });
+
+    expect(request).toHaveBeenCalledWith("skills.proposals.requestRevision", {
+      agentId: "research",
+      targetAgentId: "research",
       proposalId: "proposal-owner",
-      proposalAgentId: "research",
+      expectedRevisionHash: "a".repeat(64),
+      instructions: "revise it",
+      sessionKey: "agent:research:revision",
+      idempotencyKey: expect.any(String),
     });
   });
 
@@ -569,7 +573,7 @@ describe("SkillWorkshopPage lifecycle", () => {
     document.body.append(page);
     await page.updateComplete;
 
-    const revision = page.handleRevisionRequest("revise it", proposal, "research");
+    const revision = page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64));
     await waitForSkillWorkshop(() => expect(sessions.list).toHaveBeenCalledTimes(1));
 
     const replacement = {
@@ -594,10 +598,9 @@ describe("SkillWorkshopPage lifecycle", () => {
       },
       sessions: [],
     });
-    await revision;
+    await expect(revision).resolves.toMatchObject({ status: "retryable-failed" });
 
     expect(create).not.toHaveBeenCalled();
-    expect(context.skillWorkshopRevision.prepare).not.toHaveBeenCalled();
     expect(context.navigate).not.toHaveBeenCalled();
   });
 
@@ -630,10 +633,11 @@ describe("SkillWorkshopPage lifecycle", () => {
     document.body.append(page);
     await page.updateComplete;
 
-    await expect(page.handleRevisionRequest("revise it", proposal, "research")).rejects.toThrow();
+    await expect(
+      page.handleRevisionRequest("revise it", proposal, "research", "a".repeat(64)),
+    ).resolves.toMatchObject({ status: "retryable-failed" });
 
     expect(create).not.toHaveBeenCalled();
-    expect(context.skillWorkshopRevision.prepare).not.toHaveBeenCalled();
     expect(context.navigate).not.toHaveBeenCalled();
   });
 
