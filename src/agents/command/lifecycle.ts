@@ -69,7 +69,7 @@ export function createAgentCommandLifecycle(params: {
   const emitTerminalPhase = (
     phase: "finishing" | "end" | "error",
     terminal: EmbeddedAgentRunEntryTerminal,
-    error?: string,
+    error = terminal.outcome.status === "timeout" ? terminal.outcome.error : undefined,
     fallbackExhausted?: boolean,
   ) => {
     const { aborted, yielded, replayInvalid, terminalReply } = terminal.metadata;
@@ -166,7 +166,10 @@ export function createAgentCommandLifecycle(params: {
       }
       params.state.lifecycleEnded = true;
       const error =
-        resolveResultError(runResult, fallbackExhausted) ??
+        params.state.lifecycleError ??
+        (terminal.outcome.status === "timeout"
+          ? terminal.outcome.error
+          : resolveResultError(runResult, fallbackExhausted)) ??
         (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
       emitTerminalPhase("error", terminal, error, fallbackExhausted);
     },

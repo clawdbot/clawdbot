@@ -5,10 +5,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
+import "./test-runtime-mocks.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { resetMemoryDatabase } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
@@ -42,7 +43,20 @@ describe("memory manager reindex recovery", () => {
   let manager: MemoryIndexManager | null = null;
 
   beforeEach(async () => {
-    resetEmbeddingMocks();
+    // Register the fixture at the same boundary used by config and provider creation.
+    registerEmbeddingProvider({
+      id: "openai",
+      transport: "remote",
+      create: async () => ({
+        provider: {
+          id: "openai",
+          model: "mock-embed",
+          maxInputTokens: 8192,
+          embed: async () => [0, 1, 0],
+          embedBatch: async (inputs) => inputs.map(() => [0, 1, 0]),
+        },
+      }),
+    });
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-reindex-recovery-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");

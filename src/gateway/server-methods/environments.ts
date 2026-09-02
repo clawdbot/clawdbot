@@ -200,7 +200,7 @@ async function listWorkerProfilesWithMachines(context: GatewayRequestContext) {
     summaries.map(async (summary) => {
       const executionModes = (["worker-turn", "remote-exec"] as const).filter(
         (mode) =>
-          context.workerEnvironmentService?.supportsExecutionMode?.(summary.id, mode) === true,
+          context.workerEnvironmentService?.supportsExecutionMode(summary.id, mode) === true,
       );
       const executionMode = executionModes[0];
       const resolvedSummary = Object.assign(

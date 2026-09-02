@@ -898,7 +898,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         const directory = workerArtifacts.fixtureDirectory();
         const { config } = workerProbe(directory, true);
         const owner = createVitestWorkerRun();
-        // Node26 parent-side child.disconnect() omits ChildProcess.close. Close the
+        // Node parent-side child.disconnect() can omit ChildProcess.close. Close the
         // fixture endpoint so the owner receives EOF and retains its real join contract.
         const disconnect = writeFixture(
           directory,
@@ -1192,6 +1192,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           const target = path.join(fixture, path.relative(root, filename));
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.copyFileSync(filename, target);
+          const dependencies = path.join(path.dirname(filename), "node_modules");
+          if (path.basename(filename) === "package.json" && fs.existsSync(dependencies)) {
+            fs.symlinkSync(
+              fs.realpathSync(dependencies),
+              path.join(path.dirname(target), "node_modules"),
+              process.platform === "win32" ? "junction" : "dir",
+            );
+          }
         }
         // This is a synthetic source checkout. Its dist is valid old code, not an
         // invalid sentinel that could fail even if stale-artifact fallback regressed.
@@ -1211,11 +1219,43 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         fs.rmSync(path.dirname(JSON.parse(stale.stdout).location), { recursive: true });
 
         const dependency = path.join(fixture, "src/infra/sqlite-runtime-version.ts");
+        const privatePackage = "packages/private-worker-fixture";
+        writeFixture(
+          fixture,
+          `${privatePackage}/package.json`,
+          JSON.stringify({
+            name: "@openclaw/private-worker-fixture",
+            private: true,
+            type: "module",
+            dependencies: { "worker-private-version": "1.0.0" },
+          }),
+        );
+        writeFixture(
+          fixture,
+          `${privatePackage}/src/index.ts`,
+          'export { fixtureMajor } from "worker-private-version";',
+        );
+        writeFixture(
+          fixture,
+          `${privatePackage}/node_modules/worker-private-version/package.json`,
+          JSON.stringify({
+            name: "worker-private-version",
+            version: "1.0.0",
+            type: "module",
+            main: "index.js",
+          }),
+        );
+        writeFixture(
+          fixture,
+          `${privatePackage}/node_modules/worker-private-version/index.js`,
+          "export const fixtureMajor = 99;",
+        );
         fs.writeFileSync(
           dependency,
-          fs
-            .readFileSync(dependency, "utf8")
-            .replace("major: 3, minor: 51", "major: 99, minor: 51"),
+          `import { fixtureMajor } from "../../${privatePackage}/src/index.js";\n` +
+            fs
+              .readFileSync(dependency, "utf8")
+              .replace("major: 3, minor: 51", "major: fixtureMajor, minor: 51"),
         );
         const compilerUrl = pathToFileURL(path.join(fixture, compilerModule)).href;
         const client = `
@@ -1260,14 +1300,14 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         });
         const changedSource = fs.readFileSync(dependency, "utf8");
         fs.appendFileSync(dependency, "\n// changed after preparation\n");
-        expect(() => verifyVitestWorkerArtifacts(directories[1]!)).toThrow(
+        await expect(verifyVitestWorkerArtifacts(directories[1]!)).rejects.toThrow(
           "Source changed during compiled subprocess invocation",
         );
         fs.writeFileSync(dependency, changedSource);
         const tuiDeclaration = path.join(fixture, "src/tui/tui-pty-runtime-test-support.ts");
         const originalDeclaration = fs.readFileSync(tuiDeclaration, "utf8");
         fs.appendFileSync(tuiDeclaration, "\n// declaration changed after preparation\n");
-        expect(() => verifyVitestWorkerArtifacts(directories[1]!)).toThrow(
+        await expect(verifyVitestWorkerArtifacts(directories[1]!)).rejects.toThrow(
           "Source changed during compiled subprocess invocation",
         );
         fs.writeFileSync(tuiDeclaration, originalDeclaration);

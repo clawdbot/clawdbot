@@ -4,25 +4,52 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
-import {
-  parseAssistantTextSignature,
-  type AssistantPhase,
-} from "../shared/chat-message-content.js";
+import { parseAssistantTextSignature } from "../shared/chat-message-content.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import type {
+  AssistantStreamData,
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
-import { extractAssistantCommentaryText } from "./embedded-agent-utils.js";
+import {
+  extractAssistantCommentaryText,
+  extractAssistantVisibleText,
+} from "./embedded-agent-utils.js";
 import type { AgentMessage } from "./runtime/index.js";
+
+export function extractAssistantStreamSnapshot(
+  ctx: EmbeddedAgentSubscribeContext,
+  message: AssistantMessage,
+) {
+  const state: EmbeddedAgentSubscribeState["partialBlockState"] = {
+    thinking: false,
+    final: false,
+    inlineCode: createInlineCodeState(),
+  };
+  let rawText = "";
+  const parts: { text: string; separator: string; offset: number; index?: number }[] = [];
+  const text = extractAssistantVisibleText(message, (part, final, phase, index) => {
+    // Native blocks can divide a tag or fence; only complete visible parts get a separator.
+    const separator =
+      rawText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
+    parts.push({ text: part, separator, offset: rawText.length + separator.length, index });
+    rawText += `${separator}${part}`;
+    // Final prose preserves inline tag examples; generic streams still hide reasoning.
+    return phase === "final_answer" && !ctx.params.enforceFinalTag
+      ? part
+      : ctx.stripBlockTags(`${separator}${part}`, state, { final });
+  });
+  return { text, rawText, state, parts };
+}
 
 export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   message: AgentMessage | undefined,
@@ -285,21 +312,15 @@ export function resolveCurrentSourceMessagingToolPartial(
   return { hold, text };
 }
 
-export function appendBlockReplyChunk(ctx: EmbeddedAgentSubscribeContext, chunk: string) {
-  if (ctx.blockChunker) {
-    ctx.blockChunker.append(chunk);
-    return;
+export function replaceBlockReplyBuffer(
+  ctx: EmbeddedAgentSubscribeContext,
+  text: string,
+  sourceOffset = 0,
+) {
+  if (ctx.blockChunker.consumedLength === 0) {
+    ctx.resetBlockReplyDirectives();
   }
-  ctx.state.blockBuffer += chunk;
-}
-
-export function replaceBlockReplyBuffer(ctx: EmbeddedAgentSubscribeContext, text: string) {
-  if (ctx.blockChunker) {
-    ctx.blockChunker.reset();
-    ctx.blockChunker.append(text);
-    return;
-  }
-  ctx.state.blockBuffer = text;
+  ctx.blockChunker.replace(text, sourceOffset);
 }
 
 export function resolveAssistantTextChunk(params: {
@@ -309,10 +330,7 @@ export function resolveAssistantTextChunk(params: {
   accumulatedText: string;
 }): string {
   const { evtType, delta, content, accumulatedText } = params;
-  if (evtType === "text_delta") {
-    return delta;
-  }
-  if (delta) {
+  if (evtType === "text_delta" || delta) {
     return delta;
   }
   if (!content) {
@@ -332,136 +350,87 @@ export function resolveAssistantTextChunk(params: {
   return "";
 }
 
-export function resolveStreamVisibleText(params: {
-  previousRawText: string;
-  visibleDelta: string;
-  finalText?: string;
-}): { rawText: string; visibleText: string } {
-  if (params.finalText !== undefined) {
-    const rawText = params.finalText;
-    return { rawText, visibleText: rawText.trim() };
-  }
-  const rawText = `${params.previousRawText}${params.visibleDelta}`;
-  return { rawText, visibleText: rawText.trim() };
-}
-
 export function resolveTextAppendDelta(previousText: string, nextText: string): string {
-  if (!nextText) {
-    return "";
-  }
-  if (!previousText) {
-    return nextText;
-  }
   if (nextText.startsWith(previousText)) {
     return nextText.slice(previousText.length);
   }
-  if (previousText.startsWith(nextText)) {
-    return "";
-  }
-  return nextText;
+  return previousText.startsWith(nextText) ? "" : nextText;
 }
 
-export function copyPartialBlockState(
-  target: EmbeddedAgentSubscribeState["partialBlockState"],
-  source: EmbeddedAgentSubscribeState["partialBlockState"],
-) {
-  const copyFenceState = (fence?: typeof source.fence) =>
-    fence
-      ? {
-          atLineStart: fence.atLineStart,
-          ...(fence.open ? { open: { ...fence.open } } : {}),
-        }
-      : undefined;
-  target.thinking = source.thinking;
-  target.final = source.final;
-  target.inlineCode = { ...source.inlineCode };
-  target.fence = copyFenceState(source.fence);
-  target.reasoningInlineCode = source.reasoningInlineCode
-    ? { ...source.reasoningInlineCode }
-    : undefined;
-  target.reasoningFence = copyFenceState(source.reasoningFence);
-  target.reasoningPendingFenceFragment = source.reasoningPendingFenceFragment;
-  target.finalInlineCode = source.finalInlineCode ? { ...source.finalInlineCode } : undefined;
-  target.finalFence = copyFenceState(source.finalFence);
-  target.pendingFenceFragment = source.pendingFenceFragment;
-  target.pendingTagFragment = source.pendingTagFragment;
-}
-
-function containsCompleteMediaDirectiveLine(text: string): boolean {
-  return /(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(text);
-}
-
-function resolveIncrementalStreamingReplyText(params: {
+export function resolveStreamingReply(params: {
   evtType: "text_delta" | "text_start" | "text_end";
   next: string;
   previousRawText: string;
   previousCleaned: string;
   visibleDelta: string;
+  rawTextIsAppend: boolean;
   parsedStreamDirectives: ReplyDirectiveParseResult | null;
   shouldUsePhaseAwareBlockReply: boolean;
-}): string | undefined {
-  if (
-    params.evtType === "text_end" ||
-    !params.parsedStreamDirectives ||
-    params.parsedStreamDirectives.isSilent ||
-    hasReplyDirectiveMetadata(params.parsedStreamDirectives) ||
-    containsCompleteMediaDirectiveLine(params.visibleDelta) ||
-    params.parsedStreamDirectives.text !== params.visibleDelta
-  ) {
-    return undefined;
-  }
-
-  if (
-    !params.shouldUsePhaseAwareBlockReply &&
-    params.previousCleaned === params.previousRawText.trim()
-  ) {
-    return params.next;
-  }
-
-  const cleanedCandidate = `${params.previousCleaned}${params.parsedStreamDirectives.text}`.trim();
-  return cleanedCandidate === params.next ? cleanedCandidate : undefined;
-}
-
-export function resolveStreamingReplyText(params: {
-  evtType: "text_delta" | "text_start" | "text_end";
-  next: string;
-  previousRawText: string;
-  previousCleaned: string;
-  visibleDelta: string;
-  parsedStreamDirectives: ReplyDirectiveParseResult | null;
-  shouldUsePhaseAwareBlockReply: boolean;
-}): string {
+}): { text: string; delta: string; replace: boolean; hasText: boolean } {
   if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
-    return params.previousCleaned;
+    const text = params.previousCleaned;
+    return { text, delta: "", replace: false, hasText: Boolean(text.trim()) };
   }
 
-  return (
-    resolveIncrementalStreamingReplyText(params) ??
-    parseReplyDirectives(
-      params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
-    ).text
+  let text: string | undefined;
+  let delta: string | undefined;
+  let isAppend = false;
+  if (
+    params.evtType !== "text_end" &&
+    params.parsedStreamDirectives &&
+    !params.parsedStreamDirectives.isSilent &&
+    !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
+    !/(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
+    params.parsedStreamDirectives.text === params.visibleDelta
+  ) {
+    if (
+      !params.shouldUsePhaseAwareBlockReply &&
+      params.rawTextIsAppend &&
+      params.previousRawText === params.previousCleaned
+    ) {
+      // Reuse the normalized prefix and small delta. Trimming the cumulative
+      // snapshot can flatten it; slicing can retain it in queued updates.
+      delta = params.previousCleaned ? params.visibleDelta.trimEnd() : params.visibleDelta.trim();
+      text = delta === params.visibleDelta ? params.next : `${params.previousCleaned}${delta}`;
+      isAppend = true;
+    } else if (
+      !params.shouldUsePhaseAwareBlockReply &&
+      params.previousCleaned === params.previousRawText.trim()
+    ) {
+      text = params.next.trim();
+      isAppend = params.rawTextIsAppend;
+    } else {
+      const candidate = `${params.previousCleaned}${params.parsedStreamDirectives.text}`.trim();
+      if (candidate === params.next.trim()) {
+        text = candidate;
+        // Appending cannot alter the prior prefix unless trimming removed its whitespace.
+        isAppend =
+          candidate.length >= params.previousCleaned.length &&
+          params.previousCleaned.trimStart().length === params.previousCleaned.length;
+      }
+    }
+  }
+
+  text ??= parseReplyDirectives(
+    params.evtType === "text_end"
+      ? params.next.trim()
+      : splitTrailingDirective(params.next.trim()).text,
+  ).text;
+  const replace = Boolean(
+    !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
   );
+  return {
+    text,
+    delta: replace ? "" : (delta ?? text.slice(params.previousCleaned.length)),
+    replace,
+    hasText: Boolean(isAppend ? text : text.trim()),
+  };
 }
 
-export function buildAssistantStreamData(params: {
-  text?: string;
-  delta?: string;
-  replace?: boolean;
-  mediaUrls?: string[];
-  mediaUrl?: string;
-  managedMediaUrls?: string[];
-  phase?: AssistantPhase;
-  itemId?: string;
-}): {
-  text: string;
-  delta: string;
-  replace?: true;
-  mediaUrls?: string[];
-  managedMediaUrls?: string[];
-  phase?: AssistantPhase;
-  itemId?: string;
-} {
-  const mediaUrls = resolveSendableOutboundReplyParts(params).mediaUrls;
+export function buildAssistantStreamData(
+  params: Partial<Omit<AssistantStreamData, "replace">> & { replace?: boolean; mediaUrl?: string },
+): AssistantStreamData {
+  const mediaUrls = resolveSendableOutboundReplyParts(params, { text: "" }).mediaUrls;
   return {
     text: params.text ?? "",
     delta: params.delta ?? "",

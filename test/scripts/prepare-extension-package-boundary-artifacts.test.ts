@@ -134,7 +134,18 @@ describe("prepare-extension-package-boundary-artifacts", () => {
             `extensions/${id}/tsconfig.json`,
             JSON.stringify({ extends: "../../tsconfig.json", files: [`${entry}.ts`] }),
           );
-          write(`extensions/${id}/${entry}.ts`, 'export { value } from "fixture-sdk";');
+          write(
+            `extensions/${id}/node_modules/boundary-private-dep/package.json`,
+            '{"name":"boundary-private-dep","types":"index.d.ts"}',
+          );
+          write(
+            `extensions/${id}/node_modules/boundary-private-dep/index.d.ts`,
+            "export declare function consume(callback: (value: string) => string): void;",
+          );
+          write(
+            `extensions/${id}/${entry}.ts`,
+            'export { value } from "fixture-sdk"; export { consume } from "boundary-private-dep";',
+          );
         }
         const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
         const output = "packages/plugin-sdk/dist";
@@ -161,6 +172,28 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           }
         };
         await run();
+        if (mode === "all") {
+          write(
+            "consumer.ts",
+            'import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/api.js"; consume(value => value.toUpperCase());',
+          );
+          await runNodeStep(
+            "isolated-boundary-consumer",
+            [
+              path.join(root, "scripts/run-tsgo.mts"),
+              "--ignoreConfig",
+              "--module",
+              "nodenext",
+              "--target",
+              "es2023",
+              "--strict",
+              "--skipLibCheck",
+              "--noEmit",
+              path.join(root, "consumer.ts"),
+            ],
+            30_000,
+          );
+        }
         const first = readArtifactRecord(recordPath)!;
         expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
         write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');

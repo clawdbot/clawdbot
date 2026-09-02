@@ -907,12 +907,12 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "set -euo pipefail",
         'case "$*" in',
         '  "auth token") printf "token:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1 ;;',
-        '  "api graphql -f query=query { viewer { login } } --jq .data.viewer.login")',
+        '  "api graphql -f query=query { viewer { login } } --include")',
         '    if [ "$OPENCLAW_TEST_AUTH_FAILURE" = 1 ]; then',
         '      printf "viewer:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1',
         "    fi",
         '    printf "viewer:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS"',
-        '    printf "fixture-user\\n" ;;',
+        '    printf \'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n\' ;;',
         '  "pr view 42 --json headRefOid")',
         '    cat "$OPENCLAW_TEST_PR_METADATA"; printf "head:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
         '  "pr view 42 --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files")',
@@ -1019,7 +1019,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
                 : ["token:1", "viewer:1"],
             );
           expect.soft(controller.exitCode, output).toBe(1);
-          expect.soft(output).toContain("GitHub CLI auth is not usable");
+          expect.soft(output).toContain("GitHub API preflight failed");
           expect.soft(events.filter(Boolean), output).toEqual([]);
           expect.soft(git("rev-parse", "refs/heads/pr-42")).toBe(cachedMain);
           expect.soft(existsSync(worktreeDir)).toBe(existing);
@@ -1072,7 +1072,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
             expect.soft(output).not.toContain("Missing test target file:");
             if (failure === "auth") {
               expect.soft(fetches, output).toEqual([]);
-              expect.soft(output).toContain("GitHub CLI auth is not usable");
+              expect.soft(output).toContain("GitHub API preflight failed");
             } else {
               expect.soft(fetches, output).toEqual(["fetch:main:128"]);
               expect.soft(output).toContain("couldn't find remote ref refs/heads/main");
@@ -1737,7 +1737,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "fetch_count=0",
         "gh_plain() {",
         `  printf 'auth\\n' >> '${traceFile}'`,
-        `  return ${failure === "auth" ? code : 0}`,
+        failure === "auth"
+          ? `  return ${code}`
+          : '  printf \'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n\'',
         "}",
         "git() {",
         `  printf 'git %s\\n' "$*" >> '${traceFile}'`,
@@ -1858,6 +1860,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '  "api graphql --hostname "*)',
         '    state=OPEN; if grep -q "^merged$" "$OPENCLAW_TEST_LIFECYCLE"; then state=MERGED; fi',
         `    jq -cn --arg state "$state" --arg head '${preparedHead}' '{data:{repository:{id:"fixture-repo",url:"https://github.com/fixture/repo",nameWithOwner:"fixture/repo",ref:{target:{oid:$head}},pullRequest:{id:"fixture-pr",number:42,url:"https://github.com/fixture/repo/pull/42",state:$state,headRefOid:$head,baseRefName:"main",isDraft:false,mergeCommit:(if $state=="MERGED" then {oid:$head} else null end),autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,mergeable:"MERGEABLE",mergeStateStatus:"CLEAN"}}}}' ;;`,
+        '  "api graphql -f query=query { viewer { login } } --include")',
+        '    printf \'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n\' ;;',
         '  "api graphql "*) printf "fixture-user\\n" ;;',
         '  "pr merge 42 "*)',
         '    git rev-parse refs/openclaw/pr-operation-locks/42 > "$OPENCLAW_TEST_OWNER"',

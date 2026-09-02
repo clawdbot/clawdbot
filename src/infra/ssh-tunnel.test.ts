@@ -255,6 +255,60 @@ describe("startSshPortForward", () => {
     },
   );
 
+  it("stops an established tunnel when its owner aborts", async () => {
+    spawnFakeSshListening();
+    const controller = new AbortController();
+    const tunnel = await startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: await getFreePort(),
+      remotePort: 18789,
+      timeoutMs: 1000,
+      signal: controller.signal,
+    });
+    const child = mocks.spawn.mock.results[0]?.value as EventEmitter & { killed: boolean };
+
+    controller.abort();
+
+    await vi.waitFor(() => expect(child.killed).toBe(true));
+    await expect(tunnel.stop()).resolves.toBeUndefined();
+  });
+
+  it("keeps startup abort pending until the SSH child exits", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number;
+      stderr: EventEmitter & { setEncoding: (enc: string) => void };
+      kill: (signal?: string) => boolean;
+    };
+    child.pid = 4242;
+    child.stderr = Object.assign(new EventEmitter(), { setEncoding: () => {} });
+    child.kill = vi.fn(() => true);
+    mocks.spawn.mockReturnValue(child);
+    const controller = new AbortController();
+    const forwarding = startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: await getFreePort(),
+      remotePort: 18789,
+      timeoutMs: 1000,
+      signal: controller.signal,
+    });
+    let settled = false;
+    void forwarding
+      .finally(() => {
+        settled = true;
+      })
+      .catch(() => {});
+
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith("SIGTERM"));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    child.emit("exit", null, "SIGTERM");
+    await expect(forwarding).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("rejects with the spawn error when ssh binary is missing", async () => {
     vi.useFakeTimers();
     const spawnError = new Error("ENOENT: no such file or directory, spawn /usr/bin/ssh");

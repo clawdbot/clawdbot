@@ -6,6 +6,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 
 const nodeRequire = createRequire(import.meta.url);
+// Resolution and Jiti must accept the same source family, including typed JSX variants.
+export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".mtsx",
+  ".ctsx",
+];
+
+export function isPluginSourceModulePath(modulePath: string): boolean {
+  return PLUGIN_SOURCE_MODULE_EXTENSIONS.includes(path.extname(modulePath).toLowerCase());
+}
+
 // Failed ESM jobs survive require-cache eviction. Preserve an observed terminal error
 // if a retry hits that job, rather than transforming its rejected graph through Jiti.
 const nativeModuleLoadFailures = new Map<string, unknown>();
@@ -90,7 +104,7 @@ export function tryNativeRequireModule(
   }
   const modulePath = toNativeRequirePath(moduleSpecifier);
   if (
-    /\.[cm]?tsx?$/iu.test(modulePath) &&
+    isPluginSourceModulePath(modulePath) &&
     !process.features.typescript &&
     typeof nodeRequire.extensions?.[path.extname(modulePath)] !== "function"
   ) {

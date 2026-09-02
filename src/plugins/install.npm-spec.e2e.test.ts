@@ -11,7 +11,13 @@ import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
+import { withPluginInstallRoots } from "./install-root-context.js";
 import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
+import {
+  configWithInstalledPackageTreeBlockPolicy,
+  createInstalledPackageTreePolicyExec,
+} from "./install.npm-spec.test-support.js";
+import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
 import {
   packPlugin,
   registryPackage,
@@ -19,6 +25,7 @@ import {
   startMutableRegistry,
   type RegistryPackage,
 } from "./test-helpers/npm-registry-fixtures.js";
+import { syncPluginsForUpdateChannel } from "./update-channel.js";
 
 const tempDirs = createTempDirTracker();
 const servers: http.Server[] = [];
@@ -54,54 +61,6 @@ function uniquePackageName(prefix: string): string {
 
 async function readJson<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
-}
-
-const installedPackageTreePolicySource = `
-let input = "";
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => { input += chunk; });
-process.stdin.on("end", () => {
-  const request = JSON.parse(input);
-  if (request.sourcePathKind === "directory") {
-    process.stdout.write(JSON.stringify({
-      protocolVersion: 1,
-      decision: "block",
-      reason: "blocked installed package tree",
-    }));
-    return;
-  }
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
-});
-`;
-
-async function createInstalledPackageTreePolicyExec(rootDir: string) {
-  if (process.platform === "win32") {
-    return { command: process.execPath, args: ["-e", installedPackageTreePolicySource] };
-  }
-  const command = path.join(rootDir, "install-policy.cjs");
-  await fs.writeFile(command, `#!${process.execPath}\n${installedPackageTreePolicySource}`, "utf8");
-  await fs.chmod(command, 0o700);
-  return { command, args: [] };
-}
-
-function configWithInstalledPackageTreeBlockPolicy(exec: {
-  command: string;
-  args: string[];
-}): OpenClawConfig {
-  return {
-    security: {
-      installPolicy: {
-        enabled: true,
-        exec: {
-          source: "exec",
-          command: exec.command,
-          args: exec.args,
-          timeoutMs: 5000,
-          maxOutputBytes: 16 * 1024,
-        },
-      },
-    },
-  };
 }
 
 function pluginNpmProjectRoot(npmRoot: string, packageName: string): string {
@@ -160,6 +119,70 @@ async function installProjectDependencies(
 }
 
 describe("installPluginFromNpmSpec e2e", () => {
+  it("relocates a bundled plugin through real npm only after artifact consent", async () => {
+    const { rootDir, npmRoot } = await makeInstallFixture("relocation-e2e");
+    const packageName = uniquePackageName("relocated-plugin");
+    await useStaticRegistry([await registryPackage({ packageName, rootDir })]);
+    const bundledPath = path.join(rootDir, "old", "extensions", packageName);
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: { [packageName]: { enabled: true } },
+        load: { paths: [bundledPath] },
+        installs: {
+          [packageName]: { source: "path", sourcePath: bundledPath, installPath: bundledPath },
+        },
+      },
+    };
+    const roots = {
+      npmDir: npmRoot,
+      extensionsDir: path.join(rootDir, "extensions"),
+      gitDir: path.join(rootDir, "git"),
+      stateDir: path.join(rootDir, "state"),
+    };
+    const sync = (accept: boolean) =>
+      withPluginInstallRoots(roots, () =>
+        syncPluginsForUpdateChannel({
+          config,
+          channel: "stable",
+          env: { ...process.env, OPENCLAW_STATE_DIR: roots.stateDir },
+          externalizedBundledPluginBridges: [
+            { bundledPluginId: packageName, npmSpec: packageName },
+          ],
+          ...(accept
+            ? {
+                onCapabilityConsent: async (details: { reviewToken: string }) => ({
+                  reviewToken: details.reviewToken,
+                }),
+              }
+            : {}),
+        }),
+      );
+    const refused = await sync(false);
+    expect(refused.config).toEqual(config);
+    expect(refused.summary.errors).toEqual([
+      expect.objectContaining({
+        pluginId: packageName,
+        code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
+      }),
+    ]);
+    expect(refused.summary.errors[0]?.message).toContain(
+      "did not install the replacement plugin payload",
+    );
+    expect(refused.summary.errors[0]?.message).not.toContain("payload is missing");
+    const projectDir = pluginNpmProjectRoot(npmRoot, packageName);
+    await expect(fs.access(projectDir)).rejects.toHaveProperty("code", "ENOENT");
+    const accepted = await sync(true);
+    expect(accepted.summary.errors).toEqual([]);
+    expect(accepted.config.plugins?.load?.paths).toEqual([]);
+    expect(accepted.config.plugins?.installs?.[packageName]?.source).toBe("npm");
+    expect(
+      await runPluginPayloadSmokeCheck({
+        records: accepted.config.plugins?.installs ?? {},
+        env: process.env,
+      }),
+    ).toEqual({ checked: [packageName], failures: [] });
+  }, 120_000);
+
   it.each(["plugin", "hook pack"] as const)(
     "does not persist an npm %s when delegated authority closes during download",
     { timeout: 180_000 },

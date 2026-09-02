@@ -138,6 +138,16 @@ describe("unit-fast vitest lane", () => {
         }
         return originalReadFileSync.apply(this, args);
       };
+      const paths = await import("./test/vitest/vitest.unit-fast-paths.mjs");
+      const membership = selectedTests.map((file) => [
+        paths.isUnitFastTestFile(file),
+        paths.isUnitFastIsolatedTestFile(file),
+        paths.isUnitFastTimerTestFile(file),
+      ]);
+      console.log("UNIT_FAST_MEMBERSHIP_PROBE", JSON.stringify({ membership, unselectedFileReads }));
+      hookFileReads = 0;
+      outsideFileReads = 0;
+      unselectedFileReads = 0;
       await import("./test/vitest/vitest.hooks.config.ts?scope-probe=" + Date.now());
       const scopedHookFileReads = hookFileReads;
       const scopedOutsideFileReads = outsideFileReads;
@@ -197,6 +207,17 @@ describe("unit-fast vitest lane", () => {
 
   it("classifies only selected config sources without truncating later full ownership", () => {
     expect(configProbeResult.status, configProbeResult.stderr).toBe(0);
+    const membership = configProbeResult.stdout.match(/UNIT_FAST_MEMBERSHIP_PROBE (.+)/u);
+    expect(membership, configProbeResult.stdout).not.toBeNull();
+    expect(JSON.parse(membership?.[1] ?? "null")).toEqual({
+      membership: [
+        [true, false, false],
+        [true, true, false],
+        [true, false, true],
+        [false, false, false],
+      ],
+      unselectedFileReads: 0,
+    });
     const probeMatch = configProbeResult.stdout.match(
       /UNIT_FAST_IO_PROBE (\d+) (\d+) (\d+) (\d+) (\d+)/u,
     );
@@ -232,7 +253,7 @@ describe("unit-fast vitest lane", () => {
     const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-untracked-")));
     const pure = "src/hooks/pure.test.ts";
     const stateful = "src/hooks/stateful.test.ts";
-    const quoted = "src/hooks/quoted-é.test.ts";
+    const quoted = "src/hooks/quoted-[é].test.ts";
     const ignored = "src/hooks/ignored.test.ts";
     const moduleUrl = (file: string) => JSON.stringify(pathToFileURL(path.resolve(file)).href);
     try {
@@ -283,6 +304,7 @@ describe("unit-fast vitest lane", () => {
             excluded: createScopedVitestConfig(["src/hooks/**/*.test.ts"], { env: {} }).test.exclude
               .filter((file) => file.startsWith("src/hooks/")),
             ignored: paths.resolveUnitFastTestIncludePattern(${JSON.stringify(ignored)}),
+            literalMembership: paths.isUnitFastTestFile(${JSON.stringify(quoted)}),
           }));
         } finally {
           for (const spec of specs) fs.rmSync(spec.includeFilePath, { force: true });
@@ -300,6 +322,7 @@ describe("unit-fast vitest lane", () => {
         ],
         excluded: [pure, quoted, stateful],
         ignored: null,
+        literalMembership: true,
       });
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });

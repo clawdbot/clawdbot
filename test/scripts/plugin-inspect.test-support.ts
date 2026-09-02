@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
 import { isTrustedOfficialPluginInstallRecord } from "../../src/plugins/official-external-install-records.js";
 
@@ -17,7 +18,7 @@ export function writePluginInspectFixture(
   binDir: string,
   records: Readonly<Record<string, PluginInstallRecord>>,
   mutate?: (inspections: Record<string, PluginInspectFixture>) => void,
-): void {
+): NodeJS.ProcessEnv {
   const inspections: Record<string, PluginInspectFixture> = {};
   for (const [pluginId, record] of Object.entries(records)) {
     if (!record.installPath || !existsSync(join(record.installPath, "package.json"))) {
@@ -44,8 +45,9 @@ export function writePluginInspectFixture(
   mkdirSync(binDir, { recursive: true });
   const inspectionPath = join(binDir, "plugin-inspections.json");
   writeFileSync(inspectionPath, JSON.stringify(inspections));
+  const fixtureScript = join(binDir, "openclaw");
   writeFileSync(
-    join(binDir, "openclaw"),
+    fixtureScript,
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -61,4 +63,25 @@ if (args.join(" ") === "plugins install --help") {
 `,
     { mode: 0o755 },
   );
+  // Keep Bash's executable fixture, but let Node callers use an absolute executable on Windows.
+  const preloadPath = join(binDir, "plugin-inspect-preload.mjs");
+  writeFileSync(
+    preloadPath,
+    `import childProcess from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const execFileSync = childProcess.execFileSync;
+childProcess.execFileSync = (file, args, options) => {
+  if (file === "openclaw") {
+    return execFileSync(process.execPath, [${JSON.stringify(fixtureScript)}, ...args], options);
+  }
+  return execFileSync(file, args, options);
+};
+syncBuiltinESMExports();
+`,
+  );
+  return {
+    NODE_OPTIONS:
+      `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preloadPath).href}`.trim(),
+    PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+  };
 }

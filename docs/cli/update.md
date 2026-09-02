@@ -200,6 +200,18 @@ preserves the existing payload and does not publish a new install record.
 Registry verification and any required capability review finish before the
 repaired install record is published.
 
+When a bundled plugin moves to an external package, failed relocation reports
+that the replacement payload was not installed and preserves the underlying error.
+Resolve that error before retrying with `openclaw update repair`.
+Doctor and update repair reinstall configured payloads with missing package files
+or a reported missing runtime entry;
+an empty directory is not a successful installation. Rollback removes empty
+managed npm projects after staged files are cleaned up. Doctor preserves external
+companion packages and their install records even when a source checkout also
+contains a bundled-discovery copy of the same plugin. Repair diagnostics must identify the recorded
+package root; a broken same-ID source copy does not trigger replacement of a
+healthy managed package.
+
 With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.

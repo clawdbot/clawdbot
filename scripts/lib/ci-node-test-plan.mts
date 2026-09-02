@@ -756,22 +756,22 @@ function estimateCompactStripeSeconds(
     : blacksmithSeconds;
 }
 
-// Equal-weight sibling stripes can otherwise land in one bin and recreate the
-// indivisible critical-path floor that striping removes.
-function compactGiantStripeFamily(group: NodeTestShardGroup): string | undefined {
-  if (/^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite))?$/u.test(group.shard_name)) {
+// Split siblings must stay in different jobs, including nested children of
+// deliberately separated fixed stripes.
+function compactStripeFamily(group: NodeTestShardGroup): string | undefined {
+  if (
+    /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite))?(?:-hosted-\d+)?$/u.test(
+      group.shard_name,
+    )
+  ) {
     return "agentic-commands-doctor-sessions-cron";
   }
-  const membershipTimedParent =
-    /^(agentic-agents-support|agentic-control-plane-agent-chat)-hosted-\d+$/u.exec(
+  return (
+    /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+(?:-hosted-\d+)?$/u.exec(
       group.shard_name,
-    )?.[1];
-  if (membershipTimedParent) {
-    return membershipTimedParent;
-  }
-  return /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+$/u.exec(
-    group.shard_name,
-  )?.[1];
+    )?.[1] ??
+    (group.timing_key ? parseCompactSplitTimingKey(group.timing_key)?.selectorKey : undefined)
+  );
 }
 
 function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
@@ -2618,11 +2618,11 @@ function createCompactNodeTestShardBundles(
           : group.runner.includes("-8vcpu-")
             ? COMPACT_LARGE_NODE_TEST_JOB_SECONDS
             : COMPACT_SMALL_NODE_TEST_JOB_SECONDS;
-      const family = compactGiantStripeFamily(group);
+      const family = compactStripeFamily(group);
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
         (family === undefined ||
-          candidate.every((entry) => compactGiantStripeFamily(entry) !== family)) &&
+          candidate.every((entry) => compactStripeFamily(entry) !== family)) &&
         candidate.length < COMPACT_NODE_TEST_JOB_GROUPS &&
         estimateBinSeconds([...candidate, group]) <= secondsCap
       );

@@ -238,12 +238,18 @@ Node or Bun compiler child and joins it before returning the verified manifest t
 borrowers. The compiler module graph lives in that child, not the long-lived runner
 or Vitest worker. No shard can select a different build graph or adopt another invocation's output. The outer
 runner retains the generation until child close and process-group cleanup
-finish, then verifies it before reporting success. Standalone Vitest and watch runs retain
-source execution: its public close hooks run concurrently with pool shutdown,
-so compilation and artifact deletion require the repository runner's ownership.
+finish, then verifies it before reporting success. Verification reads every recorded
+input and output with bounded asynchronous I/O, keeping the runner responsive during
+large shutdown scans. The invocation owner verifies each borrower's preparation
+before replying and verifies again after all borrowers close; Vitest does not repeat
+these scans inside each shard or during its concurrent pool shutdown. Standalone
+Vitest and watch runs retain source execution: compilation, verification, and artifact
+deletion require the repository runner's ownership.
 A lost owner or failed build fails the run.
-Disposal cancels pending compilation and joins it and every borrower before
-removing the directory. An uncertain compiler or borrower join retains the
+Disposal cancels pending compilation and joins it, every borrower, and outstanding
+preparation requests before asynchronously removing the directory. Signal handlers
+remain active through removal, even when large generations take time to delete.
+Borrower completion does not wait for compilation, so an early child exit can reach that cancellation path. An uncertain compiler or borrower join retains the
 generation and fails the run. Abnormal termination can also leave an unused
 directory; later runs never adopt it.
 

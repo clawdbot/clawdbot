@@ -556,6 +556,133 @@ describe("gateway startup-migration refusal", () => {
     expect(hasActiveStartupMigrationLease({ env })).toBe(false);
   }, 75_000);
 
+  it("migrates retired Codex idle settings at startup without losing connection config", async () => {
+    const root = await fs.promises.realpath(tempDirs.make("openclaw-codex-startup-config-"));
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const appServer = {
+      transport: "websocket",
+      command: path.join(root, "custom-codex"),
+      args: ["app-server", "--listen", "stdio://"],
+      url: "ws://127.0.0.1:39175",
+      headers: { "X-Codex-Startup": "synthetic-header" },
+      requestTimeoutMs: 120_000,
+      mode: "guardian",
+    };
+    const pluginConfig = {
+      discovery: { enabled: false },
+      sessionCatalog: { enabled: false },
+      appServer,
+    };
+    const retiredSettings = {
+      turnCompletionIdleTimeoutMs: 60_000,
+      turnAssistantCompletionIdleTimeoutMs: 10_000,
+      postToolRawAssistantCompletionIdleTimeoutMs: 300_000,
+    };
+    const config = {
+      agents: {
+        defaults: { timeoutSeconds: 0 },
+        entries: { main: { workspace: path.join(root, "workspace") } },
+      },
+      gateway: { mode: "local", auth: { mode: "none" } },
+      plugins: {
+        allow: ["codex"],
+        entries: {
+          codex: {
+            enabled: true,
+            config: { ...pluginConfig, appServer: { ...appServer, ...retiredSettings } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      CODEX_HOME: path.join(root, ".codex"),
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_HOME: root,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    // Use the pretest-built bundled artifacts, not the parent worker's source-tree override.
+    for (const key of [
+      "NODE_ENV",
+      "NODE_OPTIONS",
+      "OPENCLAW_AGENT_DIR",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_HOME",
+      "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_UPDATE_IN_PROGRESS",
+      "VITEST",
+      "VITEST_POOL_ID",
+      "VITEST_WORKER_ID",
+    ]) {
+      delete env[key];
+    }
+
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const configUrl = new URL("../config/io.ts", import.meta.url).href;
+    const preflightUrl = new URL("./doctor-config-preflight.ts", import.meta.url).href;
+    const checkpointUrl = new URL("../infra/startup-migration-checkpoint.ts", import.meta.url).href;
+    const script = `
+      const assert = (await import("node:assert/strict")).default;
+      const fs = await import("node:fs");
+      const { readConfigFileSnapshot } = await import(${JSON.stringify(configUrl)});
+      const { runDoctorConfigPreflight } = await import(${JSON.stringify(preflightUrl)});
+      const { hasActiveStartupMigrationLease } = await import(${JSON.stringify(checkpointUrl)});
+      const expectedPluginConfig = ${JSON.stringify(pluginConfig)};
+      const retiredKeys = ${JSON.stringify(Object.keys(retiredSettings))};
+      const initial = await readConfigFileSnapshot({ observe: false });
+      assert.equal(initial.valid, false);
+      for (const key of retiredKeys) {
+        assert.ok(initial.issues.some((issue) =>
+          issue.path === "plugins.entries.codex.config.appServer" && issue.message.includes(key)
+        ), JSON.stringify(initial.issues));
+      }
+      let firstPersisted;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await runDoctorConfigPreflight({
+          migrateLegacyConfig: false,
+          invalidConfigNote: false,
+          observe: false,
+          requireStartupMigrationCheckpoint: true,
+        });
+        assert.equal(result.snapshot.valid, true);
+        const persisted = fs.readFileSync(${JSON.stringify(configPath)}, "utf8");
+        const persistedConfig = JSON.parse(persisted);
+        for (const source of [result.snapshot.sourceConfig, persistedConfig]) {
+          assert.deepEqual(source.plugins.entries.codex.config, expectedPluginConfig);
+          assert.deepEqual(source.agents, ${JSON.stringify(config.agents)});
+        }
+        const runtime = result.snapshot.config;
+        const runtimeAppServer = runtime.plugins.entries.codex.config.appServer;
+        for (const [key, value] of Object.entries(expectedPluginConfig.appServer)) {
+          assert.deepEqual(runtimeAppServer[key], value);
+        }
+        for (const key of retiredKeys) {
+          assert.equal(Object.hasOwn(runtimeAppServer, key), false);
+        }
+        assert.equal(runtime.agents.defaults.timeoutSeconds, 0);
+        assert.equal(hasActiveStartupMigrationLease(), false);
+        if (attempt === 0) {
+          firstPersisted = persisted;
+        } else {
+          assert.equal(persisted, firstPersisted);
+        }
+      }
+      console.log("__READY__");
+    `;
+
+    const result = await runIsolatedModuleScript(env, script, { timeoutMs: 60_000 });
+    expect(result.stdout, `${result.stderr}\n${result.stdout}`).toContain("__READY__");
+    expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+  }, 75_000);
+
   it("reaches readiness while preserving a legacy agent database without an owner", () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-ownerless-agent-ready-"));
     const stateDir = path.join(root, "state");

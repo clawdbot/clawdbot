@@ -116,7 +116,7 @@ export async function settleEmbeddedAttemptStream(input: {
     timedOutDuringCompaction: boolean;
   };
   markTimedOutDuringCompaction: () => void;
-  runAbortDeadlineAtMs: number;
+  getRunAbortDeadlineAtMs: () => number | undefined;
   runAbortSignal: AbortSignal;
   isProbeSession: boolean;
   onBlockReplyFlush?: (payload: {
@@ -161,16 +161,16 @@ export async function settleEmbeddedAttemptStream(input: {
           asyncTaskRunId: entry.asyncTaskRunId,
           asyncTaskId: entry.asyncTaskId,
         }));
-    const completionRequiredAsyncDeadlineAtMs = Math.max(
-      Date.now(),
-      input.runAbortDeadlineAtMs - 500,
-    );
+    const getAsyncTaskDeadlineAtMs = () => {
+      const deadlineAtMs = input.getRunAbortDeadlineAtMs();
+      return deadlineAtMs === undefined ? undefined : Math.max(Date.now(), deadlineAtMs - 500);
+    };
     let asyncTaskWait: CompletionRequiredAsyncTaskWaitResult;
     try {
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
         getToolMetas: getAsyncStartedToolMetas,
         sessionKey: attempt.sessionKey,
-        deadlineAtMs: completionRequiredAsyncDeadlineAtMs,
+        getDeadlineAtMs: getAsyncTaskDeadlineAtMs,
         abortSignal: input.runAbortSignal,
       });
     } catch (err) {
@@ -185,7 +185,7 @@ export async function settleEmbeddedAttemptStream(input: {
       asyncTaskWait = await waitForCompletionRequiredAsyncTasks({
         getToolMetas: getAsyncStartedToolMetas,
         sessionKey: attempt.sessionKey,
-        deadlineAtMs: Date.now(),
+        getDeadlineAtMs: Date.now,
       });
     }
     // An aborted run legitimately leaves async tasks unfinished; stamping a

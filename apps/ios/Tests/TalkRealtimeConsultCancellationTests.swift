@@ -6,6 +6,56 @@ import XCTest
 
 @MainActor
 final class TalkRealtimeConsultCancellationTests: XCTestCase {
+    func testHistoryFallbackWaitsForTheAcknowledgedRunInsteadOfANewerForeignReply() async throws {
+        let completed = XCTestExpectation(description: "consult returned to listening")
+        let requests = ConsultRequestCapture()
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            let data: Data
+            switch message {
+            case let .data(value): data = value
+            case let .string(value): data = Data(value.utf8)
+            @unknown default: return
+            }
+            let frame = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            await requests.append(data)
+            let payload: [String: Any]
+            switch frame["method"] as? String {
+            case "talk.client.toolCall":
+                payload = ["runId": "owned-run", "agentId": "voice", "agentSessionKey": "global"]
+            case "agent.wait":
+                payload = ["status": "ok"]
+            case "chat.history":
+                let owned = await requests.count(method: "chat.history") > 1
+                payload = [
+                    "sessionKey": "global",
+                    "messages": [[
+                        "role": "assistant",
+                        "content": [["type": "text", "text": owned ? "Owned answer" : "Unrelated answer"]],
+                        "timestamp": Date().timeIntervalSince1970 * 1000,
+                        "stopReason": "stop",
+                        "idempotencyKey": "owned-run",
+                        "__openclaw": ["runId": owned ? "owned-run" : "foreign-run"],
+                    ]],
+                ]
+            default:
+                return
+            }
+            let response = try JSONSerialization.data(withJSONObject: [
+                "type": "res", "id": XCTUnwrap(frame["id"] as? String), "ok": true, "payload": payload,
+            ])
+            socket.emitReceiveSuccessOnce(.data(response))
+        })
+        let delegate = ConsultCancellationDelegate()
+        delegate.onListening = { completed.fulfill() }
+        try await Self.withSubmittedConsult(socket: socket, delegate: delegate) { _ in
+            let finished = await XCTWaiter.fulfillment(of: [completed], timeout: 5)
+            XCTAssertEqual(finished, .completed)
+            let historyReads = await requests.count(method: "chat.history")
+            XCTAssertGreaterThanOrEqual(historyReads, 2, "A foreign reply must not complete the consult")
+            XCTAssertFalse(delegate.statuses.contains("OpenClaw unavailable"))
+        }
+    }
+
     func testStopBeforeAcknowledgementAbortsTheReturnedGlobalTarget() async throws {
         let held = XCTestExpectation(description: "consult request reached Gateway")
         let aborted = XCTestExpectation(description: "late acknowledged consult was aborted")
@@ -27,8 +77,43 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                 socket.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
             }
         })
-        let gateway = GatewayNodeSession()
         let delegate = ConsultCancellationDelegate()
+        try await Self.withSubmittedConsult(socket: socket, delegate: delegate) { talk in
+            let sent = await XCTWaiter.fulfillment(of: [held], timeout: 5)
+            XCTAssertEqual(sent, .completed)
+            let capturedID = await requests.requestID(method: "talk.client.toolCall")
+            let requestID = try XCTUnwrap(capturedID)
+
+            // Stopping before the response must not abandon the side-effecting request's run.
+            talk.stop()
+            let ack = try JSONSerialization.data(withJSONObject: [
+                "type": "res", "id": requestID, "ok": true,
+                "payload": [
+                    "runId": "run-1",
+                    "idempotencyKey": "run-1",
+                    "agentId": "voice",
+                    "agentSessionKey": "global",
+                ],
+            ])
+            socket.emitReceiveSuccessOnce(.data(ack))
+            let cancelled = await XCTWaiter.fulfillment(of: [aborted], timeout: 5)
+            XCTAssertEqual(cancelled, .completed)
+            let capturedAbort = await requests.request(method: "chat.abort")
+            let abortData = try XCTUnwrap(capturedAbort)
+            let abort = try XCTUnwrap(JSONSerialization.jsonObject(with: abortData) as? [String: Any])
+            let params = try XCTUnwrap(abort["params"] as? [String: String])
+            XCTAssertEqual(params, ["sessionKey": "global", "agentId": "voice", "runId": "run-1"])
+            XCTAssertEqual(delegate.finishes, 1)
+            XCTAssertFalse(delegate.statuses.contains("Listening"))
+        }
+    }
+
+    private static func withSubmittedConsult(
+        socket: GatewayTestWebSocketTask,
+        delegate: ConsultCancellationDelegate,
+        body: (TalkRealtimeWebRTCSession) async throws -> Void) async throws
+    {
+        let gateway = GatewayNodeSession()
         let talk = TalkRealtimeWebRTCSession(
             gateway: gateway,
             sessionKey: "main",
@@ -58,32 +143,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                 configuration: RTCDataChannelConfiguration()))
             let event = #"{"type":"response.function_call_arguments.done","call_id":"call-1","name":"openclaw_agent_consult","arguments":"{\"question\":\"Synthetic consult\"}"}"#
             talk.dataChannel(channel, didReceiveMessageWith: RTCDataBuffer(data: Data(event.utf8), isBinary: false))
-            let sent = await XCTWaiter.fulfillment(of: [held], timeout: 5)
-            XCTAssertEqual(sent, .completed)
-            let capturedID = await requests.requestID(method: "talk.client.toolCall")
-            let requestID = try XCTUnwrap(capturedID)
-
-            // Stopping before the response must not abandon the side-effecting request's run.
-            talk.stop()
-            let ack = try JSONSerialization.data(withJSONObject: [
-                "type": "res", "id": requestID, "ok": true,
-                "payload": [
-                    "runId": "run-1",
-                    "idempotencyKey": "run-1",
-                    "agentId": "voice",
-                    "agentSessionKey": "global",
-                ],
-            ])
-            socket.emitReceiveSuccessOnce(.data(ack))
-            let cancelled = await XCTWaiter.fulfillment(of: [aborted], timeout: 5)
-            XCTAssertEqual(cancelled, .completed)
-            let capturedAbort = await requests.request(method: "chat.abort")
-            let abortData = try XCTUnwrap(capturedAbort)
-            let abort = try XCTUnwrap(JSONSerialization.jsonObject(with: abortData) as? [String: Any])
-            let params = try XCTUnwrap(abort["params"] as? [String: String])
-            XCTAssertEqual(params, ["sessionKey": "global", "agentId": "voice", "runId": "run-1"])
-            XCTAssertEqual(delegate.finishes, 1)
-            XCTAssertFalse(delegate.statuses.contains("Listening"))
+            try await body(talk)
         } catch {
             await gateway.disconnect()
             throw error
@@ -111,14 +171,23 @@ private actor ConsultRequestCapture {
         else { return nil }
         return frame["id"] as? String
     }
+
+    func count(method: String) -> Int {
+        self.frames.count { data in
+            let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            return frame?["method"] as? String == method
+        }
+    }
 }
 
 @MainActor
 private final class ConsultCancellationDelegate: TalkRealtimeWebRTCSessionDelegate {
     var finishes = 0
     var statuses: [String] = []
+    var onListening: (() -> Void)?
     func realtimeSession(_: TalkRealtimeWebRTCSession, didChangeStatus status: String) {
         self.statuses.append(status)
+        if status == "Listening" { self.onListening?() }
     }
 
     func realtimeSession(_: TalkRealtimeWebRTCSession, didDetectInputSpeech _: Bool) {}

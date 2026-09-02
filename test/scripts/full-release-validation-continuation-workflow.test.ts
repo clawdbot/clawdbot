@@ -31,6 +31,7 @@ describe("full release metadata checkouts", () => {
         "release-tooling-identity.mjs",
         "full-release-candidate-contract.mjs",
         "full-release-validation-policy.mjs",
+        "lib/release-context.mjs",
       ],
     },
     {

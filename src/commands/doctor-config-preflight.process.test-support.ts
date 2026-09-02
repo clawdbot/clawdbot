@@ -8,7 +8,29 @@ import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js
 const execFileAsync = promisify(execFile);
 // The fixture owns its package assets; resolving linked source back to the checkout
 // makes Doctor repair that checkout instead, including building its Control UI.
-const ISOLATED_RUNTIME_NODE_ARGS = ["--preserve-symlinks", "--preserve-symlinks-main"];
+// Dependency realpaths still own their transitive packages under isolated installs.
+const ISOLATED_RUNTIME_NODE_ARGS = [
+  "--preserve-symlinks",
+  "--preserve-symlinks-main",
+  "--import",
+  `data:text/javascript,${encodeURIComponent(`
+    import fs from "node:fs";
+    import { registerHooks } from "node:module";
+    import path from "node:path";
+    import { fileURLToPath, pathToFileURL } from "node:url";
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        const resolved = nextResolve(specifier, context);
+        if (!resolved.url.startsWith("file:")) return resolved;
+        const filename = fileURLToPath(resolved.url);
+        if (!filename.split(path.sep).includes("node_modules")) return resolved;
+        const url = new URL(resolved.url);
+        url.pathname = pathToFileURL(fs.realpathSync(filename)).pathname;
+        return { ...resolved, url: url.href };
+      }
+    });
+  `)}`,
+];
 
 export function runBuiltRuntime(
   runtimeRoot: string,

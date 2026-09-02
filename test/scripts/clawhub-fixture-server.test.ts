@@ -302,7 +302,7 @@ ${runner.slice(boundary)}
         path.join(stateDir, "plugins", "installs.json"),
         JSON.stringify({ installRecords: record ? { whatsapp: record } : {} }),
       );
-      writePluginInspectFixture(bin, record ? { whatsapp: record } : {});
+      const fixtureEnv = writePluginInspectFixture(bin, record ? { whatsapp: record } : {});
       const artifacts = path.join(isolatedCwd, "artifacts");
       mkdirSync(artifacts, { recursive: true });
       writeFileSync(
@@ -343,8 +343,8 @@ ${runner.slice(boundary)}
           encoding: "utf8",
           env: {
             ...process.env,
+            ...fixtureEnv,
             HOME: isolatedCwd,
-            PATH: `${bin}${path.delimiter}${process.env.PATH}`,
             FIXTURE_VERSION: version,
             FIXTURE_PENDING: deniedPluginId ? "1" : "0",
             OPENCLAW_STATE_DIR: stateDir,

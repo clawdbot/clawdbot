@@ -90,7 +90,7 @@ extensions/browser/src/browser/pw-tools-core.interactions.execution.ts	4
 extensions/browser/src/browser/pw-tools-core.interactions.navigation.ts	3
 extensions/browser/src/browser/pw-tools-core.snapshot.ts	1
 extensions/browser/src/browser/pw-tools-core.state.ts	3
-extensions/browser/src/browser/routes/agent.act.normalize.ts	2
+extensions/browser/src/browser/routes/agent.act.normalize.ts	1
 extensions/browser/src/browser/routes/agent.act.shared.ts	3
 extensions/browser/src/browser/routes/agent.act.ts	2
 extensions/browser/src/browser/routes/agent.shared.ts	2
@@ -113,7 +113,6 @@ extensions/browser/src/browser/test-port.ts	1
 extensions/browser/src/browser/unhandled-rejections.ts	2
 extensions/browser/src/cli/browser-cli-actions-input/register.batch.ts	1
 extensions/browser/src/cli/browser-cli-actions-input/register.element.ts	2
-extensions/browser/src/cli/browser-cli-actions-input/shared.ts	1
 extensions/browser/src/cli/browser-cli-inspect.ts	2
 extensions/browser/src/cli/browser-cli-manage.ts	3
 extensions/browser/src/cli/browser-cli-shared.ts	1
@@ -163,12 +162,11 @@ extensions/codex/doctor-contract-api.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	27
 extensions/codex/src/app-server/approval-bridge.ts	1
-extensions/codex/src/app-server/attempt-client-cleanup.ts	2
+extensions/codex/src/app-server/attempt-client-cleanup.ts	1
 extensions/codex/src/app-server/attempt-context.ts	1
 extensions/codex/src/app-server/attempt-diagnostics.ts	3
 extensions/codex/src/app-server/attempt-notifications.ts	1
 extensions/codex/src/app-server/attempt-startup.ts	1
-extensions/codex/src/app-server/attempt-turn-watches.ts	1
 extensions/codex/src/app-server/auth-bridge.ts	2
 extensions/codex/src/app-server/client-runtime.ts	1
 extensions/codex/src/app-server/client.ts	4
@@ -213,7 +211,7 @@ extensions/codex/src/app-server/run-attempt-server-requests.ts	2
 extensions/codex/src/app-server/run-attempt-tool-setup.ts	1
 extensions/codex/src/app-server/run-attempt-tools.ts	1
 extensions/codex/src/app-server/run-attempt-turn-request.ts	1
-extensions/codex/src/app-server/run-attempt-turn-state.ts	12
+extensions/codex/src/app-server/run-attempt-turn-state.ts	6
 extensions/codex/src/app-server/runtime-artifact.ts	2
 extensions/codex/src/app-server/sandbox-exec-server.ts	1
 extensions/codex/src/app-server/sandbox-exec-server/http.ts	2
@@ -1795,7 +1793,7 @@ src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	3
 src/agents/embedded-agent-runner/run/attempt-stream.ts	9
 src/agents/embedded-agent-runner/run/attempt-subscription-cleanup.ts	2
 src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	17
-src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	6
+src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	4
 src/agents/embedded-agent-runner/run/attempt-tool-call-text-promotion.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	3
 src/agents/embedded-agent-runner/run/attempt-transcript-helpers.ts	1
@@ -1826,7 +1824,7 @@ src/agents/embedded-agent-runner/run/run-attempt-result.ts	1
 src/agents/embedded-agent-runner/run/session-bootstrap.ts	2
 src/agents/embedded-agent-runner/run/session-prompt-state.ts	1
 src/agents/embedded-agent-runner/run/setup.ts	2
-src/agents/embedded-agent-runner/run/stream-wrapper.ts	2
+src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
 src/agents/embedded-agent-runner/run/terminal-preparation.ts	2
 src/agents/embedded-agent-runner/run/terminal-resolution.ts	1
 src/agents/embedded-agent-runner/run/tool-activity-heartbeat.ts	2
@@ -1843,7 +1841,7 @@ src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	4
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
-src/agents/embedded-agent-subscribe.handlers.messages.update.ts	6
+src/agents/embedded-agent-subscribe.handlers.messages.update.ts	5
 src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	3
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	14
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	8
@@ -3259,7 +3257,7 @@ src/logging/diagnostic-stability-bundle.ts	11
 src/logging/diagnostic-stability.ts	3
 src/logging/diagnostic-support-log-redaction.ts	1
 src/logging/diagnostic-support-redaction.ts	1
-src/logging/diagnostic.ts	2
+src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
@@ -4003,9 +4001,9 @@ ui/src/pages/chat/chat-session-companion.ts	5
 ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	5
 ui/src/pages/chat/chat-state-route.ts	1
-ui/src/pages/chat/chat-thread-build.ts	2
+ui/src/pages/chat/chat-thread-build.ts	1
 ui/src/pages/chat/chat-thread-grouping.ts	2
-ui/src/pages/chat/chat-thread-items.ts	4
+ui/src/pages/chat/chat-thread-items.ts	3
 ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
 ui/src/pages/chat/components/chat-composer-slash-menu.ts	1

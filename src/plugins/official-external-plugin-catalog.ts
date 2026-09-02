@@ -1618,4 +1618,17 @@ export function getOfficialExternalPluginCatalogEntryForPackage(
     (entry) => normalizeOptionalString(entry.name) === normalized,
   );
 }
+
+/** Source discovery alone does not make an external package part of the core distribution. */
+export function isExternallyDistributedPlugin(plugin: {
+  pluginId: string;
+  packageName?: string;
+  packageBuild?: { bundledDist?: boolean };
+}): boolean {
+  const entry = getOfficialExternalPluginCatalogEntryForPackage(plugin.packageName);
+  return (
+    plugin.packageBuild?.bundledDist === false ||
+    (entry !== undefined && resolveOfficialExternalPluginId(entry) === plugin.pluginId)
+  );
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

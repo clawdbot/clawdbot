@@ -1360,6 +1360,7 @@ STT plus TTS pipeline:
 
 - Discord PCM capture is converted to a WAV temp file.
 - `tools.media.audio` handles STT, for example `openai/gpt-4o-mini-transcribe`.
+- Batch capture respects the largest applicable [audio input limit](/nodes/audio), including configured model and CLI fallbacks. Oversized captures stop with a warning to speak a shorter segment; partial audio is not transcribed. This limit does not buffer or truncate direct realtime streams.
 - The transcript is sent through Discord ingress and routing while the response LLM runs with a voice-output policy that hides the agent `tts` tool and asks for returned text, because Discord voice owns final TTS playback.
 - `voice.model`, when set, overrides only the response LLM for this voice-channel turn.
 - `voice.tts` is merged over `tts`; streaming-capable providers feed the player directly, otherwise the resulting audio file is played in the joined channel.

@@ -790,6 +790,13 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       agentDir: "/tmp/agent",
     });
 
+    // Prepare a capture limit before installing audio receive listeners.
+    const budget = await api.runtime.mediaUnderstanding.resolveAudioInputBudget({
+      cfg: api.config,
+    });
+    // budget.enabled is false when audio understanding is disabled. Otherwise,
+    // budget.maxBytes includes the container header and covers the largest fallback.
+
     // Transcribe audio
     const { text } = await api.runtime.mediaUnderstanding.transcribeAudioFile({
       filePath: "/tmp/inbound-audio.ogg",

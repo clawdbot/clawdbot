@@ -149,7 +149,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       process.execPath,
       ["--import", "tsx", "--input-type=module", "--eval", fixture],
       {
-        cwd: process.cwd(),
+        cwd: path.dirname(outDir),
         env: {
           ...process.env,
           NODE_DISABLE_COMPILE_CACHE: "1",

@@ -5388,7 +5388,7 @@ describe("syncPluginsForUpdateChannel", () => {
         pluginId: "legacy-chat",
         code: "package_not_found",
         message:
-          "Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+          'Failed to update legacy-chat: Package not found on ClawHub. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
       },
     ]);
   });
@@ -5484,7 +5484,7 @@ describe("syncPluginsForUpdateChannel", () => {
         pluginId: "legacy-chat",
         code: "archive_integrity_mismatch",
         message:
-          "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+          'Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
       },
     ]);
   });
@@ -5555,7 +5555,11 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(result.changed).toBe(false);
     expect(result.config).toBe(config);
     expect(result.summary.errors).toEqual([
-      { pluginId: "legacy-chat", message: "Failed to update legacy-chat: package unavailable" },
+      {
+        pluginId: "legacy-chat",
+        message:
+          'Failed to update legacy-chat: package unavailable\nBundled relocation did not install the replacement plugin payload; resolve the error above, then run "openclaw update repair".',
+      },
     ]);
   });
 

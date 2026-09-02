@@ -1131,6 +1131,15 @@ function acceptedSurfaceHash(surface) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+function hasCompanionPluginConsent(record) {
+  return [
+    record.acceptedSurface,
+    record.acceptedSurfaceHash,
+    record.acceptedSurfaceAt,
+    record.acceptedSurfaceIntegrity,
+  ].some((value) => value !== undefined);
+}
+
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1282,8 +1291,9 @@ function assertPluginArtifactConsent(
       `${pluginId} inspected install record changed`,
     );
     // Official provenance is not operator acceptance. Use the metadata owner's
-    // decision for this exact record; unverified sources still require consent.
-    if (inspection.plugin.trustedOfficialInstall === true) {
+    // decision for this exact record, but validate any recorded acceptance so a
+    // partial or stale artifact claim cannot pass the upgrade proof.
+    if (inspection.plugin.trustedOfficialInstall === true && !hasCompanionPluginConsent(record)) {
       process.stdout.write(
         `Plugin "${pluginId}" has verified official capability-consent exemption.\n`,
       );

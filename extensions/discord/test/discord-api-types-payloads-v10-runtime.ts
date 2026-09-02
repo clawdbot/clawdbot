@@ -1,4 +1,4 @@
-// Discord payload types runtime helper loads discord-api-types payloads at runtime.
+// Resolve Discord payload runtime values within their owning workspace package.
 import { createRequire } from "node:module";
 import type * as DiscordPayloadApiTypes from "discord-api-types/payloads/v10";
 

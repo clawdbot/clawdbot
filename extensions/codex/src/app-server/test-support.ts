@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -106,6 +106,38 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
     contextWindow: 128_000,
     maxTokens: 8_000,
   } as Model;
+}
+
+export async function waitForHarnessRequest(
+  harness: ReturnType<typeof createClientHarness>,
+  method: string,
+  startIndex = 0,
+): Promise<{ id: number | string; params?: unknown }> {
+  let request: { id?: number | string; method?: string; params?: unknown } | undefined;
+  await vi.waitFor(
+    () => {
+      request = harness.writes
+        .slice(startIndex)
+        .map(
+          (write) =>
+            JSON.parse(write) as { id?: number | string; method?: string; params?: unknown },
+        )
+        .find((message) => message.method === method);
+      expect(
+        request?.id,
+        `expected ${method} after write ${startIndex}; observed ${JSON.stringify(
+          harness.writes
+            .slice(startIndex)
+            .map((write) => (JSON.parse(write) as { method: string }).method),
+        )}`,
+      ).toBeDefined();
+    },
+    { interval: 1, timeout: 5_000 },
+  );
+  if (request?.id === undefined) {
+    throw new Error(`Codex harness did not write ${method}`);
+  }
+  return { id: request.id, params: request.params };
 }
 
 /** Creates an in-memory Codex app-server client harness with writable stdout frames. */
