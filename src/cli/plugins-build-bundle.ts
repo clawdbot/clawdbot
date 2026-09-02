@@ -23,7 +23,7 @@ type PluginBundleOptions = Omit<
   | "minifySyntax"
 > & { platform: "node" | "browser" };
 
-export function isPluginBundleHostImport(specifier: string): boolean {
+function isPluginBundleHostImport(specifier: string): boolean {
   return isBuiltin(specifier) || specifier === "openclaw" || specifier.startsWith("openclaw/");
 }
 
@@ -114,15 +114,22 @@ export async function buildPluginBundle(
     }
     throw cause;
   }
-  if (
-    Object.values(result.metafile.outputs).some((output) =>
-      output.imports.some((item) => item.path === runtimeFilesImport),
-    )
-  ) {
+  const imports = Object.values(result.metafile.outputs).flatMap((output) => output.imports);
+  if (imports.some((item) => item.path === runtimeFilesImport)) {
     const reason = backend
       ? "Plugin artifacts cannot use module-relative runtime files or require.resolve."
       : "Control UI builds cannot use require.resolve.";
     throw new Error(`${reason} ${recovery}`);
   }
-  return result;
+  if (
+    imports.some((item) => item.external && (!backend || !isPluginBundleHostImport(item.path))) ||
+    (backend && result.outputFiles.length !== 1)
+  ) {
+    throw new Error(
+      backend
+        ? "Plugin artifact must bundle all dependencies into its backend entrypoint."
+        : "Control UI builds must bundle their browser dependencies.",
+    );
+  }
+  return result.outputFiles;
 }

@@ -26,7 +26,6 @@ function renderDetails(card: WorkboardCard, overrides: Partial<WorkboardProps> =
     client: null,
     connected: true,
     canWrite: true,
-    pluginEnabled: true,
     agentsList: null,
     sessions: [],
     onOpenSession: vi.fn(),

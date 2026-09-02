@@ -1,6 +1,5 @@
 export default {
   common: {
-    loading: "Loading…",
     refreshing: "Refreshing…",
     refresh: "Refresh",
     retry: "Retry",
@@ -8,9 +7,6 @@ export default {
     create: "Create",
     na: "n/a",
     save: "Save",
-  },
-  lazyView: {
-    retry: "Retry",
   },
   sessionsView: {
     statusQueued: "Queued",
@@ -32,9 +28,6 @@ export default {
       cardCount: "{count} cards",
       noActiveCards: "No ready or running cards.",
     },
-    disabledHelpStart: "Workboard is disabled. Enable",
-    enableConfigKey: "plugins.entries.workboard.enabled = true",
-    disabledHelpEnd: ", then reload this tab.",
     status: {
       triage: "Triage",
       backlog: "Backlog",

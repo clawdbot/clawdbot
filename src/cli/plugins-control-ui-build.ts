@@ -47,7 +47,7 @@ export async function buildPluginControlUi(params: {
       { cause },
     );
   }
-  const result = await buildPluginBundle(builder, {
+  const outputFiles = await buildPluginBundle(builder, {
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
     outdir: path.join(rootDir, "dist/control-ui/build"),
@@ -61,14 +61,7 @@ export async function buildPluginControlUi(params: {
     },
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url),
   });
-  if (
-    Object.values(result.metafile.outputs).some((output) =>
-      output.imports.some((item) => item.external),
-    )
-  ) {
-    throw new Error("Control UI builds must bundle their browser dependencies.");
-  }
-  const files = result.outputFiles.toSorted((left, right) => left.path.localeCompare(right.path));
+  const files = outputFiles.toSorted((left, right) => left.path.localeCompare(right.path));
   if (
     files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||
     files.reduce((total, file) => total + file.contents.length, 0) >

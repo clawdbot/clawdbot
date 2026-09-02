@@ -27,8 +27,6 @@ export type WorkboardProps = {
   canWrite?: boolean;
   canGrant?: boolean;
   canModelOverride?: boolean;
-  pluginEnabled: boolean | null;
-  pluginEnablementError?: string | null;
   agentsList: WorkboardAgentsList | null;
   defaultAgentId?: string | null;
   sessions: GatewaySessionRow[];
@@ -37,7 +35,6 @@ export type WorkboardProps = {
   showAgentFilter?: boolean;
   onOpenSession: ControlUiHost["sessions"]["open"];
   onBoardFilterChange?: (boardFilter: string) => void;
-  onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
 };
 

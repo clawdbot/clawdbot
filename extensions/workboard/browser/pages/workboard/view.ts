@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
 import { renderAgentPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
-import { renderLoadingState } from "../../components/loading-state.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/workboard.css";
 import {
@@ -142,36 +141,6 @@ const emptyColumnModeOptions = [
 
 export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void }) {
   const state = getWorkboardState(props.host);
-
-  if (props.pluginEnabled === null) {
-    if (props.pluginEnablementError) {
-      return html`
-        <section class="workboard">
-          <div class="callout danger" role="alert">${props.pluginEnablementError}</div>
-          ${
-            props.onReloadConfig
-              ? html`<button class="btn" type="button" @click=${props.onReloadConfig}>
-                  ${t("lazyView.retry")}
-                </button>`
-              : nothing
-          }
-        </section>
-      `;
-    }
-    return renderLoadingState();
-  }
-
-  if (!props.pluginEnabled) {
-    return html`
-      <section class="workboard">
-        <div class="callout">
-          ${t("workboard.disabledHelpStart")}
-          <code>${t("workboard.enableConfigKey")}</code>${t("workboard.disabledHelpEnd")}
-        </div>
-      </section>
-    `;
-  }
-
   const defaultAgentId = props.agentsList?.defaultId ?? props.defaultAgentId;
   const agentOptions = buildAgentFilterOptions(props.agentsList, state.cards);
   state.agentFilter = normalizeActiveAgentFilter(agentOptions, state.agentFilter);

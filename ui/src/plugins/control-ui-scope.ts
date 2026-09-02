@@ -20,14 +20,10 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
       dispose();
       check();
     }
-    let active = true;
     const stop = () => {
-      if (!active) {
-        return;
+      if (disposers.delete(stop)) {
+        dispose();
       }
-      active = false;
-      disposers.delete(stop);
-      dispose();
     };
     disposers.add(stop);
     return stop;
@@ -56,9 +52,13 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
   const services = <T extends object>(
     source: T,
     callbackArguments: Readonly<Partial<Record<PropertyKey, number>>> = {},
+    disposeHandle?: () => void,
   ): T =>
     new Proxy(source, {
       get(target, property, receiver) {
+        if (property === "dispose" && disposeHandle) {
+          return disposeHandle;
+        }
         check();
         const value = Reflect.get(target, property, receiver) as unknown;
         if (typeof value !== "function") {
@@ -88,21 +88,7 @@ export function scopeControlUiHost(host: ControlUiHost, signal: AbortSignal): Co
           ) {
             const dispose = result.dispose;
             const stop = keep(() => dispose.call(result));
-            return new Proxy(result, {
-              get(handle, key, handleReceiver) {
-                if (key === "dispose") {
-                  return stop;
-                }
-                check();
-                const method = Reflect.get(handle, key, handleReceiver) as unknown;
-                return typeof method === "function"
-                  ? (...handleArgs: unknown[]) => {
-                      check();
-                      return checkCompletion(Reflect.apply(method, handle, handleArgs));
-                    }
-                  : method;
-              },
-            });
+            return services(result, {}, stop);
           }
           return checkCompletion(result);
         };

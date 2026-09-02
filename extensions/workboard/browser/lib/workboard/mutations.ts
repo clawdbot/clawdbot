@@ -36,65 +36,25 @@ function normalizeDispatchSummary(value: unknown): WorkboardDispatchSummary {
   };
 }
 
-async function createWorkboardCard(params: {
-  host: WorkboardHost;
-  client: GatewayBrowserClient | null;
-  requestUpdate?: () => void;
-}) {
-  const state = getWorkboardState(params.host);
-  if (
-    !params.client ||
-    !workboardMutationsReady(state) ||
-    !state.draftTitle.trim() ||
-    state.dispatching ||
-    state.draftSaving
-  ) {
-    return;
-  }
-  invalidateWorkboardLoads(params.host);
-  state.draftSaving = true;
-  state.loading = true;
-  state.error = null;
-  params.requestUpdate?.();
-  try {
-    const payload = await params.client.request("workboard.cards.create", {
-      ...draftPayload(state),
-      ...selectedWorkboardBoardParams(state),
-    });
-    replaceCard(state, normalizeCardPayload(payload));
-    resetDraftState(state);
-  } catch (error) {
-    state.error = formatError(error);
-  } finally {
-    state.draftSaving = false;
-    state.loading = false;
-    params.requestUpdate?.();
-  }
-}
-
 export async function saveWorkboardCardDraft(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!state.editingCardId) {
-    await createWorkboardCard(params);
-    return;
-  }
+  const cardId = state.editingCardId;
+  const base = cardId ? state.editingCardBase : null;
   if (
     !params.client ||
     !workboardMutationsReady(state) ||
     !state.draftTitle.trim() ||
     state.dispatching ||
     state.draftSaving ||
-    state.busyCardIds.has(state.editingCardId)
+    (cardId && state.busyCardIds.has(cardId))
   ) {
     return;
   }
-  const cardId = state.editingCardId;
-  const base = state.editingCardBase;
-  if (!base || base.id !== cardId) {
+  if (cardId && (!base || base.id !== cardId)) {
     state.error = "This card changed before editing began. Cancel and reopen it to continue.";
     params.requestUpdate?.();
     return;
@@ -105,20 +65,29 @@ export async function saveWorkboardCardDraft(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    const patch = changedDraftPayload(state);
-    if (Object.keys(patch).length === 0) {
-      resetDraftState(state);
-      return;
+    let payload: unknown;
+    if (base) {
+      const patch = changedDraftPayload(state);
+      if (Object.keys(patch).length === 0) {
+        resetDraftState(state);
+        return;
+      }
+      payload = await params.client.request("workboard.cards.update", {
+        id: cardId,
+        expectedUpdatedAt: base.updatedAt,
+        patch,
+      });
+    } else {
+      payload = await params.client.request("workboard.cards.create", {
+        ...draftPayload(state),
+        ...selectedWorkboardBoardParams(state),
+      });
     }
-    const payload = await params.client.request("workboard.cards.update", {
-      id: cardId,
-      expectedUpdatedAt: base.updatedAt,
-      patch,
-    });
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
   } catch (error) {
     if (
+      base &&
       isGatewayRequestError(error) &&
       error.code === "workboard_conflict" &&
       isRecord(error.details) &&

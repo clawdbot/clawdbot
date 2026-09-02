@@ -186,7 +186,6 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
     get canWrite() {
       return model.canMutate;
     },
-    pluginEnabled: true,
     agentsList: null,
     sessions: [],
     onOpenSession: model.host.sessions.open,

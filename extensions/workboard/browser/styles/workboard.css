@@ -352,7 +352,6 @@
 .workboard-select {
   width: 100%;
   min-width: 0;
-  --wa-form-control-activated-color: var(--accent);
 }
 
 .workboard-select--toolbar {
@@ -386,38 +385,6 @@
 .workboard-agent-select--toolbar .agent-select__trigger {
   height: var(--workboard-control-height);
 }
-.workboard-select::part(form-control-label) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-.workboard-select::part(combobox) {
-  min-height: var(--workboard-control-height);
-  width: 100%;
-  border-color: var(--border);
-  border-radius: 7px;
-  background: var(--bg-elevated);
-  color: var(--text);
-}
-
-.workboard-select::part(listbox) {
-  /* Keep Web Awesome's collision-aware bound in the cap; replacing it outright
-     would let the listbox overflow when the popup has little room to open. */
-  max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
-  padding: 6px;
-  border: 1px solid var(--overlay-border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-elevated) 94%, var(--bg) 6%);
-  box-shadow: var(--overlay-shadow);
-}
-
 .workboard-field--wide {
   grid-column: 1 / -1;
 }
@@ -1588,10 +1555,6 @@
     max-width: none;
   }
 
-  .workboard-select::part(listbox) {
-    max-height: min(260px, var(--auto-size-available-height, calc(100vh - 48px)));
-  }
-
   .workboard-draft__meta {
     grid-template-columns: 1fr;
   }
@@ -1692,11 +1655,6 @@
   }
 }
 
-.workboard-loading {
-  padding: 32px;
-  text-align: center;
-  color: var(--muted);
-}
 .workboard-picker {
   display: inline-flex;
   align-items: center;

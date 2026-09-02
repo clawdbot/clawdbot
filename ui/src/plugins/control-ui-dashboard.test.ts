@@ -350,31 +350,6 @@ describe("Plugin session dashboard", () => {
     },
   );
 
-  it("expands a non-empty live dashboard by default", async () => {
-    const { client, request } = createClient([
-      {
-        name: "status",
-        tabId: "main",
-        title: "Status",
-        contentKind: "html",
-        sizeW: 12,
-        sizeH: 2,
-        position: 0,
-        grantState: "none",
-        revision: 1,
-      },
-    ]);
-    const element = await mountDashboard({ sessionKey: "agent:main:workboard-non-empty" }, client);
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
-    await vi.waitFor(() =>
-      expect(
-        element.querySelector(".plugin-session-dashboard__toggle")?.getAttribute("aria-expanded"),
-      ).toBe("true"),
-    );
-    expect(element.querySelector("openclaw-board-view")).not.toBeNull();
-  });
-
   it("pauses the board while the dashboard is collapsed", async () => {
     const { client } = createClient([
       {

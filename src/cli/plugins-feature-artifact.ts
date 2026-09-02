@@ -11,7 +11,7 @@ import { loadPluginManifest, resolvePackageExtensionEntries } from "../plugins/m
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { defaultRuntime } from "../runtime.js";
 import { collectPluginsValidationResult } from "./plugins-authoring-command.js";
-import { buildPluginBundle, isPluginBundleHostImport } from "./plugins-build-bundle.js";
+import { buildPluginBundle } from "./plugins-build-bundle.js";
 
 export type PluginsPackOptions = { root?: string; out?: string; json?: boolean };
 
@@ -39,7 +39,7 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
   const require = createRequire(path.join(rootDir, "package.json"));
   // SAFETY: Node resolves the plugin's installed esbuild package with this public API.
   const builder = require("esbuild") as typeof import("esbuild");
-  const result = await buildPluginBundle(builder, {
+  const files = await buildPluginBundle(builder, {
     absWorkingDir: rootDir,
     entryPoints: [entry],
     outfile: "dist/index.js",
@@ -47,12 +47,6 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
     target: "node22",
     external: ["openclaw", "openclaw/*"],
   });
-  const unbundled = Object.values(result.metafile.outputs)
-    .flatMap((output) => output.imports)
-    .filter((item) => item.external && !isPluginBundleHostImport(item.path));
-  if (unbundled.length || result.outputFiles.length !== 1) {
-    throw new Error("Plugin artifact must bundle all dependencies into its backend entrypoint.");
-  }
   const pluginId = loaded.manifest.id;
   const outputPath = path.resolve(opts.out ?? path.join(rootDir, `${pluginId}.tgz`));
   if (!/\.(?:tgz|tar\.gz)$/u.test(outputPath)) {
@@ -90,7 +84,7 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
       await source.readBytes("openclaw.plugin.json"),
     );
     await destination.mkdir("dist");
-    await destination.create("dist/index.js", Buffer.from(result.outputFiles[0]!.contents));
+    await destination.create("dist/index.js", Buffer.from(files[0]!.contents));
     const controlUi = loaded.manifest.controlUi;
     if (controlUi) {
       const { directory, assets } = await readPluginControlUiAssets(rootDir, controlUi);

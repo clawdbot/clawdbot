@@ -10,12 +10,15 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getCachedPluginSourceModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
-import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
   loadToolPlugin,
   runPluginsBuildCommand,
   runPluginsInitCommand,
 } from "./plugins-authoring-command.js";
+import {
+  createPluginImportFixture,
+  unresolvedPluginImportCases,
+} from "./plugins-build-bundle.test-support.js";
 import { runPluginsPackCommand } from "./plugins-feature-artifact.js";
 
 const directories: string[] = [];
@@ -151,76 +154,24 @@ describe("plugin artifact authoring", () => {
     await expect(fs.stat(archive)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each([
-    {
-      name: "dynamic import",
-      file: "loader.mjs",
-      helper: "helper.mjs",
-      helperSource: 'export const value = "required dependency";',
-      source:
-        'export async function loadDependency() { const spec = "./helper.mjs"; return (await import(spec)).value; }',
-    },
-    {
-      name: "dynamic require",
-      file: "loader.cjs",
-      helper: "helper.cjs",
-      helperSource: 'exports.value = "required dependency";',
-      source:
-        'exports.loadDependency = () => { const spec = "./helper.cjs"; return require(spec).value; };',
-    },
-    {
-      name: "indirect require",
-      file: "loader.cjs",
-      helper: "helper.cjs",
-      helperSource: 'exports.value = "required dependency";',
-      source: 'const load = require; exports.loadDependency = () => load("./helper.cjs").value;',
-    },
-    {
-      name: "local require.resolve",
-      file: "loader.cjs",
-      helper: "helper.cjs",
-      helperSource: 'exports.value = "required dependency";',
-      source:
-        'exports.loadDependency = () => require.resolve("./helper.cjs").split(/[\\\\/]/).at(-1);',
-      expected: "helper.cjs",
-      diagnostic: "require.resolve",
-    },
-    {
-      name: "indexed require.resolve",
-      file: "loader.cjs",
-      helper: "helper.cjs",
-      helperSource: 'exports.value = "required dependency";',
-      source:
-        'exports.loadDependency = () => require["resolve"]("./helper.cjs").split(/[\\\\/]/).at(-1);',
-      expected: "helper.cjs",
-      diagnostic: "require.resolve",
-    },
-  ])(
+  it.each(unresolvedPluginImportCases)(
     "rejects unresolved $name before producing an artifact",
-    async ({
-      file,
-      helper,
-      helperSource,
-      source,
-      expected = "required dependency",
-      diagnostic = "will not be bundled",
-    }) => {
+    async (testCase) => {
+      const {
+        file,
+        expected = "required dependency",
+        diagnostic = "will not be bundled",
+      } = testCase;
       const { rootDir, parent } = await fixture();
-      const directory = path.join(rootDir, "dist/runtime");
-      await fs.mkdir(directory);
-      await fs.writeFile(path.join(directory, helper), helperSource);
-      await fs.writeFile(path.join(directory, file), source);
+      const runOriginal = await createPluginImportFixture(
+        path.join(rootDir, "dist/runtime"),
+        testCase,
+      );
       await fs.appendFile(
         path.join(rootDir, "dist/index.js"),
         `\nexport { loadDependency } from "./runtime/${file}";\n`,
       );
-      const originalUrl = pathToFileURL(path.join(directory, file)).href;
-      expect(
-        execNodeEvalSync(
-          `const original = await import(${JSON.stringify(originalUrl)}); process.stdout.write(await original.loadDependency());`,
-          { timeout: 5_000, maxBuffer: 1_024 },
-        ),
-      ).toBe(expected);
+      expect(runOriginal()).toBe(expected);
       const archive = path.join(parent, "runtime-dependency.tgz");
       await expect(runPluginsPackCommand({ root: rootDir, out: archive })).rejects.toThrow(
         diagnostic,

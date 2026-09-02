@@ -35,7 +35,6 @@ function createWorkboardRenderProps(
     host,
     client: null,
     connected: true,
-    pluginEnabled: true,
     agentsList: null,
     sessions: [],
     onOpenSession: () => undefined,
@@ -207,7 +206,7 @@ describe("nextWorkboardCardPosition", () => {
 });
 
 describe("renderWorkboard", () => {
-  it("shows a card dashboard only for linked cards while the plugin is active", () => {
+  it("shows a card dashboard only for linked cards", () => {
     const { state, container, renderView } = createWorkboardView();
     state.detailCardId = "card-1";
     state.cards = [
@@ -223,9 +222,6 @@ describe("renderWorkboard", () => {
     state.cards = [{ ...state.cards[0]!, sessionKey: "agent:main:dashboard-aware" }];
     renderView();
     expect(container.querySelector("[data-test-dashboard]")).not.toBeNull();
-
-    renderView({ pluginEnabled: false });
-    expect(container.querySelector("[data-test-dashboard]")).toBeNull();
   });
 
   it.each([
@@ -2526,7 +2522,6 @@ describe("renderWorkboard", () => {
       host,
       client: { request } as unknown as GatewayBrowserClient,
       connected: true,
-      pluginEnabled: true,
       agentsList: null,
       sessions: [],
       onOpenSession: () => undefined,
@@ -3009,81 +3004,6 @@ describe("renderWorkboard", () => {
     );
     expect(labels).toContain("Dashboard session");
     expect(labels).not.toContain("heartbeat");
-  });
-
-  it("shows an enablement message when the optional plugin is disabled", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderWorkboard({
-        host: {},
-        client: null,
-        connected: true,
-        pluginEnabled: false,
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-        onRefresh: () => undefined,
-      }),
-      container,
-    );
-
-    expect(container.textContent).toContain("Workboard is disabled");
-    expect(container.querySelector(".workboard-column")).toBeNull();
-  });
-
-  it("announces loading while config enablement is unknown", () => {
-    const container = document.createElement("div");
-
-    render(
-      renderWorkboard({
-        host: {},
-        client: null,
-        connected: true,
-        pluginEnabled: null,
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-        onRefresh: () => undefined,
-      }),
-      container,
-    );
-
-    const loadingState = container.querySelector('[role="status"]');
-    expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
-
-    expect(loadingState?.textContent?.trim()).toBe("Loading…");
-    expect(container.textContent).not.toContain("Loading panel");
-    expect(container.textContent).not.toContain("Workboard is disabled");
-    expect(container.querySelector(".workboard-column")).toBeNull();
-  });
-
-  it("shows config load failures with a retry action", () => {
-    const container = document.createElement("div");
-    const onReloadConfig = vi.fn();
-
-    render(
-      renderWorkboard({
-        host: {},
-        client: null,
-        connected: true,
-        pluginEnabled: null,
-        pluginEnablementError: "config.get failed",
-        agentsList: null,
-        sessions: [],
-        onOpenSession: () => undefined,
-        onRefresh: () => undefined,
-        onReloadConfig,
-      }),
-      container,
-    );
-
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("config.get failed");
-    expect(container.textContent).not.toContain("Loading panel");
-    [...container.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Retry")
-      ?.click();
-    expect(onReloadConfig).toHaveBeenCalledOnce();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

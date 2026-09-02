@@ -1,7 +1,6 @@
 {
   "zh-CN": {
     "common": {
-      "loading": "加载中…",
       "refreshing": "刷新中…",
       "refresh": "刷新",
       "retry": "重试",
@@ -9,9 +8,6 @@
       "create": "创建",
       "na": "不适用",
       "save": "保存"
-    },
-    "lazyView": {
-      "retry": "重试"
     },
     "sessionsView": {
       "statusQueued": "已排队",
@@ -32,9 +28,6 @@
         "cardCount": "{count} 张卡片",
         "noActiveCards": "没有就绪或运行中的卡片。"
       },
-      "disabledHelpStart": "Workboard 已禁用。启用",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": "，然后重新加载此标签页。",
       "status": {
         "triage": "Triage",
         "backlog": "待办池",
@@ -197,8 +190,6 @@
       "emptyFilteredHint": "请更改视图、搜索、优先级、代理或归档筛选条件。",
       "lifecycleUnlinked": "无会话",
       "lifecycleUnlinkedDetail": "启动或关联会话",
-      "lifecycleMissing": "会话缺失",
-      "lifecycleMissingDetail": "重新加载会话或重新关联此卡片",
       "lifecycleLinked": "已关联",
       "lifecycleIdleDetail": "无活动运行",
       "lifecycleRunning": "运行中",
@@ -247,7 +238,6 @@
   },
   "zh-TW": {
     "common": {
-      "loading": "載入中…",
       "refreshing": "重新整理中…",
       "refresh": "重新整理",
       "retry": "重試",
@@ -255,9 +245,6 @@
       "create": "建立",
       "na": "不適用",
       "save": "儲存"
-    },
-    "lazyView": {
-      "retry": "重試"
     },
     "sessionsView": {
       "statusQueued": "已排入佇列",
@@ -278,9 +265,6 @@
         "cardCount": "{count} 張卡片",
         "noActiveCards": "沒有就緒或執行中的卡片。"
       },
-      "disabledHelpStart": "Workboard 已停用。啟用",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": "，然後重新載入此分頁。",
       "status": {
         "triage": "Triage",
         "backlog": "待處理",
@@ -443,8 +427,6 @@
       "emptyFilteredHint": "變更檢視、搜尋、優先順序、代理或封存篩選條件。",
       "lifecycleUnlinked": "無工作階段",
       "lifecycleUnlinkedDetail": "啟動或連結工作階段",
-      "lifecycleMissing": "找不到工作階段",
-      "lifecycleMissingDetail": "重新載入工作階段或重新連結此卡片",
       "lifecycleLinked": "已連結",
       "lifecycleIdleDetail": "沒有進行中的執行",
       "lifecycleRunning": "執行中",
@@ -493,7 +475,6 @@
   },
   "pt-BR": {
     "common": {
-      "loading": "Carregando…",
       "refreshing": "Atualizando…",
       "refresh": "Atualizar",
       "retry": "Tentar novamente",
@@ -501,9 +482,6 @@
       "create": "Criar",
       "na": "n/d",
       "save": "Salvar"
-    },
-    "lazyView": {
-      "retry": "Tentar novamente"
     },
     "sessionsView": {
       "statusQueued": "Na fila",
@@ -524,9 +502,6 @@
         "cardCount": "{count} cards",
         "noActiveCards": "Nenhum cartão pronto ou em execução."
       },
-      "disabledHelpStart": "O Workboard está desativado. Ative",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", depois recarregue esta aba.",
       "status": {
         "triage": "Triage",
         "backlog": "Backlog",
@@ -689,8 +664,6 @@
       "emptyFilteredHint": "Altere a visualização, a busca, a prioridade, o agente ou o filtro de arquivamento.",
       "lifecycleUnlinked": "Nenhuma sessão",
       "lifecycleUnlinkedDetail": "Inicie ou vincule uma sessão",
-      "lifecycleMissing": "Sessão ausente",
-      "lifecycleMissingDetail": "Recarregue as sessões ou revincule este cartão",
       "lifecycleLinked": "Vinculado",
       "lifecycleIdleDetail": "Nenhuma execução ativa",
       "lifecycleRunning": "Em execução",
@@ -739,7 +712,6 @@
   },
   "de": {
     "common": {
-      "loading": "Wird geladen…",
       "refreshing": "Wird aktualisiert…",
       "refresh": "Aktualisieren",
       "retry": "Erneut versuchen",
@@ -747,9 +719,6 @@
       "create": "Erstellen",
       "na": "k. A.",
       "save": "Speichern"
-    },
-    "lazyView": {
-      "retry": "Erneut versuchen"
     },
     "sessionsView": {
       "statusQueued": "In Warteschlange",
@@ -770,9 +739,6 @@
         "cardCount": "{count} Karten",
         "noActiveCards": "Keine bereiten oder laufenden Karten."
       },
-      "disabledHelpStart": "Workboard ist deaktiviert. Aktivieren Sie",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", und laden Sie dann diesen Tab neu.",
       "status": {
         "triage": "Triage",
         "backlog": "Backlog",
@@ -935,8 +901,6 @@
       "emptyFilteredHint": "Ändern Sie die Ansicht, Suche, Priorität, den Agenten oder den Archivfilter.",
       "lifecycleUnlinked": "Keine Sitzung",
       "lifecycleUnlinkedDetail": "Sitzung starten oder verknüpfen",
-      "lifecycleMissing": "Sitzung fehlt",
-      "lifecycleMissingDetail": "Sitzungen neu laden oder diese Karte neu verknüpfen",
       "lifecycleLinked": "Verknüpft",
       "lifecycleIdleDetail": "Kein aktiver Lauf",
       "lifecycleRunning": "Wird ausgeführt",
@@ -985,7 +949,6 @@
   },
   "es": {
     "common": {
-      "loading": "Cargando…",
       "refreshing": "Actualizando…",
       "refresh": "Actualizar",
       "retry": "Reintentar",
@@ -993,9 +956,6 @@
       "create": "Crear",
       "na": "n/d",
       "save": "Guardar"
-    },
-    "lazyView": {
-      "retry": "Reintentar"
     },
     "sessionsView": {
       "statusQueued": "En cola",
@@ -1016,9 +976,6 @@
         "cardCount": "{count} tarjetas",
         "noActiveCards": "No hay tarjetas listas o en ejecución."
       },
-      "disabledHelpStart": "Workboard está desactivado. Activa",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", luego vuelve a cargar esta pestaña.",
       "status": {
         "triage": "Triage",
         "backlog": "Pendientes",
@@ -1181,8 +1138,6 @@
       "emptyFilteredHint": "Cambia la vista, la búsqueda, la prioridad, el agente o el filtro de archivo.",
       "lifecycleUnlinked": "Sin sesión",
       "lifecycleUnlinkedDetail": "Inicia o vincula una sesión",
-      "lifecycleMissing": "Sesión no encontrada",
-      "lifecycleMissingDetail": "Recarga las sesiones o vuelve a vincular esta tarjeta",
       "lifecycleLinked": "Vinculado",
       "lifecycleIdleDetail": "No hay ninguna ejecución activa",
       "lifecycleRunning": "En ejecución",
@@ -1231,7 +1186,6 @@
   },
   "ja-JP": {
     "common": {
-      "loading": "読み込み中…",
       "refreshing": "更新中…",
       "refresh": "更新",
       "retry": "再試行",
@@ -1239,9 +1193,6 @@
       "create": "作成",
       "na": "n/a",
       "save": "保存"
-    },
-    "lazyView": {
-      "retry": "再試行"
     },
     "sessionsView": {
       "statusQueued": "キュー内",
@@ -1262,9 +1213,6 @@
         "cardCount": "{count} 件のカード",
         "noActiveCards": "準備完了または実行中のカードはありません。"
       },
-      "disabledHelpStart": "Workboard は無効になっています。有効にするには",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": "を設定してから、このタブを再読み込みしてください。",
       "status": {
         "triage": "Triage",
         "backlog": "バックログ",
@@ -1427,8 +1375,6 @@
       "emptyFilteredHint": "ビュー、検索、優先度、エージェント、またはアーカイブのフィルターを変更してください。",
       "lifecycleUnlinked": "セッションなし",
       "lifecycleUnlinkedDetail": "セッションを開始またはリンク",
-      "lifecycleMissing": "セッションが見つかりません",
-      "lifecycleMissingDetail": "セッションを再読み込みするか、このカードを再リンクしてください",
       "lifecycleLinked": "リンク済み",
       "lifecycleIdleDetail": "アクティブな実行はありません",
       "lifecycleRunning": "実行中",
@@ -1477,7 +1423,6 @@
   },
   "ko": {
     "common": {
-      "loading": "로딩 중…",
       "refreshing": "새로 고치는 중…",
       "refresh": "새로고침",
       "retry": "재시도",
@@ -1485,9 +1430,6 @@
       "create": "만들기",
       "na": "해당 없음",
       "save": "저장"
-    },
-    "lazyView": {
-      "retry": "다시 시도"
     },
     "sessionsView": {
       "statusQueued": "대기 중",
@@ -1508,9 +1450,6 @@
         "cardCount": "카드 {count}개",
         "noActiveCards": "준비 또는 실행 중인 카드가 없습니다."
       },
-      "disabledHelpStart": "Workboard가 비활성화되어 있습니다. 활성화하려면",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", 그런 다음 이 탭을 새로고침하세요.",
       "status": {
         "triage": "Triage",
         "backlog": "백로그",
@@ -1673,8 +1612,6 @@
       "emptyFilteredHint": "보기, 검색, 우선순위, 에이전트 또는 보관 필터를 변경하세요.",
       "lifecycleUnlinked": "세션 없음",
       "lifecycleUnlinkedDetail": "세션을 시작하거나 연결하세요",
-      "lifecycleMissing": "세션 누락",
-      "lifecycleMissingDetail": "세션을 다시 불러오거나 이 카드를 다시 연결하세요",
       "lifecycleLinked": "연결됨",
       "lifecycleIdleDetail": "활성 실행 없음",
       "lifecycleRunning": "실행 중",
@@ -1723,7 +1660,6 @@
   },
   "fr": {
     "common": {
-      "loading": "Chargement…",
       "refreshing": "Actualisation…",
       "refresh": "Actualiser",
       "retry": "Réessayer",
@@ -1731,9 +1667,6 @@
       "create": "Créer",
       "na": "n/d",
       "save": "Enregistrer"
-    },
-    "lazyView": {
-      "retry": "Réessayer"
     },
     "sessionsView": {
       "statusQueued": "En file d’attente",
@@ -1754,9 +1687,6 @@
         "cardCount": "{count} cartes",
         "noActiveCards": "Aucune carte prête ou en cours."
       },
-      "disabledHelpStart": "Le tableau de travail est désactivé. Activez",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", puis rechargez cet onglet.",
       "status": {
         "triage": "Triage",
         "backlog": "Backlog",
@@ -1919,8 +1849,6 @@
       "emptyFilteredHint": "Modifiez la vue, la recherche, la priorité, l'agent ou le filtre d'archive.",
       "lifecycleUnlinked": "Aucune session",
       "lifecycleUnlinkedDetail": "Démarrer ou lier une session",
-      "lifecycleMissing": "Session manquante",
-      "lifecycleMissingDetail": "Recharger les sessions ou relier cette carte",
       "lifecycleLinked": "Lié",
       "lifecycleIdleDetail": "Aucune exécution active",
       "lifecycleRunning": "En cours d’exécution",
@@ -1969,7 +1897,6 @@
   },
   "hi": {
     "common": {
-      "loading": "लोड हो रहा है…",
       "refreshing": "रीफ़्रेश हो रहा है…",
       "refresh": "रीफ़्रेश करें",
       "retry": "पुनः प्रयास करें",
@@ -1977,9 +1904,6 @@
       "create": "बनाएँ",
       "na": "लागू नहीं",
       "save": "सहेजें"
-    },
-    "lazyView": {
-      "retry": "फिर से प्रयास करें"
     },
     "sessionsView": {
       "statusQueued": "कतारबद्ध",
@@ -2000,9 +1924,6 @@
         "cardCount": "{count} कार्ड",
         "noActiveCards": "कोई तैयार या चल रहे कार्ड नहीं हैं।"
       },
-      "disabledHelpStart": "Workboard अक्षम है। सक्षम करें",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", फिर इस टैब को फिर से लोड करें।",
       "status": {
         "triage": "ट्रायज",
         "backlog": "बैकलॉग",
@@ -2165,8 +2086,6 @@
       "emptyFilteredHint": "दृश्य, खोज, प्राथमिकता, एजेंट, या आर्काइव फ़िल्टर बदलें।",
       "lifecycleUnlinked": "कोई सत्र नहीं",
       "lifecycleUnlinkedDetail": "सत्र शुरू करें या लिंक करें",
-      "lifecycleMissing": "सत्र गुम है",
-      "lifecycleMissingDetail": "सत्र फिर से लोड करें या इस कार्ड को फिर से लिंक करें",
       "lifecycleLinked": "लिंक किया गया",
       "lifecycleIdleDetail": "कोई सक्रिय रन नहीं",
       "lifecycleRunning": "चल रहा है",
@@ -2215,7 +2134,6 @@
   },
   "ar": {
     "common": {
-      "loading": "جارٍ التحميل…",
       "refreshing": "جارٍ التحديث…",
       "refresh": "تحديث",
       "retry": "إعادة المحاولة",
@@ -2223,9 +2141,6 @@
       "create": "إنشاء",
       "na": "غير متوفر",
       "save": "حفظ"
-    },
-    "lazyView": {
-      "retry": "إعادة المحاولة"
     },
     "sessionsView": {
       "statusQueued": "في قائمة الانتظار",
@@ -2246,9 +2161,6 @@
         "cardCount": "{count} بطاقة",
         "noActiveCards": "لا توجد بطاقات جاهزة أو قيد التشغيل."
       },
-      "disabledHelpStart": "لوحة العمل معطّلة. فعّل",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": "، ثم أعد تحميل علامة التبويب هذه.",
       "status": {
         "triage": "Triage",
         "backlog": "الأعمال المتراكمة",
@@ -2411,8 +2323,6 @@
       "emptyFilteredHint": "غيّر العرض أو البحث أو الأولوية أو الوكيل أو فلتر الأرشيف.",
       "lifecycleUnlinked": "لا توجد جلسة",
       "lifecycleUnlinkedDetail": "ابدأ جلسة أو اربطها",
-      "lifecycleMissing": "الجلسة مفقودة",
-      "lifecycleMissingDetail": "أعد تحميل الجلسات أو أعد ربط هذه البطاقة",
       "lifecycleLinked": "مرتبط",
       "lifecycleIdleDetail": "لا يوجد تشغيل نشط",
       "lifecycleRunning": "قيد التشغيل",
@@ -2461,7 +2371,6 @@
   },
   "it": {
     "common": {
-      "loading": "Caricamento…",
       "refreshing": "Aggiornamento…",
       "refresh": "Aggiorna",
       "retry": "Riprova",
@@ -2469,9 +2378,6 @@
       "create": "Crea",
       "na": "n/d",
       "save": "Salva"
-    },
-    "lazyView": {
-      "retry": "Riprova"
     },
     "sessionsView": {
       "statusQueued": "In coda",
@@ -2492,9 +2398,6 @@
         "cardCount": "{count} schede",
         "noActiveCards": "Nessuna scheda pronta o in esecuzione."
       },
-      "disabledHelpStart": "Workboard è disabilitata. Abilita",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", quindi ricarica questa scheda.",
       "status": {
         "triage": "Triage",
         "backlog": "Backlog",
@@ -2657,8 +2560,6 @@
       "emptyFilteredHint": "Modifica la vista, la ricerca, la priorità, l'agente o il filtro archivio.",
       "lifecycleUnlinked": "Nessuna sessione",
       "lifecycleUnlinkedDetail": "Avvia o collega una sessione",
-      "lifecycleMissing": "Sessione mancante",
-      "lifecycleMissingDetail": "Ricarica le sessioni o ricollega questa scheda",
       "lifecycleLinked": "Collegato",
       "lifecycleIdleDetail": "Nessuna esecuzione attiva",
       "lifecycleRunning": "In esecuzione",
@@ -2707,7 +2608,6 @@
   },
   "tr": {
     "common": {
-      "loading": "Yükleniyor…",
       "refreshing": "Yenileniyor…",
       "refresh": "Yenile",
       "retry": "Tekrar dene",
@@ -2715,9 +2615,6 @@
       "create": "Oluştur",
       "na": "yok",
       "save": "Kaydet"
-    },
-    "lazyView": {
-      "retry": "Tekrar dene"
     },
     "sessionsView": {
       "statusQueued": "Kuyrukta",
@@ -2738,9 +2635,6 @@
         "cardCount": "{count} kart",
         "noActiveCards": "Hazır veya çalışan kart yok."
       },
-      "disabledHelpStart": "Workboard devre dışı. Etkinleştirin",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", ardından bu sekmeyi yeniden yükleyin.",
       "status": {
         "triage": "Triage",
         "backlog": "Birikmiş İşler",
@@ -2903,8 +2797,6 @@
       "emptyFilteredHint": "Görünümü, aramayı, önceliği, ajanı veya arşiv filtresini değiştirin.",
       "lifecycleUnlinked": "Oturum yok",
       "lifecycleUnlinkedDetail": "Bir oturum başlatın veya bağlayın",
-      "lifecycleMissing": "Oturum eksik",
-      "lifecycleMissingDetail": "Oturumları yeniden yükleyin veya bu kartı yeniden bağlayın",
       "lifecycleLinked": "Bağlandı",
       "lifecycleIdleDetail": "Etkin çalışma yok",
       "lifecycleRunning": "Çalışıyor",
@@ -2953,7 +2845,6 @@
   },
   "uk": {
     "common": {
-      "loading": "Завантаження…",
       "refreshing": "Оновлення…",
       "refresh": "Оновити",
       "retry": "Повторити",
@@ -2961,9 +2852,6 @@
       "create": "Створити",
       "na": "н/д",
       "save": "Зберегти"
-    },
-    "lazyView": {
-      "retry": "Повторити"
     },
     "sessionsView": {
       "statusQueued": "У черзі",
@@ -2984,9 +2872,6 @@
         "cardCount": "{count} карток",
         "noActiveCards": "Немає готових або запущених карток."
       },
-      "disabledHelpStart": "Workboard вимкнено. Увімкніть",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", потім перезавантажте цю вкладку.",
       "status": {
         "triage": "Triage",
         "backlog": "Беклог",
@@ -3149,8 +3034,6 @@
       "emptyFilteredHint": "Змініть подання, пошук, пріоритет, агента або фільтр архіву.",
       "lifecycleUnlinked": "Немає сеансу",
       "lifecycleUnlinkedDetail": "Запустіть або пов'яжіть сеанс",
-      "lifecycleMissing": "Сеанс відсутній",
-      "lifecycleMissingDetail": "Перезавантажте сеанси або повторно пов'яжіть цю картку",
       "lifecycleLinked": "Пов’язано",
       "lifecycleIdleDetail": "Немає активного запуску",
       "lifecycleRunning": "Запущено",
@@ -3199,7 +3082,6 @@
   },
   "id": {
     "common": {
-      "loading": "Memuat…",
       "refreshing": "Menyegarkan…",
       "refresh": "Muat ulang",
       "retry": "Coba lagi",
@@ -3207,9 +3089,6 @@
       "create": "Buat",
       "na": "t/a",
       "save": "Simpan"
-    },
-    "lazyView": {
-      "retry": "Coba lagi"
     },
     "sessionsView": {
       "statusQueued": "Dalam antrean",
@@ -3230,9 +3109,6 @@
         "cardCount": "{count} kartu",
         "noActiveCards": "Tidak ada kartu yang siap atau sedang berjalan."
       },
-      "disabledHelpStart": "Workboard dinonaktifkan. Aktifkan",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", lalu muat ulang tab ini.",
       "status": {
         "triage": "Triage",
         "backlog": "Backlog",
@@ -3395,8 +3271,6 @@
       "emptyFilteredHint": "Ubah filter tampilan, pencarian, prioritas, agen, atau arsip.",
       "lifecycleUnlinked": "Tidak ada sesi",
       "lifecycleUnlinkedDetail": "Mulai atau tautkan sesi",
-      "lifecycleMissing": "Sesi tidak ada",
-      "lifecycleMissingDetail": "Muat ulang sesi atau tautkan ulang kartu ini",
       "lifecycleLinked": "Ditautkan",
       "lifecycleIdleDetail": "Tidak ada run aktif",
       "lifecycleRunning": "Berjalan",
@@ -3445,7 +3319,6 @@
   },
   "pl": {
     "common": {
-      "loading": "Ładowanie…",
       "refreshing": "Odświeżanie…",
       "refresh": "Odśwież",
       "retry": "Ponów",
@@ -3453,9 +3326,6 @@
       "create": "Utwórz",
       "na": "n/d",
       "save": "Zapisz"
-    },
-    "lazyView": {
-      "retry": "Spróbuj ponownie"
     },
     "sessionsView": {
       "statusQueued": "W kolejce",
@@ -3476,9 +3346,6 @@
         "cardCount": "{count} kart",
         "noActiveCards": "Brak gotowych lub uruchomionych kart."
       },
-      "disabledHelpStart": "Workboard jest wyłączony. Włącz",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", a następnie odśwież tę kartę.",
       "status": {
         "triage": "Triage",
         "backlog": "Zaległe",
@@ -3641,8 +3508,6 @@
       "emptyFilteredHint": "Zmień widok, wyszukiwanie, priorytet, agenta lub filtr archiwum.",
       "lifecycleUnlinked": "Brak sesji",
       "lifecycleUnlinkedDetail": "Rozpocznij lub połącz sesję",
-      "lifecycleMissing": "Brak sesji",
-      "lifecycleMissingDetail": "Załaduj ponownie sesje lub połącz ponownie tę kartę",
       "lifecycleLinked": "Połączono",
       "lifecycleIdleDetail": "Brak aktywnego uruchomienia",
       "lifecycleRunning": "Uruchomiono",
@@ -3691,7 +3556,6 @@
   },
   "th": {
     "common": {
-      "loading": "กำลังโหลด…",
       "refreshing": "กำลังรีเฟรช…",
       "refresh": "รีเฟรช",
       "retry": "ลองอีกครั้ง",
@@ -3699,9 +3563,6 @@
       "create": "สร้าง",
       "na": "n/a",
       "save": "บันทึก"
-    },
-    "lazyView": {
-      "retry": "ลองอีกครั้ง"
     },
     "sessionsView": {
       "statusQueued": "อยู่ในคิว",
@@ -3722,9 +3583,6 @@
         "cardCount": "{count} การ์ด",
         "noActiveCards": "ไม่มีการ์ดที่พร้อมหรือกำลังทำงาน"
       },
-      "disabledHelpStart": "Workboard ถูกปิดใช้งาน เปิดใช้งาน",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": " แล้วโหลดแท็บนี้ใหม่",
       "status": {
         "triage": "Triage",
         "backlog": "งานค้าง",
@@ -3887,8 +3745,6 @@
       "emptyFilteredHint": "เปลี่ยนมุมมอง การค้นหา ลำดับความสำคัญ เอเจนต์ หรือตัวกรองที่เก็บถาวร",
       "lifecycleUnlinked": "ไม่มีเซสชัน",
       "lifecycleUnlinkedDetail": "เริ่มหรือเชื่อมโยงเซสชัน",
-      "lifecycleMissing": "ไม่พบเซสชัน",
-      "lifecycleMissingDetail": "โหลดเซสชันใหม่หรือเชื่อมโยงการ์ดนี้อีกครั้ง",
       "lifecycleLinked": "เชื่อมโยงแล้ว",
       "lifecycleIdleDetail": "ไม่มีการรันที่ทำงานอยู่",
       "lifecycleRunning": "กำลังทำงาน",
@@ -3937,7 +3793,6 @@
   },
   "vi": {
     "common": {
-      "loading": "Đang tải…",
       "refreshing": "Đang làm mới…",
       "refresh": "Làm mới",
       "retry": "Thử lại",
@@ -3945,9 +3800,6 @@
       "create": "Tạo",
       "na": "n/a",
       "save": "Lưu"
-    },
-    "lazyView": {
-      "retry": "Thử lại"
     },
     "sessionsView": {
       "statusQueued": "Đã xếp hàng",
@@ -3968,9 +3820,6 @@
         "cardCount": "{count} thẻ",
         "noActiveCards": "Không có thẻ nào sẵn sàng hoặc đang chạy."
       },
-      "disabledHelpStart": "Workboard đã bị tắt. Bật",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", rồi tải lại tab này.",
       "status": {
         "triage": "Triage",
         "backlog": "Việc tồn đọng",
@@ -4133,8 +3982,6 @@
       "emptyFilteredHint": "Thay đổi chế độ xem, tìm kiếm, mức ưu tiên, agent, hoặc bộ lọc lưu trữ.",
       "lifecycleUnlinked": "Không có phiên",
       "lifecycleUnlinkedDetail": "Bắt đầu hoặc liên kết một phiên",
-      "lifecycleMissing": "Thiếu phiên",
-      "lifecycleMissingDetail": "Tải lại phiên hoặc liên kết lại thẻ này",
       "lifecycleLinked": "Đã liên kết",
       "lifecycleIdleDetail": "Không có lượt chạy đang hoạt động",
       "lifecycleRunning": "Đang chạy",
@@ -4183,7 +4030,6 @@
   },
   "nl": {
     "common": {
-      "loading": "Laden…",
       "refreshing": "Vernieuwen…",
       "refresh": "Vernieuwen",
       "retry": "Opnieuw proberen",
@@ -4191,9 +4037,6 @@
       "create": "Maken",
       "na": "n.v.t.",
       "save": "Opslaan"
-    },
-    "lazyView": {
-      "retry": "Opnieuw proberen"
     },
     "sessionsView": {
       "statusQueued": "In wachtrij",
@@ -4214,9 +4057,6 @@
         "cardCount": "{count} kaarten",
         "noActiveCards": "Geen gereedstaande of actieve kaarten."
       },
-      "disabledHelpStart": "Workboard is uitgeschakeld. Schakel",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": "in en laad dit tabblad opnieuw.",
       "status": {
         "triage": "Triage",
         "backlog": "Backlog",
@@ -4379,8 +4219,6 @@
       "emptyFilteredHint": "Wijzig de weergave, het zoeken, de prioriteit, de agent of het archieffilter.",
       "lifecycleUnlinked": "Geen sessie",
       "lifecycleUnlinkedDetail": "Start of koppel een sessie",
-      "lifecycleMissing": "Sessie ontbreekt",
-      "lifecycleMissingDetail": "Herlaad sessies of koppel deze kaart opnieuw",
       "lifecycleLinked": "Gekoppeld",
       "lifecycleIdleDetail": "Geen actieve run",
       "lifecycleRunning": "Actief",
@@ -4429,7 +4267,6 @@
   },
   "fa": {
     "common": {
-      "loading": "در حال بارگیری…",
       "refreshing": "در حال تازه‌سازی…",
       "refresh": "تازه‌سازی",
       "retry": "تلاش مجدد",
@@ -4437,9 +4274,6 @@
       "create": "ایجاد",
       "na": "n/a",
       "save": "ذخیره"
-    },
-    "lazyView": {
-      "retry": "تلاش دوباره"
     },
     "sessionsView": {
       "statusQueued": "در صف",
@@ -4460,9 +4294,6 @@
         "cardCount": "{count} کارت",
         "noActiveCards": "هیچ کارت آماده یا در حال اجرا نیست."
       },
-      "disabledHelpStart": "Workboard غیرفعال است. فعال کنید",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": "، سپس این زبانه را دوباره بارگذاری کنید.",
       "status": {
         "triage": "Triage",
         "backlog": "بک‌لاگ",
@@ -4625,8 +4456,6 @@
       "emptyFilteredHint": "نما، جست‌وجو، اولویت، عامل یا فیلتر بایگانی را تغییر دهید.",
       "lifecycleUnlinked": "بدون نشست",
       "lifecycleUnlinkedDetail": "شروع یا پیوند یک نشست",
-      "lifecycleMissing": "نشست موجود نیست",
-      "lifecycleMissingDetail": "نشست‌ها را بارگذاری مجدد کنید یا این کارت را دوباره پیوند دهید",
       "lifecycleLinked": "پیوندشده",
       "lifecycleIdleDetail": "اجرای فعالی وجود ندارد",
       "lifecycleRunning": "در حال اجرا",
@@ -4675,7 +4504,6 @@
   },
   "ru": {
     "common": {
-      "loading": "Загрузка…",
       "refreshing": "Обновление…",
       "refresh": "Обновить",
       "retry": "Повторить",
@@ -4683,9 +4511,6 @@
       "create": "Создать",
       "na": "н/д",
       "save": "Сохранить"
-    },
-    "lazyView": {
-      "retry": "Повторить"
     },
     "sessionsView": {
       "statusQueued": "В очереди",
@@ -4706,9 +4531,6 @@
         "cardCount": "{count} карточек",
         "noActiveCards": "Нет готовых или выполняющихся карточек."
       },
-      "disabledHelpStart": "Workboard отключен. Включите",
-      "enableConfigKey": "plugins.entries.workboard.enabled = true",
-      "disabledHelpEnd": ", затем перезагрузите эту вкладку.",
       "status": {
         "triage": "Разбор",
         "backlog": "Бэклог",
@@ -4871,8 +4693,6 @@
       "emptyFilteredHint": "Измените представление, поиск, приоритет, агента или фильтр архива.",
       "lifecycleUnlinked": "Нет сессии",
       "lifecycleUnlinkedDetail": "Запустите или свяжите сессию",
-      "lifecycleMissing": "Сессия отсутствует",
-      "lifecycleMissingDetail": "Перезагрузите сессии или свяжите эту карточку заново",
       "lifecycleLinked": "Связано",
       "lifecycleIdleDetail": "Нет активного запуска",
       "lifecycleRunning": "Выполняется",

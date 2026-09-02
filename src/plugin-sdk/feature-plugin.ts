@@ -66,11 +66,11 @@ export type DefineFeaturePluginOptions<C extends FeatureContract> = {
 };
 
 class FeatureValidationError extends Error {
-  readonly code: "INVALID_INPUT" | "INVALID_OUTPUT";
-
-  constructor(code: "INVALID_INPUT" | "INVALID_OUTPUT", message: string) {
+  constructor(
+    readonly code: "INVALID_INPUT" | "INVALID_OUTPUT",
+    message: string,
+  ) {
     super(message);
-    this.code = code;
     this.name = "FeatureValidationError";
   }
 }
@@ -176,15 +176,13 @@ export function defineFeaturePlugin<C extends FeatureContract>(
             "output",
           );
         };
-        const requiredScopes = [
-          operation.kind === "query" ? "operator.read" : "operator.write",
-        ] as const;
+        const requiredScope = operation.kind === "query" ? "operator.read" : "operator.write";
         api.registerSessionAction({
           id,
           description: operation.description,
           // SAFETY: registerSessionAction validates the schema as bounded JSON before retaining it.
           schema: operation.input as PluginJsonValue,
-          requiredScopes: [...requiredScopes],
+          requiredScopes: [requiredScope],
           async handler(action) {
             try {
               return {
@@ -230,7 +228,7 @@ export function defineFeaturePlugin<C extends FeatureContract>(
             description: command.description ?? operation.description,
             acceptsArgs: true,
             requireAuth: true,
-            requiredScopes: [...requiredScopes],
+            requiredScopes: [requiredScope],
             async handler(context) {
               const output = await invoke(command.parse(context), {
                 source: "command",

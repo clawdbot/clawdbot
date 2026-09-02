@@ -219,14 +219,13 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
   @state() private open = false;
   @state() private reloading = false;
   @state() private reloadError = "";
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.plugins,
-    (plugins, notify) => plugins.subscribe(notify),
-  );
 
-  override disconnectedCallback() {
-    this.subscriptions.clear();
-    super.disconnectedCallback();
+  constructor() {
+    super();
+    new SubscriptionsController(this).watch(
+      () => this.context?.plugins,
+      (plugins, notify) => plugins.subscribe(notify),
+    );
   }
 
   override render() {

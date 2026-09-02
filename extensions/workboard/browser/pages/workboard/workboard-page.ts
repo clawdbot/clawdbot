@@ -261,7 +261,6 @@ export function createWorkboardPage(workboard: WorkboardCapability): ControlUiVi
             canWrite: host.connection.canWrite,
             canGrant: host.connection.canGrant,
             canModelOverride: host.connection.canAdmin,
-            pluginEnabled: true,
             agentsList,
             defaultAgentId,
             sessions,
