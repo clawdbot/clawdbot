@@ -487,7 +487,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           : {}),
         // The CLI's own terminal reason outranks the synthetic marker: it names
         // why the turn stopped and must not be retried like a format fault.
-        ...(stoppedTurn && !text
+        // Delivery is judged on this result's own segment; text an earlier
+        // interim result already committed is not this turn's reply.
+        ...(stoppedTurn && !nextText
           ? { errorText: stoppedTurnErrorText, terminalFailure: stoppedTurn }
           : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),

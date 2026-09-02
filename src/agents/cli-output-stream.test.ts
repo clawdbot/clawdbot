@@ -272,6 +272,52 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toEqual(expected);
   });
 
+  it("records a hook stop that follows an interim result", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "interim-then-stop",
+          terminal_reason: "completed",
+          result: "Agent is running. I'll let you know when it finishes.",
+        },
+        {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          session_id: "interim-then-stop",
+          stop_reason: "tool_use",
+          terminal_reason: "hook_stopped",
+          result: "",
+        },
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toMatchObject({
+      errorText:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+      terminalFailure: {
+        reason: "turn_stopped",
+        terminalReason: "hook_stopped",
+        stopReason: "tool_use",
+      },
+    });
+  });
+
   it.each([
     {
       name: "ordinary lookalike",
