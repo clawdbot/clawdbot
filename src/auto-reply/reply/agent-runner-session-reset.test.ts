@@ -578,7 +578,7 @@ describe("resetReplyRunSession", () => {
     ).toMatchObject({ reason: "reset", firstKeptEntryId: expect.any(String) });
   });
 
-  it("migrates an unreadable legacy transcript target to the SQLite reset boundary", async () => {
+  it("migrates an unreadable legacy transcript target without minting a headerless boundary", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const unreadableReplaySource = path.join(rootDir, "previous-transcript-dir");
     await fs.mkdir(unreadableReplaySource);
@@ -609,6 +609,8 @@ describe("resetReplyRunSession", () => {
     });
 
     expect(activeSessionEntry).not.toHaveProperty("sessionFile");
+    // The never-materialized SQLite transcript must stay empty: a reset boundary at
+    // seq 0 would have no session header, and every later load rejects that shape.
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -616,7 +618,7 @@ describe("resetReplyRunSession", () => {
         sessionKey,
         storePath,
       }),
-    ).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ type: "reset" })]));
+    ).resolves.toEqual([]);
   });
 
   it("replaces a SQLite marker for a different transcript target", async () => {

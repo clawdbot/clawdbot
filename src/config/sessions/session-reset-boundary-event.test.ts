@@ -18,6 +18,27 @@ function message(params: {
 }
 
 describe("reset boundary planning", () => {
+  it("builds no boundary for a transcript with nothing to reset", () => {
+    expect(
+      buildSessionResetBoundaryEvent({ context: "clear", events: [], reason: "new" }),
+    ).toBeUndefined();
+    expect(
+      buildSessionResetBoundaryEvent({
+        context: "preserve-tail",
+        events: [
+          {
+            type: "session",
+            version: 3,
+            id: "session-id",
+            timestamp: "2026-07-22T00:00:00.000Z",
+            cwd: "/workspace",
+          },
+        ],
+        reason: "daily",
+      }),
+    ).toBeUndefined();
+  });
+
   it.each(["new", "reset"] as const)(
     "cuts prior conversation context for explicit %s boundaries",
     async (reason) => {

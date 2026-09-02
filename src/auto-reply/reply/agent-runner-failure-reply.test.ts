@@ -155,3 +155,37 @@ describe("buildPreflightCompactionFailureText", () => {
     );
   });
 });
+
+// Session-hydration failures must stay visible in group chats: the group
+// silent-reply policy deletes generic failure text, so a wedged session would
+// otherwise fail every turn with no user-visible outcome.
+describe("session transcript repair failure classification", () => {
+  const HEADERLESS_TRANSCRIPT_ERROR =
+    'Persisted session transcript has no session header row; run "openclaw doctor --fix" to repair it';
+  const LEGACY_TRANSCRIPT_ERROR =
+    "Persisted legacy session transcripts require doctor/import migration before runtime use";
+
+  it.each([
+    { name: "headerless transcript", message: HEADERLESS_TRANSCRIPT_ERROR },
+    { name: "legacy transcript", message: LEGACY_TRANSCRIPT_ERROR },
+  ])("classifies the $name load failure as actionable, not generic", ({ message }) => {
+    const reply = buildExternalRunFailureReply(message);
+    expect(reply.isGenericRunnerFailure).toBe(false);
+    expect(reply.text).toContain("openclaw doctor --fix");
+  });
+
+  it("keeps the repair notice visible in group conversations", () => {
+    const reply = buildExternalRunFailureReply(HEADERLESS_TRANSCRIPT_ERROR);
+    const visibleText = resolveExternalRunFailureTextForConversation({
+      text: reply.text,
+      sessionCtx: {
+        ChatType: "group",
+        Provider: "telegram",
+        SessionKey: "agent:main:telegram:group:example",
+        Surface: "telegram",
+      },
+      isGenericRunnerFailure: reply.isGenericRunnerFailure,
+    });
+    expect(visibleText).toBe(reply.text);
+  });
+});
