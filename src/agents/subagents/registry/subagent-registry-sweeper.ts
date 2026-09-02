@@ -436,7 +436,27 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
 
-        if (entry.collect && entry.collectorCompletion) {
+        if (entry.collect && shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+          // Older persisted rows may already have frozen a collector result and
+          // armed group retention before this disposition existed. Neither is
+          // valid without observed stop evidence; clear both before any member
+          // can nominate the group for destructive archival.
+          if (entry.collectorCompletion !== undefined) {
+            delete entry.collectorCompletion;
+            mutated = true;
+            mutatedRunIds.add(runId);
+          }
+          if (entry.archiveAtMs !== undefined) {
+            delete entry.archiveAtMs;
+            mutated = true;
+            mutatedRunIds.add(runId);
+          }
+        }
+        if (
+          entry.collect &&
+          entry.collectorCompletion &&
+          !shouldDeferTerminalCleanupForUnconfirmedChild(entry)
+        ) {
           if (entry.collectorLaunchCleanupPending) {
             const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
             if (!suppressSessionEffects) {
@@ -599,6 +619,7 @@ export function createSubagentRegistrySweeper(params: {
           groupEntries.some(
             ([, candidate]) =>
               !candidate.collectorCompletion ||
+              shouldDeferTerminalCleanupForUnconfirmedChild(candidate) ||
               candidate.collectorLaunchCleanupPending === true ||
               candidate.archiveAtMs === undefined ||
               candidate.archiveAtMs > now,
@@ -700,6 +721,7 @@ export function createSubagentRegistrySweeper(params: {
             ([candidateRunId, candidate]) =>
               expectedGroupEntries.get(candidateRunId) !== candidate ||
               !candidate.collectorCompletion ||
+              shouldDeferTerminalCleanupForUnconfirmedChild(candidate) ||
               candidate.collectorLaunchCleanupPending === true ||
               candidate.archiveAtMs === undefined ||
               candidate.archiveAtMs > now,

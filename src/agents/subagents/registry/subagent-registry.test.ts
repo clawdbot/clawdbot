@@ -747,6 +747,95 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId("run-collector-incomplete")).toBeDefined();
   });
 
+  it("keeps an unconfirmed collector group alive until stop evidence promotes the child", async () => {
+    const now = Date.now();
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
+      session: { mainKey: "main", scope: "per-sender" },
+    });
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          lifecycleRevision: "revision-unconfirmed-collector",
+          sessionId: "session-unconfirmed-collector",
+          status: "running",
+          updatedAt: now,
+        },
+        "agent:main:subagent:collector-unconfirmed",
+      ),
+    );
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-collector-confirmed",
+        childSessionKey: "agent:main:subagent:collector-confirmed",
+        task: "completed sibling",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        archiveAtMs: now - 1,
+        groupId: "swarm:unconfirmed-member",
+      }),
+    );
+    mod.addSubagentRunForTests(
+      makeCompletedCollectorRun({
+        runId: "run-collector-unconfirmed",
+        childSessionKey: "agent:main:subagent:collector-unconfirmed",
+        task: "still-running collector",
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+        archiveAtMs: now - 1,
+        groupId: "swarm:unconfirmed-member",
+      }),
+    );
+
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId("run-collector-confirmed")).toBeDefined();
+    const unconfirmed = mod.getSubagentRunByRunId("run-collector-unconfirmed");
+    expect(unconfirmed).toBeDefined();
+    expect(unconfirmed?.collectorCompletion).toBeUndefined();
+    expect(unconfirmed?.archiveAtMs).toBeUndefined();
+    expect(
+      mocks.callGateway.mock.calls.filter(([request]) => request.method === "sessions.delete"),
+    ).toHaveLength(0);
+
+    mocks.loadSessionStore.mockReturnValue(
+      createSessionStore(
+        {
+          lifecycleRevision: "revision-unconfirmed-collector",
+          sessionId: "session-unconfirmed-collector",
+          status: "done",
+          updatedAt: now + 1_000,
+          endedAt: now + 1_000,
+        },
+        "agent:main:subagent:collector-unconfirmed",
+      ),
+    );
+    vi.setSystemTime(now + 2_000);
+    await mod.testing.sweepOnceForTests();
+
+    expect(mod.getSubagentRunByRunId("run-collector-unconfirmed")?.collectorCompletion).toEqual({
+      status: "done",
+    });
+
+    vi.setSystemTime(now + 62_000);
+    await mod.testing.sweepOnceForTests();
+    expect(mod.getSubagentRunByRunId("run-collector-confirmed")).toBeUndefined();
+    expect(mod.getSubagentRunByRunId("run-collector-unconfirmed")).toBeUndefined();
+    const deleteCalls = mocks.callGateway.mock.calls.filter(
+      ([request]) => request.method === "sessions.delete",
+    );
+    expect(deleteCalls).toHaveLength(1);
+    expect(deleteCalls[0]?.[0]).toMatchObject({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:collector-unconfirmed",
+        expectedSessionId: "session-unconfirmed-collector",
+        expectedLifecycleRevision: "revision-unconfirmed-collector",
+      },
+    });
+  });
+
   it("refreshes collector membership after awaited sweep work", async () => {
     const now = Date.now();
     mocks.loadSessionStore.mockReturnValue(

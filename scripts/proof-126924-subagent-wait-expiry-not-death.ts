@@ -38,17 +38,10 @@
  *   Plugin-hook deferral itself is covered by unit tests, not by this script.
  *
  * WHAT IS ADVANCED RATHER THAN WAITED OUT
- * - Two retention clocks are rewound on the live registry rows (the real
- *   `subagentRuns` map, not a copy): the armed `archiveAtMs`, floored by the
- *   config schema to one minute, and `delivery.suspendedAt`, whose expiry is a
- *   hard-coded seven days. Sleeping either out in wall-clock is not an option —
- *   the seven-day one is impossible and the one-minute one stalled an earlier
- *   revision of this script for ~57 seconds with no output. Nothing under test
- *   is faked by this: the sweeper still reads `Date.now()` itself and still
- *   compares it against those fields, so the archive/delete and
- *   suspended-expiry branches become genuinely eligible. The rewind only moves
- *   the clock in the direction that makes the fail-closed assertions
- *   load-bearing instead of vacuous.
+ * - `delivery.suspendedAt` is rewound past its hard-coded seven-day expiry.
+ *   Sleeping that out is impossible. The sweeper still reads `Date.now()`
+ *   itself and compares it against the real row, so the expiry branch is
+ *   genuinely eligible.
  *
  * OUTPUT CADENCE AND RUNTIME
  * - Measured here: ~2 minutes end to end, of which ~95s is one cold synchronous jiti
@@ -291,24 +284,11 @@ try {
     fs.writeFileSync(artifactFor(runId), "written by a child that may still be running\n");
   }
 
-  // Rewind an already-armed retention due time on the live registry row. See the
-  // header: the sweeper's own `Date.now()` comparison and every guard under test
-  // stay real; only the clock moves.
   const liveRow = (runId: string) => {
     const row = memory.subagentRuns.get(runId);
     assert.ok(row, `the live registry row for ${runId} must be readable`);
     return row;
   };
-  const rewindArchiveClock = (runId: string) => {
-    const row = liveRow(runId);
-    assert.equal(
-      typeof row.archiveAtMs,
-      "number",
-      `retention must be armed on ${runId}, or the fail-closed assertions prove nothing`,
-    );
-    row.archiveAtMs = Date.now() - 1;
-  };
-
   // The live child's own record: alive and running. This is a real row on disk
   // and the only independent liveness evidence the registry ever consults.
   await writeChildSessionRow(LIVE_CHILD_SESSION_KEY, {
@@ -391,15 +371,14 @@ try {
     "[1/6] detached tasks read back through the real task registry: status=running (nonterminal)",
   );
 
-  // Both rows are delete-mode, so retention is armed at `endedAt +
-  // archiveAfterMinutes`. It has to have actually come due, or the fail-closed
-  // assertions below would pass simply because nothing was eligible for teardown
-  // yet — that exact vacuity bit an earlier revision of this script.
-  rewindArchiveClock(LIVE_RUN_ID);
-  rewindArchiveClock(ABSENT_RUN_ID);
-  log(
-    `[clock] retention was armed (archiveAfterMinutes=${ARCHIVE_AFTER_MINUTES}, floored to 1); its due time is rewound past now so the archive branch is eligible`,
-  );
+  for (const runId of [LIVE_RUN_ID, ABSENT_RUN_ID]) {
+    assert.equal(
+      liveRow(runId).archiveAtMs,
+      undefined,
+      `an unconfirmed child must not arm retention (${runId})`,
+    );
+  }
+  log("[clock] unconfirmed rows armed no destructive retention deadline");
 
   // ---------------------------------------------------------------- scenario 2
   await sweep();

@@ -76,7 +76,7 @@ describe("updateSubagentArchiveAtMs", () => {
     }
   });
 
-  it("keeps archiveAfterMinutes: 0 disabling auto-archive for an unconfirmed child", () => {
+  it("keeps every retention clock disabled for an unconfirmed child", () => {
     // Regression (openclaw-odqn round 2, finding 2): zero is the documented
     // no-auto-archive opt-out. Round 1 substituted the default 60-minute window
     // for a `child-unconfirmed` row so the deferred deletion would have an
@@ -97,8 +97,7 @@ describe("updateSubagentArchiveAtMs", () => {
     expect(updateSubagentArchiveAtMs(unconfirmed, disabled)).toBe(false);
     expect(unconfirmed.archiveAtMs).toBeUndefined();
 
-    // A configured window still applies normally to the same row: the fix
-    // restores the contract, it does not disable retention.
+    // A positive configured window is still only a clock, not stop evidence.
     const configured = createRunEntry({
       cleanup: "delete",
       execution: {
@@ -108,8 +107,26 @@ describe("updateSubagentArchiveAtMs", () => {
         outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
       },
     });
-    expect(updateSubagentArchiveAtMs(configured, cfg)).toBe(true);
-    expect(configured.archiveAtMs).toBe(902_000);
+    expect(updateSubagentArchiveAtMs(configured, cfg)).toBe(false);
+    expect(configured.archiveAtMs).toBeUndefined();
+  });
+
+  it("does not freeze an unconfirmed collector or arm group archival", () => {
+    const entry = createRunEntry({
+      collect: true,
+      archiveAtMs: 302_000,
+      collectorCompletion: { status: "timeout" },
+      execution: {
+        status: "terminal",
+        startedAt: 1_000,
+        endedAt: 2_000,
+        outcome: { status: "timeout", timeoutDisposition: "child-unconfirmed" },
+      },
+    });
+
+    expect(updateSwarmCollectorCompletion(entry, cfg)).toBe(true);
+    expect(entry.collectorCompletion).toBeUndefined();
+    expect(entry.archiveAtMs).toBeUndefined();
   });
 
   it("starts ordinary delete-mode retention at execution completion", () => {

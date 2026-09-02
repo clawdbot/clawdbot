@@ -379,6 +379,13 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
 
 /** Arms retention only after the run or its waitable collector result has completed. */
 export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
+  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
+    if (entry.archiveAtMs === undefined) {
+      return false;
+    }
+    delete entry.archiveAtMs;
+    return true;
+  }
   const endedAt =
     typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt)
       ? entry.execution.endedAt
