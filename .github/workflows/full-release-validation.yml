@@ -387,12 +387,14 @@ jobs:
           identity_kind="$(jq -r '.kind' <<< "$release_context")"
           release_tag="$(jq -r '.releaseTag' <<< "$release_context")"
           base_tag="$(jq -r '.baseTag // empty' <<< "$release_context")"
-          repository_url="https://github.com/${GITHUB_REPOSITORY}.git"
+          # The API uses this step's token and peels tags without persisting Git credentials.
+          resolve_release_ref() {
+            local encoded_ref
+            encoded_ref="$(jq -rn --arg value "$1" '$value | @uri')"
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha
+          }
           if [[ -n "$base_tag" ]]; then
-            base_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${base_tag}^{}" | awk 'NR == 1 { print $1 }')"
-            if [[ -z "$base_sha" ]]; then
-              base_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${base_tag}" | awk 'NR == 1 { print $1 }')"
-            fi
+            base_sha="$(resolve_release_ref "refs/tags/${base_tag}")"
             if [[ "$base_sha" != "$TARGET_SHA" ]]; then
               echo "Correction source ${TARGET_SHA} must match base release tag ${base_tag}." >&2
               exit 1
@@ -407,16 +409,13 @@ jobs:
               exit 1
             fi
             if [[ "$identity_kind" == "release tag" ]]; then
-              remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}^{}" | awk 'NR == 1 { print $1 }')"
-              if [[ -z "$remote_sha" ]]; then
-                remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}" | awk 'NR == 1 { print $1 }')"
-              fi
+              remote_sha="$(resolve_release_ref "refs/tags/${context_ref}")"
               if [[ "$remote_sha" != "$TARGET_SHA" ]]; then
                 echo "Target SHA ${TARGET_SHA} does not match release tag ${context_ref} at ${remote_sha:-missing}." >&2
                 exit 1
               fi
             else
-              remote_sha="$(git ls-remote --heads "$repository_url" "refs/heads/${context_ref}" | awk 'NR == 1 { print $1 }')"
+              remote_sha="$(resolve_release_ref "refs/heads/${context_ref}")"
               if [[ -z "$remote_sha" ]]; then
                 echo "Release context branch ${context_ref} does not resolve." >&2
                 exit 1
@@ -1180,7 +1179,7 @@ jobs:
     name: Run release checks independent validation
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1219,7 +1218,7 @@ jobs:
     name: Run release checks candidate validation
     needs: [resolve_target, evidence_reuse, candidate_acquisition]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1283,7 +1282,7 @@ jobs:
     name: Run product performance evidence
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1468,7 +1467,7 @@ jobs:
         performance,
       ]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
       sha256: ${{ steps.plan.outputs.sha256 }}
@@ -1701,7 +1700,7 @@ jobs:
     name: Release Decision
     needs: [resolve_target, release_execution_plan]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 720
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -1760,7 +1759,7 @@ jobs:
     name: Diagnostic Drain
     needs: [resolve_target, release_execution_plan]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 720
     outputs:
       state: ${{ steps.state.outputs.state }}

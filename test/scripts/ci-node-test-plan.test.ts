@@ -52,6 +52,7 @@ type VitestConfig = {
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
+const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
 const STORE_ALIAS_CHANGED_PATHS = [
   "docs/gateway/secrets.md",
   "src/agents/auth-profiles/read-only-availability.test.ts",
@@ -813,6 +814,43 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expect(selected, largeFile).toHaveLength(1);
           expect(selected[0]?.runner, largeFile).toBe(DEFAULT_NODE_TEST_RUNNER);
         }
+        const supportGroups = groups.filter((group) =>
+          group.configs.includes(agentVitestProjectOwners.support.config),
+        );
+        expect(supportGroups.length, profile.name).toBeGreaterThan(0);
+        if (profile.name === "Blacksmith") {
+          for (const owner of [
+            "agentic-control-plane-agent-chat",
+            "agentic-gateway-core-3",
+            "core-runtime-infra-storage-state",
+          ]) {
+            expect(
+              groups.filter((group) => group.shard_name.startsWith(`${owner}-hosted-`)).length,
+              owner,
+            ).toBeGreaterThan(1);
+          }
+          expect(supportGroups).toEqual([
+            {
+              shard_name: "agentic-agents-support",
+              configs: [agentVitestProjectOwners.support.config],
+              requiresDist: false,
+              runner: EXTRA_LARGE_NODE_TEST_RUNNER,
+            },
+          ]);
+          expect(plan.find((shard) => shard.groups.includes(supportGroups[0]!))).toMatchObject({
+            checkName: "checks-node-compact-large32-1",
+            shardName: "compact-large32-1",
+            groups: supportGroups,
+            runner: EXTRA_LARGE_NODE_TEST_RUNNER,
+            planConcurrency: 1,
+            timeoutMinutes: 120,
+          });
+        } else {
+          expect(supportGroups.every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER)).toBe(
+            true,
+          );
+          expect(plan.some((shard) => shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)).toBe(false);
+        }
         const cliProcessJobs = plan.filter((shard) =>
           shard.groups.some((group) =>
             group.configs.includes("test/vitest/vitest.cli-process.config.ts"),
@@ -866,9 +904,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(plan.every((shard) => Number.isFinite(shard.predictedSeconds))).toBe(true);
         const names = plan.flatMap((shard) => shard.groups.map((group) => group.shard_name));
         expect(new Set(names).size).toBe(names.length);
-        expect(plan.length, `${profile.name} row budget`).toBeLessThanOrEqual(
-          profile.name === "GitHub-hosted" ? 112 : 96,
-        );
+        expect(new Set(plan.map((shard) => shard.checkName)).size).toBe(plan.length);
+        expect(new Set(plan.map((shard) => shard.shardName)).size).toBe(plan.length);
+        expect(plan.length, `${profile.name} row budget`).toBeLessThanOrEqual(80);
       }
     }
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
@@ -890,8 +928,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "core-runtime-media-ui",
       "core-unit-src-security",
     ]) {
-      const jobs = [1, 2, 3].map((stripe) => jobOf(`${prefix}-${stripe}`));
-      expect(jobs.every((job) => job >= 0)).toBe(true);
+      const jobs = [1, 2, 3].flatMap((stripe) => {
+        const owner = `${prefix}-${stripe}`;
+        const placements = compact.flatMap((shard, index) =>
+          shard.groups
+            .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner)
+            .map(() => index),
+        );
+        expect(placements.length, owner).toBeGreaterThan(0);
+        return placements;
+      });
       expect(new Set(jobs).size).toBe(jobs.length);
     }
     // Cheap stripes may legally co-locate in one bin; only existence matters.
@@ -1057,11 +1103,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     });
     for (const prefix of ["agentic-gateway-core", "core-runtime-media-ui"]) {
       for (const suffix of ["1", "2", "3"]) {
-        expect(
-          compact
-            .flatMap((shard) => shard.groups)
-            .find((group) => group.shard_name === `${prefix}-${suffix}`)?.env,
-        ).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: "2" });
+        const groups = compact
+          .flatMap((shard) => shard.groups)
+          .filter(
+            (group) => group.shard_name.replace(/-hosted-\d+$/u, "") === `${prefix}-${suffix}`,
+          );
+        expect(groups.length).toBeGreaterThan(0);
+        for (const group of groups) {
+          expect(group.env).toEqual({ OPENCLAW_VITEST_MAX_WORKERS: "2" });
+        }
       }
     }
     expect(
@@ -1089,12 +1139,20 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const smallJobs = compact.filter(
       (shard) => !shard.requiresDist && shard.checkName.startsWith("checks-node-compact-small-"),
     );
+    const extraLargeJobs = compact.filter(
+      (shard) => !shard.requiresDist && shard.checkName.startsWith("checks-node-compact-large32-"),
+    );
     const distJobs = compact.filter((shard) => shard.requiresDist);
     expect(largeJobs.length).toBeGreaterThan(0);
     expect(smallJobs.length).toBeGreaterThan(0);
+    expect(extraLargeJobs).toHaveLength(1);
     expect(distJobs).toHaveLength(1);
+    expect(largeJobs.length + smallJobs.length + extraLargeJobs.length + distJobs.length).toBe(
+      compact.length,
+    );
     expect(largeJobs.every((shard) => shard.runner === DEFAULT_NODE_TEST_RUNNER)).toBe(true);
     expect(smallJobs.every((shard) => shard.runner === BUNDLED_NODE_TEST_RUNNER)).toBe(true);
+    expect(extraLargeJobs[0]?.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
     for (const shard of [
       ...compact,
       ...pullRequestCompact,
@@ -2496,9 +2554,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(after.every((shard) => shard.planConcurrency === 1 && shard.groups.length <= 10)).toBe(
         true,
       );
-      if (runnerBackend !== "blacksmith") {
-        expect(after.length).toBeLessThanOrEqual(runnerBackend === "github" ? 112 : 96);
-      }
+      expect(after.length).toBeLessThanOrEqual(80);
     },
   );
 

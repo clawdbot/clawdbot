@@ -186,16 +186,20 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   before build and transform warming. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- Hybrid first attempts route `preflight`, `security-fast`, and `ci-gate` to
-  the existing 4-vCPU Blacksmith runner after measured hosted queue delays.
-  Contributor trust, manual/non-canonical fallbacks, hosted retries, and the
-  `github` outage override remain intact. Budget all three registrations.
+- `ci-gate` follows `preflight` routing for every non-`github` value, including
+  the existing 4-vCPU Blacksmith runner, contributor-trust checks, hosted
+  dispatch/retry/fork fallbacks, and non-canonical fallbacks; `security-fast`
+  stays hosted outside eligible hybrid first attempts. This avoids a second
+  hosted assignment wave. Security hooks use pinned installed packages and
+  local hook definitions, without remote Git initialization. The `github` outage override remains
+  intact. Budget two control-job registrations per eligible Blacksmith run and
+  three per eligible hybrid first attempt.
   The aggregate uses `!cancelled()` to report failed prerequisites without
   holding a superseded run open after workflow cancellation.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
-  and 96 with the GitHub or hybrid planner profile, Windows at 2, and Android
-  at 2. The compact row budgets are 112 for hosted-only GitHub and 96 for
-  hybrid; the higher hosted row budget does not increase concurrency.
+- CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 2,
+  and Android at 2. Every compact profile has an enforced 80-row budget, plugin
+  fallback has a 50-row budget, and the final Node matrix enforces 80 push or
+  130 PR rows, including precise plans. Excess inventory fails preflight.
 - Windows keeps two disjoint file inventories. Jobs requesting the existing
   Blacksmith class admit at most two project processes with one Vitest worker
   each; hosted fallbacks remain serial. Runtime preparation completes before
@@ -210,21 +214,21 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - iOS Release, Debug/simulator tests, and both screenshot shards always use
   `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
   hosted image; do not require a failed first attempt to select that capacity.
-  Excluding those four hosted rows from the current 86-row non-Node inventory
-  leaves 82 potentially eligible rows. Historical targets without the UI
-  named-project contract can use one extra row: 87 total and 83 potentially
-  eligible. Retain the conservative allowance of 84, including other hosted/skipped
-  jobs; the saved capacity remains unspent. This gives 180 rows per main run and
-  274 per broad PR, or
-  `4 × 180 + 19 × 274 = 5,926` registrations in the observed five-minute
-  arrival envelope. This is not organization-wide headroom: include queued
-  carryover, adjacent repositories, and release arrivals. A complete npm
-  qualification uses six Blacksmith jobs, three more than the former serial
-  layout; parent retries reuse the existing producer. Hosted manual/retry
-  CI paths add no Blacksmith registrations.
+  The current non-Node inventory is 85 rows, or 86 for historical UI targets.
+  Excluding those four hosted rows leaves at most 82 potentially eligible jobs.
+  The enforced Node caps therefore give 162 registrations per main run and
+  212 per PR: `4 × 162 + 21 × 212 = 5,100` in the retained peak arrival
+  envelope. The old 19-arrival estimate is obsolete. The remaining 900 below
+  the 6,000 reference target must cover adjacent repositories, releases and
+  carryover; the bounded 2026-09-02 census did not prove that upper bound.
+  Treat a single PR concurrency trial separately from a global rollout.
+  A shared-token quota response does not establish organization-wide usage.
+  Budget all six npm qualification jobs and the actual full-release children;
+  ordinary manual check rows can still use Blacksmith outside hybrid mode.
 - Canonical PR Node tests use one precise changed-target job when possible;
-  broad, deleted, unknown, or planner-failed changes fall back to the compact
-  full-suite plan. Targeted plans retain the full built-artifact
+  broad, deleted or unknown changes fall back to the compact full-suite plan
+  plus affected plugin coverage. Current PR planner errors fail preflight.
+  Targeted plans retain the full built-artifact
   boundary gate. `main` uses compact integration; manual and release runs use
   full named shards.
 - The combined Node matrix admits compact and plugin descriptors by estimated
@@ -232,6 +236,16 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   existing 90-file job budget with native Vitest sharding; retain complete
   config discovery, exclusions and process isolation. Count every appended
   plugin row, including the five added QA/provider rows, in the burst envelope.
+- Plugin fallback pairs retain separate child processes, including process-bounded
+  configs. Their budget remains 150 predicted seconds while expanded compact
+  jobs use 210. Runtime preparation stays separate; no process/file/worker
+  limits are relaxed. The complete supplemental boundary list runs in one job
+  with four concurrent checks and one full-root focused-rule scan.
+- Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
+  outliers reuse the existing file splitter. Preserve serial execution, worker
+  pins and complete timing-history floors; no blanket increase in sharding.
+- The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
+  Its file inventory and resource-derived worker policy remain unchanged.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
 - CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
   jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe

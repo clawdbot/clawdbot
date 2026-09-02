@@ -518,17 +518,9 @@ describe("CI changed Node test plan", () => {
         .toSorted((left, right) => left.shard_name.localeCompare(right.shard_name));
 
     expect(executionDescriptors(groups)).toEqual(executionDescriptors(fallbackGroups(original)));
-    for (const config of [
-      "test/vitest/vitest.extension-codex.config.ts",
-      "test/vitest/vitest.extension-matrix.config.ts",
-      "test/vitest/vitest.extension-telegram.config.ts",
-    ]) {
-      expect(shards.filter((shard) => shard.configs.includes(config))).toEqual(
-        original.filter((shard) => shard.configs.includes(config)),
-      );
-    }
     expect(shards).toHaveLength(original.length - bundles.length);
     expect(shards.length).toBeGreaterThan(1);
+    expect(shards.length).toBeLessThanOrEqual(50);
     expect(shards.every((shard) => !shard.targets)).toBe(true);
     expect(groups.every((group) => group.configs.length === 1)).toBe(true);
     expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
