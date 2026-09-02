@@ -360,6 +360,15 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
   expect((await request("sessions.list")).payload).toMatchObject({
     sessions: [{ pinned: true, pinnedAt: expect.any(Number) }],
   });
+  const beforeStalePatch = (await request("sessions.list")).payload.sessions;
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: "retired-generation",
+      label: "Wrong generation",
+    }),
+  ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  expect((await request("sessions.list")).payload.sessions).toEqual(beforeStalePatch);
 });
 
 it("replays later commits onto an injected list without adopting its stale generation", async ({

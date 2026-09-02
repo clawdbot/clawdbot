@@ -97,6 +97,7 @@ suite.define(() => {
       kind: "direct",
       label: "Session A",
       permissionMode: "guarded",
+      sessionId: "session-a-original",
       sessionRoot: "/workspace/projects/openclaw",
       updatedAt: 2,
     };
@@ -142,6 +143,7 @@ suite.define(() => {
       await pane.locator('[data-chat-permission-option="workspace"]').click();
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({
+        expectedSessionId: session.sessionId,
         key: session.key,
         permissionMode: "workspace",
       });
@@ -185,8 +187,35 @@ suite.define(() => {
         chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
       );
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
-      await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Default");
+
+      await gateway.deferNext("sessions.patch");
+      await trigger.click();
+      await pane.locator('[data-chat-permission-option="full"]').click();
+      const stalePatch = (await waitForRequests(gateway, "sessions.patch", 3))[2];
+      expect(requireRecord(stalePatch?.params)).toMatchObject({
+        expectedSessionId: session.sessionId,
+        key: session.key,
+        permissionMode: "full",
+      });
+      const replacement = {
+        ...session,
+        permissionMode: "read-only",
+        sessionId: "session-after-replacement",
+        updatedAt: 5,
+      };
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([replacement]));
+      await gateway.rejectDeferred("sessions.patch", {
+        code: "INVALID_REQUEST",
+        message: "session identity changed; refresh and retry",
+      });
+
+      await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("read-only");
+      await expect.poll(() => trigger.isEnabled()).toBe(true);
+      await pane
+        .locator(".chat-error")
+        .getByText("Failed to update permissions", { exact: false })
+        .waitFor();
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -876,6 +905,7 @@ suite.define(() => {
             kind: "direct",
             label: "Session A",
             permissionMode: "workspace",
+            sessionId: "session-a-send-barrier",
             updatedAt: 2,
           },
         ]),
@@ -896,6 +926,9 @@ suite.define(() => {
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({
         key: "agent:main:session-a",
+        ...(setting.label === "Full Access permission"
+          ? { expectedSessionId: "session-a-send-barrier" }
+          : {}),
         ...setting.patch,
       });
 

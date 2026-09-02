@@ -95,6 +95,7 @@ export function patchChatSessionSettings(
   patch: SessionPatch,
   options: {
     agentId?: string;
+    expectedSessionId?: string;
     ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},
@@ -106,6 +107,7 @@ export function patchChatSessionSettings(
     // redirect queued intent to a replacement Gateway.
     const result = await host.sessions.patch(sessionKey, patch, {
       agentId: options.agentId,
+      expectedSessionId: options.expectedSessionId,
       ownsModelOverride: options.ownsModelOverride,
       waitFor: previous,
     });

@@ -1544,6 +1544,17 @@ function installControlUiMockGateway(
       }
     }
     if (method === "sessions.patch" && isRecord(params) && typeof params.key === "string") {
+      if (
+        typeof params.expectedSessionId === "string" &&
+        sessions.read(params.key).sessionId !== params.expectedSessionId
+      ) {
+        return {
+          __mockError: {
+            code: "INVALID_REQUEST",
+            message: "session identity changed; refresh and retry",
+          },
+        };
+      }
       const result = sessions.patch(params.key, params);
       return "__mockError" in result || (isRecord(response) && Object.keys(response).length === 0)
         ? result
