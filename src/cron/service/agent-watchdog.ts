@@ -49,6 +49,7 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
 /** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
 type CronAgentWatchdog = {
   start: () => void;
+  replaceTimeout: (timeoutMs: number | undefined) => void;
   noteLaneWait: () => void;
   noteLaneAdmitted: () => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
@@ -64,6 +65,7 @@ export function createCronAgentWatchdog(params: {
   jobTimeoutMs: number;
   triggerTimeout: (reason: string) => void;
 }): CronAgentWatchdog {
+  let jobTimeoutMs = params.jobTimeoutMs;
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
   let setupTimeoutId: NodeJS.Timeout | undefined;
@@ -85,7 +87,7 @@ export function createCronAgentWatchdog(params: {
     }
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
-    }, params.jobTimeoutMs);
+    }, jobTimeoutMs);
   };
   const clearSetupTimeout = () => {
     if (!setupTimeoutId) {
@@ -122,7 +124,7 @@ export function createCronAgentWatchdog(params: {
       if (isWaitingForExecution()) {
         setTimedOut(preExecutionTimeoutErrorMessage(activeExecution));
       }
-    }, resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs));
+    }, resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs));
   };
   const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
     if (!info) {
@@ -148,6 +150,20 @@ export function createCronAgentWatchdog(params: {
         startSetupTimeout();
         return;
       }
+      startTimeout();
+    },
+    replaceTimeout: (timeoutMs) => {
+      if (state === "timed_out" || state === "disposed") {
+        return;
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+      if (timeoutMs === undefined) {
+        return;
+      }
+      jobTimeoutMs = timeoutMs;
       startTimeout();
     },
     noteLaneWait: () => {
