@@ -598,7 +598,6 @@ export function projectChatTranscript(
     transcriptRows.push({ kind: "content", key: "presence:typing", content: typingIndicator });
   }
   trackTranscriptRenderDependencies(state, [
-    chatItems,
     locale,
     expandedToolCards,
     getExpansionStateVersion(expandedToolCards),
