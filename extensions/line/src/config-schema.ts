@@ -69,6 +69,10 @@ export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema
       label: "LINE Group Join Introduction",
       help: "Post one brief introduction when the bot joins an allowed LINE group or multi-person room (default: true). Account settings override the channel-wide setting.",
     },
+    textChunkLimit: {
+      label: "LINE Text Chunk Limit",
+      help: "Maximum characters per outbound LINE message before OpenClaw splits a long reply (default and maximum: 5000, the limit LINE itself enforces). A smaller value makes shorter bubbles but sends more messages, and every message past a reply's first five counts against the monthly quota.",
+    },
   },
 });
 
