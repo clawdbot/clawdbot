@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+} from "../../api/gateway.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { TaskStatus, TaskSummary } from "../../lib/tasks/task-summary.ts";
@@ -20,10 +24,19 @@ type TasksPageTestElement = HTMLElement & {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
+    reject = rejectPromise;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
+}
+
+function staleCursorError() {
+  return new GatewayRequestError({
+    code: "INVALID_REQUEST",
+    message: "invalid or expired tasks.list cursor; restart pagination without a cursor",
+  });
 }
 
 function createGateway(
@@ -389,7 +402,207 @@ describe("TasksPage active pagination", () => {
     expect(page.tasks.filter((task) => task.id === "task-shared")).toEqual([sharedPageTwo]);
   });
 
-  it("fails visibly when an active page repeats its cursor", async () => {
+  it("retains rows while one stale continuation retries cursorlessly", async () => {
+    const stale = createTask("task-stale");
+    const completed = createTask("task-stale", "completed", { updatedAt: 200 });
+    const retry = deferred<{ tasks: TaskSummary[] }>();
+    let phase: "initial" | "pending" = "initial";
+    let continuationRejected = false;
+    let recentCalls = 0;
+    const request = vi.fn(
+      (
+        _method: string,
+        params?: { cursor?: string; status?: readonly string[] },
+      ): Promise<{ tasks: TaskSummary[]; nextCursor?: string }> => {
+        if (params?.status?.includes("completed")) {
+          recentCalls += 1;
+          return Promise.resolve({ tasks: continuationRejected ? [completed] : [] });
+        }
+        if (phase === "initial") {
+          return Promise.resolve({ tasks: [stale] });
+        }
+        if (params?.cursor) {
+          continuationRejected = true;
+          return Promise.reject(staleCursorError());
+        }
+        if (continuationRejected) {
+          return retry.promise;
+        }
+        return Promise.resolve({ tasks: [stale], nextCursor: "stale-cursor" });
+      },
+    );
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(page.tasks).toEqual([stale]));
+    const initialRecentCalls = recentCalls;
+
+    phase = "pending";
+    const pending = page.refreshTasks();
+    await vi.waitFor(() => {
+      const activeCalls = request.mock.calls.filter(([, params]) =>
+        (params as { status?: readonly string[] } | undefined)?.status?.includes("running"),
+      );
+      expect(activeCalls.slice(-3).map(([, params]) => params?.cursor)).toEqual([
+        undefined,
+        "stale-cursor",
+        undefined,
+      ]);
+    });
+    expect(page.tasks).toEqual([stale]);
+    expect(page.error).toBeNull();
+
+    retry.resolve({ tasks: [] });
+    await pending;
+
+    expect(recentCalls - initialRecentCalls).toBe(2);
+    expect(page.tasks).toEqual([completed]);
+    expect(page.error).toBeNull();
+  });
+
+  it("clears stale rows after the bounded retry also loses its continuation", async () => {
+    const stale = createTask("task-stale");
+    const fresh = createTask("task-fresh", "running", { updatedAt: 200 });
+    let continuationFailures = 0;
+    let phase: "initial" | "rejected" | "recovered" = "initial";
+    const request = vi.fn(
+      (
+        _method: string,
+        params?: { cursor?: string; status?: readonly string[] },
+      ): Promise<{ tasks: TaskSummary[]; nextCursor?: string }> => {
+        if (params?.status?.includes("completed")) {
+          return Promise.resolve({ tasks: [] });
+        }
+        if (phase === "initial") {
+          return Promise.resolve({ tasks: [stale] });
+        }
+        if (phase === "recovered") {
+          return Promise.resolve({ tasks: [fresh] });
+        }
+        if (params?.cursor) {
+          continuationFailures += 1;
+          return Promise.reject(staleCursorError());
+        }
+        return Promise.resolve({
+          tasks: [stale],
+          nextCursor: `stale-cursor-${continuationFailures + 1}`,
+        });
+      },
+    );
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(page.tasks).toEqual([stale]));
+
+    phase = "rejected";
+    await page.refreshTasks();
+
+    expect(continuationFailures).toBe(2);
+    expect(page.tasks).toEqual([]);
+    expect(page.error).toContain("restart pagination");
+    source.emitTask({ action: "upserted", task: createTask("task-event", "running") });
+    expect(page.tasks).toEqual([]);
+
+    phase = "recovered";
+    await page.refreshTasks();
+
+    expect(page.tasks).toEqual([fresh]);
+    expect(page.error).toBeNull();
+    expect(request.mock.calls.at(-2)?.[1]).toEqual({
+      agentId: "main",
+      limit: 500,
+      status: ["queued", "running"],
+    });
+  });
+
+  it("ignores a rejected continuation from a replaced gateway identity", async () => {
+    const stale = createTask("task-stale");
+    const fresh = createTask("task-fresh", "running", { updatedAt: 200 });
+    const continuation = deferred<{ tasks: TaskSummary[] }>();
+    let phase: "initial" | "pending" | "replacement" = "initial";
+    const request = vi.fn(
+      (_method: string, params?: { cursor?: string; status?: readonly string[] }) => {
+        if (params?.status?.includes("completed")) {
+          return Promise.resolve({ tasks: [] });
+        }
+        if (phase === "replacement") {
+          return Promise.resolve({ tasks: [fresh] });
+        }
+        if (phase === "pending" && params?.cursor) {
+          return continuation.promise;
+        }
+        return Promise.resolve({
+          tasks: [stale],
+          ...(phase === "pending" ? { nextCursor: "stale-cursor" } : {}),
+        });
+      },
+    );
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(page.tasks).toEqual([stale]));
+
+    phase = "pending";
+    const pending = page.refreshTasks();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "tasks.list",
+        expect.objectContaining({ cursor: "stale-cursor" }),
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    phase = "replacement";
+    source.emitConnected(false);
+    source.emitConnected(true);
+    await waitForFast(() => expect(page.tasks).toEqual([fresh]));
+    continuation.reject(staleCursorError());
+    await pending;
+
+    expect(page.tasks).toEqual([fresh]);
+    expect(page.error).toBeNull();
+  });
+
+  it("retains populated rows and event updates after a cursorless list failure", async () => {
+    const current = createTask("task-current");
+    let rejectContinuation = false;
+    const request = vi.fn(
+      (_method: string, params?: { cursor?: string; status?: readonly string[] }) => {
+        if (params?.status?.includes("completed")) {
+          return Promise.resolve({ tasks: [] });
+        }
+        if (rejectContinuation && params?.cursor) {
+          return Promise.reject(
+            new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "temporary task list failure",
+            }),
+          );
+        }
+        return Promise.resolve({
+          tasks: [current],
+          ...(rejectContinuation ? { nextCursor: "active-page-2" } : {}),
+        });
+      },
+    );
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(page.tasks).toEqual([current]));
+
+    rejectContinuation = true;
+    await page.refreshTasks();
+    expect(page.tasks).toEqual([current]);
+
+    const updated = { ...current, progressSummary: "Still running", updatedAt: 200 };
+    source.emitTask({ action: "upserted", task: updated });
+    expect(page.tasks).toEqual([updated]);
+  });
+
+  it("fails visibly when both active-page attempts repeat their cursor", async () => {
     let activeCalls = 0;
     const request = vi.fn((_method: string, params?: { status?: readonly string[] }) => {
       if (!params?.status || params.status.length !== 2) {
@@ -408,8 +621,8 @@ describe("TasksPage active pagination", () => {
 
     await waitForFast(() => expect(page.error).toBe("The gateway returned an invalid task list."));
 
-    expect(activeCalls).toBe(2);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(activeCalls).toBe(4);
+    expect(request).toHaveBeenCalledTimes(6);
   });
 
   it("replays buffered events after the final active page resolves", async () => {

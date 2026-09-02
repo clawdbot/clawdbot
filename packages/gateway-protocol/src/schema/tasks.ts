@@ -77,18 +77,20 @@ export const TaskSummarySchema = closedObject({
 });
 
 /** Task list filters with bounded pagination. */
+export const TASKS_LIST_CURSOR_MAX_LENGTH = 512;
+
 export const TasksListParamsSchema = closedObject({
   status: Type.Optional(Type.Union([TaskLedgerStatusSchema, Type.Array(TaskLedgerStatusSchema)])),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-  cursor: Type.Optional(Type.String()),
+  cursor: Type.Optional(Type.String({ maxLength: TASKS_LIST_CURSOR_MAX_LENGTH })),
 });
 
 /** Task list page response. */
 export const TasksListResultSchema = closedObject({
   tasks: Type.Array(TaskSummarySchema),
-  nextCursor: Type.Optional(Type.String()),
+  nextCursor: Type.Optional(Type.String({ maxLength: TASKS_LIST_CURSOR_MAX_LENGTH })),
 });
 
 /** Lookup request for one task id. */
