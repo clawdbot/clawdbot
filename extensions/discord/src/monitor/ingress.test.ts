@@ -364,6 +364,60 @@ describe("Discord durable ingress", () => {
     });
   });
 
+  it("leaves malformed policy fields to claim-time failure while unrelated work drains", async () => {
+    await withQueue(async (queue) => {
+      const malformed = {
+        ...createRawMessage("malformed", "channel-bad", {
+          guild_id: GUILD_ID,
+          channel_type: ChannelType.GuildText,
+          timestamp: new Date(STALE_AT).toISOString(),
+        }),
+        mentions: {},
+      };
+      await queue.enqueue(
+        "malformed",
+        {
+          version: 1,
+          receivedAt: STALE_AT,
+          // SAFETY: this malformed payload intentionally bypasses the test queue's valid type.
+          rawMessage: malformed as never,
+          channelKind: "non-thread",
+        },
+        { laneKey: "channel:channel-bad", receivedAt: STALE_AT },
+      );
+      const current = createRawMessage("current-after-malformed", "channel-good", {
+        guild_id: GUILD_ID,
+        channel_type: ChannelType.GuildText,
+        timestamp: new Date(FROZEN_NOW).toISOString(),
+      });
+      await queue.enqueue(
+        current.id,
+        {
+          version: 1,
+          receivedAt: FROZEN_NOW,
+          rawMessage: current,
+          channelKind: "non-thread",
+        },
+        { laneKey: "channel:channel-good", receivedAt: FROZEN_NOW },
+      );
+      const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = createPolicyMonitor({ queue, dispatch });
+      monitor.start();
+      try {
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+        await vi.waitFor(async () => {
+          expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+            { id: "malformed", reason: "invalid-event" },
+          ]);
+        });
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it.each([
     {
       name: "current ambient work",

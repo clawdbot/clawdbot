@@ -82,8 +82,27 @@ function readDiscordMessageFacts(rawMessage: unknown): { eventId: string; laneKe
   return eventId && channelId ? { eventId, laneKey: `channel:${channelId}` } : null;
 }
 
+function hasReadableDiscordPolicyFields(rawMessage: Record<string, unknown>): boolean {
+  return (
+    typeof rawMessage.content === "string" &&
+    typeof rawMessage.timestamp === "string" &&
+    typeof rawMessage.mention_everyone === "boolean" &&
+    Array.isArray(rawMessage.attachments) &&
+    rawMessage.attachments.every(isRecord) &&
+    Array.isArray(rawMessage.mentions) &&
+    rawMessage.mentions.every((mention) => isRecord(mention) && typeof mention.id === "string") &&
+    (rawMessage.message_reference == null || isRecord(rawMessage.message_reference)) &&
+    (rawMessage.referenced_message == null || isRecord(rawMessage.referenced_message))
+  );
+}
+
 export function readDiscordIngressPendingRow(payload: unknown): DiscordIngressPendingRow | null {
-  if (!isRecord(payload) || !readDiscordMessageFacts(payload.rawMessage)) {
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.rawMessage) ||
+    !readDiscordMessageFacts(payload.rawMessage) ||
+    !hasReadableDiscordPolicyFields(payload.rawMessage)
+  ) {
     return null;
   }
   // SAFETY: identity validation above proves the durable value is a Discord gateway frame.
