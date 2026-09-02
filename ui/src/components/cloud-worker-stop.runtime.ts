@@ -19,6 +19,7 @@ export async function requestCloudWorkerStop(
   await client.request(
     "sessions.reclaim",
     { key: session.key, ...(session.agentId ? { agentId: session.agentId } : {}) },
-    { timeoutMs: 10 * 60_000 },
+    // Provider-owned capture and teardown determine the deadline; connection loss still rejects.
+    { timeoutMs: null },
   );
 }

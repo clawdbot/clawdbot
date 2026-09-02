@@ -10,6 +10,16 @@ import {
 } from "./input-files.js";
 
 describe("extractFileContentFromSource", () => {
+  it("preserves the encoding used to recognize otherwise untyped text", async () => {
+    const text = "Café notes: résumé et météo pour demain.";
+    const result = await extractFileContentFromSource({
+      source: { type: "base64", data: Buffer.from(text, "latin1").toString("base64") },
+      limits: resolveInputFileLimits(),
+    });
+
+    expect(result.text).toBe(text);
+  });
+
   const avi = Buffer.from("524946463800000041564920" + "00".repeat(52), "hex");
   const aviSource = { type: "base64", data: avi.toString("base64"), filename: "clip.avi" } as const;
 
@@ -53,6 +63,86 @@ describe("extractFileContentFromSource", () => {
         },
       ),
     ).rejects.toThrow(/Unsupported image MIME type: video\//);
+  });
+
+  it.each([
+    'text/plain; charset="windows-1252"',
+    'Text/Plain; Charset="WINDOWS-1252"',
+    'text/plain; charset="windows\\-1252"',
+    'text/plain; note="a;charset=utf-8;b"; charset=windows-1252',
+    "text/plain; charset=windows-1252; charset=utf-8",
+    'text/plain; charset="windows-1252"; charset=utf-8',
+    "text/plain; charset=; charset=windows-1252",
+    "text/plain; charset= windows-1252",
+  ])("decodes declared text bytes using %s", async (mediaType) => {
+    const result = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20, 0x80]).toString("base64"),
+        mediaType,
+      },
+      limits: resolveInputFileLimits(),
+    });
+
+    expect(result.text).toBe("café €");
+  });
+
+  it.each([
+    "text/plain",
+    'text/plain; charset="utf-8"',
+    "text/plain; charset=not-an-encoding; charset=windows-1252",
+    'text/plain; charset=""; charset=windows-1252',
+    "text/plain; charset =windows-1252",
+  ])("keeps UTF-8 decoding for %s", async (mediaType) => {
+    const result = await extractFileContentFromSource({
+      source: { type: "base64", data: Buffer.from("café €").toString("base64"), mediaType },
+      limits: resolveInputFileLimits(),
+    });
+
+    expect(result.text).toBe("café €");
+  });
+
+  it("keeps byte-detected UTF-16 ahead of a declared charset", async () => {
+    const result = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from("\ufeffcafé €", "utf16le").toString("base64"),
+        mediaType: 'text/plain; charset="windows-1252"',
+      },
+      limits: resolveInputFileLimits(),
+    });
+
+    expect(result.text).toBe("café €");
+  });
+
+  it("keeps configured MIME synonyms while parsing charset parameters", async () => {
+    const result = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from("name: café").toString("base64"),
+        mediaType: 'text/yaml; charset="utf-8"',
+      },
+      limits: resolveInputFileLimits({ allowedMimes: ["application/yaml"] }),
+    });
+
+    expect(result.text).toBe("name: café");
+  });
+
+  it.each([
+    ['text/plain; charset="windows-1252', "café €"],
+    ['text/plain; note="a; charset=windows-1252', "caf\uFFFD \uFFFD"],
+    ["plain; charset=windows-1252", "café €"],
+  ])("uses MIME parser recovery without changing admission for %s", async (mediaType, text) => {
+    const result = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x20, 0x80]).toString("base64"),
+        mediaType,
+      },
+      limits: resolveInputFileLimits(),
+    });
+
+    expect(result.text).toBe(text);
   });
 
   it("keeps the declared MIME when the filename suggests plain text", async () => {

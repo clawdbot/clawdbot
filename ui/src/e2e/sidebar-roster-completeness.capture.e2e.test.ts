@@ -1,10 +1,10 @@
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -118,6 +118,7 @@ suite.define(() => {
       // Captured before the row assertion so a pre-fix run still produces its
       // own proof image instead of dying at the assertion with nothing to show.
       await captureUiProof(
+        suite,
         page,
         `roster-completeness-${process.env.OPENCLAW_ROSTER_PROOF ?? "after"}.png`,
       );

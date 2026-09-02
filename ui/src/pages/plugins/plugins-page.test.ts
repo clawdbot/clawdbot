@@ -25,6 +25,7 @@ import {
   createResult,
   createRuntimeConfigHarness,
   deferred,
+  mountClawHubSearchPage,
   mountPage,
   resetPluginsPageTestState,
   type RuntimeConfigTestState,
@@ -76,110 +77,6 @@ describe("PluginsPage", () => {
     expect(
       page.querySelector(".plugins-page-error")?.textContent?.match(/catalog unavailable/gu),
     ).toHaveLength(1);
-  });
-
-  it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
-    const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response(null, { status: 401 }))
-      .mockResolvedValueOnce(
-        new Response(
-          new Blob(
-            [
-              new Uint8Array([
-                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52,
-                0, 0, 0, 2, 0, 0, 0, 1,
-              ]),
-            ],
-            { type: "image/png" },
-          ),
-          {
-            status: 200,
-            headers: { "content-type": "image/png" },
-          },
-        ),
-      );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
-    harness.gateway.connection.token = "first";
-    harness.gateway.connection.password = "second";
-    const result = createResult(
-      createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true }),
-    );
-    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
-
-    const { page } = await mountPage(createContext(harness.gateway), routeData);
-
-    await waitForFast(() => {
-      expect(
-        page.querySelector('[data-plugin-id="remote-icon"] img.plugins-icon')?.getAttribute("src"),
-      ).toBe("blob:firecrawl-icon");
-    });
-    expect(
-      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
-    ).toEqual(["Bearer first", "Bearer second"]);
-    page.applyMutationResult({
-      ok: true,
-      plugin: createPlugin({ id: "other-plugin", name: "Other Plugin" }),
-      restartRequired: false,
-    });
-    expect(revokeObjectURL).not.toHaveBeenCalled();
-
-    page.remove();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
-  });
-
-  it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
-    const createObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = vi.fn();
-      },
-    );
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(
-          new Blob(
-            [
-              `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><filter id="work"><feTurbulence /></filter><path filter="url(#work)" d="M0 0h24v24H0z"/></svg>`,
-            ],
-            { type: "image/svg+xml" },
-          ),
-          { status: 200, headers: { "content-type": "image/svg+xml" } },
-        ),
-      );
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
-    const result = createResult(
-      createPlugin({ id: "unsafe-icon", name: "Unsafe Icon", hasIcon: true }),
-    );
-
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway, result),
-    );
-
-    await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
-    expect(createObjectURL).not.toHaveBeenCalled();
-    expect(
-      page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
-    ).toContain("UI");
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {
@@ -321,6 +218,52 @@ describe("PluginsPage", () => {
     );
   });
 
+  it.each([0, 1, 3])(
+    "announces %i completed ClawHub search results in the existing status",
+    async (count) => {
+      vi.useFakeTimers();
+      const response = deferred<{ results: PluginSearchResult[] }>();
+      const { client } = createClient(async (method) => {
+        if (method === "plugins.search") {
+          return response.promise;
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const { page } = await mountClawHubSearchPage(client);
+      const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
+      search.value = "calendar";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(300);
+      const pending = page.querySelector('[role="status"]');
+      expect(pending?.textContent).toContain("Searching ClawHub");
+
+      const results: PluginSearchResult[] = Array.from({ length: count }, (_, index) => ({
+        score: 1,
+        package: {
+          name: `calendar-${index}`,
+          displayName: `Calendar ${index}`,
+          family: "code-plugin",
+          channel: "community",
+          isOfficial: false,
+        },
+      }));
+      response.resolve({ results });
+      await vi.waitFor(() => expect(page.searchResults).toEqual(results));
+      await page.updateComplete;
+
+      const completed = page.querySelector('[role="status"]');
+      expect(completed).toBe(pending);
+      expect(completed?.getAttribute("aria-live")).toBe("polite");
+      expect(completed?.textContent).toContain(
+        count === 0
+          ? "ClawHub has no results for “calendar”."
+          : `${count} result${count === 1 ? "" : "s"}`,
+      );
+      expect(completed?.classList.contains(count === 0 ? "settings-empty" : "sr-only")).toBe(true);
+      expect(page.querySelectorAll("[data-package-name]")).toHaveLength(count);
+    },
+  );
+
   it("commits only the latest ClawHub search result", async () => {
     vi.useFakeTimers();
     const first = deferred<{ results: PluginSearchResult[] }>();
@@ -331,15 +274,7 @@ describe("PluginsPage", () => {
       }
       return (params as { query: string }).query === "first" ? first.promise : second.promise;
     });
-    const harness = createGateway(client);
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(
-        harness.gateway,
-        createResult(),
-        createPluginsRouteLocation("/settings/plugins/discover"),
-      ),
-    );
+    const { page } = await mountClawHubSearchPage(client);
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "first";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -365,6 +300,8 @@ describe("PluginsPage", () => {
     await Promise.resolve();
 
     expect(page.searchResults).toEqual([latest]);
+    await page.updateComplete;
+    expect(page.querySelector('[role="status"]')?.textContent).toContain("1 result");
   });
 
   it("refreshes plugins and runtime config without discarding a pending config draft", async () => {

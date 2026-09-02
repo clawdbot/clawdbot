@@ -1,8 +1,8 @@
-// Control UI E2E tests cover suggestion queue and solo-dormancy behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
-import { it } from "vitest";
+import { beforeEach, it } from "vitest";
+// Control UI E2E tests cover suggestion queue and solo-dormancy behavior.
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,15 +13,16 @@ const suite = createControlUiE2eSuite({
 
 const sessionKey = "agent:main:main";
 
-function artifactDir(): string | undefined {
-  return process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined;
-}
+let proofArtifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  proofArtifactDir = parent
+    ? createControlUiE2eArtifactDir("session-suggestions", parent)
+    : undefined;
+});
 
 async function contextAndPage() {
-  const output = artifactDir();
-  if (output) {
-    await fs.mkdir(output, { recursive: true });
-  }
+  const output = proofArtifactDir;
   const context = await suite.browser.newContext({
     viewport: { height: 760, width: 1180 },
     ...(output ? { recordVideo: { dir: output, size: { height: 760, width: 1180 } } } : {}),
@@ -30,7 +31,7 @@ async function contextAndPage() {
 }
 
 async function screenshot(page: Page, name: string) {
-  const output = artifactDir();
+  const output = proofArtifactDir;
   if (output) {
     await page.screenshot({ animations: "disabled", path: path.join(output, name) });
   }
@@ -241,7 +242,7 @@ suite.define(() => {
       visible = visible ? `${visible} ${word}` : word;
       await ownerTyping(visible);
       await expect(previewBubble).toHaveText(visible);
-      if (artifactDir()) {
+      if (proofArtifactDir) {
         // Readability pacing for the recorded artifact only; assertions above
         // already proved each chunk rendered.
         await page.waitForTimeout(160);

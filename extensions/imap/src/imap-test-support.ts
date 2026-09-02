@@ -3,11 +3,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
-import { createImapState } from "./state.js";
+import { createImapState, type ImapCursor } from "./state.js";
 
 export function createImapTestRuntime() {
   const namespaces = new Map<string, Map<string, unknown>>();
-  const initialCursorRegistered = createDeferred<void>();
+  let cursorChanged = createDeferred<void>();
   const dispatchHookAgentTurn = vi.fn<
     OpenClawPluginApi["runtime"]["hooks"]["dispatchHookAgentTurn"]
   >(async () => ({ ok: true, runId: "mail-run" }));
@@ -25,7 +25,9 @@ export function createImapTestRuntime() {
           register: async (key: string, value: T) => {
             entries.set(key, value);
             if (options.namespace === "cursor") {
-              initialCursorRegistered.resolve();
+              const previous = cursorChanged;
+              cursorChanged = createDeferred<void>();
+              previous.resolve();
             }
           },
           registerIfAbsent: async (key: string, value: T) => {
@@ -49,11 +51,28 @@ export function createImapTestRuntime() {
       },
     },
   });
+  const state = createImapState(runtime);
   return {
     runtime,
-    state: createImapState(runtime),
+    state,
     dispatchHookAgentTurn,
-    initialCursorRegistered: initialCursorRegistered.promise,
+    waitForCursor: async (
+      accountId: string,
+      expected: Pick<ImapCursor, "uidValidity" | "lastSeenUid">,
+    ) => {
+      for (;;) {
+        // Capture the notification before lookup so a concurrent write cannot be missed.
+        const changed = cursorChanged.promise;
+        const cursor = await state.cursors.lookup(accountId);
+        if (
+          cursor?.uidValidity === expected.uidValidity &&
+          cursor.lastSeenUid === expected.lastSeenUid
+        ) {
+          return cursor;
+        }
+        await changed;
+      }
+    },
   };
 }
 

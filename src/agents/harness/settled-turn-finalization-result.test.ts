@@ -92,12 +92,14 @@ describe("assertSettledTurnFinalizationResult", () => {
     }
   });
 
-  it("rejects an intentionally silent answer", () => {
-    expect(() =>
-      assertSettledTurnFinalizationResult({
-        assistant: assistantMessage([{ type: "text", text: "NO_REPLY" }]),
-      }),
-    ).toThrow("without a visible answer");
+  it("classifies an intentionally silent answer as completed-empty", () => {
+    const result = {
+      assistant: assistantMessage([{ type: "text", text: "NO_REPLY" }]),
+    };
+
+    expect(() => assertSettledTurnFinalizationResult(result)).toThrow(
+      EmptySettledTurnFinalizationError,
+    );
   });
 
   it.each(["length", "error", "aborted"] as const)(

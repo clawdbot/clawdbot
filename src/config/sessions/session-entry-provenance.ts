@@ -1,3 +1,4 @@
+import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
 /** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
@@ -42,17 +43,26 @@ export function buildSessionCreationStamp(params: {
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
+  skillLibrarySelections?: SkillLibrarySelection[];
 }): {
   createdVia: SessionCreatedVia;
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
+  skillLibrarySelections?: SkillLibrarySelection[];
 } {
   return {
     createdVia: params.via,
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
     ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
+    ...(params.skillLibrarySelections
+      ? {
+          skillLibrarySelections: params.skillLibrarySelections.map((selection) => ({
+            ...selection,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -73,12 +83,31 @@ export function preserveCreationStamp<
 
 /** Delegation keeps a required parent's human isolation identity, regardless of current roles. */
 export function inheritSessionCreationPolicy(
-  source: { createdActor?: SessionCreatedActor; sandbox?: "required" } | undefined,
+  source:
+    | {
+        createdActor?: SessionCreatedActor;
+        sandbox?: "required";
+        skillLibrarySelections?: SkillLibrarySelection[];
+      }
+    | undefined,
   actor?: SessionCreatedActor,
-): { actor?: SessionCreatedActor; sandbox?: "required" } {
-  return source?.sandbox === "required"
-    ? { actor: source.createdActor, sandbox: "required" }
-    : { actor };
+): {
+  actor?: SessionCreatedActor;
+  sandbox?: "required";
+  skillLibrarySelections?: SkillLibrarySelection[];
+} {
+  return {
+    ...(source?.sandbox === "required"
+      ? { actor: source.createdActor, sandbox: "required" as const }
+      : { actor }),
+    ...(source?.skillLibrarySelections
+      ? {
+          skillLibrarySelections: source.skillLibrarySelections.map((selection) => ({
+            ...selection,
+          })),
+        }
+      : {}),
+  };
 }
 
 export type SessionEntryProvenance = {

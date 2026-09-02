@@ -8,6 +8,7 @@ export type DraftSubmissionSnapshot = Readonly<{
 }>;
 
 export type DraftSubmissionCallbacks = {
+  takePreparedTitle?: () => string | undefined;
   requestUpdate: () => void;
   closeTransientUi: () => void;
 };

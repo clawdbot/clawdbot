@@ -111,12 +111,6 @@ type RequestBodyLimitValues = {
   timeoutMs: number;
 };
 
-type RequestBodyChunkProgress = {
-  buffer: Buffer;
-  totalBytes: number;
-  exceeded: boolean;
-};
-
 function resolveRequestBodyLimitValues(options: {
   maxBytes: number;
   timeoutMs?: number;
@@ -133,20 +127,6 @@ function resolveRequestBodyLimitValues(options: {
 
 export const testApi = { resolveRequestBodyLimitValues };
 export { testApi as __test__ };
-
-function advanceRequestBodyChunk(
-  chunk: Buffer | string,
-  totalBytes: number,
-  maxBytes: number,
-): RequestBodyChunkProgress {
-  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-  const nextTotalBytes = totalBytes + buffer.length;
-  return {
-    buffer,
-    totalBytes: nextTotalBytes,
-    exceeded: nextTotalBytes > maxBytes,
-  };
-}
 
 function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean): void {
   if (req.destroyed) {
@@ -230,10 +210,7 @@ async function readResponsePrefixFromReader(
   }
 
   return {
-    buffer: Buffer.concat(
-      chunks.map((chunk) => Buffer.from(chunk)),
-      total,
-    ),
+    buffer: Buffer.concat(chunks, total),
     size,
     truncated,
   };
@@ -413,15 +390,15 @@ export async function readRequestBodyWithLimit(
       if (done) {
         return;
       }
-      const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
-      totalBytes = progress.totalBytes;
-      if (progress.exceeded) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > maxBytes) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
         stopRequestBodyAfterLimit(req, destroyOnLimit);
         fail(error);
         return;
       }
-      chunks.push(progress.buffer);
+      chunks.push(buffer);
     };
 
     const onEnd = () => {
@@ -571,9 +548,8 @@ export function installRequestBodyLimitGuard(
     if (done) {
       return;
     }
-    const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
-    totalBytes = progress.totalBytes;
-    if (progress.exceeded) {
+    totalBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+    if (totalBytes > maxBytes) {
       trip(new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" }));
     }
   };

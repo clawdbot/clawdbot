@@ -13,6 +13,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "versioned-runtime-deps",
   "cron-scheduled-authority",
   "sqlite-volume",
+  "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
 ]);
 
@@ -20,7 +21,9 @@ const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
 // legacy import rather than native state from every baseline in a broad sweep.
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
-    scenario !== "prerelease-plugin-registry" && scenario !== "auth-profile-v2026-7-2-beta-5",
+    scenario !== "prerelease-plugin-registry" &&
+    scenario !== "auth-profile-v2026-7-2-beta-5" &&
+    scenario !== "recovery-cleanup",
 );
 const scenarioAliases = new Map([
   ["reported-issues", aggregateScenarios.filter((scenario) => scenario !== "sqlite-volume")],

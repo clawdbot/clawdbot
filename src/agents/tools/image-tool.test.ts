@@ -15,6 +15,7 @@ import type {
   ImagesDescriptionRequest,
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
@@ -784,6 +785,7 @@ async function expectImageToolExecOk(
     path: imagePath,
   });
   expectToolText(result, "ok");
+  expect((result as ToolTextResult).details).toMatchObject({ text: "ok" });
 }
 
 type ToolTextResult = {
@@ -2762,7 +2764,7 @@ describe("image tool MiniMax VLM routing", () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = createMinimaxImageConfig();
     const tool = createRequiredImageTool({ config: cfg, agentDir });
-    return { fetch: fetchMock, tool };
+    return { fetch: fetchMock, tool, cfg, agentDir };
   }
 
   it("accepts path for single-image requests and calls minimaxUnderstandImage", async () => {
@@ -2887,14 +2889,39 @@ describe("image tool MiniMax VLM routing", () => {
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
-    const { tool } = await createMinimaxVlmFixture({ status_code: 1004, status_msg: "bad key" });
+    const { tool, cfg, agentDir } = await createMinimaxVlmFixture({
+      status_code: 1004,
+      status_msg: "bad key",
+    });
+    const generation = createModelGenerationFixture({
+      agentDir,
+      workspaceDir: state.workspaceDir,
+      config: cfg,
+      label: "minimax-vlm",
+      provider: "minimax",
+      requestProvider: "minimax",
+    });
+    const classifyFailoverReason = vi.fn(() => undefined);
+    expectDefined(
+      generation.pluginRegistry.providers[0],
+      "MiniMax provider registration",
+    ).provider.classifyFailoverReason = classifyFailoverReason;
 
+    // Embedded tools inherit this registry scope before provider error classification.
     await expect(
-      tool.execute("t1", {
-        prompt: "Describe the image.",
-        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-      }),
+      withPluginRuntimeGenerationScope(generation.preparedModelRuntime, () =>
+        tool.execute("t1", {
+          prompt: "Describe the image.",
+          path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        }),
+      ),
     ).rejects.toThrow(/MiniMax VLM API error/i);
+    expect(classifyFailoverReason).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax",
+        errorMessage: "MiniMax VLM API error (1004): bad key.",
+      }),
+    );
   });
 });
 
@@ -3231,77 +3258,87 @@ describe("image compression policy", () => {
     testing.setProviderDepsForTest();
   });
 
-  it("keeps runtime augmentation pinned to the prepared plugin generation", async () => {
-    const state = await createOpenClawTestState({ label: "image-model-generation" });
-    try {
-      const provider = "prepared-image-provider";
-      const model = "prepared-image-model";
-      const cfg = {} satisfies OpenClawConfig;
-      const generationA = createModelGenerationFixture({
-        agentDir: state.agentDir("prepared"),
-        workspaceDir: state.workspaceDir,
-        config: cfg,
-        label: "image-a",
-        provider,
-        requestProvider: provider,
-        modelId: model,
-        runtimeAugment: true,
-        staticImagePolicy: {
-          maxBytes: 1_000_000,
-          preferredSidePx: 1_280,
-          tokenMode: "detail",
-        },
-        runtimeImagePolicy: { maxSidePx: 1_440 },
-      });
-      const generationB = createModelGenerationFixture({
-        agentDir: state.agentDir("prepared"),
-        workspaceDir: state.workspaceDir,
-        config: cfg,
-        label: "image-b",
-        provider,
-        requestProvider: provider,
-        modelId: model,
-        runtimeAugment: true,
-        staticImagePolicy: {
-          maxBytes: 2_000_000,
-          preferredSidePx: 2_560,
-          tokenMode: "provider",
-        },
-        runtimeImagePolicy: { maxSidePx: 2_880 },
-      });
-      installImageUnderstandingProviderDeps([], {
-        useDefaultResolveModelAsync: true,
-      });
-      publishCurrentModelGeneration(generationB);
-
-      // Compression deliberately omits agentDir: real resolution uses the default
-      // agent, not the distinct "prepared" agent stored in the snapshot.
-      await expect(
-        testing.resolveImageCompressionPolicy({
-          cfg,
-          imageModelConfig: { primary: `${provider}/${model}` },
-          imageCount: 1,
-          preparedModelRuntime: generationA.preparedModelRuntime,
-          workspaceDir: generationA.preparedModelRuntime.workspaceDir,
-        }),
-      ).resolves.toEqual({
-        imageCount: 1,
-        models: [
-          {
-            maxSidePx: 1_440,
+  it.each([
+    { label: "runtime catalog", runtimeAugment: true, staticMaxSidePx: undefined },
+    { label: "static catalog", runtimeAugment: false, staticMaxSidePx: undefined },
+    { label: "complete static policy", runtimeAugment: false, staticMaxSidePx: 1_440 },
+  ])(
+    "keeps image policy pinned to the prepared generation: $label",
+    async ({ runtimeAugment, staticMaxSidePx }) => {
+      const state = await createOpenClawTestState({ label: "image-model-generation" });
+      try {
+        const provider = "prepared-image-provider";
+        const model = "prepared-image-model";
+        const cfg = {} satisfies OpenClawConfig;
+        const generationA = createModelGenerationFixture({
+          agentDir: state.agentDir("prepared"),
+          workspaceDir: state.workspaceDir,
+          config: cfg,
+          label: "image-a",
+          provider,
+          requestProvider: provider,
+          modelId: model,
+          runtimeAugment,
+          staticImagePolicy: {
+            ...(staticMaxSidePx === undefined ? {} : { maxSidePx: staticMaxSidePx }),
             maxBytes: 1_000_000,
             preferredSidePx: 1_280,
             tokenMode: "detail",
           },
-        ],
-      });
-      expect(generationA.resolveDynamicModel).toHaveBeenCalled();
-      expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
-    } finally {
-      resetModelGenerationFixtureState();
-      await state.cleanup();
-    }
-  });
+          runtimeImagePolicy: { maxSidePx: 1_440 },
+        });
+        const generationB = createModelGenerationFixture({
+          agentDir: state.agentDir("prepared"),
+          workspaceDir: state.workspaceDir,
+          config: cfg,
+          label: "image-b",
+          provider,
+          requestProvider: provider,
+          modelId: model,
+          runtimeAugment,
+          staticImagePolicy: {
+            maxBytes: 2_000_000,
+            preferredSidePx: 2_560,
+            tokenMode: "provider",
+          },
+          runtimeImagePolicy: { maxSidePx: 2_880 },
+        });
+        installImageUnderstandingProviderDeps([], {
+          useDefaultResolveModelAsync: true,
+        });
+        publishCurrentModelGeneration(generationB);
+
+        // Compression deliberately omits agentDir: real resolution uses the default
+        // agent, not the distinct "prepared" agent stored in the snapshot.
+        await expect(
+          testing.resolveImageCompressionPolicy({
+            cfg,
+            imageModelConfig: { primary: `${provider}/${model}` },
+            imageCount: 1,
+            preparedModelRuntime: generationA.preparedModelRuntime,
+            workspaceDir: generationA.preparedModelRuntime.workspaceDir,
+          }),
+        ).resolves.toEqual({
+          imageCount: 1,
+          models: [
+            {
+              maxSidePx: 1_440,
+              maxBytes: 1_000_000,
+              preferredSidePx: 1_280,
+              tokenMode: "detail",
+            },
+          ],
+        });
+        expect(generationA.resolveDynamicModel).toHaveBeenCalledTimes(
+          staticMaxSidePx === undefined ? 1 : 0,
+        );
+        expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
+      } finally {
+        resetModelGenerationFixtureState();
+        await state.cleanup();
+      }
+    },
+  );
 
   it("derives model metadata, quality preference, and image count from config", async () => {
     const cfg = {
@@ -3342,14 +3379,14 @@ describe("image compression policy", () => {
     });
   });
 
-  it("uses bundled Anthropic media limits without runtime provider hooks", async () => {
+  it("uses bundled Anthropic media limits and handles unknown fallback models", async () => {
     installImageUnderstandingProviderDeps([], { useDefaultResolveModelAsync: true });
     await expect(
       testing.resolveImageCompressionPolicy({
         cfg: {},
         imageModelConfig: {
           primary: "anthropic/claude-opus-4-8",
-          fallbacks: ["anthropic/claude-haiku-4-5"],
+          fallbacks: ["anthropic/claude-haiku-4-5", "unknown/custom-image"],
         },
         imageCount: 1,
       }),
@@ -3358,6 +3395,7 @@ describe("image compression policy", () => {
       models: [
         { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
         { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+        {},
       ],
     });
   });

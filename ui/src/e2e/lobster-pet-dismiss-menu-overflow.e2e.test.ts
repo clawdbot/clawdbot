@@ -1,10 +1,10 @@
 // Measures the lobster dismiss menu's internal overflow in the real sidebar
 // footer context, with classic (space-taking) scrollbars forced on so the
 // Linux run matches what a macOS "Always show scrollbars" operator sees.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContextOptions, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -25,10 +25,7 @@ type BrowserLobsterPet = HTMLElement & {
   updateComplete: Promise<unknown>;
 };
 
-const artifactDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/lobster-dismiss-menu-overflow",
-);
+let artifactDir: string;
 
 /** Shared setup for a fresh page: mock gateway, load, and park the clock so
  *  the pet's own timers don't fire mid-assertion. Reused across the default
@@ -48,7 +45,6 @@ async function withDismissMenuPage(
 ) {
   await suite.withPage({ viewport: { width: 1280, height: 900 }, ...options }, async ({ page }) => {
     await loadControlUiPage(page);
-    await mkdir(artifactDir, { recursive: true });
     await run(page);
   });
 }
@@ -171,6 +167,9 @@ async function useOversizedDismissLabels(currentPage: Page) {
 }
 
 suite.define(() => {
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("lobster-dismiss-menu-overflow");
+  });
   it("does not scroll its two dismissal items in the real sidebar footer", () =>
     withDismissMenuPage({}, async (page) => {
       await mountPetInRealFooter(page, 42);

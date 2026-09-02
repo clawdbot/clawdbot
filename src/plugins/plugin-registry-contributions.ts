@@ -176,13 +176,28 @@ function resolveContributionPluginIds(params: {
   index: PluginRegistrySnapshot;
   includeDisabled?: boolean;
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): readonly string[] {
   if (params.includeDisabled) {
     return params.index.plugins.map((plugin) => plugin.pluginId);
   }
   return params.index.plugins
-    .filter((plugin) => isInstalledPluginEnabled(params.index, plugin.pluginId, params.config))
+    .filter((plugin) =>
+      isInstalledPluginEnabled(params.index, plugin.pluginId, params.config, params.env),
+    )
     .map((plugin) => plugin.pluginId);
+}
+
+function createContributionPluginFilter(
+  params: PluginRegistryContributionOptions,
+  index: PluginRegistrySnapshot,
+): (pluginId: string) => boolean {
+  if (params.includeDisabled) {
+    // Keep disabled-owner inspection within the supplied installed inventory.
+    const installedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
+    return (pluginId) => installedPluginIds.has(pluginId);
+  }
+  return (pluginId) => isInstalledPluginEnabled(index, pluginId, params.config, params.env);
 }
 
 function loadContributionManifestRegistry(
@@ -200,6 +215,7 @@ function loadContributionManifestRegistry(
       index: params.index,
       includeDisabled: params.includeDisabled,
       config: params.config,
+      env: params.env,
     }),
     includeDisabled: true,
   });
@@ -212,14 +228,8 @@ function listContributionManifestPlugins(
 ): readonly PluginManifestRecord[] {
   const plugins = params.lookUpTable?.plugins;
   if (plugins) {
-    const enabledPluginIds = new Set(
-      resolveContributionPluginIds({
-        index: params.index,
-        includeDisabled: params.includeDisabled,
-        config: params.config,
-      }),
-    );
-    return plugins.filter((plugin) => enabledPluginIds.has(plugin.id));
+    const includePlugin = createContributionPluginFilter(params, params.index);
+    return plugins.filter((plugin) => includePlugin(plugin.id));
   }
   return loadContributionManifestRegistry({
     ...params,
@@ -275,15 +285,8 @@ export function resolvePluginContributionOwners(
     if (!owners) {
       return [];
     }
-    const enabledPluginIds = new Set(
-      resolveContributionPluginIds({
-        index,
-        includeDisabled: params.includeDisabled,
-        config: params.config,
-      }),
-    );
     return normalizeSortedUniqueStringEntries(
-      owners.filter((owner) => enabledPluginIds.has(owner)),
+      owners.filter(createContributionPluginFilter(params, index)),
     );
   }
   const matcher =

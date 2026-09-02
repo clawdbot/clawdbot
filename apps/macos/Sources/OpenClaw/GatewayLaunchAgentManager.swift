@@ -321,9 +321,7 @@ extension GatewayLaunchAgentManager {
         #if DEBUG
         if self.testingInterceptDaemonCommands {
             self.testingDaemonCommandCalls.append(args)
-            if self.testingDaemonCommandDelayNanoseconds > 0 {
-                try? await Task.sleep(nanoseconds: self.testingDaemonCommandDelayNanoseconds)
-            }
+            await self.testingDaemonCommandHook?(args)
             let payload = if args.first == "status" {
                 if self.testingDaemonStatusPayloads.isEmpty {
                     self.testingDaemonStatusPayload ?? "{\"ok\":true}"
@@ -392,14 +390,18 @@ extension GatewayLaunchAgentManager {
     private nonisolated(unsafe) static var testingDaemonCommandCalls: [[String]] = []
     private nonisolated(unsafe) static var testingDaemonStatusPayload: String?
     private nonisolated(unsafe) static var testingDaemonStatusPayloads: [String] = []
-    private nonisolated(unsafe) static var testingDaemonCommandDelayNanoseconds: UInt64 = 0
+    private nonisolated(unsafe) static var testingDaemonCommandHook: (@Sendable ([String]) async -> Void)?
 
     static func setTestingDisableLaunchAgentMarkerURL(_ url: URL?) {
         self.testingDisableLaunchAgentMarkerURL = url
     }
 
-    static func setTestingInterceptDaemonCommands(_ intercept: Bool) {
+    static func setTestingInterceptDaemonCommands(
+        _ intercept: Bool,
+        beforeReturning hook: (@Sendable ([String]) async -> Void)? = nil)
+    {
         self.testingInterceptDaemonCommands = intercept
+        self.testingDaemonCommandHook = hook
     }
 
     static func setTestingDaemonStatusPayload(_ payload: String?) {
@@ -410,10 +412,6 @@ extension GatewayLaunchAgentManager {
     static func setTestingDaemonStatusPayloads(_ payloads: [String]) {
         self.testingDaemonStatusPayload = nil
         self.testingDaemonStatusPayloads = payloads
-    }
-
-    static func setTestingDaemonCommandDelayNanoseconds(_ nanoseconds: UInt64) {
-        self.testingDaemonCommandDelayNanoseconds = nanoseconds
     }
 
     static func clearTestingDaemonCommandCalls() {

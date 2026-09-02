@@ -6,25 +6,25 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { accumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-// Control UI page module reconciles Chat Gateway events into Chat state.
-import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import {
-  chatScopedEventSessionMatches,
   isHiddenAssistantStreamText,
   isSilentReplyStream,
-  materializeVisibleAssistantStreamMessages,
   shouldHideAssistantChatMessage,
-  type ChatEventPayload,
-  type ChatState,
-} from "./chat-history.ts";
+} from "../../lib/chat/message-visibility.ts";
+// Control UI page module reconciles Chat Gateway events into Chat state.
+import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
+import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
+import type { ChatEventPayload } from "./chat-history.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
   readChatSessionProjectionScope,
   setChatRunOwner,
-  setChatSessionProjection,
+  publishChatSessionProjection,
 } from "./history-merge.ts";
 import {
   adoptStartedChatRun,
@@ -145,15 +145,26 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
     : assistant;
 }
 
-function stripChatErrorMarker(text: string): string {
-  return text.replace(/^⚠️\s*/u, "");
-}
-
 function normalizeChatErrorComparisonText(text: string): string {
-  return stripChatErrorMarker(text)
+  return text
+    .replace(/^⚠️\s*/u, "")
     .replace(/^Error:\s*/iu, "")
     .replace(/\s+/gu, " ")
     .trim();
+}
+
+function formatGatewayErrorDetail(payload: ChatEventPayload): string | null {
+  const detail = payload.errorDetail;
+  if (!detail || detail.providerRuntimeFailureKind !== "auth_refresh") {
+    return null;
+  }
+  const lines = [
+    detail.provider ? `Provider: ${detail.provider}` : undefined,
+    detail.httpStatus ? `HTTP status: ${detail.httpStatus}` : undefined,
+    detail.failoverReason ? `Reason: ${detail.failoverReason}` : undefined,
+    detail.providerErrorType ? `Type: ${detail.providerErrorType}` : undefined,
+  ].filter((line): line is string => Boolean(line));
+  return lines.length > 0 ? lines.join("\n") : null;
 }
 
 function resolveGatewayErrorText(
@@ -162,12 +173,15 @@ function resolveGatewayErrorText(
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
-    return errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-      ? stripChatErrorMarker(errorText)
-      : `Error: ${errorText}`;
+    const summary =
+      errorText.startsWith("⚠️") || errorText.startsWith("Error:")
+        ? errorText
+        : `Error: ${errorText}`;
+    const detail = formatGatewayErrorDetail(payload);
+    return detail ? `${summary}\n\n${detail}` : summary;
   }
   const messageText = message ? extractText(message)?.trim() : null;
-  return messageText ? stripChatErrorMarker(messageText) : "chat error";
+  return messageText || "chat error";
 }
 
 function payloadMessageIsErrorProjection(
@@ -238,16 +252,16 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     message: Record<string, unknown>,
     visibleMessages: unknown[],
     runId: string | null | undefined,
-    retainSupersededMessages = false,
+    afterSequence?: number | null,
   ): void => {
     const event = payload as ChatEventPayload & { messageId?: unknown; messageSeq?: unknown };
     publishChatSessionProjectionMessages(state, visibleMessages, {
       scope,
-      retainSupersededMessages,
       event: {
         type: "messagePersisted",
         message,
         envelope: {
+          afterSequence,
           ...(runId ? { runId } : {}),
           ...(event.messageId === undefined ? {} : { messageId: event.messageId }),
           ...(event.messageSeq === undefined ? {} : { messageSeq: event.messageSeq }),
@@ -258,13 +272,13 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   const projectedRun =
     payload.runId && payload.state !== "status"
       ? reduceSessionProjectionRunEvent(
-          getChatSessionProjection(state, state.chatMessages, scope),
+          getChatSessionProjection(state, scope),
           normalizedFinalMessage ? { ...payload, message: normalizedFinalMessage } : payload,
           scope,
         )
       : null;
   if (projectedRun) {
-    setChatSessionProjection(state, projectedRun.projection);
+    publishChatSessionProjection(state, projectedRun.projection);
   }
   const terminalRunId = payload.runId ?? state.chatRunId;
   const reconcileOwnedTerminalRun = () => {
@@ -327,7 +341,14 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
-        setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId);
+        setChatRunError(
+          state,
+          resolveGatewayErrorText(payload, null),
+          payload.runId,
+          payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+            ? "auth_refresh"
+            : undefined,
+        );
       }
       if (payload.state === "error") {
         reconcileOwnedTerminalRun();
@@ -425,8 +446,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         ? reconcileTerminalStreamBoundary(finalMessage, state)
         : { kind: "none" as const };
       if (boundary.kind === "split") {
-        // Same-run assistant rows share one cumulative reducer identity. Keep the
-        // authoritative prefix stable and project the complete terminal tail after it.
+        // The tail follows a known transcript boundary; it cannot adopt the saved prefix.
         discardStreamSegmentIndexes(state, boundary.replacedSegmentIndexes);
         let visibleMessages = materializeVisibleStream({ includeCurrent: false });
         if (boundary.tailMessage && !shouldHideAssistantChatMessage(boundary.tailMessage)) {
@@ -438,7 +458,12 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
               boundary.afterBoundaryRunId,
             ),
           );
-          publishVisibleTerminal(boundary.tailMessage, visibleMessages, terminalRunId, true);
+          publishVisibleTerminal(
+            boundary.tailMessage,
+            visibleMessages,
+            terminalRunId,
+            boundary.afterSequence,
+          );
         } else {
           publishChatSessionProjectionMessages(state, visibleMessages, { scope });
         }
@@ -455,7 +480,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           terminalRunId,
         );
       } else {
-        state.chatMessages = materializeVisibleStream();
+        publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
       }
     }
     reconcileOwnedTerminalRun();
@@ -478,10 +503,17 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         terminalRunId,
       );
     } else {
-      state.chatMessages = materializeVisibleStream();
+      publishChatSessionProjectionMessages(state, materializeVisibleStream(), { scope });
     }
     if (payload.errorMessage?.trim()) {
-      setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId);
+      setChatRunError(
+        state,
+        resolveGatewayErrorText(payload, null),
+        payload.runId,
+        payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+          ? "auth_refresh"
+          : undefined,
+      );
     }
     reconcileOwnedTerminalRun();
   } else if (payload.state === "error") {
@@ -518,7 +550,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           terminalRunId,
         );
       } else {
-        state.chatMessages = materializeVisibleStream({ includeCurrent: true });
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleStream({ includeCurrent: true }),
+          { scope },
+        );
         const materialized = state.chatMessages.findLast(
           (message) => transcriptRunId(message) === terminalRunId,
         );
@@ -537,6 +573,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
       payload.runId,
+      payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+        ? "auth_refresh"
+        : undefined,
     );
   }
   if (payload.state !== "delta") {

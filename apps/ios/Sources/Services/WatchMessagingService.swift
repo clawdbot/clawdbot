@@ -47,18 +47,10 @@ enum WatchMessagingError: LocalizedError {
 
 @MainActor
 final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
-    private enum StartupEvent {
-        case reply(WatchQuickReplyEvent)
-        case execApprovalResolve(WatchExecApprovalResolveEvent)
-        case execApprovalSnapshotRequest(WatchExecApprovalSnapshotRequestEvent)
-        case appSnapshotRequest(WatchAppSnapshotRequestEvent)
-        case appCommand(WatchAppCommandEvent)
-    }
-
     private static let maxStartupEvents = 64
 
     private let transport: WatchConnectivityTransport
-    private var startupEvents = WatchMessagingStartupBuffer<StartupEvent>(
+    private var startupEvents = WatchMessagingStartupBuffer<WatchMessagingInboundEvent>(
         maxCount: WatchMessagingService.maxStartupEvents)
     private var statusHandler: (@Sendable (WatchMessagingStatus) -> Void)?
     private var lastEmittedStatus: WatchMessagingStatus?
@@ -76,29 +68,9 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
                 self?.emitStatusIfChanged(snapshot)
             }
         }
-        self.transport.setReplyHandler { [weak self] event in
+        self.transport.setInboundEventHandler { [weak self] event in
             Task { @MainActor [weak self] in
-                self?.receiveStartupEvent(.reply(event))
-            }
-        }
-        self.transport.setExecApprovalResolveHandler { [weak self] event in
-            Task { @MainActor [weak self] in
-                self?.receiveStartupEvent(.execApprovalResolve(event))
-            }
-        }
-        self.transport.setExecApprovalSnapshotRequestHandler { [weak self] event in
-            Task { @MainActor [weak self] in
-                self?.receiveStartupEvent(.execApprovalSnapshotRequest(event))
-            }
-        }
-        self.transport.setAppSnapshotRequestHandler { [weak self] event in
-            Task { @MainActor [weak self] in
-                self?.receiveStartupEvent(.appSnapshotRequest(event))
-            }
-        }
-        self.transport.setAppCommandHandler { [weak self] event in
-            Task { @MainActor [weak self] in
-                self?.receiveStartupEvent(.appCommand(event))
+                self?.receiveStartupEvent(event)
             }
         }
         self.transport.activate()
@@ -260,7 +232,7 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         self.appCommandHandler?(event)
     }
 
-    private func receiveStartupEvent(_ event: StartupEvent) {
+    private func receiveStartupEvent(_ event: WatchMessagingInboundEvent) {
         for event in self.startupEvents.receive(event) {
             self.dispatchStartupEvent(event)
         }
@@ -280,7 +252,7 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         }
     }
 
-    private func dispatchStartupEvent(_ event: StartupEvent) {
+    private func dispatchStartupEvent(_ event: WatchMessagingInboundEvent) {
         switch event {
         case let .reply(event):
             self.emitReply(event)

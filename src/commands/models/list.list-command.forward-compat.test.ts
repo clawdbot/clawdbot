@@ -77,6 +77,7 @@ const mocks = vi.hoisted(() => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -239,6 +240,7 @@ function modelRegistryOptions(index = 0): Record<string, unknown> {
 
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
 let listRowsModule: typeof import("./list.rows.js");
+let cliBackendsTesting: typeof import("../../agents/cli-backends.test-support.js").testing;
 
 function installModelsListCommandForwardCompatMocks() {
   const suppressOpenAiSpark = ({
@@ -388,6 +390,7 @@ function installModelsListCommandForwardCompatMocks() {
 
 beforeAll(async () => {
   installModelsListCommandForwardCompatMocks();
+  ({ testing: cliBackendsTesting } = await import("../../agents/cli-backends.test-support.js"));
   listRowsModule = await import("./list.rows.js");
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });
@@ -433,9 +436,21 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
 beforeEach(() => {
   vi.clearAllMocks();
   resetMocks();
+  // These command cases own their backend fixture; setup loading has separate coverage.
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+    ],
+  });
 });
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
 });
 

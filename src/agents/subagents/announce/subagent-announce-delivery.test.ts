@@ -1929,14 +1929,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("does not directly deliver failed subagent placeholder output", async () => {
+  it("delivers a generic notice for failed subagent placeholder output", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
+    const childSessionKey = "agent:worker:subagent:failed-no-output";
 
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
+      sourceSessionKey: childSessionKey,
       internalEvents: taskCompletionEvents({
+        childSessionKey,
         childSessionId: "child-session-id",
         status: "error",
         statusLabel: "failed: all models failed",
@@ -1944,13 +1947,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }),
     });
 
-    expectRecordFields(result, {
-      delivered: false,
-      path: "direct",
-      reason: "visible_reply_missing",
-      error: "completion agent did not produce a visible reply",
-    });
-    expect(sendMessage).not.toHaveBeenCalled();
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(mockCallArg(sendMessage, 0, 0).content).toBe(
+      "A delegated task failed before it could report a result. Please retry the task.",
+    );
   });
 
   it.each(["error", "timeout", "unknown"] as const)(
@@ -2187,6 +2188,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     const ownerContext = { owner: "gateway-a" } as never;
     const resolveGatewayContext = () => ownerContext;
+    const signal = new AbortController().signal;
     const result = await deliverSubagentAnnouncement({
       requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
       targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
@@ -2206,6 +2208,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-dispatch",
       resolveGatewayContext,
+      signal,
     });
 
     expectDeliveryPath(result, "direct");
@@ -2221,6 +2224,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
     const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
     expect(dispatchOptions).toMatchObject({
+      cancelOnDeadline: true,
       expectFinal: true,
       forceSyntheticClient: true,
       operatorRoleActor: { kind: "system" },
@@ -2233,6 +2237,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
       timeoutMs: 120_000,
       resolveGatewayContext,
+      signal,
     });
   });
 
@@ -2241,6 +2246,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       runId: "descendant-wake-run",
     });
     const resolveGatewayContext: GatewayContextResolver = () => undefined;
+    const signal = new AbortController().signal;
     const replaceSubagentRunAfterSteer = vi.fn(async () => true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
@@ -2257,6 +2263,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
         typeof entry === "object" && entry !== null,
       resolveGatewayContext,
+      signal,
       deps: {
         callGateway: createGatewayMock(),
         dispatchGatewayMethodInProcess,
@@ -2267,7 +2274,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expect(woke).toBe(true);
     expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+      cancelOnDeadline: true,
       resolveGatewayContext,
+      signal,
     });
     expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2839,19 +2848,22 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
+  it("keeps synthetic missing output on the generic retry path", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const childSessionKey = "agent:worker:subagent:empty-success";
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
       isActive: true,
       queueEmbeddedAgentMessageWithOutcome,
+      sourceSessionKey: childSessionKey,
       internalEvents: taskCompletionEvents({
+        childSessionKey,
         childSessionId: "child-session-id",
-        status: "error",
-        statusLabel: "failed: all models failed",
+        status: "ok",
+        statusLabel: "completed successfully",
         result: "(no output)",
       }),
     });
@@ -2879,7 +2891,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
     expect(result.terminal).toBeUndefined();
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -4020,11 +4032,29 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it.each([
-    { status: "ok", statusLabel: "completed successfully" },
-    { status: "error", statusLabel: "failed" },
+    {
+      status: "ok",
+      statusLabel: "completed successfully",
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "visible_reply_missing",
+        error: "completion agent did not produce a visible reply",
+      },
+    },
+    {
+      status: "error",
+      statusLabel: "failed",
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "message_tool_delivery_missing",
+        error: "completion agent did not use the message tool for message-tool-only delivery",
+      },
+    },
   ] as const)(
     "fails $status no-output channel subagent completions when parent silently skips required message tool",
-    async ({ status, statusLabel }) => {
+    async ({ status, statusLabel, expected }) => {
       const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
       const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
       const childSessionKey = "agent:worker:subagent:no-output";
@@ -4045,12 +4075,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         }),
       });
 
-      expectRecordFields(result, {
-        delivered: false,
-        path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
-      });
+      expectRecordFields(result, expected);
       expectGatewayAgentParams(callGateway, {
         deliver: false,
         channel: "slack",
@@ -4939,6 +4964,47 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expect(result).toMatchObject({ delivered: true, path: "direct" });
     expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs the full retry schedule for a typed adapter-resolution failure", async () => {
+    const adapterUnavailable = new PlatformMessageNotDispatchedError(
+      "Outbound not configured for channel: slack",
+      { cause: new Error("adapter unavailable") },
+    );
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(adapterUnavailable)
+      .mockRejectedValueOnce(adapterUnavailable)
+      .mockRejectedValueOnce(adapterUnavailable)
+      .mockResolvedValueOnce({ result: { payloads: [{ text: "recovered child completion" }] } });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway: callGateway as typeof runtimeCallGateway,
+      directIdempotencyKey: "announce-adapter-resolution-retry",
+    });
+
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(callGateway).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps an exhausted typed adapter-resolution failure retryable", async () => {
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
+      throw new PlatformMessageNotDispatchedError("Outbound not configured for channel: slack", {
+        cause: new Error("adapter unavailable"),
+      });
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-adapter-resolution-exhausted",
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      disposition: "retryable",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(4);
   });
 
   it.each([

@@ -18,7 +18,12 @@ import {
 } from "../infra/heartbeat-wake.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
@@ -570,6 +575,83 @@ describe("task-registry", () => {
     hoisted.killSubagentRunAdminMock.mockReset();
   });
 
+  it.each(["terminal", "progress"] as const)(
+    "preserves the bare-session requester on direct %s delivery",
+    async (kind) => {
+      await withTaskRegistryTempDir(async () => {
+        hoisted.sendMessageMock.mockResolvedValue({ deliveryStatus: "delivered" });
+        const task = createTaskFixture("cli", {
+          ownerKey: "global",
+          requesterAgentId: "alpha",
+          agentId: "beta",
+          requesterOrigin: NOTIFYCHAT_ORIGIN,
+          task: "Report the background result",
+          deliveryStatus: "pending",
+          notifyPolicy: "state_changes",
+        });
+        if (kind === "terminal") {
+          markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: Date.now() });
+          await maybeDeliverTaskTerminalUpdate(task.taskId);
+        } else {
+          await maybeDeliverTaskStateChangeUpdate(task.taskId, {
+            at: Date.now(),
+            kind: "progress",
+            summary: "Checking the result",
+          });
+        }
+        expect(hoisted.sendMessageMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            agentId: "alpha",
+            mirror: expect.objectContaining({ sessionKey: "global", agentId: "alpha" }),
+          }),
+        );
+      });
+    },
+  );
+
+  it.each(["terminal", "progress", "blocked", "fallback"] as const)(
+    "keeps bare-session %s events and wakes with the requesting agent",
+    async (kind) => {
+      await withTaskRegistryTempDir(async () => {
+        hoisted.sendMessageMock.mockRejectedValue(new Error("fixture delivery unavailable"));
+        const task = createTaskFixture("cli", {
+          ownerKey: "global",
+          requesterAgentId: "alpha",
+          agentId: "beta",
+          ...(kind === "fallback" ? { requesterOrigin: NOTIFYCHAT_ORIGIN } : {}),
+          task: "Report the background result",
+          deliveryStatus: "pending",
+          notifyPolicy: "state_changes",
+        });
+        if (kind === "progress") {
+          await maybeDeliverTaskStateChangeUpdate(task.taskId, {
+            at: Date.now(),
+            kind: "progress",
+            summary: "Checking the result",
+          });
+        } else {
+          markTaskTerminalById({
+            taskId: task.taskId,
+            status: "succeeded",
+            endedAt: Date.now(),
+            ...(kind === "blocked" ? { terminalOutcome: "blocked" } : {}),
+          });
+          await maybeDeliverTaskTerminalUpdate(task.taskId);
+        }
+        const events = peekSystemEventEntries("global");
+        expect(events).toHaveLength(kind === "blocked" ? 2 : 1);
+        expect(selectAgentSystemEvents(events, "alpha")).toEqual(events);
+        expect(selectAgentSystemEvents(events, "beta")).toEqual([]);
+        await flushHeartbeatWakeRequests();
+        const taskWakes = heartbeatWakeRequests.filter((request) =>
+          request.source.startsWith("background-task"),
+        );
+        expect(taskWakes.length).toBeGreaterThan(0);
+        expect(taskWakes.every((request) => request.agentId === "alpha")).toBe(true);
+      });
+    },
+  );
+
   it("sweeps one expired plugin-state batch per maintenance pass after restart", async () => {
     await withTaskRegistryTempDir(async () => {
       try {
@@ -717,6 +799,77 @@ describe("task-registry", () => {
         data: { phase: "end", endedAt: 200 },
       });
       expect(upsert).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each([
+    {
+      name: "the beginning of a final line longer than the retained suffix",
+      text: `Earlier\r\n  First\t words ${"x".repeat(8_000)}\r\n \t\r\n`,
+      expected: `First words ${"x".repeat(188)}`,
+    },
+    {
+      name: "CR, LF, and CRLF lines with Unicode whitespace",
+      text: "Earlier\rDiscarded\nDiscarded too\r\n \u00a0Last\u2028line\u2029here\t\r\n\u3000",
+      expected: "Last line here",
+    },
+    {
+      name: "a surrogate pair across the 200-unit boundary",
+      text: `${"x".repeat(199)}🦞after`,
+      expected: "x".repeat(199),
+    },
+    {
+      name: "a surrogate pair ending at the boundary",
+      text: `${"x".repeat(198)}🦞after`,
+      expected: `${"x".repeat(198)}🦞`,
+    },
+    {
+      name: "collapsed whitespace at the boundary",
+      text: `${"x".repeat(199)}\t  after`,
+      expected: `${"x".repeat(199)} `,
+    },
+  ])("preserves live activity from $name", async ({ text, expected }) => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:activity-boundary",
+        runId: "run-activity-boundary",
+        task: "Display the current output line",
+      });
+      emitAgentEvent({ runId: task.runId!, stream: "assistant", data: { text } });
+      expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe(expected);
+    });
+  });
+
+  it("preserves snapshot replacement, delta suffixes, and sticky assistant precedence", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:activity-streams",
+        runId: "run-activity-streams",
+        task: "Display replacing and incremental output",
+      });
+      const emitActivity = (
+        stream: "assistant" | "thinking",
+        data: Record<string, unknown>,
+        expected: string,
+      ) => {
+        emitAgentEvent({ runId: task.runId!, stream, data });
+        expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe(expected);
+      };
+      emitActivity("thinking", { text: "Planning" }, "Planning");
+      emitActivity("assistant", { text: " \r\n\t" }, "Planning");
+      emitActivity("thinking", { delta: " next" }, "Planning next");
+      emitActivity(
+        "assistant",
+        { text: `Beginning ${"x".repeat(8_000)}` },
+        `Beginning ${"x".repeat(190)}`,
+      );
+      emitActivity("assistant", { delta: " more" }, "x".repeat(200));
+      emitActivity("assistant", { text: "Short", delta: "ignored" }, "Short");
+      emitActivity("assistant", { text: "", delta: "ignored" }, "Short");
+      emitActivity("thinking", { text: "Never replaces assistant output" }, "Short");
+      emitActivity("assistant", { delta: "Fresh" }, "Fresh");
+      emitActivity("assistant", { text: " \r\n\t" }, "Fresh");
+      emitActivity("assistant", { delta: "Next" }, "Next");
     });
   });
 

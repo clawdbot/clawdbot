@@ -22,6 +22,7 @@ import {
 } from "./node-worker-tunnel.test-support.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { readActualWorkspaceManifest } from "./workspace-reconcile.js";
 
@@ -48,7 +49,8 @@ describe("node worker tunnel manager", () => {
   it.each([
     ["gateway-push", true],
     ["published-origin", false],
-  ])("preserves the Gateway Git author through %s workspaces", async (_, dirty) => {
+    ["prepared-project", false],
+  ])("preserves the Gateway Git author through %s workspaces", async (syncPath, dirty) => {
     const localPath = tempDirs.make("node-worker-git-author-gateway-");
     const remoteWorkspaceDir = path.join(tempDirs.make("node-worker-git-author-remote-"), "worker");
     const gitEnv: NodeJS.ProcessEnv = {
@@ -77,7 +79,7 @@ describe("node worker tunnel manager", () => {
     const rawManifest = serializeWorkerWorkspaceManifest(manifest);
     const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
     const nodeTransport = transport();
-    nodeTransport.invoke = vi.fn(async ({ command, params }) => {
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async ({ command, params }) => {
       if (command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
         return { ok: true, payloadJSON: "null" };
       }
@@ -118,6 +120,7 @@ describe("node worker tunnel manager", () => {
         }),
       };
     });
+    nodeTransport.invoke = invoke;
     const transfer = {
       prepareSync: vi.fn(async () => ({
         snapshot: { manifest, manifestRef, rawManifest, root: localPath },
@@ -142,8 +145,23 @@ describe("node worker tunnel manager", () => {
         sessionId: "session-1",
         generation: 1,
         gitAuthor: { name: "Configured Gateway Author" },
+        ...(syncPath === "prepared-project" ? { projectKey: "a".repeat(64) } : {}),
       }),
     ).resolves.toEqual({ mode: "git", remoteWorkspaceDir, manifestRef });
+
+    if (syncPath === "prepared-project") {
+      const commands = invoke.mock.calls.map(
+        ([call]) => call.params as NodeWorkerWorkspaceExecInput,
+      );
+      expect(
+        commands.some(
+          (command) => command.argv.includes("clone") || command.argv.includes("fetch"),
+        ),
+      ).toBe(false);
+      expect(commands.find((command) => command.transfer)?.transfer).toMatchObject({
+        seedKey: workerProjectSeedKey({ key: "a".repeat(64), baseCommit }),
+      });
+    }
 
     const commitArgs = [
       "-c",
@@ -326,13 +344,12 @@ describe("node worker tunnel manager", () => {
       const manifest = { version: 1 as const, baseCommit: null, entries: [] };
       const rawManifest = serializeWorkerWorkspaceManifest(manifest);
       const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
-      const outputs = [`quiesced ${"c".repeat(32)}`, manifestRef, ""];
       const nodeTransport = transport();
       const invoke = vi.fn(async () => ({
         ok: true,
         payloadJSON: JSON.stringify({
           workspaceDir: "/node/workspace",
-          stdout: outputs.shift() ?? "",
+          stdout: "",
           stderr: "",
           code: 0,
           signal: null,
@@ -382,15 +399,7 @@ describe("node worker tunnel manager", () => {
       const expectedStatus = outcome === "success" ? "fulfilled" : "rejected";
       expect(results.map((result) => result.status)).toEqual([expectedStatus, expectedStatus]);
       expect(manager.status("environment-1")).toBe(outcome === "success" ? "connected" : "stopped");
-      if (outcome === "success") {
-        expect(invoke).toHaveBeenCalledWith(
-          expect.objectContaining({
-            params: expect.objectContaining({
-              argv: expect.arrayContaining(["all", manifestRef.slice("sha256:".length)]),
-            }),
-          }),
-        );
-      }
+      expect(invoke).not.toHaveBeenCalled();
     },
   );
 
@@ -399,7 +408,6 @@ describe("node worker tunnel manager", () => {
     const manifest = { version: 1 as const, baseCommit: null, entries: [] };
     const rawManifest = serializeWorkerWorkspaceManifest(manifest);
     const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
-    const outputs = [`quiesced ${"c".repeat(32)}`, manifestRef, ""];
     let launchEligible = true;
     const invoke = vi.fn(
       async (request: Parameters<NodeWorkerSupervisorTransport["invoke"]>[0]) => {
@@ -412,7 +420,7 @@ describe("node worker tunnel manager", () => {
           ok: true,
           payloadJSON: JSON.stringify({
             workspaceDir: "/node/workspace",
-            stdout: outputs.shift() ?? "",
+            stdout: "",
             stderr: "",
             code: 0,
             signal: null,
@@ -503,7 +511,6 @@ describe("node worker tunnel manager", () => {
         localPath: "/gateway/workspace",
       }),
     );
-    expect(outputs).toEqual([]);
   });
 
   it("keeps node command deadlines and rechecks turn authority after discovery", async () => {
@@ -511,7 +518,6 @@ describe("node worker tunnel manager", () => {
     const manifest = { version: 1 as const, baseCommit: null, entries: [] };
     const rawManifest = serializeWorkerWorkspaceManifest(manifest);
     const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
-    const validationOutputs = [`quiesced ${"c".repeat(32)}`, manifestRef, ""];
     let commandTimeoutMs: number | undefined;
     let transportTimeoutMs: number | undefined;
     const nodeTransport = transport();
@@ -537,7 +543,7 @@ describe("node worker tunnel manager", () => {
         ok: true,
         payloadJSON: JSON.stringify({
           workspaceDir: "/node/workspace",
-          stdout: validationOutputs.shift() ?? "",
+          stdout: "",
           stderr: "",
           code: 0,
           signal: null,
@@ -582,7 +588,6 @@ describe("node worker tunnel manager", () => {
     expect(commandTimeoutMs).toBe(60_000);
     expect(transportTimeoutMs).toBeGreaterThan(60_000);
     expect(transportTimeoutMs).toBeLessThanOrEqual(65_000);
-    expect(validationOutputs).toEqual([]);
 
     const listCurrentNodes = nodeTransport.listCurrentNodes.bind(nodeTransport);
     let current = true;

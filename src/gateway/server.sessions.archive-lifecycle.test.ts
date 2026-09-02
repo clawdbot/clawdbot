@@ -474,98 +474,106 @@ test("sharing revocation fences archive before cancellation and forces fresh aut
   }
 });
 
-test("archive retains the lifecycle fence until drain and commit before sharing proceeds", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:archive-before-sharing";
-  const sessionId = "session-archive-before-sharing";
-  const runId = "run-archive-before-sharing";
-  const owner = identifiedClient("archive-owner");
-  await writeSessionStore({
-    entries: {
-      [sessionKey]: sessionStoreEntry(sessionId, {
-        createdVia: "operator",
-        createdActor: { type: "human", source: "profile", id: "archive-owner" },
-        visibility: "shared",
-      }),
-    },
-  });
-  const admission = await beginSessionWorkAdmission({
-    scope: storePath,
-    identities: [sessionKey, sessionId],
-    assertAllowed: () => {},
-  });
-  const persistence = createDeferredCore();
-  const active = activeRunContext({ runId, sessionId, sessionKey, persistence });
-  const requestContext = await archiveLifecycleRequestContext(active.context);
-  let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
-  const reclaimGate = createDeferredCore();
-  const reclaim = vi.fn(async () => {
-    await reclaimGate.promise;
-    placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
-    return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
-  });
-  requestContext.workerSessionPlacementService = placementReader(() => placement);
-  requestContext.workerPlacementDispatchService = { dispatch: vi.fn(), reclaim };
-  const authorized = resolveSessionMutationAuthorization({
-    client: owner,
-    method: "sessions.patch",
-    requestParams: { key: sessionKey, archived: true },
-    context: requestContext,
-  });
-  expect(authorized.error).toBeNull();
-  if (!authorized.authorization) {
-    throw new Error("expected captured archive authorization");
-  }
-  let archive: Promise<LifecycleHandlerResponse> | undefined;
-  let sharing: Promise<LifecycleHandlerResponse> | undefined;
-
-  try {
-    archive = invokeArchiveHandler({
-      authorization: authorized.authorization,
-      client: owner,
+test.each(["owner", "viewer"] as const)(
+  "archive permits sharing during drain and revalidates the %s before commit",
+  async (archiveRole) => {
+    const { storePath } = await createSessionStoreDir();
+    const sessionKey = "agent:main:archive-before-sharing";
+    const sessionId = "session-archive-before-sharing";
+    const runId = "run-archive-before-sharing";
+    const owner = identifiedClient("archive-owner");
+    const archiver = archiveRole === "owner" ? owner : identifiedClient("archive-viewer");
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(sessionId, {
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "archive-owner" },
+          visibility: "shared",
+        }),
+      },
+    });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      assertAllowed: () => {},
+    });
+    const persistence = createDeferredCore();
+    const active = activeRunContext({ runId, sessionId, sessionKey, persistence });
+    const requestContext = await archiveLifecycleRequestContext(active.context);
+    let placement = workerPlacement({ sessionId, sessionKey, state: "active" });
+    const reclaimGate = createDeferredCore();
+    const reclaim = vi.fn(async () => {
+      await reclaimGate.promise;
+      placement = workerPlacement({ sessionId, sessionKey, state: "reclaimed" });
+      return placement as Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
+    });
+    requestContext.workerSessionPlacementService = placementReader(() => placement);
+    requestContext.workerPlacementDispatchService = { dispatch: vi.fn(), reclaim };
+    const authorized = resolveSessionMutationAuthorization({
+      client: archiver,
+      method: "sessions.patch",
+      requestParams: { key: sessionKey, archived: true },
       context: requestContext,
-      sessionKey,
-      expectedSessionId: sessionId,
     });
-    await vi.waitFor(() => expect(active.controller.signal.aborted).toBe(true));
+    expect(authorized.error).toBeNull();
+    if (!authorized.authorization) {
+      throw new Error("expected captured archive authorization");
+    }
+    let archive: Promise<LifecycleHandlerResponse> | undefined;
+    let sharing: Promise<LifecycleHandlerResponse> | undefined;
 
-    let sharingSettled = false;
-    sharing = invokeVisibilityHandler({
-      client: owner,
-      context: requestContext,
-      sessionKey,
-      visibility: "draft",
-    }).finally(() => {
-      sharingSettled = true;
-    });
-    await Promise.resolve();
-    expect(sharingSettled).toBe(false);
-    expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("shared");
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    try {
+      archive = invokeArchiveHandler({
+        authorization: authorized.authorization,
+        client: archiver,
+        context: requestContext,
+        sessionKey,
+        expectedSessionId: sessionId,
+      });
+      await vi.waitFor(() => expect(active.controller.signal.aborted).toBe(true));
 
-    admission.release();
-    persistence.resolve();
-    await vi.waitFor(() => expect(reclaim).toHaveBeenCalledOnce());
-    expect(sharingSettled).toBe(false);
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
-    reclaimGate.resolve();
-    expect(await archive).toMatchObject({ ok: true });
-    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
-    expect(await sharing).toMatchObject({ ok: true });
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
-      archivedAt: expect.any(Number),
-      visibility: "draft",
-    });
-  } finally {
-    admission.release();
-    persistence.resolve();
-    reclaimGate.resolve();
-    await Promise.allSettled([...(archive ? [archive] : []), ...(sharing ? [sharing] : [])]);
-    active.unsubscribe();
-  }
-});
+      sharing = invokeVisibilityHandler({
+        client: owner,
+        context: requestContext,
+        sessionKey,
+        visibility: "draft",
+      });
+      expect(await sharing).toMatchObject({ ok: true });
+      expect(loadSessionEntry({ storePath, sessionKey })?.visibility).toBe("draft");
+      expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 
-test("alias archive lets the canonical cloud reclaim barrier reenter without deadlock", async () => {
+      admission.release();
+      persistence.resolve();
+      if (archiveRole === "viewer") {
+        expect(await archive).toMatchObject({
+          ok: false,
+          error: { details: { code: "SESSION_PARTICIPATION_REQUIRED" } },
+        });
+        expect(reclaim).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+        return;
+      }
+      await vi.waitFor(() => expect(reclaim).toHaveBeenCalledOnce());
+      expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+      reclaimGate.resolve();
+      expect(await archive).toMatchObject({ ok: true });
+      expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
+      expect(await sharing).toMatchObject({ ok: true });
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        archivedAt: expect.any(Number),
+        visibility: "draft",
+      });
+    } finally {
+      admission.release();
+      persistence.resolve();
+      reclaimGate.resolve();
+      await Promise.allSettled([...(archive ? [archive] : []), ...(sharing ? [sharing] : [])]);
+      active.unsubscribe();
+    }
+  },
+);
+
+test("alias archive lets an earlier alias mutation finish before canonical reclaim", async () => {
   const { storePath } = await createSessionStoreDir();
   const aliasKey = "aaa-archive-cloud-alias";
   const sessionKey = `agent:main:${aliasKey}`;
@@ -575,6 +583,7 @@ test("alias archive lets the canonical cloud reclaim barrier reenter without dea
   const reclaimEntered = createDeferredCore();
   const allowNestedReclaim = createDeferredCore();
   const contenderRelease = createDeferredCore();
+  const contenderStarted = createDeferredCore();
   const reclaim = vi.fn(async () => {
     reclaimEntered.resolve();
     await allowNestedReclaim.promise;
@@ -600,29 +609,23 @@ test("alias archive lets the canonical cloud reclaim barrier reenter without dea
   const contender = runExclusiveSessionLifecycleMutation({
     scope: storePath,
     identities: [aliasKey],
-    run: async () => await contenderRelease.promise,
+    run: async () => {
+      contenderStarted.resolve();
+      await contenderRelease.promise;
+    },
   });
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await contenderStarted.promise;
   allowNestedReclaim.resolve();
-  let timer: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    const result = await Promise.race([
-      archive,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("nested alias reclaim deadlocked")), 2_000);
-      }),
-    ]);
+    expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+    contenderRelease.resolve();
+    const result = await archive;
     expect(result.ok).toBe(true);
     expect(reclaim).toHaveBeenCalledOnce();
     expect(placement.state).toBe("reclaimed");
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
     contenderRelease.resolve();
     allowNestedReclaim.resolve();
     await Promise.allSettled([archive, contender]);
@@ -1014,8 +1017,8 @@ test("sessions.patch rejects a generation replaced after the exact preparation r
       sessionId: "session-archive-generation-replacement",
     });
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
-    expect(reclaim).toHaveBeenCalledOnce();
-    expect(placement.state).toBe("reclaimed");
+    expect(reclaim).not.toHaveBeenCalled();
+    expect(placement.state).toBe("active");
     expect(dispatch).not.toHaveBeenCalled();
   } finally {
     active.unsubscribe();

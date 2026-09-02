@@ -206,11 +206,11 @@ describe("browser maintenance", () => {
   });
 
   it("refuses to use a symlinked trash directory", async () => {
+    const realTrashDir = path.join(testRoot, "real-trash");
+    realRmSync(path.join(homeDir, ".Trash"), { recursive: true, force: true });
+    realMkdirSync(realTrashDir, { recursive: true, mode: 0o700 });
+    fs.symlinkSync(realTrashDir, path.join(homeDir, ".Trash"), "dir");
     vi.spyOn(fs, "mkdirSync").mockImplementation(() => undefined);
-    vi.spyOn(fs, "lstatSync").mockReturnValue({
-      isDirectory: () => true,
-      isSymbolicLink: () => true,
-    } as fs.Stats);
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
 

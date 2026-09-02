@@ -24,12 +24,6 @@ import {
 const sharedTest = sharedVitestConfig.test ?? {};
 const exclude = sharedTest.exclude ?? [];
 
-export function loadIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
-
 export function loadExtraExcludePatternsFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): string[] {
@@ -114,10 +108,10 @@ export function createUnitVitestConfigWithOptions(
 ) {
   const isolate = resolveVitestIsolation(env);
   const argv = options.argv ?? process.argv;
-  const unitFastTestFiles = getUnitFastTestFiles();
-  const envIncludePatterns = loadIncludePatternsFromEnv(env);
+  const envIncludePatterns = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
   const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, argv);
+  const unitFastTestFiles = getUnitFastTestFiles(envIncludePatterns ?? cliIncludePatterns);
   const coverageIncludePatterns =
     isCoverageEnabledFromArgv(argv) &&
     options.includePatterns === undefined &&

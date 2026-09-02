@@ -5,12 +5,16 @@ import {
   listSessionPlacementRecoveryStorageKeys,
   sessionPlacementRecoveryExactStorageKey,
 } from "../lib/sessions/session-placement-recovery-storage-key.ts";
-import type { SessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
+import type {
+  SessionPlacementRecovery,
+  SessionPlacementTarget,
+} from "../lib/sessions/session-placement-recovery.ts";
+import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import type { ApplicationInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 
 export type ApplicationPlacementStartupStatus = {
   readonly sessionKey: string;
+  readonly targetKind: SessionPlacementTarget["kind"];
   readonly phase:
     | "pending"
     | "requested"
@@ -37,7 +41,7 @@ type PlacementStartupInput = {
 export type ApplicationPlacementStartupDependencies = {
   gateway: ApplicationGateway;
   sessions: SessionCapability;
-  initialUserMessage: ApplicationInitialUserMessageHandoff;
+  chatSubmissions: ApplicationChatSubmissions;
 };
 
 type PlacementStartupRecoveryAccess = Pick<
@@ -179,6 +183,7 @@ export function createApplicationPlacementStartup(
       return readyClient()
         ? {
             sessionKey,
+            targetKind: input.recovery.target.kind,
             phase: runtimeError ? "failed" : "pending",
             startedAt: input.createdAt,
             error: runtimeError,

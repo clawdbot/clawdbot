@@ -82,13 +82,12 @@ export function resolveHeartbeatForWake(params: {
   configuredHeartbeat?: HeartbeatConfig;
   requestedHeartbeat?: HeartbeatConfig;
   source?: HeartbeatWakeSource;
-  mergeRequestedHeartbeat: boolean;
 }): HeartbeatConfig | undefined {
-  const base = params.configuredHeartbeat ?? resolveHeartbeatConfig(params.cfg, params.agentId);
-  const heartbeat =
-    params.requestedHeartbeat && params.mergeRequestedHeartbeat
-      ? { ...base, ...params.requestedHeartbeat }
-      : (params.requestedHeartbeat ?? base);
+  const configuredHeartbeat =
+    params.configuredHeartbeat ?? resolveHeartbeatConfig(params.cfg, params.agentId);
+  const heartbeat = params.requestedHeartbeat
+    ? { ...configuredHeartbeat, ...params.requestedHeartbeat }
+    : configuredHeartbeat;
   return params.source === "cron" && params.requestedHeartbeat?.target === "last"
     ? omitExplicitHeartbeatDestination(heartbeat)
     : heartbeat;

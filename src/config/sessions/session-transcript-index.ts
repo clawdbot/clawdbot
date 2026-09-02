@@ -12,6 +12,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -21,6 +22,7 @@ import {
   hasUnclassifiedSessionTranscriptEvents,
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
+  type PreparedSessionTranscriptProjection,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import {
@@ -158,56 +160,45 @@ export function sessionTranscriptIndexNeedsReconcile(db: DatabaseSync, sessionId
   );
 }
 
-function writeWatermark(
-  db: DatabaseSync,
-  sessionId: string,
-  watermark: SessionTranscriptProjectionState,
-  now: number,
-  updateExisting = false,
-): SessionTranscriptProjectionState {
-  const kysely = getIndexKysely(db);
-  const values = {
-    active_event_count: watermark.activeEventCount,
-    active_message_count: watermark.activeMessageCount,
-    indexed_seq: watermark.indexedSeq,
-    leaf_event_id: watermark.leafEventId,
-    needs_rebuild: watermark.needsRebuild ? 1 : 0,
-    updated_at: now,
-  };
-  executeSqliteQuerySync(
+function createWatermarkWriter(db: DatabaseSync, sessionId: string, updateExisting = false) {
+  return prepareSqliteQuerySync<SessionTranscriptProjectionState & { updatedAt: number }>(
     db,
-    updateExisting
-      ? kysely
-          .updateTable("session_transcript_index_state")
-          .set(values)
-          .where("session_id", "=", sessionId)
-      : kysely
-          .insertInto("session_transcript_index_state")
-          .values({ session_id: sessionId, ...values })
-          .onConflict((conflict) => conflict.column("session_id").doUpdateSet(values)),
+    (parameter) => {
+      const kysely = getIndexKysely(db);
+      const values = {
+        active_event_count: parameter((row) => row.activeEventCount),
+        active_message_count: parameter((row) => row.activeMessageCount),
+        indexed_seq: parameter((row) => row.indexedSeq),
+        leaf_event_id: parameter((row) => row.leafEventId),
+        needs_rebuild: parameter((row) => (row.needsRebuild ? 1 : 0)),
+        updated_at: parameter((row) => row.updatedAt),
+      };
+      return updateExisting
+        ? kysely
+            .updateTable("session_transcript_index_state")
+            .set(values)
+            .where("session_id", "=", sessionId)
+        : kysely
+            .insertInto("session_transcript_index_state")
+            .values({ session_id: sessionId, ...values })
+            .onConflict((conflict) => conflict.column("session_id").doUpdateSet(values));
+    },
   );
-  return watermark;
 }
 
-function insertActiveEventRow(
-  db: DatabaseSync,
-  params: {
-    activePosition: number;
-    contextEligible: 0 | 1;
-    eventSeq: number;
-    messagePosition: number | null;
-    sessionId: string;
-  },
-): void {
-  executeSqliteQuerySync(
+function createActiveEventInserter(db: DatabaseSync, sessionId: string) {
+  return prepareSqliteQuerySync<PreparedSessionTranscriptProjection["activeRows"][number]>(
     db,
-    getIndexKysely(db).insertInto("session_transcript_active_events").values({
-      session_id: params.sessionId,
-      active_position: params.activePosition,
-      context_eligible: params.contextEligible,
-      event_seq: params.eventSeq,
-      message_position: params.messagePosition,
-    }),
+    (parameter) =>
+      getIndexKysely(db)
+        .insertInto("session_transcript_active_events")
+        .values({
+          session_id: sessionId,
+          active_position: parameter((row) => row.activePosition),
+          context_eligible: parameter((row) => row.contextEligible),
+          event_seq: parameter((row) => row.eventSeq),
+          message_position: parameter((row) => row.messagePosition),
+        }),
   );
 }
 
@@ -220,18 +211,18 @@ function deleteActiveEventRows(db: DatabaseSync, sessionId: string): void {
   );
 }
 
-function insertFtsRow(db: DatabaseSync, sessionId: string, entry: TranscriptIndexEntry): void {
-  executeSqliteQuerySync(
-    db,
-    getIndexKysely(db).insertInto("session_transcript_fts").values({
-      text: entry.text,
-      session_id: sessionId,
-      message_id: entry.messageId,
-      role: entry.role,
-      // FTS5 aux columns are typeless; the local insert type preserves the
-      // numeric timestamp SQLite stores while generated readers stay strings.
-      timestamp: entry.timestamp,
-    }),
+function createFtsInserter(db: DatabaseSync, sessionId: string) {
+  return prepareSqliteQuerySync<TranscriptIndexEntry>(db, (parameter) =>
+    getIndexKysely(db)
+      .insertInto("session_transcript_fts")
+      .values({
+        text: parameter((entry) => entry.text),
+        session_id: sessionId,
+        message_id: parameter((entry) => entry.messageId),
+        role: parameter((entry) => entry.role),
+        // FTS5 aux columns are typeless; preserve the numeric timestamp SQLite stores.
+        timestamp: parameter((entry) => entry.timestamp),
+      }),
   );
 }
 
@@ -257,6 +248,9 @@ export function createTranscriptIndexAppenderInTransaction(
 ): (params: TranscriptIndexAppend) => boolean {
   let watermark = readSessionTranscriptProjectionState(db, sessionId);
   let hasUnclassifiedEvents: boolean | undefined;
+  let insertActiveEvent: ReturnType<typeof createActiveEventInserter> | undefined;
+  let insertFts: ReturnType<typeof createFtsInserter> | undefined;
+  let updateWatermark: ReturnType<typeof createWatermarkWriter> | undefined;
   return (params) => {
     if (!watermark) {
       if (params.seq !== 0) {
@@ -264,7 +258,7 @@ export function createTranscriptIndexAppenderInTransaction(
         // transcripts): stay unindexed until reconcile rebuilds the session.
         return true;
       }
-      watermark = applyForwardIndex(db, sessionId, params, watermark);
+      applyForwardIndex(params);
       return false;
     }
     if (watermark.needsRebuild) {
@@ -311,51 +305,46 @@ export function createTranscriptIndexAppenderInTransaction(
       watermark = markSessionTranscriptIndexDirtyInTransaction(db, sessionId);
       return true;
     }
-    watermark = applyForwardIndex(db, sessionId, params, watermark);
+    applyForwardIndex(params);
     return false;
   };
-}
 
-function applyForwardIndex(
-  db: DatabaseSync,
-  sessionId: string,
-  params: TranscriptIndexAppend,
-  watermark: SessionTranscriptProjectionState | undefined,
-): SessionTranscriptProjectionState {
-  const entry = extractTranscriptIndexEntry(params.event, params.createdAt);
-  if (entry) {
-    insertFtsRow(db, sessionId, entry);
-  }
-  const projectsActiveEvent = shouldProjectActiveEvent(params.event);
-  const projectsMessage = projectsActiveEvent && hasTranscriptMessage(params.event);
-  if (projectsActiveEvent) {
-    insertActiveEventRow(db, {
-      activePosition: watermark?.activeEventCount ?? 0,
-      contextEligible: transcriptEventContextEligibility(params.event),
-      eventSeq: params.seq,
-      messagePosition: projectsMessage ? (watermark?.activeMessageCount ?? 0) : null,
-      sessionId,
-    });
-  }
-  // Mirror scanSessionTranscriptTree's leaf advancement: canonical entries
-  // (parent-linked or parentless) become the tip the next append chains to;
-  // headers and unknown control rows leave the tip untouched.
-  const advancesLeaf = params.eventId !== null && isCanonicalSessionTranscriptEntry(params.event);
-  return writeWatermark(
-    db,
-    sessionId,
-    {
+  function applyForwardIndex(params: TranscriptIndexAppend): void {
+    const entry = extractTranscriptIndexEntry(params.event, params.createdAt);
+    if (entry) {
+      insertFts ??= createFtsInserter(db, sessionId);
+      insertFts(entry);
+    }
+    const projectsActiveEvent = shouldProjectActiveEvent(params.event);
+    const projectsMessage = projectsActiveEvent && hasTranscriptMessage(params.event);
+    if (projectsActiveEvent) {
+      insertActiveEvent ??= createActiveEventInserter(db, sessionId);
+      insertActiveEvent({
+        activePosition: watermark?.activeEventCount ?? 0,
+        contextEligible: transcriptEventContextEligibility(params.event),
+        eventSeq: params.seq,
+        messagePosition: projectsMessage ? (watermark?.activeMessageCount ?? 0) : null,
+      });
+    }
+    // Mirror scanSessionTranscriptTree's leaf advancement: canonical entries
+    // (parent-linked or parentless) become the tip the next append chains to;
+    // headers and unknown control rows leave the tip untouched.
+    const advancesLeaf = params.eventId !== null && isCanonicalSessionTranscriptEntry(params.event);
+    const nextWatermark = {
       activeEventCount: (watermark?.activeEventCount ?? 0) + (projectsActiveEvent ? 1 : 0),
       activeMessageCount: (watermark?.activeMessageCount ?? 0) + (projectsMessage ? 1 : 0),
       indexedSeq: params.seq,
       leafEventId: advancesLeaf ? params.eventId : (watermark?.leafEventId ?? null),
       needsRebuild: false,
-    },
-    params.createdAt,
-    // The synchronous appender owns this row until its batch ends; initialization
-    // still upserts, while subsequent events avoid repeated conflict resolution.
-    watermark !== undefined,
-  );
+      updatedAt: params.createdAt,
+    };
+    // Initialization still upserts; this synchronous batch owns all subsequent updates.
+    const write = watermark
+      ? (updateWatermark ??= createWatermarkWriter(db, sessionId, true))
+      : createWatermarkWriter(db, sessionId);
+    write(nextWatermark);
+    watermark = nextWatermark;
+  }
 }
 
 /** Marks one session for lazy rebuild without touching its FTS rows. */
@@ -365,18 +354,15 @@ export function markSessionTranscriptIndexDirtyInTransaction(
 ): SessionTranscriptProjectionState {
   const now = Date.now();
   const watermark = readSessionTranscriptProjectionState(db, sessionId);
-  return writeWatermark(
-    db,
-    sessionId,
-    {
-      activeEventCount: watermark?.activeEventCount ?? 0,
-      activeMessageCount: watermark?.activeMessageCount ?? 0,
-      indexedSeq: watermark?.indexedSeq ?? -1,
-      leafEventId: watermark?.leafEventId ?? null,
-      needsRebuild: true,
-    },
-    now,
-  );
+  const dirty = {
+    activeEventCount: watermark?.activeEventCount ?? 0,
+    activeMessageCount: watermark?.activeMessageCount ?? 0,
+    indexedSeq: watermark?.indexedSeq ?? -1,
+    leafEventId: watermark?.leafEventId ?? null,
+    needsRebuild: true,
+  };
+  createWatermarkWriter(db, sessionId)({ ...dirty, updatedAt: now });
+  return dirty;
 }
 
 /** In-transaction delete hook: drops index rows alongside transcript rows. */
@@ -403,24 +389,21 @@ function rebuildSessionTranscriptIndexInTransaction(db: DatabaseSync, sessionId:
   deleteFtsRows(db, sessionId);
   deleteActiveEventRows(db, sessionId);
   const projection = visitSessionTranscriptProjection(db, sessionId, {
-    activeRow: (row) => insertActiveEventRow(db, { ...row, sessionId }),
-    ftsRow: (entry) => insertFtsRow(db, sessionId, entry),
+    activeRow: createActiveEventInserter(db, sessionId),
+    ftsRow: createFtsInserter(db, sessionId),
   });
   if (!projection) {
     return;
   }
-  writeWatermark(
-    db,
-    sessionId,
-    {
-      activeEventCount: projection.activeEventCount,
-      activeMessageCount: projection.activeMessageCount,
-      indexedSeq: projection.sourceIndexedSeq,
-      leafEventId: projection.leafEventId,
-      needsRebuild: false,
-    },
-    Date.now(),
-  );
+  const writeWatermark = createWatermarkWriter(db, sessionId);
+  writeWatermark({
+    activeEventCount: projection.activeEventCount,
+    activeMessageCount: projection.activeMessageCount,
+    indexedSeq: projection.sourceIndexedSeq,
+    leafEventId: projection.leafEventId,
+    needsRebuild: false,
+    updatedAt: Date.now(),
+  });
 }
 
 /** Rebuilds one lagging projection under its current write transaction. */

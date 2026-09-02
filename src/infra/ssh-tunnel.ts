@@ -3,7 +3,10 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
+import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
+import { tryListenOnPort } from "./ports-probe.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
 import { resolveSshClient } from "./ssh-client.js";
 
@@ -93,46 +96,38 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   return { user: userPart, host: hostPart, port: 22 };
 }
 
-async function pickEphemeralPort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const addr = server.address();
-      server.close(() => {
-        if (!addr || typeof addr === "string") {
-          reject(new Error("failed to allocate a local port"));
-          return;
-        }
-        resolve(addr.port);
-      });
-    });
-  });
-}
-
-async function canConnectLocal(port: number): Promise<boolean> {
+async function canConnectLocal(port: number, signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted();
   return await new Promise<boolean>((resolve) => {
     const socket = net.connect({ host: "127.0.0.1", port });
-    const done = (ok: boolean) => {
-      socket.removeAllListeners();
-      socket.destroy();
-      resolve(ok);
-    };
-    socket.once("connect", () => done(true));
-    socket.once("error", () => done(false));
-    socket.setTimeout(250, () => done(false));
+    let connected = false;
+    const destroy = () => socket.destroy();
+    signal.addEventListener("abort", destroy, { once: true });
+    socket.once("connect", () => {
+      connected = true;
+      destroy();
+    });
+    socket.once("error", destroy);
+    socket.setTimeout(250, destroy);
+    // Closing, not just requesting destruction, releases the probe's I/O and timer.
+    socket.once("close", () => {
+      signal.removeEventListener("abort", destroy);
+      resolve(connected);
+    });
   });
 }
 
-async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (await canConnectLocal(port)) {
+async function waitForLocalListener(
+  port: number,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const startedAt = performance.now(); // Clock adjustments must not change the polling budget.
+  while (performance.now() - startedAt < timeoutMs) {
+    if (await canConnectLocal(port, signal)) {
       return;
     }
-    await new Promise((r) => {
-      setTimeout(r, 50);
-    });
+    await sleepWithAbort(50, signal);
   }
   throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
 }
@@ -143,6 +138,7 @@ export async function startSshPortForward(opts: {
   localPortPreferred: number;
   remotePort: number;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<SshTunnel> {
   const parsed = parseSshTarget(opts.target);
   if (!parsed) {
@@ -159,7 +155,7 @@ export async function startSshPortForward(opts: {
     await ensurePortAvailable(localPort, "127.0.0.1");
   } catch (err) {
     if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
-      localPort = await pickEphemeralPort();
+      localPort = await tryListenOnPort({ port: 0, host: "127.0.0.1" });
     } else {
       throw err;
     }
@@ -193,6 +189,10 @@ export async function startSshPortForward(opts: {
   // Security: Use '--' to prevent userHost from being interpreted as an option
   args.push("--", userHost);
 
+  if (opts.signal?.aborted) {
+    throw createAbortError("SSH tunnel start aborted", { cause: opts.signal.reason });
+  }
+
   const stderr: string[] = [];
   const child = spawn(sshPath, args, {
     stdio: ["ignore", "ignore", "pipe"],
@@ -207,40 +207,78 @@ export async function startSshPortForward(opts: {
     stderr.push(...lines);
   });
 
-  const stop = async () => {
-    if (child.killed || !child.kill("SIGTERM")) {
-      return;
+  const exited = new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+    child.once("close", () => resolve());
+  });
+  let onAbort: (() => void) | undefined;
+  const detachAbort = () => {
+    if (onAbort) {
+      opts.signal?.removeEventListener("abort", onAbort);
+      onAbort = undefined;
     }
-    await new Promise<void>((resolve) => {
-      const t = setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } finally {
-          resolve();
-        }
-      }, 1500);
-      child.once("exit", () => {
-        clearTimeout(t);
-        resolve();
-      });
-    });
   };
+  let stopping: Promise<void> | undefined;
+  const stop = () =>
+    (stopping ??= (async () => {
+      detachAbort();
+      // Sending a signal is not exit; every caller must await the same child lifetime.
+      const timer = setTimeout(() => child.kill("SIGKILL"), 1500);
+      try {
+        child.kill("SIGTERM");
+        await exited;
+      } finally {
+        clearTimeout(timer);
+      }
+    })());
 
+  const readinessController = new AbortController();
+  const readiness = waitForLocalListener(
+    localPort,
+    Math.max(250, opts.timeoutMs),
+    readinessController.signal,
+  );
   try {
-    await Promise.race([
-      waitForLocalListener(localPort, Math.max(250, opts.timeoutMs)),
-      new Promise<void>((_, reject) => {
-        child.once("error", (err) => reject(err));
-        child.once("exit", (code, signal) => {
-          reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
-        });
-      }),
-    ]);
+    try {
+      await racePromiseWithAbortSignal(
+        Promise.race([
+          readiness,
+          new Promise<void>((_, reject) => {
+            child.once("error", (err) => reject(err));
+            child.once("exit", (code, signal) => {
+              reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
+            });
+          }),
+        ]),
+        opts.signal,
+      );
+    } finally {
+      // The race owns its losing readiness work; preserve the winner's error
+      // only after its socket or retry delay has stopped and joined.
+      readinessController.abort();
+      await readiness.catch(() => {});
+    }
   } catch (err) {
     await stop();
+    if (isAbortError(err)) {
+      throw err;
+    }
     const suffix = stderr.length > 0 ? `\n${stderr.join("\n")}` : "";
     throw new Error(`${formatErrorMessage(err)}${suffix}`, { cause: err });
   }
+
+  if (opts.signal) {
+    // Keep cancellation attached until this exact child exits. Removing it at
+    // listener readiness would let a later command signal orphan the tunnel.
+    onAbort = () => void stop().catch(() => {});
+    opts.signal.addEventListener("abort", onAbort, { once: true });
+    if (opts.signal.aborted) {
+      onAbort();
+      await stop();
+      throw createAbortError("SSH tunnel start aborted", { cause: opts.signal.reason });
+    }
+  }
+  void exited.then(detachAbort);
 
   return {
     parsedTarget: parsed,

@@ -1,6 +1,5 @@
 // Implements system prompt inspection commands for agent runtime sessions.
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { EmbeddedContextFile } from "../../agents/embedded-agent-helpers.js";
@@ -79,6 +78,7 @@ async function resolveCommandSkillsPrompt(params: {
   agentId: string;
   config: HandleCommandsParams["cfg"];
   eligibility: SkillEligibilityContext;
+  sandboxAgentId: string;
   sandboxed: boolean;
   sessionKey: string | undefined;
   workspaceDir: string;
@@ -89,6 +89,7 @@ async function resolveCommandSkillsPrompt(params: {
       // those paths can be unreadable inside the container.
       const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
         config: params.config,
+        agentId: params.sandboxAgentId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
       });
@@ -168,11 +169,7 @@ export async function resolveCommandsSystemPromptBundle(
 ): Promise<CommandsSystemPromptBundle> {
   const workspaceDir = params.workspaceDir;
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-    agentId: params.agentId,
-  });
+  const sessionAgentId = params.agentId;
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
     workspaceDir,
     config: params.cfg,
@@ -194,7 +191,9 @@ export async function resolveCommandsSystemPromptBundle(
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: toolPolicySessionKey,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: toolPolicySessionKey,
   });
   const skillsEligibility = resolveCommandSkillsEligibility({
     agentId: sessionAgentId,
@@ -206,6 +205,7 @@ export async function resolveCommandsSystemPromptBundle(
     agentId: sessionAgentId,
     config: params.cfg,
     eligibility: skillsEligibility,
+    sandboxAgentId: sandboxRuntime.classificationAgentId,
     sandboxed: sandboxRuntime.sandboxed,
     sessionKey: toolPolicySessionKey,
     workspaceDir,

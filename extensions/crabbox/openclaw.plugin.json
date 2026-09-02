@@ -1,5 +1,8 @@
 {
   "id": "crabbox",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "name": "Crabbox Worker Provider",
   "description": "Cloud worker provider backed by the Crabbox CLI.",
   "cliCommands": [

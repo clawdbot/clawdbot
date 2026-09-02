@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
 // Process coverage for one-shot Gateway CLI output followed by clean exit.
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -269,6 +271,48 @@ describe("gateway-backed CLI process exit", () => {
 
       expectUnreachableGatewayTransportFailure(result, output);
       expect(await snapshotSharedStateArtifacts(fixture.stateDir)).toEqual(before);
+    },
+  );
+
+  it.each([
+    { label: "empty", timeout: "", valid: false },
+    { label: "whitespace", timeout: " \t ", valid: false },
+    { label: "positive", timeout: "10000", valid: true },
+  ])(
+    "validates a $label nodes timeout before opening a Gateway connection",
+    async ({ timeout, valid }) => {
+      const root = tempDirs.make("openclaw-nodes-timeout-");
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const token = "test-token";
+      const gateway = await startNodePairingGateway(token);
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
+      );
+
+      const result = await runIsolatedGatewayCli({
+        args: ["nodes", "list", "--timeout", timeout, "--json"],
+        root,
+        stateDir,
+        configPath,
+      });
+
+      expect(result, result.stderr).toMatchObject({ code: valid ? 0 : 1, signal: null });
+      if (valid) {
+        expect(result.stderr).toBe("");
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          pending: [{ requestId: "request-1", nodeId: "node-1" }],
+          paired: [],
+        });
+        expect(gateway.connectionCount).toBeGreaterThan(0);
+        expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
+      } else {
+        expect(result.stderr).toContain("Invalid --timeout");
+        expect(gateway.connectionCount).toBe(0);
+        expect(gateway.calls).toEqual([]);
+      }
     },
   );
 
@@ -556,6 +600,76 @@ describe("gateway-backed CLI process exit", () => {
           .map((value) => Number.parseInt(value, 10)),
       );
       expect(entryPids.size).toBe(1);
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "reports a socat-owned port through the gateway status entry process",
+    async () => {
+      const root = tempDirs.make("openclaw-gateway-status-socat-");
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const listenerPath = path.join(root, "socat-listener.mjs");
+      const port = await getFreePort();
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } } }),
+      );
+      await fs.writeFile(
+        listenerPath,
+        [
+          'import fs from "node:fs";',
+          'import net from "node:net";',
+          'fs.writeFileSync("/proc/self/comm", "socat");',
+          'net.createServer().listen(Number(process.argv[2]), "127.0.0.1", () => {',
+          '  process.stdout.write("ready\\n");',
+          "});",
+          "",
+        ].join("\n"),
+      );
+      const listener = spawn(process.execPath, [listenerPath, String(port), "openclaw"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let listenerStderr = "";
+      listener.stderr.setEncoding("utf8");
+      listener.stderr.on("data", (chunk: string) => {
+        listenerStderr += chunk;
+      });
+
+      try {
+        const ready = await Promise.race([
+          once(listener.stdout, "data").then(([chunk]) => String(chunk)),
+          once(listener, "exit").then(([code, signal]) => {
+            throw new Error(
+              `socat fixture exited before listening: code=${code} signal=${signal}\n${listenerStderr}`,
+            );
+          }),
+        ]);
+        expect(ready).toContain("ready");
+
+        const result = await runIsolatedGatewayCli({
+          args: ["gateway", "status", "--port", String(port), "--no-probe", "--json"],
+          root,
+          stateDir,
+          configPath,
+        });
+
+        expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          port: {
+            port,
+            status: "busy",
+            listeners: [expect.objectContaining({ command: "socat" })],
+            hints: ["Another process is listening on this port."],
+          },
+        });
+      } finally {
+        if (listener.exitCode === null && listener.signalCode === null) {
+          listener.kill("SIGTERM");
+          await once(listener, "exit");
+        }
+      }
     },
   );
 
@@ -929,6 +1043,38 @@ describe("gateway-backed CLI process exit", () => {
     const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
 
     expect(result.code, result.stderr).toBe(0);
+  });
+
+  it.each([
+    { label: "empty", timeout: "", valid: false },
+    { label: "whitespace", timeout: " \t ", valid: false },
+    { label: "omitted", timeout: undefined, valid: true },
+    { label: "positive", timeout: "10000", valid: true },
+  ])("validates a $label channels capabilities timeout", async ({ timeout, valid }) => {
+    const root = tempDirs.make("openclaw-capabilities-timeout-");
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+
+    const result = await runIsolatedGatewayCli({
+      args: [
+        "channels",
+        "capabilities",
+        ...(timeout === undefined ? [] : ["--timeout", timeout]),
+        "--json",
+      ],
+      root,
+      stateDir,
+      configPath,
+    });
+
+    expect(result, result.stderr).toMatchObject({ code: valid ? 0 : 1, signal: null });
+    if (valid) {
+      expect(JSON.parse(result.stdout)).toEqual({ channels: [] });
+    } else {
+      expect(result.stderr).toContain("Invalid --timeout");
+    }
   });
 
   it("preserves pre-hello rate-limit details through the real health entry point", async () => {

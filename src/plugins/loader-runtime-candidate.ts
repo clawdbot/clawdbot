@@ -48,6 +48,7 @@ import {
   resolveManifestOwnerBasePolicyBlock,
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import {
@@ -119,6 +120,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(context.autoEnabledReasons[pluginId]),
       });
@@ -145,6 +147,7 @@ export function loadRuntimePluginCandidate(params: {
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
+        channelIds: manifestRecord.channels,
         activationSource: context.activationSource,
       });
   const entry = context.normalized.entries[policyId];
@@ -204,6 +207,11 @@ export function loadRuntimePluginCandidate(params: {
       record,
       message,
     });
+  const missingDependencyHint = resolveExternalPluginRuntimeDependencyRepairHint({
+    pluginId,
+    packageName: candidate.packageName,
+    packageBuild: candidate.packageManifest?.build,
+  });
   if (blockUntrustedLocalScopedChannelSetupImport) {
     record.status = "disabled";
     record.error =
@@ -415,6 +423,7 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
       diagnosticMessagePrefix: "failed to load plugin: ",
+      missingDependencyHint,
     });
     moduleLoadFailed = true;
     return;
@@ -565,6 +574,7 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
       diagnosticMessagePrefix: "plugin failed during register: ",
+      missingDependencyHint,
       ...(error instanceof PluginDashboardDeclarationError
         ? { diagnosticCode: "dashboard-declaration-invalid" }
         : {}),

@@ -6,7 +6,6 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   clearFirstRunActivationReceipt,
   persistFirstRunActivationReceipt,
@@ -15,11 +14,7 @@ import {
   type FirstRunActivationReceipt,
   firstRunActivationDeadline,
 } from "./first-run-activation-receipt.ts";
-import {
-  formatModelSetupError,
-  type ModelSetupActivationTaskResult,
-  type ModelSetupTaskResult,
-} from "./model-setup-task-result.ts";
+import { formatModelSetupError, type ModelSetupTaskResult } from "./model-setup-task-result.ts";
 import {
   activationTargetId,
   mapVerifyResult,
@@ -64,10 +59,7 @@ type FirstRunSetupHost = {
   canUseSetup: (client: GatewayBrowserClient | null) => boolean;
   canVerify: (client: GatewayBrowserClient | null) => boolean;
   verify: () => Promise<SetupOutcome<SystemAgentSetupVerifyResult>>;
-  activate: (
-    candidate: Candidate,
-    targetId: string,
-  ) => Promise<ModelSetupActivationTaskResult | undefined>;
+  activate: (candidate: Candidate, targetId: string) => Promise<void>;
   setVerifyState: (state: ModelSetupVerifyState) => void;
   setActivationState: (state: ModelSetupActivationState) => void;
   setRefreshWarning: (warning: string | null) => void;
@@ -76,7 +68,6 @@ type FirstRunSetupHost = {
 export class FirstRunSetup {
   private generation = 0;
   private started = false;
-  private readonly attempts = new Set<string>();
   private readyConnection: ModelSetupConnection | null = null;
   private pending: FirstRunActivation | null = null;
 
@@ -212,9 +203,6 @@ export class FirstRunSetup {
         status: "unknown",
         error: `${t("modelSetup.access.gatewayTooOld")}. ${t("updates.confirm.action")}. ${t("desktop.reconnect")}.`,
       });
-      return;
-    }
-    if (!configured && isGatewayMethodAdvertised(snapshot, "openclaw.setup.activate") !== true) {
       return;
     }
     this.started = true;
@@ -404,7 +392,6 @@ export class FirstRunSetup {
   private reset(): void {
     this.generation += 1;
     this.started = false;
-    this.attempts.clear();
   }
 
   private owns(owner: FirstRunOwner): boolean {
@@ -439,33 +426,22 @@ export class FirstRunSetup {
         return;
       }
     }
-    const context = this.host.context();
-    if (isGatewayMethodAdvertised(context.gateway.snapshot, "openclaw.setup.activate") !== true) {
-      return;
-    }
     for (const candidate of detection.candidates) {
       const targetId = activationTargetId(candidate.kind, candidate.modelRef);
       if (
         candidate.credentials === false ||
         (detection.configuredModel &&
-          (candidate.kind === "existing-model" ||
-            candidate.modelRef === detection.configuredModel)) ||
-        this.attempts.has(targetId)
+          (candidate.kind === "existing-model" || candidate.modelRef === detection.configuredModel))
       ) {
         continue;
       }
       if (!this.owns(owner)) {
         return;
       }
-      this.attempts.add(targetId);
-      const outcome = await this.host.activate(candidate, targetId);
-      if (!this.owns(owner) || !outcome || "error" in outcome) {
-        return;
-      }
-      // Only a definitive Gateway rejection permits trying another candidate.
-      if (!outcome.isCurrent() || outcome.value.result.ok) {
-        return;
-      }
+      // Activation now owns an interactive review. A declined or cancelled
+      // review must never authorize another candidate's setup automatically.
+      await this.host.activate(candidate, targetId);
+      return;
     }
   }
 
