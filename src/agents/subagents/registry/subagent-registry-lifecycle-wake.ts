@@ -288,7 +288,6 @@ export function scheduleRequesterSettleWake(
   // A replayed lifecycle start can retain an older endedAt; require both
   // terminal status and end evidence so a live child never wakes its requester.
   if (
-    !admittedWake ||
     entry.collect ||
     entry.execution.status === "running" ||
     !hasSubagentRunEnded(entry) ||
@@ -340,7 +339,7 @@ export function scheduleRequesterSettleWake(
           requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
         });
         const current = params.runs.get(runId);
-        if (current !== entry || current.requesterSettleWake !== admittedWake) {
+        if (!admittedWake || current !== entry || current.requesterSettleWake !== admittedWake) {
           return;
         }
         try {
