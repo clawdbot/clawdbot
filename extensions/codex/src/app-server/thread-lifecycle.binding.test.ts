@@ -235,6 +235,12 @@ function createPluginAppPolicyContext() {
   };
 }
 
+function createInstalledPluginAppSnapshot() {
+  // Warm resumes attest the effective native app surface too. Model that read
+  // explicitly rather than skipping the check in these binding fixtures.
+  return { apps: [{ id: "google-calendar-app", enabled: true, callable: true }] };
+}
+
 function createTwoPluginAppConfigPatch() {
   return {
     apps: {
@@ -2336,10 +2342,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond,
-    });
+    const fixture = await createLeasedLifecycleWireClient(
+      path.join(tempDir, "agent"),
+      ({ method }) => respond(method),
+    );
 
     await expect(
       startOrResumeThread({
@@ -2351,12 +2357,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
         nativeCodeModeEnabled: false,
         userMcpServersEnabled: false,
         hostSystemAgentActive: false,
+        signal: new AbortController().signal,
       }),
     ).resolves.toMatchObject({
       threadId: "thread-plugin-policy-managed-hooks",
       lifecycle: { action: "started" },
     });
-    expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
+    expect(respond.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -4055,6 +4062,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
         if (method === "thread/resume") {
           return threadStartResult("thread-existing");
         }
+        if (method === "app/installed") {
+          return createInstalledPluginAppSnapshot();
+        }
         throw new Error(`unexpected method: ${method}`);
       },
     );
@@ -4120,7 +4130,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(buildDenyAllPluginThreadConfig).toHaveBeenCalledTimes(1);
     expect(buildEnabledPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls;
-    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requestCalls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/resume",
+      "app/installed",
+    ]);
     expect(requestCalls[0]?.[1]).toMatchObject({
       dynamicTools: [
         expect.objectContaining({ name: "read" }),
@@ -4320,6 +4334,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-hooks");
       }
+      if (method === "app/installed") {
+        return createInstalledPluginAppSnapshot();
+      }
       throw new Error(`unexpected method: ${method}`);
     });
     const pluginAppPolicyContext = createPluginAppPolicyContext();
@@ -4374,7 +4391,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requestCalls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/resume",
+      "app/installed",
+    ]);
     expect(requestCalls[0]?.[1].config).toMatchObject({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
@@ -4402,6 +4423,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-plugins");
+      }
+      if (method === "app/installed") {
+        return createInstalledPluginAppSnapshot();
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -4465,8 +4489,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "thread/start",
       "config/read",
       "thread/resume",
+      "app/installed",
     ]);
-    const threadRequests = requestCalls.filter(([method]) => method !== "config/read");
+    const threadRequests = requestCalls.filter(([method]) => method.startsWith("thread/"));
     expect(threadRequests.map(([, requestParams]) => requestParams.approvalsReviewer)).toEqual([
       "auto_review",
       "auto_review",
@@ -4575,6 +4600,9 @@ describe("Codex app-server thread lifecycle bindings", () => {
       if (method === "thread/resume") {
         return threadStartResult("thread-existing");
       }
+      if (method === "app/installed") {
+        return createInstalledPluginAppSnapshot();
+      }
       throw new Error(`unexpected method: ${method}`);
     });
 
@@ -4595,7 +4623,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume", "app/installed"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
       ...createPluginAppConfigPatch(),

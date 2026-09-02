@@ -1830,7 +1830,7 @@ describe("Codex app-server dynamic tool build", () => {
     expect(
       tools
         .filter((tool) => ["exec", "process", "node_exec"].includes(tool.name))
-        .map((tool) => tool.catalogMode),
+        .map((tool: RuntimeDynamicToolForTest) => tool.catalogMode),
     ).toEqual(["direct-only", "direct-only", "direct-only"]);
 
     const bridge = createCodexDynamicToolBridge({
@@ -1898,7 +1898,7 @@ describe("Codex app-server dynamic tool build", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["message", "sandbox_exec", "sandbox_process"]);
-    expect(tools.map((tool) => tool.catalogMode)).toEqual([
+    expect(tools.map((tool: RuntimeDynamicToolForTest) => tool.catalogMode)).toEqual([
       undefined,
       "direct-only",
       "direct-only",

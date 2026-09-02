@@ -3066,6 +3066,7 @@ describe("Codex plugin binding recovery", () => {
       "thread/start",
       "app/installed",
       "thread/resume",
+      "app/installed",
     ]);
     expect(threadStarts).toHaveLength(3);
     expect(threadStarts[1]?.config).toMatchObject({
