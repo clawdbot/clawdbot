@@ -879,6 +879,7 @@ describe("failover-error", () => {
         "WorkerWorkspaceReconciliationError",
         "cloud worker workspace result could not be reconciled",
       ],
+      ["active turn claim", "ActiveTurnClaimError", "session already has an active turn claim"],
     ])("returns true for direct and nested runner %s failures", (_label, name, message) => {
       const coordination = new Error(message);
       coordination.name = name;
