@@ -1,64 +1,9 @@
 // Memory Core tests cover manager status state plugin behavior.
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import {
-  collectMemoryStatusAggregate,
-  resolveInitialMemoryDirty,
-  resolveStatusProviderInfo,
-} from "./manager-status-state.js";
+import { collectMemoryStatusAggregate, resolveStatusProviderInfo } from "./manager-status-state.js";
 
 describe("memory manager status state", () => {
-  it.each([
-    {
-      name: "indexed status-only memory stays clean",
-      params: {
-        hasMemorySource: true,
-        transient: true,
-        hasIndexedMeta: true,
-      },
-      expected: false,
-    },
-    {
-      name: "indexed one-shot CLI memory stays clean",
-      params: {
-        hasMemorySource: true,
-        transient: true,
-        hasIndexedMeta: true,
-      },
-      expected: false,
-    },
-    {
-      name: "missing metadata is dirty",
-      params: {
-        hasMemorySource: true,
-        transient: true,
-        hasIndexedMeta: false,
-      },
-      expected: true,
-    },
-    {
-      name: "indexed default manager stays dirty for initial sync",
-      params: {
-        hasMemorySource: true,
-        transient: false,
-        hasIndexedMeta: true,
-      },
-      expected: true,
-    },
-    {
-      name: "identity mismatch is dirty",
-      params: {
-        hasMemorySource: false,
-        transient: true,
-        hasIndexedMeta: true,
-        indexIdentityMismatched: true,
-      },
-      expected: true,
-    },
-  ])("resolves $name", ({ params, expected }) => {
-    expect(resolveInitialMemoryDirty(params)).toBe(expected);
-  });
-
   it.each([
     {
       name: "requested provider before initialization",

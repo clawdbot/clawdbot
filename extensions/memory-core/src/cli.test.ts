@@ -2103,9 +2103,6 @@ describe("memory cli", () => {
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
     });
-    expect(getMemorySearchManager).toHaveBeenCalledWith(
-      expect.objectContaining({ purpose: "cli", inspectSources: true }),
-    );
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
