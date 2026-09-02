@@ -83,7 +83,7 @@ export type BackgroundTasksHost = {
 // from hiding behind newer terminal records here.
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
-const TASK_LIST_MAX_ATTEMPTS = 3;
+const TASK_LIST_MAX_ATTEMPTS = 2;
 const TASK_LIST_RETRY_DEFAULT_MS = 250;
 const TASK_LIST_RETRY_MAX_MS = 30_000;
 
@@ -238,27 +238,43 @@ async function requestBackgroundTaskSnapshot(
 ) {
   const { sessionKey, agentId } = state;
   for (let attempt = 0; attempt < TASK_LIST_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await Promise.all([
-        client.request("tasks.list", {
-          sessionKey,
-          agentId,
-          status: ["queued", "running"],
-          limit: ACTIVE_TASKS_LIMIT,
-        }),
-        client.request("tasks.list", { sessionKey, agentId, limit: RECENT_TASKS_LIMIT }),
-      ]);
-    } catch (error) {
-      const retryDelayMs = taskListRetryDelayMs(error);
-      if (retryDelayMs === undefined || attempt === TASK_LIST_MAX_ATTEMPTS - 1) {
-        throw error;
+    const results = await Promise.allSettled([
+      client.request("tasks.list", {
+        sessionKey,
+        agentId,
+        status: ["queued", "running"],
+        limit: ACTIVE_TASKS_LIMIT,
+      }),
+      client.request("tasks.list", {
+        sessionKey,
+        agentId,
+        status: ["completed", "failed", "timed_out", "cancelled"],
+        sortBy: "endedAt",
+        limit: RECENT_TASKS_LIMIT,
+      }),
+    ]);
+    const [active, recent] = results;
+    if (active?.status === "fulfilled" && recent?.status === "fulfilled") {
+      return [active.value, recent.value];
+    }
+    const failures = results.filter((result) => result.status === "rejected");
+    const error = failures[0]?.reason;
+    let retryDelayMs = 0;
+    for (const failure of failures) {
+      const delay = taskListRetryDelayMs(failure.reason);
+      if (delay === undefined) {
+        throw failure.reason;
       }
-      await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, retryDelayMs);
-      });
-      if (!host.connected || host.client !== client || getBackgroundTasksState(host) !== state) {
-        throw error;
-      }
+      retryDelayMs = Math.max(retryDelayMs, delay);
+    }
+    if (attempt === TASK_LIST_MAX_ATTEMPTS - 1) {
+      throw error;
+    }
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, retryDelayMs);
+    });
+    if (!host.connected || host.client !== client || getBackgroundTasksState(host) !== state) {
+      throw error;
     }
   }
   throw new Error("unreachable task list retry state");
@@ -290,6 +306,7 @@ function loadBackgroundTasks(
   state.loading = true;
   state.error = null;
   state.pendingReload = false;
+  host.requestUpdate?.();
   void (async () => {
     try {
       const [activePayload, recentPayload] = await requestBackgroundTaskSnapshot(

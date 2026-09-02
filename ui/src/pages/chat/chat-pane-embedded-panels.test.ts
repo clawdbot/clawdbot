@@ -75,6 +75,7 @@ describe("chat pane embedded panels", () => {
       'button[aria-label="Refresh background tasks"]',
     );
     expect(refresh).not.toBeNull();
+    expect(refresh?.querySelector("svg")?.outerHTML).toContain("M21 12a9");
     refresh?.click();
     expect(onRefreshTasks).toHaveBeenCalledOnce();
 
@@ -92,6 +93,13 @@ describe("chat pane embedded panels", () => {
         mount.querySelector<HTMLButtonElement>('button[aria-label="Refresh background tasks"]')
           ?.disabled,
       ).toBe(true);
+      if (tasksLoading) {
+        expect(
+          mount.querySelector(
+            'button[aria-label="Refresh background tasks"] .btn__spinner[aria-hidden="true"]',
+          ),
+        ).not.toBeNull();
+      }
     }
   });
 });

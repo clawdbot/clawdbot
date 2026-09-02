@@ -161,11 +161,17 @@ suite.define(() => {
       status: ["queued", "running"],
       limit: 200,
     };
-    const recentParams = { sessionKey: chatSessionKey, agentId: "main", limit: 100 };
+    const recentParams = {
+      sessionKey: chatSessionKey,
+      agentId: "main",
+      status: ["completed", "failed", "timed_out", "cancelled"],
+      sortBy: "endedAt",
+      limit: 100,
+    };
     const listResponses = {
       cases: [
         { match: activeParams, response: { tasks: activeTasks } },
-        { match: recentParams, response: { tasks: [...activeTasks, ...finishedTasks] } },
+        { match: recentParams, response: { tasks: finishedTasks } },
       ],
     };
     const runningOrder = () =>
@@ -216,6 +222,9 @@ suite.define(() => {
       const beforeTransient = (await gateway.getRequests("tasks.list")).length;
       await gateway.deferNext("tasks.list", activeParams);
       await refresh.click();
+      await expect.poll(() => refresh.isDisabled()).toBe(true);
+      expect(await refresh.locator(".btn__spinner").count()).toBe(1);
+      await page.screenshot({ path: path.join(proofDir, "03-refresh-loading.png") });
       await expect
         .poll(async () => gateway.getRequests("tasks.list"))
         .toHaveLength(beforeTransient + 2);
@@ -227,17 +236,18 @@ suite.define(() => {
       await expect
         .poll(async () => gateway.getRequests("tasks.list"))
         .toHaveLength(beforeTransient + 4);
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
       expect(await panel.getByRole("alert").count()).toBe(0);
       expect(await runningOrder()).toEqual(expectedRunning);
-      await page.screenshot({ path: path.join(proofDir, "03-transient-retry-hidden.png") });
+      await page.screenshot({ path: path.join(proofDir, "04-transient-retry-hidden.png") });
       await page.waitForTimeout(500);
 
       let listRequestCount = (await gateway.getRequests("tasks.list")).length;
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         await gateway.deferNext("tasks.list", activeParams);
       }
       await refresh.click();
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         await expect
           .poll(async () => gateway.getRequests("tasks.list"))
           .toHaveLength(listRequestCount + 2);
@@ -253,14 +263,14 @@ suite.define(() => {
       expect(await alert.textContent()).toContain(
         "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
       );
-      await page.screenshot({ path: path.join(proofDir, "04-retries-exhausted.png") });
+      await page.screenshot({ path: path.join(proofDir, "05-retries-exhausted.png") });
       await page.waitForTimeout(500);
 
       await refresh.click();
       await expect.poll(() => alert.count()).toBe(0);
       expect(await runningOrder()).toEqual(expectedRunning);
       expect(await finishedOrder()).toEqual(expectedFinished);
-      await page.screenshot({ path: path.join(proofDir, "05-recovered.png") });
+      await page.screenshot({ path: path.join(proofDir, "06-recovered.png") });
       await page.waitForTimeout(500);
     } finally {
       await context.close();

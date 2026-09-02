@@ -183,6 +183,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       agentId,
       sessionKey,
       sessionAgentId,
+      params.sortBy ?? null,
     ];
     const bindCursor = (...fields: number[]) => taskListFingerprint([fields, ...bindingFacts]);
     const cursorBinding =
@@ -191,9 +192,8 @@ export const tasksHandlers: GatewayRequestHandlers = {
       invalidTaskListCursor(respond);
       return;
     }
-    // The ledger pages by last activity so an old long-running task that just
-    // finished still surfaces first. Selection stays inside the registry so
-    // only the bounded wire page pays for defensive record cloning.
+    // Selection stays inside the registry so ordering applies before pagination
+    // and only the bounded wire page pays for defensive record cloning.
     const canReadTask = (task: Readonly<TaskRecord>) =>
       canAccessTaskRequesterSession({ cfg, client, task });
     const pageParams = {
@@ -206,6 +206,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       sessionAgentId,
       cfg,
       filter: canReadTask,
+      sortBy: params.sortBy,
     };
     // Page scans yield to active task updates. Restart the complete selection
     // and authorization attempt so transient registry churn never reaches clients.

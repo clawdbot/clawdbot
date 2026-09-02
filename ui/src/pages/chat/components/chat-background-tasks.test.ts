@@ -18,6 +18,14 @@ function flushAsync() {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function makeTask(overrides: Partial<TaskSummary> & { id: string }): TaskSummary {
   return {
     taskId: overrides.id,
@@ -170,9 +178,10 @@ describe("background tasks rail state", () => {
     vi.useFakeTimers();
     try {
       const running = makeTask({ id: "task-retried" });
+      const pendingRecent = deferred<{ tasks: TaskSummary[] }>();
       let requestCount = 0;
       const { host, request } = createHost({
-        request: () => {
+        request: (_method, params) => {
           requestCount += 1;
           if (requestCount === 1) {
             return Promise.reject(
@@ -184,11 +193,21 @@ describe("background tasks rail state", () => {
               }),
             );
           }
+          if (
+            (params as { status?: string[] }).status?.includes("completed") &&
+            requestCount === 2
+          ) {
+            return pendingRecent.promise;
+          }
           return Promise.resolve({ tasks: [running] });
         },
       });
 
       createBackgroundTasksProps(host);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(createBackgroundTasksProps(host)).toMatchObject({ loading: true, error: null });
+      pendingRecent.resolve({ tasks: [running] });
       await vi.advanceTimersByTimeAsync(10);
 
       const props = createBackgroundTasksProps(host);
@@ -217,10 +236,10 @@ describe("background tasks rail state", () => {
       });
 
       createBackgroundTasksProps(host);
-      await vi.advanceTimersByTimeAsync(20);
+      await vi.advanceTimersByTimeAsync(10);
 
       let props = createBackgroundTasksProps(host);
-      expect(request).toHaveBeenCalledTimes(6);
+      expect(request).toHaveBeenCalledTimes(4);
       expect(props.error).toBe(error.message);
       const rail = renderTaskRail({ ...props, collapsed: false });
       expect(rail.querySelector('[role="alert"]')?.textContent).toContain(error.message);
@@ -256,12 +275,26 @@ describe("background tasks rail state", () => {
     expect(props.activeCount).toBe(1);
   });
 
-  it("keeps the later recent page's equally current running progress", async () => {
+  it("reports refresh loading before the snapshot settles", async () => {
+    const pending = deferred<{ tasks: TaskSummary[] }>();
+    const { host, requestUpdate } = createHost({ request: () => pending.promise });
+
+    const initial = createBackgroundTasksProps(host);
+
+    expect(initial.loading).toBe(true);
+    expect(requestUpdate).toHaveBeenCalled();
+    pending.resolve({ tasks: [] });
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).loading).toBe(false);
+  });
+
+  it("keeps a terminal snapshot when the active page is stale", async () => {
     const recent = makeTask({
       id: "task-1",
+      status: "completed",
       toolUseCount: 2,
       lastToolName: "write",
-      progressSummary: "Finishing the concurrent task report",
+      terminalSummary: "Finished the concurrent task report",
     });
     const active = makeTask({
       id: "task-1",
@@ -273,7 +306,7 @@ describe("background tasks rail state", () => {
       request: (method, params) => {
         expect(method).toBe("tasks.list");
         const status = (params as { status?: string[] }).status;
-        return Promise.resolve({ tasks: [status ? active : recent] });
+        return Promise.resolve({ tasks: [status?.includes("running") ? active : recent] });
       },
     });
 
@@ -281,7 +314,10 @@ describe("background tasks rail state", () => {
     await flushAsync();
 
     expect(request.mock.calls[0]?.[1]).toMatchObject({ status: ["queued", "running"] });
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("status");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      status: ["completed", "failed", "timed_out", "cancelled"],
+      sortBy: "endedAt",
+    });
     expect(createBackgroundTasksProps(host).tasks).toEqual([recent]);
   });
 

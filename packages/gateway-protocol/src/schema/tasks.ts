@@ -32,6 +32,10 @@ const TaskDeliveryStatusSchema = Type.Union([
   Type.Literal("not_applicable"),
 ]);
 const TaskTerminalOutcomeSchema = Type.Union([Type.Literal("succeeded"), Type.Literal("blocked")]);
+const TaskListSortBySchema = Type.Unsafe<"updatedAt" | "endedAt">({
+  type: "string",
+  enum: ["updatedAt", "endedAt"],
+});
 const TaskDiffStatSchema = withSince(
   "2026.8",
   closedObject({
@@ -85,6 +89,7 @@ export const TasksListParamsSchema = closedObject({
   sessionKey: Type.Optional(NonEmptyString),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
   cursor: Type.Optional(Type.String({ maxLength: TASKS_LIST_CURSOR_MAX_LENGTH })),
+  sortBy: Type.Optional(withSince("2026.8", TaskListSortBySchema)),
 });
 
 /** Task list page response. */

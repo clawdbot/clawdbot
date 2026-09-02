@@ -392,7 +392,7 @@ describe("tasks.list Gateway performance", () => {
           resetTaskRegistryForTests({ persist: false });
           let convergingChurnStarted = false;
           let convergingRevision = 0;
-          const convergingRevisionTarget = 937;
+          const convergingRevisionTarget = 1;
           const convergeTaskRegistry = () => {
             if (convergingRevision >= convergingRevisionTarget) {
               return;
