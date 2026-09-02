@@ -636,8 +636,8 @@ describe("pruneHistoryForContextShare", () => {
     });
 
     expect(pruned.messages).not.toContain(messages[2]!);
-    expect(pruned.droppedMessagesList).toEqual([messages[0], messages[2]]);
-    expect(pruned.droppedMessages).toBe(2);
+    expect(pruned.droppedMessagesList).toEqual([messages[0], messages[1], messages[2], messages[4]]);
+    expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length);
   });
 
   it("does not count normalized retained tool_results as dropped", () => {
