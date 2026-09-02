@@ -1,268 +1,105 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   pluginSdkEntrypoints,
-  productionPluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
-import { createScriptTestHarness } from "./test-helpers.js";
+import {
+  createFixture,
+  declarationCacheRecords,
+  declarationInputs,
+  expectOutputs,
+  expectStagingClean,
+  loader,
+  runFixture,
+  runWriter,
+  treeHashes,
+} from "./tsdown-declaration-fixture.js";
 
-const { createTempDir } = createScriptTestHarness();
-const sourceRoot = process.cwd();
-const loader = pathToFileURL(path.resolve("scripts/tsx.mjs")).href;
-const writer = path.resolve("scripts/write-plugin-sdk-entry-dts.ts");
 const compiler = path.resolve("scripts/run-tsgo.mjs");
-const declarationInputs = [
-  { file: "src/contract.d.ts", specifier: "../contract.js", name: "SourceOnly" },
-  { file: "root.d.mts", specifier: "../../root.mjs", name: "RootOnly" },
-  {
-    file: "scripts/fixture-types.d.ts",
-    specifier: "../../scripts/fixture-types.js",
-    name: "ScriptOnly",
-  },
-  { file: "test/fixture-types.d.cts", specifier: "../../test/fixture-types.cjs", name: "TestOnly" },
-  { file: "src/actual.mts", specifier: "../actual.mjs", name: "EmittedMts" },
-  { file: "src/actual.cts", specifier: "../actual.cjs", name: "EmittedCts" },
-] as const;
-
-function runFixture(root: string, args: string[], privateQa = false) {
-  return spawnSync(process.execPath, args, {
-    cwd: root,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      OPENCLAW_BUILD_PRIVATE_QA: privateQa ? "1" : "0",
-      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0",
-      // Use the build owner's existing direct-tool path, without a fixture pnpm shim.
-      OPENCLAW_BUILD_ALL_NO_PNPM: "1",
-    },
-  });
-}
-
-type ConfigEntries = { inputs: string[]; selected: Record<string, string> };
-// Share canonical input metadata; every case still compiles in a fresh fixture tree.
-let configEntries: { production: ConfigEntries; qa: ConfigEntries } | undefined;
-
-function readConfigEntries(root: string, privateQa: boolean): ConfigEntries {
-  const result = runFixture(
-    root,
-    [
-      "--import",
-      loader,
-      "--input-type=module",
-      "--eval",
-      `
-import configs from ${JSON.stringify(pathToFileURL(path.join(root, "tsdown.config.ts")).href)};
-import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from ${JSON.stringify(pathToFileURL(path.join(sourceRoot, "scripts/lib/tsdown-config-groups.mts")).href)};
-const groups = configs.filter(config => TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.includes(config.name));
-if (groups.length !== TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.length) throw new Error("Missing SDK declaration groups");
-const selected = Object.fromEntries(groups.flatMap(config =>
-  Object.entries(config.entry).filter(([, source]) => config.dts.entry.includes(source))
-));
-process.stdout.write(JSON.stringify({ inputs: Object.values(groups[0].entry), selected }));
-`,
-    ],
-    privateQa,
-  );
-  expect(result.status, result.stdout + result.stderr).toBe(0);
-  const entries = JSON.parse(result.stdout) as ConfigEntries;
-  const relative = (source: string) => path.relative(root, path.resolve(root, source));
-  return {
-    inputs: entries.inputs.map(relative),
-    selected: Object.fromEntries(
-      Object.entries(entries.selected).map(([name, source]) => [name, relative(source)]),
-    ),
-  };
-}
-
-function createFixture() {
-  const root = path.join(fs.realpathSync(createTempDir("openclaw-sdk-declarations-")), "Project");
-  fs.mkdirSync(root, { recursive: true });
-  fs.mkdirSync(path.join(root, ".artifacts"));
-  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
-  const write = (source: string, contents: string) => {
-    const relative = path.relative(root, path.resolve(root, source));
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error(`Fixture input escapes its root: ${source}`);
-    }
-    const target = path.join(root, relative);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, contents);
-  };
-  write(
-    "package.json",
-    '{"name":"sdk-declaration-fixture","version":"0.0.0","private":true,"type":"module"}',
-  );
-  write("tsdown.config.ts", fs.readFileSync(path.join(sourceRoot, "tsdown.config.ts"), "utf8"));
-  fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
-  fs.mkdirSync(path.join(root, "extensions"));
-  fs.mkdirSync(path.join(root, "scripts/lib"));
-  for (const entry of fs.readdirSync(path.join(sourceRoot, "scripts/lib"), {
-    withFileTypes: true,
-  })) {
-    const source = path.join(sourceRoot, "scripts/lib", entry.name);
-    const target = path.join(root, "scripts/lib", entry.name);
-    if (entry.name === "runtime-process-build-entries.mts") {
-      fs.copyFileSync(source, target);
-    } else {
-      fs.symlinkSync(source, target, entry.isDirectory() ? "junction" : "file");
-    }
-  }
-  // These owners derive runtime inputs from import.meta.url; keep that graph inside the fixture.
-  const runtimeEntryOwners = new Set([
-    "src/infra/runtime-process-entrypoints.ts",
-    "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
-  ]);
-  for (const source of runtimeEntryOwners) {
-    write(source, fs.readFileSync(path.join(sourceRoot, source), "utf8"));
-  }
-  // The unmodified config reads workspace export metadata before selecting its SDK groups.
-  for (const entry of fs.readdirSync(path.join(sourceRoot, "packages"), { withFileTypes: true })) {
-    const metadata = path.join(sourceRoot, "packages", entry.name, "package.json");
-    if (entry.isDirectory() && fs.existsSync(metadata)) {
-      write(`packages/${entry.name}/package.json`, fs.readFileSync(metadata, "utf8"));
-    }
-  }
-  // The full config resolves these runtime inputs before selecting declaration groups.
-  for (const source of [
-    "src/worker/worker-deploy-browser-runtime.ts",
-    "extensions/browser/src/browser/playwright-core.runtime.ts",
-    "src/infra/net/undici-dispatcher-options.ts",
-  ]) {
-    write(source, "export {};\n");
-  }
-  const { production, qa } = (configEntries ??= {
-    production: readConfigEntries(root, false),
-    qa: readConfigEntries(root, true),
-  });
-  // Rolldown resolves the complete canonical entry graph even for declaration-only groups.
-  // Empty non-SDK sources are fixture inputs, never replacement compiler output.
-  for (const source of new Set(qa.inputs)) {
-    const relative = path.relative(root, path.resolve(root, source)).replaceAll(path.sep, "/");
-    if (!runtimeEntryOwners.has(relative)) {
-      write(source, "export {};\n");
-    }
-  }
-  write(
-    "tsconfig.json",
-    JSON.stringify({
-      compilerOptions: {
-        target: "ES2023",
-        module: "NodeNext",
-        moduleResolution: "NodeNext",
-        strict: true,
-        types: [],
-        paths: {
-          "@openclaw/llm-core": ["./src/shared.ts"],
-          "@openclaw/llm-core/contract": ["./contracts/current.ts"],
-        },
-      },
-      include: ["src/**/*.ts"],
-    }),
-  );
-  write(
-    "src/shared.ts",
-    '/** Nominal contract documentation. */\nexport class Shared { private brand = "canonical"; }',
-  );
-  const writeDeclarations = (value: string) => {
-    for (const { file, name } of declarationInputs) {
-      write(file, `export interface ${name} { value: "${value}"; }`);
-    }
-    write(`contracts/${value}.ts`, `export interface TransitiveAlias { value: "${value}"; }`);
-    write("contracts/current.ts", `export type { TransitiveAlias } from "./${value}.js";`);
-  };
-  writeDeclarations("before");
-  write("src/schema.d.ts", 'declare module "*.sql" { const text: string; export default text; }');
-  write("src/schema.sql", "CREATE TABLE fixture (value TEXT NOT NULL);");
-  for (const source of Object.values(qa.selected)) {
-    write(
-      source,
-      [
-        'export { Shared } from "@openclaw/llm-core";',
-        'export type { TransitiveAlias } from "@openclaw/llm-core/contract";',
-        ...declarationInputs.map(
-          ({ specifier, name }) => `export type { ${name} } from "${specifier}";`,
-        ),
-      ].join("\n"),
-    );
-  }
-  write(
-    "src/plugin-sdk/core.ts",
-    [
-      '/// <reference path="../schema.d.ts" />',
-      'import schema from "../schema.sql";',
-      'export { Shared } from "@openclaw/llm-core";',
-      "export function getSchema(): string { return schema; }",
-    ].join("\n"),
-  );
-  return {
-    root,
-    write,
-    writeDeclarations,
-    production: Object.keys(production.selected),
-    qa: Object.keys(qa.selected),
-  };
-}
-
-function runWriter(root: string, privateQa = false) {
-  return runFixture(root, ["--import", loader, writer], privateQa);
-}
-
-function treeHashes(root: string) {
-  return Object.fromEntries(
-    fs
-      .readdirSync(root, { recursive: true, encoding: "utf8" })
-      .filter((name) => fs.statSync(path.join(root, name)).isFile())
-      .toSorted()
-      .map((name) => [
-        name.replaceAll(path.sep, "/"),
-        createHash("sha256")
-          .update(fs.readFileSync(path.join(root, name)))
-          .digest("hex"),
-      ]),
-  );
-}
-
-function expectOutputs(root: string, entries: readonly string[], files: string[]) {
-  const sdk = path.join(root, "dist/plugin-sdk");
-  expect(
-    fs
-      .readdirSync(sdk)
-      .filter((name) => name.endsWith(".d.ts"))
-      .toSorted(),
-  ).toEqual(entries.map((entry) => `${entry.slice("plugin-sdk/".length)}.d.ts`).toSorted());
-  for (const entry of entries) {
-    expect(fs.statSync(path.join(root, `dist/${entry}.d.ts`)).size, entry).toBeGreaterThan(0);
-  }
-  const text = files
-    .filter((name) => /\.d\.[cm]?ts$/u.test(name))
-    .map((name) => fs.readFileSync(path.join(root, "dist", name), "utf8"))
-    .join("\n");
-  expect(text).toContain("Nominal contract documentation.");
-  expect(text).not.toContain("schema.sql");
-  expect(text).not.toContain("CREATE TABLE fixture");
-  expect(text).not.toContain(root);
-  expect(text).not.toContain("plugin-sdk-staging-");
-  expect(files.some((name) => name.endsWith(".sql"))).toBe(false);
-}
-
-function expectStagingClean(root: string) {
-  expect(
-    fs
-      .readdirSync(path.join(root, ".artifacts"))
-      .filter((name) => name.startsWith("plugin-sdk-staging-")),
-  ).toEqual([]);
-  expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(false);
-}
 
 describe("write-plugin-sdk-entry-dts", () => {
+  it("preserves repository input metadata during direct declaration builds", () => {
+    const { root, write, declarations, production } = createFixture();
+    for (const [name, roots] of Object.entries(declarations)) {
+      write(
+        `compiler-inputs/${name}.json`,
+        JSON.stringify({ roots, sentinel: "repository input" }),
+      );
+    }
+    const before = treeHashes(path.join(root, "compiler-inputs"));
+    const direct = runFixture(root, [
+      "--import",
+      loader,
+      path.resolve("scripts/tsdown-build.mts"),
+      "--config",
+      "tsdown.config.ts",
+      ...Object.keys(declarations).flatMap((name) => ["--filter", name]),
+    ]);
+    expect(direct.status, direct.stdout + direct.stderr).toBe(0);
+    expect(
+      (direct.stdout + direct.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
+    ).toHaveLength(2);
+    expect(treeHashes(path.join(root, "compiler-inputs"))).toEqual(before);
+    expectOutputs(root, production, Object.keys(treeHashes(path.join(root, "dist"))));
+    expectStagingClean(root);
+  });
+
+  it.each<{ name: string; badPlugin: string; before: NodeJS.ProcessEnv; after: NodeJS.ProcessEnv }>(
+    [
+      {
+        name: "bounded plugins",
+        badPlugin: "broken",
+        before: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "plain" },
+        after: {},
+      },
+      {
+        name: "optional plugins",
+        badPlugin: "acpx",
+        before: { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" },
+        after: {},
+      },
+      {
+        name: "Docker plugins",
+        badPlugin: "external",
+        before: {},
+        after: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external" },
+      },
+    ],
+  )(
+    "rejects newly selected $name instead of restoring their previous SDK cache",
+    ({ badPlugin, before, after }) => {
+      const { root, write } = createFixture();
+      for (const id of ["plain", badPlugin]) {
+        write(`extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
+        write(
+          `extensions/${id}/package.json`,
+          JSON.stringify({
+            name: `@openclaw/${id}`,
+            openclaw: { build: { bundledDist: id !== "external" } },
+          }),
+        );
+        if (id !== badPlugin) {
+          write(`extensions/${id}/index.ts`, "export {};\n");
+        }
+      }
+      const initial = runWriter(root, false, before);
+      expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+      const published = treeHashes(path.join(root, "dist"));
+      const selected = runWriter(root, false, after);
+      expect(selected.status, selected.stdout + selected.stderr).toBeGreaterThan(0);
+      expect(selected.stdout + selected.stderr).toContain(`extensions/${badPlugin}/index.ts`);
+      expect(treeHashes(path.join(root, "dist"))).toEqual(published);
+      expectStagingClean(root);
+    },
+  );
+
   it("publishes fresh canonical partitions with stable bytes and public nominal identity", () => {
     const { root, write, writeDeclarations, production, qa } = createFixture();
-    expect(production).toEqual(
-      expect.arrayContaining(productionPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`)),
+    expect(production.toSorted()).toEqual(
+      publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`).toSorted(),
     );
     expect(qa).toEqual(
       expect.arrayContaining(pluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`)),
@@ -289,53 +126,53 @@ describe("write-plugin-sdk-entry-dts", () => {
     const before = treeHashes(path.join(root, "dist"));
     expectOutputs(root, production, Object.keys(before));
     expectStagingClean(root);
-    for (const entry of qa.filter((entry) => !production.includes(entry))) {
+    const records = declarationCacheRecords(root);
+    expect(records).toHaveLength(2);
+    const inputs = records.flatMap((record) => record.inputs ?? []);
+    expect(inputs).toEqual(
+      expect.arrayContaining([
+        ...declarationInputs.map(({ file }) => file),
+        "src/shared.ts",
+        "src/schema.d.ts",
+        "contracts/before.ts",
+      ]),
+    );
+    expect(inputs.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
+    expect(inputs).not.toContain("test/unrelated.test.ts");
+    expect(inputs).not.toContain("ui/unrelated.ts");
+    for (const entry of qa.filter((candidate) => !production.includes(candidate))) {
       expect(fs.existsSync(path.join(root, `dist/${entry}.d.ts`)), entry).toBe(false);
     }
 
-    // Restore into an equivalent checkout; copying the whole fixture can turn
-    // Windows junctions into source directories and correctly invalidate its cache.
-    const { root: relocated } = createFixture();
-    fs.cpSync(
-      path.join(root, ".artifacts/build-all-cache"),
-      path.join(relocated, ".artifacts/build-all-cache"),
-      { recursive: true },
-    );
-    const restored = runWriter(relocated);
-    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
-    expect(restored.stdout + restored.stderr).not.toContain("[tsdown-build] invocation");
-    const restoredFiles = treeHashes(path.join(relocated, "dist"));
-    expect(restoredFiles).toEqual(
-      Object.fromEntries(
-        Object.entries(before).filter(([file]) => !Object.hasOwn(preserved, `dist/${file}`)),
-      ),
-    );
-    expectOutputs(relocated, production, Object.keys(restoredFiles));
-    expectStagingClean(relocated);
     // Identical sources with a different QA selection must emit the extra canonical entries.
-    const privateQa = runWriter(relocated, true);
+    const privateQa = runWriter(root, true);
     expect(privateQa.status, privateQa.stdout + privateQa.stderr).toBe(0);
     expect(
       (privateQa.stdout + privateQa.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
     ).toHaveLength(2);
-    expectOutputs(relocated, qa, Object.keys(treeHashes(path.join(relocated, "dist"))));
-    expectStagingClean(relocated);
+    const priorOutputs = treeHashes(path.join(root, "dist"));
+    expectOutputs(root, qa, Object.keys(priorOutputs));
+    expectStagingClean(root);
 
     writeDeclarations("after");
     fs.rmSync(path.join(root, "contracts/before.ts"));
     write("dist/plugin-sdk/obsolete.d.ts", "obsolete flat declaration");
     const changed = runWriter(root, true);
     expect(changed.status, changed.stdout + changed.stderr).toBe(0);
+    expect(
+      (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
+    ).toHaveLength(2);
     const first = treeHashes(path.join(root, "dist"));
+    const cachedDistFiles = new Set(
+      declarationCacheRecords(root).flatMap((record) =>
+        Object.keys(record.outputs)
+          .filter((file) => file.startsWith("dist/"))
+          .map((file) => file.slice("dist/".length)),
+      ),
+    );
     expectOutputs(root, qa, Object.keys(first));
     expectStagingClean(root);
     expect(first).not.toEqual(before);
-    const repeated = runWriter(root, true);
-    expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
-    expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
-    // Include shared root chunks, not just flat SDK entries, in filename/byte determinism.
-    expect(treeHashes(path.join(root, "dist"))).toEqual(first);
-    expectStagingClean(root);
     expect(fs.existsSync(path.join(root, "dist/plugin-sdk/obsolete.d.ts"))).toBe(false);
     for (const [relative, content] of Object.entries(preserved)) {
       expect(fs.readFileSync(path.join(root, relative), "utf8")).toBe(content);
@@ -343,6 +180,47 @@ describe("write-plugin-sdk-entry-dts", () => {
     expect(fs.readFileSync(path.join(root, "src/schema.sql"), "utf8")).toBe(
       "CREATE TABLE fixture (value TEXT NOT NULL);",
     );
+
+    // One restore proves portable, byte-stable reuse despite unrelated edits.
+    // Copy only the cache: copying Windows junctions can change the source topology.
+    const {
+      root: relocated,
+      write: writeRelocated,
+      writeDeclarations: writeRelocatedDeclarations,
+    } = createFixture();
+    writeRelocatedDeclarations("after");
+    fs.rmSync(path.join(relocated, "contracts/before.ts"));
+    writeRelocated("test/unrelated.test.ts", "export const test = 2;\n");
+    writeRelocated("ui/unrelated.ts", "export const view = 2;\n");
+    writeRelocated(".github/workflows/unrelated.yml", "name: unrelated after\n");
+    for (const [relative, content] of Object.entries(preserved)) {
+      writeRelocated(relative, content);
+    }
+    // The QA build can add shared chunks after the production snapshot. Seed
+    // only unowned history; current cache outputs must come from the restore.
+    for (const file of Object.keys(priorOutputs).filter(
+      (entry) => !entry.startsWith("plugin-sdk/") && !cachedDistFiles.has(entry),
+    )) {
+      expect(first[file]).toBe(priorOutputs[file]);
+      writeRelocated(`dist/${file}`, fs.readFileSync(path.join(root, "dist", file), "utf8"));
+    }
+    writeRelocated("dist/plugin-sdk/obsolete.d.ts", "obsolete restored declaration");
+    fs.cpSync(
+      path.join(root, ".artifacts/build-all-cache"),
+      path.join(relocated, ".artifacts/build-all-cache"),
+      { recursive: true },
+    );
+    const restored = runWriter(relocated, true);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+    expect(restored.stdout + restored.stderr).not.toContain("[tsdown-build] invocation");
+    const restoredFiles = treeHashes(path.join(relocated, "dist"));
+    // Include shared root chunks, not just flat SDK entries, in filename/byte determinism.
+    expect(restoredFiles).toEqual(first);
+    expectOutputs(relocated, qa, Object.keys(restoredFiles));
+    expectStagingClean(relocated);
+    for (const [relative, content] of Object.entries(preserved)) {
+      expect(fs.readFileSync(path.join(relocated, relative), "utf8")).toBe(content);
+    }
 
     write(
       "consumer.ts",
@@ -388,6 +266,7 @@ describe("write-plugin-sdk-entry-dts", () => {
     { source: "missing entry", diagnostics: ["core.ts"] },
     { source: "invalid config", diagnostics: ["missing-config.json"] },
     { source: "missing declaration", diagnostics: ["contract"] },
+    { source: "input mutation after emit", diagnostics: ["changed during compilation"] },
   ])(
     "rejects $source before replacing published or local declarations",
     ({ source, diagnostics }) => {
@@ -405,8 +284,22 @@ describe("write-plugin-sdk-entry-dts", () => {
         fs.rmSync(path.join(root, "src/plugin-sdk/core.ts"));
       } else if (source === "invalid config") {
         write("tsconfig.json", '{"extends":"./missing-config.json"}');
-      } else {
+      } else if (source === "missing declaration") {
         fs.rmSync(path.join(root, "src/contract.d.ts"));
+      } else {
+        write(
+          "tsdown.config.ts",
+          `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
+for (const config of configs) {
+  if (!config.dts?.emitDtsOnly) continue;
+  const done = config.hooks?.["build:done"];
+  config.hooks = { ...config.hooks, "build:done": async (context) => {
+    await done?.(context);
+    fs.appendFileSync("src/shared.ts", "\\n");
+  }};
+}
+`,
+        );
       }
       const failed = runWriter(root, true);
       expect(failed.error).toBeUndefined();

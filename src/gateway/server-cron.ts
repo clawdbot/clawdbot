@@ -1,5 +1,6 @@
 // Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
 // plugin hooks, notifications, and cron lifecycle cleanup.
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import {
@@ -68,9 +69,14 @@ import type {
 } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
+import {
+  resolveHeartbeatForWake,
+  resolveHeartbeatTimeoutOverrideSeconds,
+} from "../infra/heartbeat-runner-config.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
 import {
   requestHeartbeat,
+  requestHeartbeatAndWait,
   requestHeartbeatRetry,
   type HeartbeatWakeRequest,
 } from "../infra/heartbeat-wake.js";
@@ -543,27 +549,6 @@ export function buildGatewayCronService(params: {
     return { runtimeConfig, agentId, sessionKey };
   };
 
-  const resolveCronHeartbeatOverride = (paramsLocal: {
-    runtimeConfig: OpenClawConfig;
-    agentId?: string;
-    heartbeat?: AgentDefaultsConfig["heartbeat"];
-  }) => {
-    if (!paramsLocal.heartbeat) {
-      return undefined;
-    }
-    const agentEntry =
-      paramsLocal.agentId !== undefined
-        ? findAgentEntry(paramsLocal.runtimeConfig, paramsLocal.agentId)
-        : undefined;
-    const agentHeartbeat =
-      agentEntry && typeof agentEntry === "object" ? agentEntry.heartbeat : undefined;
-    const baseHeartbeat = {
-      ...paramsLocal.runtimeConfig.agents?.defaults?.heartbeat,
-      ...agentHeartbeat,
-    };
-    const heartbeatOverride = { ...baseHeartbeat, ...paramsLocal.heartbeat };
-    return sanitizeCronHeartbeatOverride(heartbeatOverride);
-  };
   const resolveCronHeartbeatWake = (
     opts:
       | {
@@ -573,6 +558,8 @@ export function buildGatewayCronService(params: {
           agentId?: string;
           sessionKey?: string;
           heartbeat?: HeartbeatWakeRequest["heartbeat"];
+          scheduledEveryMs?: number;
+          tasks?: HeartbeatWakeRequest["tasks"];
         }
       | undefined,
     direct = false,
@@ -592,9 +579,11 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey: useConfiguredSession ? undefined : sessionKey,
-        heartbeat: direct
-          ? resolveCronHeartbeatOverride({ runtimeConfig, agentId, heartbeat: opts?.heartbeat })
-          : sanitizeCronHeartbeatOverride(opts?.heartbeat),
+        heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
+        ...(opts?.scheduledEveryMs !== undefined
+          ? { scheduledEveryMs: opts.scheduledEveryMs }
+          : {}),
+        ...(opts?.tasks?.length ? { tasks: opts.tasks } : {}),
       },
     };
   };
@@ -883,21 +872,30 @@ export function buildGatewayCronService(params: {
       : {}),
     requestHeartbeat: (opts, retry) => {
       const { wake } = resolveCronHeartbeatWake(opts);
-      const request = {
-        ...wake,
-        ...(opts?.scheduledEveryMs !== undefined
-          ? { scheduledEveryMs: opts.scheduledEveryMs }
-          : {}),
-        ...(opts.tasks?.length ? { tasks: opts.tasks } : {}),
-      };
       if (retry) {
-        requestHeartbeatRetry(request, retry);
+        requestHeartbeatRetry(wake, retry);
       } else {
-        requestHeartbeat(request);
+        requestHeartbeat(wake);
       }
+    },
+    requestHeartbeatAndWait: (opts, lifecycle) =>
+      requestHeartbeatAndWait(resolveCronHeartbeatWake(opts).wake, lifecycle),
+    resolveHeartbeatTimeoutMs: (opts) => {
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts.agentId);
+      const heartbeat = resolveHeartbeatForWake({
+        cfg: runtimeConfig,
+        agentId,
+        requestedHeartbeat: opts.heartbeat,
+        source: opts.source,
+      });
+      const timeoutMs = finiteSecondsToTimerSafeMilliseconds(
+        resolveHeartbeatTimeoutOverrideSeconds(runtimeConfig, heartbeat),
+      );
+      return timeoutMs === 0 ? undefined : timeoutMs;
     },
     runHeartbeatOnce: async (opts) => {
       const { runtimeConfig, wake } = resolveCronHeartbeatWake(opts, true);
+      const { getReplyFromConfig: _getReplyFromConfig, ...heartbeatDeps } = params.deps;
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         ...wake,
@@ -905,7 +903,8 @@ export function buildGatewayCronService(params: {
         // the cron run that is awaiting it.
         owningCronJobMarker: opts?.owningCronJobMarker,
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
-        deps: { ...params.deps, runtime: defaultRuntime },
+        // Gateway heartbeats acquire reply preparation from their published runtime boundary.
+        deps: { ...heartbeatDeps, runtime: defaultRuntime },
       });
     },
     runSkillCollectionReview: ({ agentId, abortSignal }) =>

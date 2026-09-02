@@ -22,7 +22,7 @@ import {
 } from "../lib/sessions/session-placement-submit.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { restoreChatApiAttachments } from "../pages/chat/attachment-api.ts";
-import { prepareInitialUserMessageHandoff } from "../pages/chat/initial-turn-handoff.ts";
+import { buildInitialChatSubmission } from "../pages/chat/user-message-content.ts";
 import {
   capturePlacementStartupConnection,
   type ApplicationPlacementStartupRuntime,
@@ -152,12 +152,17 @@ export default function createApplicationPlacementStartupRuntime(
     recovery: SessionPlacementRecovery,
     result: Extract<SessionPlacementDraftAdvanceResult, { status: "started" }>,
   ) => {
-    prepareInitialUserMessageHandoff(
-      params.initialUserMessage,
-      entry.owner.sessionKey,
-      { text: recovery.message, attachments: entry.attachments, createdAt: entry.createdAt },
-      entry.scope.client,
-      { runId: result.messageId },
+    params.chatSubmissions.retain(
+      buildInitialChatSubmission(
+        entry.owner.sessionKey,
+        {
+          text: recovery.message,
+          attachments: entry.attachments,
+          createdAt: entry.createdAt,
+        },
+        entry.scope.client,
+        result.messageId,
+      ),
     );
   };
 
@@ -355,6 +360,7 @@ export default function createApplicationPlacementStartupRuntime(
       }
       return {
         sessionKey: entry.owner.sessionKey,
+        targetKind: entry.work.recovery.target.kind,
         phase,
         startedAt: entry.createdAt,
         initialTurn: initialTurn(entry),

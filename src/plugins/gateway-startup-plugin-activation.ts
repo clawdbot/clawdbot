@@ -111,6 +111,7 @@ function resolveStartupActivationState(
   return resolveEffectivePluginActivationState({
     id: params.plugin.pluginId,
     origin: params.plugin.origin,
+    channelIds: params.plugin.contributions?.channels,
     config: applyBundledProviderCompat
       ? normalizePluginsConfig(config.plugins)
       : params.pluginsConfig,

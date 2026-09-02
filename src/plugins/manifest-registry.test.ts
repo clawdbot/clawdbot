@@ -770,19 +770,32 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(globalDir, manifest);
     writeManifest(configDir, manifest);
 
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "external-chat",
-        rootDir: globalDir,
-        origin: "global",
-      }),
-      createPluginCandidate({
-        idHint: "external-chat",
-        rootDir: configDir,
-        origin: "config",
-      }),
-    ]);
+    const registry = loadPluginManifestRegistryCore({
+      candidates: [
+        createPluginCandidate({
+          idHint: "external-chat",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+        createPluginCandidate({
+          idHint: "external-chat",
+          rootDir: configDir,
+          origin: "config",
+        }),
+      ],
+      diagnostics: [globalDir, configDir, globalDir].map((source) => ({
+        level: "warn" as const,
+        pluginId: "external-chat",
+        source,
+        message: "extension entry unreadable (I/O error): ./index.js",
+      })),
+    });
 
+    expect(
+      registry.diagnostics
+        .filter((diagnostic) => diagnostic.message.includes("extension entry unreadable"))
+        .map((diagnostic) => diagnostic.source),
+    ).toEqual([globalDir, configDir]);
     const channelConfigWarnings = registry.diagnostics.filter((diagnostic) =>
       diagnostic.message.includes("without channelConfigs metadata"),
     );
@@ -977,6 +990,18 @@ describe("loadPluginManifestRegistry", () => {
 
   it.each([
     {
+      name: "conflicting npm requested identity",
+      overrides: { spec: "@vendor/diffs" },
+    },
+    {
+      name: "conflicting npm resolved identity",
+      overrides: { resolvedName: "@vendor/diffs" },
+    },
+    {
+      name: "missing npm identity",
+      overrides: { spec: undefined, resolvedName: undefined, resolvedSpec: undefined },
+    },
+    {
       name: "npm-pack archive metadata",
       overrides: {
         sourcePath: "/tmp/diffs.tgz",
@@ -1165,7 +1190,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
-  it("preserves legacy spec-only records for catalog-backed ClawHub installs", () => {
+  it("does not trust legacy ClawHub records without source authority", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
 
@@ -1188,7 +1213,7 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
   it("marks official diagnostics-otel config paths trusted when the install record matches", () => {

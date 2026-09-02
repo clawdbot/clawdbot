@@ -15,10 +15,13 @@ import type {
 } from "../../api/types.ts";
 import {
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
+import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import { renderGitHubIdentity } from "../../features/github-connections/github-identity-view.ts";
 import { t } from "../../i18n/index.ts";
 import {
   type AgentToolEntry,
@@ -37,8 +40,6 @@ import {
   computeSkillReasons,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import type { GitHubIdentityController } from "./github-identity-controller.ts";
-import { renderGitHubIdentity } from "./github-identity-view.ts";
 import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
 
 function renderToolMetaBadges(labels: string[]) {
@@ -240,6 +241,7 @@ export function renderAgentTools(params: {
   runtimeSessionMatchesSelectedAgent: boolean;
   canUpdateConfig: boolean;
   githubIdentity: GitHubIdentityController;
+  onOpenGitHubConnections: () => void;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -370,7 +372,7 @@ export function renderAgentTools(params: {
   const runtimeAvailability = !params.runtimeSessionMatchesSelectedAgent
     ? renderSettingsEmpty(t("agentTools.switchAgent"))
     : params.toolsEffectiveLoading && !params.toolsEffectiveResult && !params.toolsEffectiveError
-      ? renderSettingsEmpty(t("agentTools.loadingAvailable"))
+      ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingAvailable"), rows: 2 })
       : params.toolsEffectiveError
         ? renderSettingsEmpty(t("agentTools.availableError"))
         : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
@@ -420,9 +422,6 @@ export function renderAgentTools(params: {
       : nothing}
     ${hasGlobalAllow
       ? html`<div class="callout info">${t("agentTools.globalAllowlist")}</div>`
-      : nothing}
-    ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
-      ? html`<div class="callout info">${t("agentTools.loadingCatalog")}</div>`
       : nothing}
     ${params.toolsCatalogError
       ? html`<div class="callout info">${t("agentTools.catalogFallback")}</div>`
@@ -515,11 +514,19 @@ export function renderAgentTools(params: {
       },
       html`${renderEffectiveToolNotices(params.toolsEffectiveResult)}${runtimeAvailability}`,
     )}
-    ${renderGitHubIdentity(params.githubIdentity)}
+    ${renderGitHubIdentity(params.githubIdentity, params.onOpenGitHubConnections)}
     ${renderSettingsSection(
       { title: t("agentTools.catalogTitle") },
       html`
-        <div class="agents-panel-body agent-tools-grid">
+        ${params.toolsCatalogLoading && !params.toolsCatalogResult && !params.toolsCatalogError
+          ? renderSettingsLoadingSkeleton({ label: t("agentTools.loadingCatalog") })
+          : nothing}
+        <div
+          class="agents-panel-body agent-tools-grid"
+          ?hidden=${params.toolsCatalogLoading &&
+          !params.toolsCatalogResult &&
+          !params.toolsCatalogError}
+        >
           ${toolSections.map((section) => {
             const sortedTools = sortSectionTools(section.tools);
             const enabledSectionCount = section.tools.filter(

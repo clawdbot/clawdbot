@@ -27,6 +27,146 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test(arguments: [
+        ("gateway-a", "gateway-b"),
+        (" gateway-a ", "gateway-a"),
+        ("gateway-e\u{301}", "gateway-\u{E9}"),
+    ])
+    func `chat outbox route keeps the exact gateway owner`(owner: String, otherOwner: String) async throws {
+        let gateway = GatewayNodeSession()
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.deviceAuthGatewayID = owner
+        options.allowStoredDeviceAuth = false
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://chat-transport-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession()),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            let matching = IOSGatewayChatTransport(gateway: gateway, outboxGatewayID: owner)
+            let foreign = IOSGatewayChatTransport(gateway: gateway, outboxGatewayID: otherOwner)
+
+            #expect(await matching.currentSessionMutationRoute() != nil)
+            #expect(await foreign.currentSessionMutationRoute() == nil)
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    @Test func `history compatibility rejects only the old unsupported input run field`() {
+        let unsupportedField = "invalid chat.history params: at root: unexpected property 'inputRunIds'"
+        let cases: [(String, String, String, Bool)] = [
+            ("chat.history", "INVALID_REQUEST", unsupportedField, true),
+            ("chat.send", "INVALID_REQUEST", unsupportedField, false),
+            ("chat.history", "FORBIDDEN", unsupportedField, false),
+            (
+                "chat.history",
+                "INVALID_REQUEST",
+                "invalid chat.history params: at root: unexpected property 'cursor'",
+                false),
+            ("chat.history", "INVALID_REQUEST", "invalid chat.history params: missing sessionKey", false),
+            ("chat.history", "INVALID_REQUEST", "\(unsupportedField); missing sessionKey", false),
+        ]
+        for (method, code, message, expected) in cases {
+            let error = GatewayResponseError(method: method, code: code, message: message, details: nil)
+            #expect(IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(error) == expected)
+        }
+        #expect(!IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(URLError(.timedOut)))
+    }
+
+    @Test func `composer mutation compatibility preserves legacy controls only for unknown catalogs`() {
+        #expect(IOSGatewayChatTransport.composerMutationAvailable(
+            methodSupport: nil,
+            allowedByScope: false))
+        #expect(IOSGatewayChatTransport.composerMutationAvailable(
+            methodSupport: true,
+            allowedByScope: true))
+        #expect(!IOSGatewayChatTransport.composerMutationAvailable(
+            methodSupport: true,
+            allowedByScope: false))
+        #expect(!IOSGatewayChatTransport.composerMutationAvailable(
+            methodSupport: false,
+            allowedByScope: true))
+    }
+
+    @Test func `composer skill owner follows canonical session agent`() {
+        let selected = IOSGatewayChatTransport.sessionTarget(
+            for: "main",
+            selectedAgentID: "reviewer")
+        let canonical = IOSGatewayChatTransport.sessionTarget(
+            for: "agent:ops:main",
+            selectedAgentID: "reviewer")
+
+        #expect(IOSGatewayChatTransport.composerAgentID(for: selected) == "reviewer")
+        #expect(IOSGatewayChatTransport.composerAgentID(for: canonical) == "ops")
+    }
+
+    @Test func `composer skill projection keeps agent filtering session enableable`() {
+        let skill = SkillStatus(
+            name: "Weather",
+            description: "Forecasts",
+            source: "openclaw-managed",
+            filePath: "/tmp/weather/SKILL.md",
+            baseDir: "/tmp/weather",
+            skillKey: "weather",
+            primaryEnv: nil,
+            emoji: nil,
+            homepage: nil,
+            always: false,
+            disabled: false,
+            blockedByAgentFilter: true,
+            eligible: false,
+            requirements: SkillRequirements(bins: [], env: [], config: []),
+            missing: SkillMissing(bins: [], env: [], config: []),
+            configChecks: [],
+            install: [])
+
+        let projected = IOSGatewayChatTransport.composerSkill(skill)
+
+        #expect(projected.baseEnabled)
+        #expect(projected.agentFiltered)
+        #expect(!projected.blocked)
+    }
+
+    @Test func `composer tool projection accepts only MCP tools and preserves inherited denial`() throws {
+        let result = ToolsEffectiveResult(
+            agentid: "main",
+            profile: "default",
+            groups: [ToolsEffectiveGroup(
+                id: AnyCodable("tools"),
+                label: "Tools",
+                source: AnyCodable("mixed"),
+                tools: [
+                    ToolsEffectiveEntry(
+                        id: "mcp-github-create-issue",
+                        label: "Create issue",
+                        description: "",
+                        rawdescription: "",
+                        source: AnyCodable("mcp"),
+                        mcpserver: "github",
+                        mcptoolname: "create_issue",
+                        deniedbysession: true),
+                    ToolsEffectiveEntry(
+                        id: "core-spoof",
+                        label: "Spoof",
+                        description: "",
+                        rawdescription: "",
+                        source: AnyCodable("core"),
+                        mcpserver: "github",
+                        mcptoolname: "spoof"),
+                ])])
+
+        let tools = try #require(IOSGatewayChatTransport.composerToolsByServer(result)["github"])
+        #expect(tools.map(\.name) == ["create_issue"])
+        #expect(tools.first?.baseEnabled == true)
+        #expect(tools.first?.sessionDenied == true)
+    }
+
     @Test func `model patch result decodes authoritative Luna thinking state`() throws {
         let data = Data(
             #"""
@@ -79,7 +219,7 @@ struct IOSGatewayChatTransportTests {
               "type":"hello-ok",
               "protocol":4,
               "server":{"version":"test","connId":"test"},
-              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract","session-unread-ack-contract"]},
+              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract","session-scoped-chat-metadata","session-unread-ack-contract"]},
               "snapshot":{
                 "presence":[],
                 "health":{},
@@ -92,7 +232,20 @@ struct IOSGatewayChatTransportTests {
             """#.utf8)
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
         #expect(hello.supportsServerCapability(.chatSendRoutingContract))
+        #expect(hello.supportsServerCapability(.sessionScopedChatMetadata))
         #expect(hello.supportsServerCapability(.sessionUnreadAckContract))
+        #expect(!hello.supportsServerCapability(.sessionSettingsContract))
+        #expect(!hello.supportsServerCapability(.sessionSettingsCAS))
+
+        let currentData = Data(
+            String(decoding: data, as: UTF8.self)
+                .replacingOccurrences(
+                    of: "session-unread-ack-contract\"]",
+                    with: "session-unread-ack-contract\",\"session-settings-contract\",\"session-settings-cas-v1\"]")
+                .utf8)
+        let current = try JSONDecoder().decode(HelloOk.self, from: currentData)
+        #expect(current.supportsServerCapability(.sessionSettingsContract))
+        #expect(current.supportsServerCapability(.sessionSettingsCAS))
     }
 
     @Test func `session mutations dispatch normalized selected agent targets`() async throws {
@@ -114,7 +267,9 @@ struct IOSGatewayChatTransportTests {
         #expect(requests.map(\.method) == Array(
             repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
             count: 3).flatMap(\.self))
-        #expect(requests.map(\.timeoutMs) == Array(repeating: 15000, count: 9))
+        #expect(requests.map(\.timeoutMs) == Array(
+            repeating: [15000, 600_000, 15000],
+            count: 3).flatMap(\.self))
 
         for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
             (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),
@@ -158,7 +313,7 @@ struct IOSGatewayChatTransportTests {
 
         let requests = await recorder.all()
         #expect(requests.map(\.method) == ["sessions.patch", "sessions.patch"])
-        #expect(requests.map(\.timeoutMs) == [600_000, 15_000])
+        #expect(requests.map(\.timeoutMs) == [600_000, 15000])
         #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
         #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
         #expect(requests.allSatisfy { $0.params["expectedSessionId"]?.value as? String == "session-a" })
@@ -570,5 +725,30 @@ struct LocalFixtureChatTransportTests {
         }
 
         #expect(decoded.last(where: { $0.role == "user" })?.idempotencyKey == "fixture-run:user")
+    }
+
+    @Test func `Apple Review fixture persists capability mutations into session readback`() async throws {
+        let transport = LocalFixtureChatTransport(fixture: .appleReviewDemo)
+        #expect(transport.supportsComposerCapabilities)
+        let catalog = await transport.loadComposerCapabilityCatalog(sessionKey: "main", agentID: "main")
+        #expect(catalog.permissionMutationAvailable)
+        #expect(catalog.toolOverrideMutationAvailable)
+        let overrides = OpenClawChatSessionToolOverrides(
+            webSearch: false,
+            skills: ["autoreview": false],
+            mcpServers: ["GitHub": false])
+
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "main",
+            agentID: "main",
+            patch: OpenClawChatSessionSettingsPatch(
+                expectedSessionID: "apple-review-demo-main",
+                permissionMode: .some(.workspace),
+                toolOverrides: .some(overrides)))
+
+        let session = try #require(
+            try await transport.listSessions(limit: nil, search: nil, archived: false).sessions.first)
+        #expect(session.permissionMode == .workspace)
+        #expect(session.toolOverrides == overrides)
     }
 }

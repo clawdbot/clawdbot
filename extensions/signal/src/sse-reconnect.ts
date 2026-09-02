@@ -1,6 +1,6 @@
 // Signal plugin module implements sse reconnect behavior.
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
-import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
   logVerbose,
@@ -14,6 +14,7 @@ import {
   type SignalTransportKind,
   streamSignalEvents,
 } from "./client-adapter.js";
+import { SignalSseRejectionError } from "./client.js";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -21,6 +22,15 @@ const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0.2,
 };
+
+function isPermanentSignalSseRejection(error: unknown): error is SignalSseRejectionError {
+  if (!(error instanceof SignalSseRejectionError)) {
+    return false;
+  }
+  // signal-cli uses other 4xx responses for request/configuration rejection.
+  // These three statuses explicitly permit a later retry.
+  return error.status >= 400 && error.status < 500 && ![408, 425, 429].includes(error.status);
+}
 
 export type SignalStatusSink = (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 
@@ -107,6 +117,12 @@ export async function runSignalSseLoop({
         return;
       }
       runtime.error?.(`Signal stream error: ${String(err)}`);
+      if (isPermanentSignalSseRejection(err)) {
+        const lastError = `Signal daemon rejected the event stream: ${err.message}. Check the configured account and daemon URL, fix the daemon or proxy response, then restart the channel.`;
+        runtime.log?.(`Signal reconnect stopped: ${lastError}`);
+        statusSink?.(channelBlockedPatch(lastError, { connected: false }));
+        return;
+      }
       publishSignalRecovering(statusSink, String(err));
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);

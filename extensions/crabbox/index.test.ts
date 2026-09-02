@@ -142,7 +142,12 @@ describe("Crabbox plugin generation lifecycle", () => {
         provider: backend,
       };
       try {
-        expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(153 * 60_000);
+        // Classless profiles reserve placement-enabled preparation/capture and the
+        // complete diagnostics, Stop and child-settlement cleanup envelope.
+        expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
+          158 * 60_000 + 30_000,
+        );
+        expect(generation.provider.resolveDestroyTimeoutMs?.(profile)).toBe(16 * 60_000 + 20_000);
         expect(await generation.provider.listMachineOptions?.(profile)).toEqual([]);
         const waitForDeviceId = vi.fn(async () => "device-classless");
         const lease = await generation.provider.provision(profile, "classless-operation", {
@@ -188,6 +193,10 @@ describe("Crabbox plugin generation lifecycle", () => {
           "--id",
           lease.leaseId,
         ]);
+        expect(runCommand.mock.lastCall?.[1]).toMatchObject({
+          timeoutMs: 310_000,
+          killProcessTree: true,
+        });
       } finally {
         await stopGeneration(generation.services);
       }

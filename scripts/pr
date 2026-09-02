@@ -45,98 +45,9 @@ requested_subcommand="${1-}"
 script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
 script_parent_dir="$(dirname "$script_self")"
 canonical_repo_root="$script_parent_dir/.."
-pr_wrapper_components=(
-  scripts/pr
-  scripts/pr-lib
-  # Complete repository-source closure, including the publisher test planner.
-  # Candidate build/test commands still run from the PR worktree.
-  packages/normalization-core/src/record-coerce.ts
-  packages/normalization-core/src/stable-stringify.ts
-  scripts/changed-lanes.mts
-  scripts/check-changelog-attributions.mjs
-  scripts/check-changelog-attributions.mts
-  scripts/lib/arg-utils.mts
-  scripts/lib/arg-utils.runtime.mjs
-  scripts/lib/bundled-plugin-paths.mjs
-  scripts/lib/changed-extensions.mts
-  scripts/lib/changed-path-facts.mjs
-  scripts/lib/extension-test-plan.mts
-  scripts/lib/failed-trailer.mts
-  scripts/lib/gateway-server-test-plan.mts
-  scripts/lib/managed-child-process.mts
-  scripts/lib/merge-head-diff-base.mjs
-  scripts/lib/numeric-options.mjs
-  scripts/lib/record-shared.mjs
-  scripts/lib/repo-root.mjs
-  scripts/lib/test-projects-delegation.mts
-  scripts/lib/test-selector-source-facts.mts
-  scripts/lib/vitest-build-prerequisites.mts
-  scripts/lib/vitest-cli-mode.mts
-  scripts/lib/vitest-local-scheduling.mts
-  scripts/lib/vitest-process-env.mts
-  scripts/lib/vitest-process.mts
-  scripts/lib/vitest-shard-metadata.mts
-  scripts/lib/vitest-unhandled-errors.mts
-  scripts/lib/vitest-worker-artifacts.mts
-  scripts/lib/vitest-worker-run.mts
-  scripts/lib/windows-cmd-helpers-runtime.mts
-  scripts/lib/windows-taskkill.mjs
-  scripts/pnpm-runner.mts
-  scripts/run-vitest.mts
-  scripts/test-projects.test-support.mts
-  scripts/vitest-process-group.mts
-  scripts/windows-cmd-helpers.mjs
-  test/helpers/temp-dir.ts
-  test/vitest/vitest.agents-paths.mjs
-  test/vitest/vitest.channel-paths.mjs
-  test/vitest/vitest.cli-process-paths.mjs
-  test/vitest/vitest.commands-light-paths.mjs
-  test/vitest/vitest.contracts-paths.mjs
-  test/vitest/vitest.extension-acpx-paths.mjs
-  test/vitest/vitest.extension-active-memory-paths.mjs
-  test/vitest/vitest.extension-browser-paths.mjs
-  test/vitest/vitest.extension-channel-split-paths.mjs
-  test/vitest/vitest.extension-codex-paths.mjs
-  test/vitest/vitest.extension-diffs-paths.mjs
-  test/vitest/vitest.extension-feishu-paths.mjs
-  test/vitest/vitest.extension-irc-paths.mjs
-  test/vitest/vitest.extension-matrix-paths.mjs
-  test/vitest/vitest.extension-mattermost-paths.mjs
-  test/vitest/vitest.extension-media-paths.mjs
-  test/vitest/vitest.extension-memory-paths.mjs
-  test/vitest/vitest.extension-messaging-paths.mjs
-  test/vitest/vitest.extension-misc-paths.mjs
-  test/vitest/vitest.extension-msteams-paths.mjs
-  test/vitest/vitest.extension-provider-paths.mjs
-  test/vitest/vitest.extension-qa-paths.mjs
-  test/vitest/vitest.extension-telegram-paths.mjs
-  test/vitest/vitest.extension-voice-call-paths.mjs
-  test/vitest/vitest.extension-whatsapp-paths.mjs
-  test/vitest/vitest.extension-zalo-paths.mjs
-  test/vitest/vitest.gateway-server-paths.mjs
-  test/vitest/vitest.pattern-file.ts
-  test/vitest/vitest.performance-config.ts
-  test/vitest/vitest.plugin-sdk-paths.mjs
-  test/vitest/vitest.test-shards.mjs
-  test/vitest/vitest.tooling-isolated-paths.mjs
-  test/vitest/vitest.ui-isolated-paths.mjs
-  test/vitest/vitest.ui-paths.mjs
-  test/vitest/vitest.unit-fast-paths.mjs
-  test/vitest/vitest.unit-paths.mjs
-  scripts/lib/plain-gh.sh
-  scripts/lib/plain-gh.mjs
-  scripts/lib/direct-run.mjs
-  scripts/lib/tsx-cli-shim.mjs
-  scripts/lib/local-check-runtime.mts
-  scripts/tsx.mjs
-  scripts/crabbox-untrusted-bootstrap.sh
-  scripts/pr-crabbox-gate-publisher.mjs
-  scripts/verify-pr-hosted-gates.mjs
-  scripts/verify-pr-hosted-gates.mts
-  scripts/watch-pr-ci.mjs
-  scripts/watch-pr-ci.mts
-  .github/workflows/pr-crabbox-gate-publisher.yml
-)
+# Bootstrap paths stay fixed so an edited inventory cannot exclude itself from
+# the working-tree and anchor checks. The inventory owns the remaining closure.
+pr_wrapper_components=(scripts/pr scripts/pr-lib)
 # Anchor-exec handoff: this process was exec'd from wrapper bytes materialized
 # out of refs/remotes/origin/main by the selection logic below in a previous
 # wrapper. The env var conveys repository addressing only — code trust came
@@ -154,6 +65,10 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
   canonical_repo_root="$(dirname "$common_git_dir")"
   canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
   if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
+    linked_inventory=$(git -C "$script_parent_dir" show HEAD:scripts/pr-lib/wrapper-components.txt)
+    while IFS= read -r wrapper_component; do
+      pr_wrapper_components+=("$wrapper_component")
+    done <<< "$linked_inventory"
     if ! git -C "$script_parent_dir" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
       echo "scripts/pr wrapper files have uncommitted changes in this worktree." >&2
       echo "Refusing to run unreviewed wrapper code from: $script_parent_dir" >&2
@@ -165,13 +80,9 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
     canonical_wrapper_revision=$(
       git -C "$canonical_repo_root" rev-parse "${pr_wrapper_components[@]/#/HEAD:}" 2>/dev/null || true
     )
-    canonical_wrapper_clean=1
-    if ! git -C "$canonical_repo_root" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
-      canonical_wrapper_clean=0
-    fi
     if [ -n "$linked_wrapper_revision" ] &&
       [ "$linked_wrapper_revision" = "$canonical_wrapper_revision" ] &&
-      [ "$canonical_wrapper_clean" = "1" ]; then
+      git -C "$canonical_repo_root" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
       exec "$canonical_self" "$@"
     fi
     # The canonical checkout can be parked on another branch or carry local
@@ -180,9 +91,23 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
     # substitution, when it exactly matches origin/main.
     # refs/remotes/... explicitly: bare "origin/main" is a DWIM name that a
     # local branch or tag named origin/main could shadow, spoofing the anchor.
-    anchor_wrapper_revision=$(
-      git -C "$script_parent_dir" rev-parse "${pr_wrapper_components[@]/#/refs/remotes/origin/main:}" 2>/dev/null || true
-    )
+    anchor_commit=$(git -C "$script_parent_dir" rev-parse --verify refs/remotes/origin/main^{commit} 2>/dev/null || true)
+    anchor_wrapper_revision=""
+    if [ -n "$anchor_commit" ] &&
+      anchor_inventory=$(git -C "$script_parent_dir" show "$anchor_commit:scripts/pr-lib/wrapper-components.txt" 2>/dev/null); then
+      # A newer anchor can add helpers outside the caller's inventory. Its own
+      # closure governs canonical substitution as well as extraction below.
+      anchor_components=(scripts/pr scripts/pr-lib)
+      while IFS= read -r anchor_component; do
+        anchor_components+=("$anchor_component")
+      done <<< "$anchor_inventory"
+      anchor_wrapper_revision=$(
+        git -C "$script_parent_dir" rev-parse "${anchor_components[@]/#/$anchor_commit:}" 2>/dev/null || true
+      )
+      canonical_wrapper_revision=$(
+        git -C "$canonical_repo_root" rev-parse "${anchor_components[@]/#/HEAD:}" 2>/dev/null || true
+      )
+    fi
     if [ -z "$linked_wrapper_revision" ] ||
       [ -z "$anchor_wrapper_revision" ] ||
       [ "$linked_wrapper_revision" != "$anchor_wrapper_revision" ]; then
@@ -205,7 +130,7 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
         # anchor code; announce the substitution so it is never silent.
         if [ -n "$anchor_wrapper_revision" ] &&
           [ "$canonical_wrapper_revision" = "$anchor_wrapper_revision" ] &&
-          [ "$canonical_wrapper_clean" = "1" ]; then
+          git -C "$canonical_repo_root" diff --quiet HEAD -- "${anchor_components[@]/#/:(top)}"; then
           echo "scripts/pr wrapper in this worktree differs from origin/main; running the canonical checkout's wrapper (matches the origin/main trust anchor): $canonical_repo_root" >&2
           exec "$canonical_self" "$@"
         fi
@@ -222,8 +147,8 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
           anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
           anchor_extraction_valid=0
-          if git -C "$anchor_git_root" archive refs/remotes/origin/main -- \
-            "${pr_wrapper_components[@]}" 2>/dev/null |
+          if git -C "$anchor_git_root" archive "$anchor_commit" -- \
+            "${anchor_components[@]}" 2>/dev/null |
             tar -x -C "$anchor_exec_dir" 2>/dev/null; then
             anchor_extraction_valid=1
             anchor_verified_entries=0
@@ -240,7 +165,7 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
                 break
               fi
               anchor_verified_entries=$((anchor_verified_entries + 1))
-            done < <(git -C "$anchor_git_root" ls-tree -r --full-tree refs/remotes/origin/main -- "${pr_wrapper_components[@]}")
+            done < <(git -C "$anchor_git_root" ls-tree -r --full-tree "$anchor_commit" -- "${anchor_components[@]}")
             # An empty listing means the anchor read failed; never exec unverified bytes.
             if [ "$anchor_verified_entries" = "0" ]; then
               anchor_extraction_valid=0
@@ -263,7 +188,7 @@ EOF_NODE
             # Not cleaned by trap: exec replaces this shell, and bash re-reads
             # the script file during execution, so the copy must outlive the
             # whole supervised run. OS tmp reaping owns this directory.
-            echo "scripts/pr wrapper in this worktree differs from origin/main; running wrapper code materialized from the refs/remotes/origin/main trust anchor at revision $(git -C "$script_parent_dir" rev-parse --short refs/remotes/origin/main)." >&2
+            echo "scripts/pr wrapper in this worktree differs from origin/main; running wrapper code materialized from the refs/remotes/origin/main trust anchor at revision $(git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
             OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" exec "$anchor_exec_dir/scripts/pr" "$@"
           fi
           rm -rf "$anchor_exec_dir"
@@ -317,6 +242,21 @@ is_supervised_pr_process() {
     [ "${OPENCLAW_PR_LOCK_SUPERVISOR_PID:-}" = "$PPID" ]
 }
 
+# The supervisor changes cwd to the canonical repo. Resolve an explicit body
+# relative to the operator's caller before crossing that boundary; do not read it.
+if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
+  merge_cli_args=() merge_cli_body_next=false
+  for merge_cli_arg in "$@"; do
+    if [ "$merge_cli_body_next" = true ] && [ -n "$merge_cli_arg" ]; then
+      merge_cli_arg=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$merge_cli_arg") || exit 1
+    fi
+    merge_cli_args+=("$merge_cli_arg")
+    merge_cli_body_next=false
+    [ "$merge_cli_arg" != --body-file ] || merge_cli_body_next=true
+  done
+  set -- "${merge_cli_args[@]}"
+fi
+
 if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
   if is_supervised_pr_process; then
     # operation-lock.sh consumes the one-shot marker when it installs the
@@ -357,14 +297,18 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
   scripts/pr merge-verify <PR>
-  scripts/pr merge-run <PR> [--auto-merge]
+  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
     --auto-merge selects pinned immediate squash for MERGEABLE/CLEAN, auto for MERGEABLE/BEHIND.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
+    --body-file snapshots a regular UTF-8 file relative to the caller, replacing squash prose.
+    Empty files are valid. Existing source/server co-authors are always retained; queue merges reject it.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
-    Keeps prior evidence and reruns admission; requires the same head/method and no auto/queue/admin route.
+    Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
+    freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
+    Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
 
   --dev-wrapper permits a mismatched local wrapper only for subcommands
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
@@ -454,15 +398,41 @@ main() {
     review-tests)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       ;;
-    merge-run)
-      [ "$#" -ge 1 ] && [ "$#" -le 2 ] || { usage; exit 2; }
-      if [ "$#" -eq 2 ] && [ "$2" != "--auto-merge" ]; then
-        usage
-        exit 2
+    merge-run | merge-recover)
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path=""
+      [ -n "$merge_pr" ] || { usage; exit 2; }
+      shift
+      if [ "$cmd" = merge-recover ]; then
+        [ "$#" -ge 2 ] && is_canonical_pr_number "$merge_pr" &&
+          [[ "$1" =~ ^[0-9a-f]{40}$ ]] && [ "$2" = --confirmed-operator-recovery ] || { usage; exit 2; }
+        recovery_oid="$1"
+        shift 2
       fi
-      ;;
-    merge-recover)
-      [ "$#" -eq 3 ] && [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = "--confirmed-operator-recovery" ] || { usage; exit 2; }
+      while [ "$#" -gt 0 ]; do
+        case "$1" in
+          --auto-merge)
+            [ "$cmd" = merge-run ] && [ "$auto_merge" = false ] || { usage; exit 2; }
+            auto_merge=true
+            shift
+            ;;
+          --body-file)
+            [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$body_path" ] || { usage; exit 2; }
+            body_path="$2"
+            shift 2
+            ;;
+          --replacement-head)
+            [ "$cmd" = merge-recover ] && [ "$#" -ge 2 ] &&
+              [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ -z "$replacement_head" ] || { usage; exit 2; }
+            replacement_head="$2"
+            shift 2
+            ;;
+          *) usage; exit 2 ;;
+        esac
+      done
+      if [ "$cmd" = merge-run ] && [ "${OPENCLAW_PR_AUTO_MERGE:-}" = 1 ]; then
+        auto_merge=true
+      fi
+      set -- "$merge_pr"
       ;;
     review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
@@ -585,17 +555,8 @@ main() {
       [ -n "$pr" ] || { usage; exit 2; }
       merge_verify "$pr"
       ;;
-    merge-run)
-      local pr="${1-}"
-      [ -n "$pr" ] || { usage; exit 2; }
-      local auto_merge=false
-      if [ "${2-}" = "--auto-merge" ] || [ "${OPENCLAW_PR_AUTO_MERGE:-}" = "1" ]; then
-        auto_merge=true
-      fi
-      merge_run "$pr" "$auto_merge"
-      ;;
-    merge-recover)
-      merge_run "$1" false "$2"
+    merge-run | merge-recover)
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path"
       ;;
     *)
       usage

@@ -7,6 +7,7 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { hashWorkerCredential } from "./credential.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -289,13 +290,8 @@ describe("worker environment service", () => {
       { agentId: "main", sessionKey: `agent:main:${sessionId}` },
       () => {},
     );
-    let resumeInstallation: (() => void) | undefined;
-    support.testState.prepareInstallation = vi.fn(
-      async () =>
-        await new Promise<typeof support.BUNDLE_ARTIFACT>((resolve) => {
-          resumeInstallation = () => resolve(support.BUNDLE_ARTIFACT);
-        }),
-    );
+    const installation = createDeferredCore<typeof support.BUNDLE_ARTIFACT>();
+    support.testState.prepareInstallation = vi.fn(() => installation.promise);
     const gate = createWorkerSessionPlacementGate(store);
     const workerService = support.createService(support.createProvider(), { placementStore: gate });
     const firstCredential = await workerService.acquireTurnCredential(first);
@@ -314,9 +310,11 @@ describe("worker environment service", () => {
       handshake: support.BOOTSTRAP_RECEIPT,
     };
     let secondAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
+    const pendingAdmission = workerService.admitWorker(admission);
     try {
-      const pendingAdmission = workerService.admitWorker(admission);
-      expect(support.testState.prepareInstallation).toHaveBeenCalledOnce();
+      await support.waitForFast(() =>
+        expect(support.testState.prepareInstallation).toHaveBeenCalledOnce(),
+      );
 
       store.releaseTurn(first);
       releaseAgentRunDelegatedAuthority(firstAuthority);
@@ -343,11 +341,13 @@ describe("worker environment service", () => {
         { agentId: "main", sessionKey: `agent:main:${sessionId}` },
         () => {},
       );
-      resumeInstallation?.();
+      installation.resolve(support.BUNDLE_ARTIFACT);
 
       await expect(pendingAdmission).resolves.toEqual({ ok: false, reason: "invalid-credential" });
       expect(receipts).toEqual([]);
     } finally {
+      installation.resolve(support.BUNDLE_ARTIFACT);
+      await Promise.allSettled([pendingAdmission]);
       clear();
       releaseAgentRunDelegatedAuthority(firstAuthority);
       if (secondAuthority) {

@@ -14,6 +14,53 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
+describe("chat history model selection defaults", () => {
+  it.each(["chat.history", "chat.startup"] as const)(
+    "%s projects the non-primary agent's resolved selection target",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const cfg = {
+          agents: {
+            defaults: { model: "openai/gpt-5.6-sol" },
+            ownership: "explicit",
+            entries: {
+              main: {},
+              work: { model: "anthropic/claude-sonnet-4-6" },
+            },
+          },
+        } satisfies OpenClawConfig;
+        await state.writeConfig(cfg);
+        const scope = {
+          agentId: "work",
+          sessionKey: "agent:work:main",
+          sessionId: "work-main",
+        };
+        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+        let result: unknown;
+
+        await expectDefined(
+          chatHistoryHandlers[method],
+          "history handler",
+        )({
+          params: { agentId: scope.agentId, sessionKey: scope.sessionKey },
+          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          req: { type: "req", id: "model-target", method },
+          client: { connect: { scopes: ["operator.admin"] } } as never,
+          isWebchatConnect: () => false,
+          respond: (ok, payload, error) => {
+            expect(error).toBeUndefined();
+            expect(ok).toBe(true);
+            result = payload;
+          },
+        });
+
+        const response = expectDefined(asOptionalRecord(result), "history response");
+        expect(response.defaults).toMatchObject({ modelSelectionTarget: "agent" });
+      });
+    },
+  );
+});
+
 describe("chat history consumption receipts", () => {
   it("projects pending input at its acceptance time", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -225,11 +272,13 @@ describe("chat history exact-entry snapshots", () => {
         };
         const childScope = { agentId: "main", sessionKey: "agent:main:subagent:history-child" };
         const toolOverrides = { mcpToolsDeny: { synthetic: ["blocked"] } };
+        const skillsSnapshot = { prompt: "history unused saved prompt", skills: [] };
         await upsertSessionEntryCore(scope, {
           sessionId: scope.sessionId,
           updatedAt: now,
           thinkingLevel: "high",
           toolOverrides,
+          skillsSnapshot,
         });
         await upsertSessionEntryCore(childScope, {
           sessionId: "history-child",
@@ -237,12 +286,14 @@ describe("chat history exact-entry snapshots", () => {
           parentSessionKey: scope.sessionKey,
           spawnedBy: scope.sessionKey,
           status: "running",
+          skillsSnapshot,
         });
         const context = createDirectChatContext();
         const handler = expectDefined(chatHistoryHandlers[method], "history handler");
         const call = async () => {
           const respond = vi.fn();
           const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+          const parseSpy = vi.spyOn(JSON, "parse");
           try {
             const pending = handler({
               params: { sessionKey: scope.sessionKey },
@@ -256,6 +307,9 @@ describe("chat history exact-entry snapshots", () => {
             const preparationCopies = cloneSpy.mock.calls.filter(
               ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
             ).length;
+            expect(
+              parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt)),
+            ).toBe(false);
             await pending;
             const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
             expect(error).toBeUndefined();
@@ -264,6 +318,7 @@ describe("chat history exact-entry snapshots", () => {
             return expectDefined(asOptionalRecord(payload), "history payload");
           } finally {
             cloneSpy.mockRestore();
+            parseSpy.mockRestore();
           }
         };
 

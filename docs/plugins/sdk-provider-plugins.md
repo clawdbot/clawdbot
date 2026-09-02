@@ -206,6 +206,13 @@ catalog, API-key auth, and dynamic model resolution.
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    For provider-key lookup and selection from an already loaded auth store,
+    import `findNormalizedProviderValue` and `resolveAuthProfileOrder` from
+    `openclaw/plugin-sdk/provider-auth`. This keeps provider entrypoints from
+    loading the full agent runtime just to select a credential. The deprecated
+    `agent-runtime` exports remain available for compatibility; use the narrower
+    `provider-auth` route in new code.
+
     A custom interactive auth method that mints a static token or API key can
     request protected persistence on its returned profile:
 
@@ -411,13 +418,23 @@ catalog, API-key auth, and dynamic model resolution.
 
     Official plugins use the private, pure
     `openclaw/plugin-sdk/model-catalog-pricing` runtime subpath. It exposes
-    `normalizeModelPricingCatalog(rows, normalizePricing, readPricing?)` for
+    `normalizeModelPricingCatalog(rows, normalizePricing, options?)` for
     provider-owned pricing feeds. It returns a map of complete costs: absent
     prices are omitted, while malformed declared prices, invalid or duplicate
     model IDs, and a feed with no usable prices return `undefined`. Supply the
-    provider's unit conversion and optional price-field selector; the default
-    selector reads `model.pricing`. No auth, discovery, or runtime loader is
-    imported.
+    provider's unit conversion. Options can select `readModelId(model)` (default
+    `model.id`), `readPricing(model)` (default `model.pricing`), and
+    `isSupportedPricing(rawPricing)` (default `true`). Declared prices are
+    normalized and validated before unsupported schedules are omitted; duplicate
+    IDs are rejected even on unpriced or unsupported rows. Non-token domains
+    can return `undefined` from `readPricing`. No auth, discovery, or runtime
+    loader is imported.
+
+    DeepInfra's `pricing-api.ts` uses these selectors for its native array and
+    `model_name` identities. Release plugins using the options contract (including
+    DeepInfra and Venice) with a matching host, and coordinate their plugin API
+    and minimum-host floors at release time. The private subpath is not an
+    independently versioned third-party compatibility API.
 
     This subpath also exposes `normalizeOpenRouterModelPricing(pricing)` for
     native OpenRouter pricing objects. It converts per-token rates and static
@@ -910,6 +927,12 @@ catalog, API-key auth, and dynamic model resolution.
         `openclaw/plugin-sdk/provider-http`. The helper normalizes upload
         filenames, including AAC uploads that need an M4A-style filename for
         compatible transcription APIs.
+
+        Official plugins can use the private `blob-runtime` helper
+        `bufferToBlobPart(buffer)` for other multipart uploads. Pass it directly to
+        `new Blob(...)` to preserve the Buffer range without an intermediate copy;
+        shared backing is copied when needed. Construct the Blob before awaiting
+        other work so it snapshots the bytes immediately.
       </Tab>
       <Tab title="Realtime voice">
         Consumers can pass candidate provider IDs as the optional second argument
@@ -983,6 +1006,26 @@ catalog, API-key auth, and dynamic model resolution.
         lifecycle. Do not infer or enable this mode from a model name alone.
       </Tab>
       <Tab title="Media understanding">
+        Audio providers with their own credential and endpoint contracts can
+        implement `transcribeAudioWithContext(request)`. The host calls it after
+        loading each audio file. The request includes the audio bytes, filename,
+        model, prompt, language, timeout, transport settings, configuration,
+        agent directory, and selected profile. Resolve credentials for that call;
+        do not retain credentials across attachment downloads.
+
+        Return `{ ok: true, value: { text, model } }` after transcription. Return
+        `{ ok: false, error }` only for authentication or configuration rejected
+        **before uploading audio**. The host records that error and automatic
+        selection may try the next provider or local backend. Canonical missing
+        provider auth leaves the automatic candidate unavailable without a failed
+        attempt. Upload and HTTP failures must throw: automatic selection then
+        stops without sending the recording to another provider. Explicit model
+        lists retain their authored fallback order.
+
+        Return the model when known; otherwise the host retains the requested
+        model in its result. `transcribeAudio` remains available for providers
+        using host-owned API-key resolution and rotation.
+
         ```typescript
         api.registerMediaUnderstandingProvider({
           id: "acme-ai",

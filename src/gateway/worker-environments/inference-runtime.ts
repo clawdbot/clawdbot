@@ -17,7 +17,7 @@ import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-
 import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
-import { resolveEmbeddedAgentStreamFn } from "../../agents/embedded-agent-runner/stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "../../agents/embedded-agent-runner/stream-resolution.js";
 import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -106,7 +106,7 @@ type WorkerInferenceRuntimeDependencies = {
   resolveModel: typeof resolveModelAsync;
   prepareModel: typeof prepareSimpleCompletionModel;
   resolveProviderStream: typeof registerProviderStreamForModel;
-  resolveStream: typeof resolveEmbeddedAgentStreamFn;
+  resolveStream: typeof resolveEmbeddedAgentStream;
   applyStreamPolicy: typeof applyExtraParamsToAgent;
   wrapStream: typeof wrapStreamFnWithDiagnosticModelCallEvents;
   createTrace: typeof createDiagnosticTraceContextFromActiveScope;
@@ -333,7 +333,7 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   resolveModel: resolveModelAsync,
   prepareModel: prepareSimpleCompletionModel,
   resolveProviderStream: registerProviderStreamForModel,
-  resolveStream: resolveEmbeddedAgentStreamFn,
+  resolveStream: resolveEmbeddedAgentStream,
   applyStreamPolicy: applyExtraParamsToAgent,
   wrapStream: wrapStreamFnWithDiagnosticModelCallEvents,
   createTrace: createDiagnosticTraceContextFromActiveScope,
@@ -593,18 +593,16 @@ export function createWorkerInferenceExecutor(
           workspaceDir: approved.workspaceDir,
         });
         const authValue = approved.prepared.auth.apiKey;
-        const streamAgent = {
-          streamFn: dependencies.resolveStream({
-            llmRuntime,
-            currentStreamFn: llmRuntime.streamSimple,
-            ...(providerStream ? { providerStreamFn: providerStream } : {}),
-            sessionId: request.sessionId,
-            signal,
-            model: providerModel,
-            resolvedApiKey: authValue,
-            authProfileId: approved.prepared.auth.profileId,
-          }),
-        };
+        const streamAgent = dependencies.resolveStream({
+          llmRuntime,
+          currentStreamFn: llmRuntime.streamSimple,
+          ...(providerStream ? { providerStreamFn: providerStream } : {}),
+          sessionId: request.sessionId,
+          signal,
+          model: providerModel,
+          resolvedApiKey: authValue,
+          authProfileId: approved.prepared.auth.profileId,
+        });
         const streamPolicyOptions: WorkerInferenceStartParams["options"] = {
           ...(request.options.temperature !== undefined
             ? { temperature: request.options.temperature }

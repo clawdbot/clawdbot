@@ -1,8 +1,13 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
+import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import {
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
@@ -61,6 +66,25 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
       loadPluginManifestRegistryForInstalledIndex(params),
   };
 });
+
+function mockSchemaSnapshotSource(
+  index: ReturnType<typeof makeIndex>,
+  properties: Record<string, unknown>,
+) {
+  const registry = makeManifestRegistry();
+  const plugin = registry.plugins[0];
+  if (!plugin) {
+    throw new Error("expected manifest plugin fixture");
+  }
+  plugin.configSchema = { type: "object", properties };
+  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+    source: "provided",
+    snapshot: index,
+    diagnostics: [],
+  });
+  loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+  return registry;
+}
 
 describe("plugin metadata snapshot", () => {
   beforeEach(() => {
@@ -123,6 +147,51 @@ describe("plugin metadata snapshot", () => {
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_STATE_DIR: "/unselected-state" },
     });
     expect(registry).toBe(snapshot.manifestRegistry);
+  });
+
+  it("refreshes snapshots for the selected environment's discovery policy", async () => {
+    const roots: string[] = [];
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", makeTempDir(roots, "openclaw-metadata-process-"));
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: makeTempDir(roots, "openclaw-metadata-selected-"),
+      };
+      const config = {};
+      writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
+      clearBundledDiscoveryModeMemo();
+      const index = makeIndex();
+      index.policyHash = resolveInstalledPluginIndexPolicyHash(config, env);
+      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+        source: "persisted",
+        snapshot: index,
+        diagnostics: [],
+      });
+
+      const first = loadPluginMetadataSnapshot({ config, env });
+      expect(first.index.plugins.map((plugin) => plugin.enabled)).toEqual([true]);
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(first);
+
+      // Doctor updates machine policy and the persisted inventory without changing env paths.
+      writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env });
+      clearBundledDiscoveryModeMemo();
+      index.policyHash = resolveInstalledPluginIndexPolicyHash(config, env);
+      index.plugins = index.plugins.map((plugin) => ({ ...plugin, enabled: false }));
+
+      const refreshed = loadPluginMetadataSnapshot({ config, env });
+      expect(refreshed.index.plugins.map((plugin) => plugin.enabled)).toEqual([false]);
+      expect(refreshed.policyHash).toBe(index.policyHash);
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(refreshed);
+
+      writeConfigMachineState("plugins.bundledDiscovery", "compat");
+      clearBundledDiscoveryModeMemo();
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(refreshed);
+      expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    } finally {
+      envSnapshot.restore();
+      await Promise.all(roots.map(removeBundledDiscoveryStateRoot));
+    }
   });
 
   it("publishes the complete prepared cache and keeps fresh operations outside boot scopes", () => {
@@ -278,25 +347,11 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks collection-bearing manifest graphs after prototype mutation", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     const initialMapValue = { nested: { value: "initial-map" } };
     const initialSetValue = { nested: { value: "initial-set" } };
     const sharedMap = new Map([["initial", initialMapValue]]);
     const sharedSet = new Set([initialSetValue]);
-    plugin.configSchema = {
-      type: "object",
-      properties: { sharedMap, sharedSet },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { sharedMap, sharedSet });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(Object.isFrozen(initialMapValue.nested)).toBe(true);
@@ -337,27 +392,13 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks enumerable accessor graphs when their closure-backed values change", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     let accessorValue = { nested: { value: "initial" } };
     const accessor = {} as { current: typeof accessorValue };
     Object.defineProperty(accessor, "current", {
       enumerable: true,
       get: () => accessorValue,
     });
-    plugin.configSchema = {
-      type: "object",
-      properties: { accessor },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { accessor });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(Object.isFrozen(accessor)).toBe(true);
@@ -383,11 +424,6 @@ describe("plugin metadata snapshot", () => {
 
   it("rewalks proxy graphs that forge safe descriptors before their values change", () => {
     const index = makeIndex();
-    const registry = makeManifestRegistry();
-    const plugin = registry.plugins[0];
-    if (!plugin) {
-      throw new Error("expected manifest plugin fixture");
-    }
     let currentValue = { nested: { value: "decoy" } };
     const target = {} as { current: typeof currentValue };
     Object.defineProperty(target, "current", {
@@ -418,16 +454,7 @@ describe("plugin metadata snapshot", () => {
         return Reflect.get(proxyTarget, key, receiver);
       },
     });
-    plugin.configSchema = {
-      type: "object",
-      properties: { proxy },
-    };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "provided",
-      snapshot: index,
-      diagnostics: [],
-    });
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+    const registry = mockSchemaSnapshotSource(index, { proxy });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
     expect(forgedDescriptors).toBe(1);

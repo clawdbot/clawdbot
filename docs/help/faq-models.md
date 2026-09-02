@@ -477,7 +477,8 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     sibling model on the same provider; billing/disabled windows block the
     whole profile.
 
-    Set a per-agent order override (stored in that agent's `auth-state.json`):
+    Set a per-agent order override (stored in that agent's
+    `openclaw-agent.sqlite` database):
 
     ```bash
     # Defaults to the configured default agent (omit --agent)

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../../app/route-transition.ts";
+import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
@@ -61,6 +62,9 @@ describe("DraftSubmissionFlow", () => {
       initialRun: { status: "started", runId: "run-background" },
     });
     flow.setMessage("start this in the background");
+    stubObjectUrls("blob:background-note");
+    const attachment = registerTextPayload("background-note");
+    flow.attachmentDraft.replace([attachment]);
 
     await flow.submit(undefined, true);
     await Promise.resolve();
@@ -81,6 +85,22 @@ describe("DraftSubmissionFlow", () => {
       { timeoutMs: null },
     );
     expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(2);
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    const retained = context.chatSubmissions.readInitial(
+      "agent:main:dashboard:background",
+      context.gateway.snapshot.client,
+    );
+    expect(retained?.message.content).toContainEqual({
+      type: "attachment",
+      attachment: {
+        url: `data:text/plain;base64,${btoa("background-note")}`,
+        kind: "document",
+        label: "background-note.txt",
+        mimeType: "text/plain",
+      },
+    });
     expect(flow.message).toBe("");
     expect(flow.submitting).toBe(false);
   });
@@ -229,6 +249,72 @@ describe("DraftSubmissionFlow", () => {
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
     expect(flow.error).toBeNull();
   });
+
+  it.each([
+    {
+      scenario: "the Gateway handshake is replaced",
+      retire: ({ context }: ReturnType<typeof createDraftFixture>) => {
+        context.gateway.snapshot.hello = { ...context.gateway.snapshot.hello! };
+      },
+    },
+    {
+      scenario: "the Gateway client is replaced",
+      retire: ({ context }: ReturnType<typeof createDraftFixture>) => {
+        context.gateway.snapshot.client = new Proxy(context.gateway.snapshot.client!, {});
+      },
+    },
+    {
+      scenario: "the pending navigation is retired",
+      retire: ({ flow }: ReturnType<typeof createDraftFixture>) => flow.invalidate(),
+    },
+  ])(
+    "retires a confirmed session handoff when $scenario during route preparation",
+    async ({ retire }) => {
+      const fixture = createDraftFixture();
+      const { context, flow } = fixture;
+      const sessionKey = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
+      vi.mocked(context.sessions.createResult).mockResolvedValue({
+        key: sessionKey,
+        initialRun: { status: "idle" },
+      });
+      let releasePreload!: () => void;
+      vi.mocked(context.preload).mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releasePreload = resolve;
+        }),
+      );
+      vi.mocked(context.navigateAndWait).mockImplementation(async () => {
+        queueMicrotask(() => document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT)));
+      });
+      flow.setMessage("keep this task on its original connection");
+      let settled = false;
+      const submission = flow.submit().finally(() => {
+        settled = true;
+      });
+      let pathname: string | undefined;
+      try {
+        await vi.waitFor(() => expect(context.preload).toHaveBeenCalledOnce());
+        pathname = vi.mocked(context.preload).mock.calls[0]?.[1]?.pathname;
+        if (!pathname) {
+          throw new Error("The created session did not prepare a route");
+        }
+        retire(fixture);
+        releasePreload();
+
+        await vi.waitFor(() => expect(settled).toBe(true));
+        expect(consumeSessionNavigationHandoff(context.gateway, pathname)).toBeUndefined();
+        expect(context.navigateAndWait).not.toHaveBeenCalled();
+        expect(context.sessions.createResult).toHaveBeenCalledOnce();
+      } finally {
+        releasePreload();
+        document.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT));
+        await submission;
+        if (pathname) {
+          consumeSessionNavigationHandoff(context.gateway, pathname);
+        }
+      }
+    },
+  );
 
   it.each([
     {
@@ -658,6 +744,7 @@ describe("DraftSubmissionFlow", () => {
           sessionKey: "",
           hello: {
             auth: {
+              recoveryScope: client.recoveryScope,
               role: "operator",
               scopes: ["operator.admin", "operator.read", "operator.write"],
             },

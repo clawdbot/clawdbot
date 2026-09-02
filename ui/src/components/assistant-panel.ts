@@ -29,7 +29,7 @@ import {
   type CustodianSessionStore,
 } from "../pages/custodian/custodian-session-store.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
+import { assistantPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { renderLazyElementState } from "./lazy-view-error.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -47,18 +47,6 @@ const HOME_SESSION_ELEMENT = {
 type AssistantDestination = "home" | "custodian";
 type AssistantDock = Exclude<DockPanelSide, "left">;
 
-const panelLayout = createDockPanelLayout({
-  // Shipped key: operators' saved dock size and placement live here, so the
-  // legacy custodian spelling stays even though the dock is now shared.
-  storageKey: "openclaw.custodian.panel.v1",
-  minHeight: 240,
-  minWidth: 320,
-  defaultDock: "right",
-  supportedDocks: ["bottom", "right"],
-  defaultHeight: 420,
-  defaultWidth: 440,
-});
-
 export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   @property({ attribute: false })
@@ -66,18 +54,16 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @property({ type: Boolean }) custodianAvailable = false;
   @property({ type: Boolean }) homeAvailable = false;
   @property({ type: Boolean }) custodianSuppressed = false;
-  @property({ type: Boolean }) sessionPage = false;
   @property() pageSessionKey = "";
   @property() pageAgentId = "";
-  /** Route id of the page being worked on; the dock derives its own snapshot from it. */
-  @property() workPage = "";
+  @property() pageRouteId: RouteId = "chat";
   @state() private destination: AssistantDestination = "custodian";
   private readonly homeLoader = new LazyCustomElementRequestController(this);
   @property({ type: Number }) minimizeRequestId = 0;
   @property({ attribute: false }) store: CustodianSessionStore = custodianSessionStore;
 
   private readonly dockLayout = new DockLayoutController(this, {
-    layout: panelLayout,
+    layout: assistantPanelLayout,
     reservationPrefix: "assistant",
     isAvailable: () => this.available,
   });
@@ -121,6 +107,10 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
         subscribeChatWorkContext(this.context, () => this.requestUpdate()),
         // The sidebar switcher owns agent choice; the dock follows it.
         this.context.agentSelection.subscribe(() => this.requestUpdate()),
+        // Snapshot changes need not change route facts; keep the open Home reference current.
+        this.context.sessions.subscribe(() => this.requestUpdate()),
+        this.context.agents.subscribe(() => this.requestUpdate()),
+        this.context.gateway.subscribe(() => this.requestUpdate()),
       ];
       this.contextCleanup = () => {
         for (const cleanup of cleanups) {
@@ -233,7 +223,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
       return this.custodianSuppressed;
     }
     const context = this.context;
-    if (!context || !this.sessionPage) {
+    if (!context || this.pageRouteId !== "chat") {
       return false;
     }
     const page = resolveUiConversationIdentity(
@@ -346,10 +336,9 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     const dock = this.dockLayout.dock;
     const home = this.homeTarget;
     const homeState = this.homeLoader.visibleState;
-    // Built here, not by the shell: the dock re-derives on its own work-context
-    // and agent-selection subscriptions without waiting for a shell render.
+    // The deferred panel owns preparation; the eager shell supplies route facts only.
     const workContext = this.context
-      ? buildHomeWorkContext(this.context, this.workPage, this.pageSessionKey)
+      ? buildHomeWorkContext(this.context, this.pageRouteId, this.pageSessionKey, this.pageAgentId)
       : undefined;
     const style =
       dock === "bottom" ? `height:${this.dockLayout.height}px` : `width:${this.dockLayout.width}px`;

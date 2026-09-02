@@ -6,6 +6,7 @@ import type {
   AnyAgentTool,
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   type CodexAppServerRuntimeOptions,
   resolveCodexAppServerRuntimeOptions,
@@ -13,7 +14,11 @@ import {
 } from "./src/app-server/config.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
-import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolSpec,
+  type JsonObject,
+} from "./src/app-server/protocol.js";
 import {
   buildDeveloperInstructions,
   buildThreadResumeParams,
@@ -22,6 +27,17 @@ import {
 } from "./src/app-server/thread-lifecycle.js";
 
 export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
+
+/** Keeps host integration tests on the plugin's test boundary without exposing runtime internals. */
+export async function createCodexSessionInitializationFixtureForTest(params: {
+  runtime: PluginRuntime;
+  workspaceDir: string;
+}) {
+  // Snapshot scripts also load this barrel outside Vitest; load its test fixture only on demand.
+  const { createCodexSessionInitializationFixture } =
+    await import("./src/app-server/session-initialization.test-support.js");
+  return await createCodexSessionInitializationFixture(params);
+}
 
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
@@ -80,6 +96,9 @@ export function buildCodexHarnessPromptSnapshot(params: {
       appServer: params.appServer,
       promptText: params.promptText,
       turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      sessionStatusAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
+        (tool) => tool.name === "session_status",
+      ),
     }),
   };
 }
@@ -102,3 +121,4 @@ export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
     directToolNames: params.directToolNames,
   }).specs;
 }
+export { createCanonicalForkFixture as createCanonicalForkFixtureForTest } from "./src/app-server/canonical-fork.test-support.js";

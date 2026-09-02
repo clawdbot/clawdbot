@@ -585,14 +585,18 @@ export function reconcileSessionHistory(
   const nextDefaults = defaults
     ? preserveRicherThinkingMetadata(defaults, result.defaults)
     : result.defaults;
+  // Lineage and repeated events can supply the current defaults. Preserve
+  // result identity when nothing changes so shared subscribers stay quiet.
+  const resultWithDefaults =
+    nextDefaults === result.defaults ? result : { ...result, defaults: nextDefaults };
   if (preserveMatchingExistingRow && existing) {
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   if (isOlderSessionSnapshot(session, existing)) {
     return result;
   }
   if (isOutsideResultScope || (!existing && !isPersistedSessionRow(session))) {
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   const visibleKey = existing?.key ?? session.key;
   const visibleSession = preserveRosterPresentationMetadata(
@@ -603,19 +607,14 @@ export function reconcileSessionHistory(
     existing,
   );
   if (isStaleForActiveSession(visibleSession, existing)) {
-    // Keep result identity when nothing changed so the caller's
-    // result === state.result publish gate can skip a spurious re-render.
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   if (
     existing &&
     isShallowEqualSessionRow(visibleSession, existing) &&
     sessionMatchesArchivedFilter(visibleSession, archivedFilter)
   ) {
-    // The same event reconciled twice (capability handler + chat page) must
-    // no-op the second pass; a fresh array here defeats every downstream
-    // result === state.result publish gate and re-renders per event.
-    return defaults ? { ...result, defaults: nextDefaults } : result;
+    return resultWithDefaults;
   }
   const sessions = sessionMatchesArchivedFilter(visibleSession, archivedFilter)
     ? [

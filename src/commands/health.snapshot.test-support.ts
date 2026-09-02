@@ -1,7 +1,9 @@
 import { vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { collectGatewayHealthSnapshot } from "../gateway/health/collector.js";
 import type { HealthSummary } from "../gateway/health/types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 
 export type LegacyHealthSnapshotParams = Partial<
   Omit<Parameters<typeof collectGatewayHealthSnapshot>[0], "audience">
@@ -49,12 +51,38 @@ export async function loadFreshHealthModulesForTest(params: {
     resolveSessionStorePathCore: params.getSessionStorePath,
   }));
   vi.doMock("../config/sessions/session-accessor.js", () => ({
-    listSessionEntriesReadOnly: (scope?: { agentId?: string; storePath?: string }) => {
-      params.onSessionRead?.(scope ?? {});
-      return Object.entries(params.getSessions()).map(([sessionKey, entry]) => ({
-        sessionKey,
-        entry,
-      }));
+    readSessionStoreSummaryReadOnly: (
+      ...[scope, options]: Parameters<
+        typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
+      >
+    ) => {
+      params.onSessionRead?.(scope);
+      const entries = Object.entries(params.getSessions())
+        .filter(
+          ([sessionKey]) =>
+            parseAgentSessionKey(sessionKey) !== null && !isInternalSessionEffectsKey(sessionKey),
+        )
+        .map(([sessionKey, entry]) => ({
+          sessionKey,
+          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+        }))
+        .toSorted(
+          (left, right) =>
+            right.entry.updatedAt - left.entry.updatedAt ||
+            (left.sessionKey < right.sessionKey ? -1 : 1),
+        );
+      return {
+        count: entries.length,
+        recent: entries.slice(0, options.recentLimit),
+        byAgent: new Map(
+          options.agentIds.map((agentId) => {
+            const owned = entries.filter(
+              ({ sessionKey }) => parseAgentSessionKey(sessionKey)?.agentId === agentId,
+            );
+            return [agentId, { count: owned.length, recent: owned.slice(0, options.recentLimit) }];
+          }),
+        ),
+      };
     },
   }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({

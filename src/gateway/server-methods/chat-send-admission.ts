@@ -15,8 +15,6 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
-import { readSessionTranscriptActivePathEntryRelation } from "../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -33,7 +31,6 @@ import {
   registerChatAbortController,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -48,6 +45,7 @@ import {
   isRetryableUnadoptedChatClaim,
   resolveRestartSafeChatAdmission,
 } from "./chat-restart-recovery.js";
+import { assertExpectedLeafActive } from "./chat-send-active-leaf.js";
 import {
   ACTIVE_LEAF_CHANGED_ERROR_REASON,
   inspectGoalChatSendRetry,
@@ -55,9 +53,12 @@ import {
   respondChatSessionRoutingChanged,
 } from "./chat-send-pre-admission.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import {
+  captureAdmittedChatSendSessionSettings,
+  SESSION_SETTINGS_CHANGED_ERROR_REASON,
+} from "./chat-send-session-settings.js";
+import { prepareGoalChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Reserve the session lifecycle and register the abortable run before attachment work. */
@@ -180,6 +181,8 @@ export async function admitChatSend(params: {
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
   let initialSessionEntry: SessionEntry | undefined;
+  let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
+  let assertInitialSkillSelection: (() => void) | undefined;
   let messageInjectionTarget: ReturnType<
     typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
   >;
@@ -245,6 +248,13 @@ export async function admitChatSend(params: {
       throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }
     const latestEntry = latestSession.entry;
+    // Freeze the writer-barrier snapshot; later preparation must retain this authority.
+    admittedSessionSettings = captureAdmittedChatSendSessionSettings({
+      commit: commitOutcome,
+      entry: latestEntry,
+      expectedPermissionMode: p.expectedPermissionMode,
+      expectedToolOverrides: p.expectedToolOverrides,
+    });
     if (
       request.goalOperation &&
       (isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, backingSessionId]) ||
@@ -273,32 +283,7 @@ export async function admitChatSend(params: {
       runInterruptTarget = resolvedInterruptTarget;
     }
     if (commitOutcome && p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-      // Runtime session identity resolves through the canonical SQLite accessor;
-      // legacy/reset-archive files are read-only history fallbacks, never send targets.
-      const activePathRelation = latestEntry?.sessionId
-        ? readSessionTranscriptActivePathEntryRelation(
-            {
-              agentId,
-              sessionId: latestEntry.sessionId,
-              sessionKey: latestSession.canonicalKey,
-              sessionEntry: latestEntry,
-              storePath: latestSession.storePath,
-            },
-            expectedLeafEntryId,
-          )
-        : expectedLeafEntryId === null
-          ? "exact"
-          : "off-path";
-      // Branch switches preserve entry ids while rotating session ids. A supplied session id
-      // must fence exact and ancestor matches; omission remains legacy exact-only compatibility.
-      const matchesRequestedSession =
-        requestedSessionId === undefined || requestedSessionId === latestEntry?.sessionId;
-      const matchesActivePath =
-        activePathRelation === "exact" ||
-        (activePathRelation === "ancestor" && requestedSessionId !== undefined);
-      if (!matchesRequestedSession || !matchesActivePath) {
-        throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
-      }
+      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId);
     }
     // Admission can queue behind reset. Never route a request captured
     // against the old session into the replacement transcript. Expected-leaf sends
@@ -341,32 +326,15 @@ export async function admitChatSend(params: {
     }
     admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
     if (request.goalOperation?.action === "start" && !latestEntry && !requestedSessionId) {
-      const creationError = authorizeGatewaySessionCreation({
+      const prepared = prepareGoalChatSendSession({
         cfg: latestSession.cfg,
         client,
         agentId,
+        getRuntimeConfig: context.getRuntimeConfig,
       });
-      if (creationError) {
-        throw new Error(creationError.message);
-      }
-      const creation = resolveOperatorSessionCreation(client);
-      const createdAt = Date.now();
-      // A caller's retry ID must never revive a retained transcript window.
-      admittedSessionId = randomUUID();
-      // Keep the seed in memory until the input, Goal, run claim, and receipt commit together.
-      initialSessionEntry = {
-        ...buildSessionCreationStamp({
-          ...creation,
-          sandbox: resolveCreatorSandbox(latestSession.cfg, creation),
-          now: createdAt,
-        }),
-        sessionId: admittedSessionId,
-        lifecycleRevision: randomUUID(),
-        updatedAt: createdAt,
-        sessionStartedAt: createdAt,
-        lastInteractionAt: createdAt,
-        chatType: "direct",
-      };
+      initialSessionEntry = prepared.entry;
+      assertInitialSkillSelection = prepared.assertSkillSelection;
+      admittedSessionId = initialSessionEntry.sessionId;
     }
     restartSafeAdmission = resolveRestartSafeChatAdmission({
       agentId,
@@ -465,6 +433,16 @@ export async function admitChatSend(params: {
     }
     if (err instanceof Error && err.message === ACTIVE_LEAF_CHANGED_ERROR_REASON) {
       respondChatActiveLeafChanged(respond);
+      return { ok: false as const };
+    }
+    if (err instanceof Error && err.message === SESSION_SETTINGS_CHANGED_ERROR_REASON) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Session settings changed before send. Retry.", {
+          details: { reason: SESSION_SETTINGS_CHANGED_ERROR_REASON },
+        }),
+      );
       return { ok: false as const };
     }
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
@@ -696,11 +674,13 @@ export async function admitChatSend(params: {
     ok: true as const,
     value: {
       activeRunAbort,
+      admittedSessionSettings,
       admittedSessionId,
       sessionBinding,
       onSessionPrepared,
       initialSessionEntry,
       chatSendTraceAttributes,
+      assertInitialSkillSelection,
       cleanupAdmittedRun,
       finishAbortedChatSend,
       gatewayWorkAdmission,
@@ -719,6 +699,7 @@ export async function admitChatSend(params: {
         // admission until the aggregate commits or settles.
         if (
           gatewayWorkAdmissionRetains === 0 ||
+          !acquiredGatewayWorkAdmission.isActive() ||
           lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
           (activeRunAbort.controller.signal.aborted &&
             !(queued?.controller === activeRunAbort.controller && queued.abortable === false))

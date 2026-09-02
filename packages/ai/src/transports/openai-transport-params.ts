@@ -389,20 +389,22 @@ function resolveOpenAISdkTimeoutMs(model: Model, timeoutMs?: number): number | u
   return resolveModelRequestTimeoutMs(model, timeoutMs);
 }
 
-export function buildOpenAISdkClientOptions(model: Model): { timeout?: number } {
+export function buildOpenAISdkClientOptions(model: Model): { timeout?: number; maxRetries: 0 } {
   const timeout = resolveOpenAISdkTimeoutMs(model);
-  return timeout === undefined ? {} : { timeout };
+  return { ...(timeout === undefined ? {} : { timeout }), maxRetries: 0 };
 }
 
 export function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
-  options?: { stream?: boolean; timeoutMs?: number; maxRetries?: number },
+  options?: { stream?: boolean; timeoutMs?: number },
 ):
   | {
       signal?: AbortSignal;
       timeout?: number;
-      maxRetries?: number;
+      // Always 0: the embedded runner's failover controller is the only retry
+      // owner; SDK-internal retries would hide attempts from its budget.
+      maxRetries: 0;
       headers?: Record<string, string>;
     }
   | undefined {
@@ -411,14 +413,14 @@ export function buildOpenAISdkRequestOptions(
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }
       : undefined;
-  if (timeout === undefined && options?.maxRetries === undefined && !signal && !headers) {
+  if (timeout === undefined && !signal && !headers) {
     return undefined;
   }
   return {
     ...(headers ? { headers } : {}),
     ...(signal ? { signal } : {}),
     ...(timeout !== undefined ? { timeout } : {}),
-    ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+    maxRetries: 0,
   };
 }
 

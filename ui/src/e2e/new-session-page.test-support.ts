@@ -1,6 +1,7 @@
 import path from "node:path";
 import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -34,6 +35,28 @@ export function installMockGateway(
 }
 
 export const WORKSPACE = "/home/peter/openclaw";
+
+export const LOCAL_GIT_WORKSPACE_RESPONSES = {
+  "agents.list": {
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Main" },
+        name: "Main",
+        workspace: WORKSPACE,
+        workspaceGit: true,
+      },
+    ],
+    defaultId: "main",
+    mainKey: "main",
+    scope: "agent",
+  },
+  "worktrees.branches": {
+    branches: [{ kind: "local", name: "main" }],
+    defaultBranch: "main",
+    repositoryStatus: "git",
+  },
+};
 export const PICKED = "/home/peter/openclaw/packages";
 export const SOURCE_REPO = "/tmp/source-repo";
 export const TARGET_REPO = "/tmp/target-repo";
@@ -76,6 +99,67 @@ export function createNewSessionPageE2eSuite() {
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is unavailable at ${executablePath}`,
   });
+}
+
+export async function expectDecodedThumbnail(image: Locator, expectedNaturalWidth?: number) {
+  await image.waitFor({ state: "visible" });
+  await image.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() =>
+      image.evaluate(async (element: HTMLImageElement, expectedWidth) => {
+        await element.decode();
+        const bounds = element.getBoundingClientRect();
+        return (
+          (expectedWidth === undefined || element.naturalWidth === expectedWidth) &&
+          Math.min(element.naturalWidth, element.naturalHeight, bounds.width, bounds.height) >=
+            32 &&
+          bounds.top >= 0 &&
+          bounds.left >= 0 &&
+          bounds.bottom <= window.innerHeight &&
+          bounds.right <= window.innerWidth
+        );
+      }, expectedNaturalWidth),
+    )
+    .toBe(true);
+}
+
+export async function expectPendingNewSessionPresentation(page: Page) {
+  const presentation = await page.locator(".new-session-page__starting").evaluate((thread) => {
+    const user = thread.querySelector<HTMLElement>(".chat-group.user")!;
+    const bubble = user.querySelector<HTMLElement>(".chat-bubble")!;
+    const text = bubble.classList.contains("chat-bubble--with-images")
+      ? bubble.querySelector<HTMLElement>(".chat-text, .chat-json-collapse")!
+      : bubble;
+    const claw = thread.querySelector<SVGElement>(".chat-reading-indicator svg")!;
+    const userStyle = getComputedStyle(user);
+    const textStyle = getComputedStyle(text);
+    const clawStyle = getComputedStyle(claw);
+    const row = user.getBoundingClientRect();
+    const content = bubble.getBoundingClientRect();
+    return {
+      direction: userStyle.flexDirection,
+      width: thread.getBoundingClientRect().width,
+      rightGap: Math.abs(row.right - content.right),
+      padding: [textStyle.paddingTop, textStyle.paddingRight],
+      images: bubble.classList.contains("chat-bubble--with-images"),
+      background: textStyle.backgroundColor,
+      clawSize: [clawStyle.width, clawStyle.height],
+      animation: clawStyle.animationName,
+      reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    };
+  });
+  expect(presentation.direction).toBe("row-reverse");
+  expect(presentation.width).toBeLessThanOrEqual(768);
+  expect(presentation.rightGap).toBeLessThanOrEqual(1);
+  expect(presentation.padding).toEqual(presentation.images ? ["10px", "14px"] : ["16px", "16px"]);
+  expect(presentation.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(presentation.clawSize).toEqual(["18px", "18px"]);
+  if (presentation.reducedMotion) {
+    expect(presentation.animation).toBe("none");
+  } else {
+    expect(presentation.animation).toContain("chatWorkingClawFlex");
+  }
+  return presentation;
 }
 
 export function createdSessionListResult(sessionKey: string) {
@@ -218,6 +302,15 @@ export async function waitForCommittedNewSessionDraft(
     params.get("group")?.trim() ?? "",
   ]);
   await waitForCommittedComposerDraft(page, scopeKey, expectedText, expectedAttachments);
+}
+
+export async function waitForGatewayRecoveryScope(page: Page, ready = true) {
+  await page.waitForFunction((expected) => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: ApplicationContext };
+    };
+    return app.runtime?.context.gateway.snapshot.client?.recoveryScopeReady === expected;
+  }, ready);
 }
 
 export async function replaceGatewayClient(page: Page) {

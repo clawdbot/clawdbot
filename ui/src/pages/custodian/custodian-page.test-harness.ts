@@ -123,7 +123,7 @@ export function createContext(
         agentsList: options.agentsList ?? {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "global",
           agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
         },
       },

@@ -18,7 +18,6 @@ import {
   type InternalSessionTranscriptWriteLockParams,
 } from "./session-transcript-lock-runtime.js";
 import {
-  publishSessionTranscriptUpdateByIdentity,
   readSessionTranscriptEvents,
   resolveSessionTranscriptIdentity,
   type SessionTranscriptTargetParams,
@@ -65,29 +64,24 @@ export async function withCodexSessionTranscriptMirrorWriteLock<T>(
   params: InternalSessionTranscriptWriteLockParams,
   run: (context: CodexSessionTranscriptMirrorWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  return await withProjectedSessionTranscriptWriteLock(
-    params,
-    run,
-    (context, locked) => ({
-      ...context,
-      appendMessageWithMessageSequence: (options) =>
-        locked.appendMessageWithMessageSequence({
-          ...options,
-          ...(params.config !== undefined ? { config: params.config } : {}),
-        }),
-      readMessageFacts: async (factParams) => {
-        const facts = await locked.readMessageFacts(factParams);
-        const messagesByIdempotencyKey = new Map<string, AgentMessage>();
-        for (const [idempotencyKey, message] of facts.messagesByIdempotencyKey) {
-          if (isAgentMessageRecord(message)) {
-            messagesByIdempotencyKey.set(idempotencyKey, message);
-          }
+  return await withProjectedSessionTranscriptWriteLock(params, run, (context, locked) => ({
+    ...context,
+    appendMessageWithMessageSequence: (options) =>
+      locked.appendMessageWithMessageSequence({
+        ...options,
+        ...(params.config !== undefined ? { config: params.config } : {}),
+      }),
+    readMessageFacts: async (factParams) => {
+      const facts = await locked.readMessageFacts(factParams);
+      const messagesByIdempotencyKey = new Map<string, AgentMessage>();
+      for (const [idempotencyKey, message] of facts.messagesByIdempotencyKey) {
+        if (isAgentMessageRecord(message)) {
+          messagesByIdempotencyKey.set(idempotencyKey, message);
         }
-        return { ...facts, messagesByIdempotencyKey };
-      },
-    }),
-    publishSessionTranscriptUpdateByIdentity,
-  );
+      }
+      return { ...facts, messagesByIdempotencyKey };
+    },
+  }));
 }
 
 function isAgentMessageRecord(value: unknown): value is AgentMessage & Record<string, unknown> {

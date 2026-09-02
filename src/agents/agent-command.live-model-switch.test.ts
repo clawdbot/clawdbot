@@ -1316,6 +1316,26 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("applies the configured run cwd to ordinary (non-ACP) command sessions", async () => {
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      agents: {
+        ...state.defaultRuntimeConfig.agents,
+        defaults: { ...state.defaultRuntimeConfig.agents.defaults, cwd: "/tmp/task-repo" },
+      },
+    };
+    // Ordinary sessions resolve to a truthy { kind: "none" }; only a real ACP
+    // placement may keep the configured cwd away from the run.
+    state.acpResolveSessionMock.mockReturnValue({ kind: "none" });
+    setupAdmittedSuccessfulAttempt();
+
+    await runBasicAgentCommand();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/task-repo", workspaceDir: "/tmp/workspace" }),
+    );
+  });
+
   it.each([
     ["local CLI", runBasicAgentCommand],
     ["system", runSystemAgentCommand],
@@ -5095,7 +5115,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "All fallback candidates ended incomplete",
-            fallbackExhaustedFailure: true,
+            executionSettled: true,
           }),
         }),
       ]),
@@ -5158,6 +5178,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "Command may have changed state",
+            executionSettled: true,
             replayInvalid: true,
           }),
         }),

@@ -24,7 +24,6 @@ import { telegramExtensionTestRoots } from "./vitest.extension-telegram-paths.mj
 import { voiceCallExtensionTestRoots } from "./vitest.extension-voice-call-paths.mjs";
 import { whatsAppExtensionTestRoots } from "./vitest.extension-whatsapp-paths.mjs";
 import { zaloExtensionTestRoots } from "./vitest.extension-zalo-paths.mjs";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export const extensionCatchAllExcludedTestRoots = [
@@ -51,16 +50,10 @@ export const extensionCatchAllExcludedTestRoots = [
   zaloExtensionTestRoots,
 ].flat();
 
-export function loadIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
-
 export function createExtensionsVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? [BUNDLED_PLUGIN_TEST_GLOB], {
+  return createScopedVitestConfig([BUNDLED_PLUGIN_TEST_GLOB], {
     dir: "extensions",
     env,
     name: "extensions",

@@ -14,7 +14,7 @@ import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/deliver
 import { createCronExecutionId } from "../cron/run-id.js";
 import type { CronEvent, CronService } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronFailureNotificationDelivery, CronJob } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
@@ -342,75 +342,111 @@ function dispatchDetachedCronNotification(params: {
 /** Transports a scheduler-authorized cron failure alert. */
 export async function sendGatewayCronFailureAlert(params: CronFailureAlertParams): Promise<void> {
   await runWithGatewayIndependentRootWorkContinuation(async () => {
-    await sendGatewayCronFailureAlertUnderAdmission(params);
+    const settled = await sendGatewayCronFailureAlertUnderAdmission(params);
+    await params.onDeliverySettled(settled.outcome);
+    if (settled.kind === "failed") {
+      throw settled.error;
+    }
   }, "cron:failure-alert");
 }
 
+type FailureAlertTransportResult =
+  | { kind: "settled"; outcome: CronFailureNotificationDelivery }
+  | { kind: "failed"; error: unknown; outcome: CronFailureNotificationDelivery };
+
 async function sendGatewayCronFailureAlertUnderAdmission(
   params: CronFailureAlertParams,
-): Promise<void> {
-  const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
+): Promise<FailureAlertTransportResult> {
+  let mayHaveReachedRecipient = false;
+  const onDeliveryAttempt = (reachedRecipient: boolean) => {
+    mayHaveReachedRecipient ||= reachedRecipient;
+  };
+  try {
+    const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(params.job.agentId);
+    if (params.mode === "webhook") {
+      if (!params.to) {
+        throw new Error("cron failure alert webhook requires a URL");
+      }
+      const webhookUrl = normalizeHttpWebhookUrl(params.to);
+      if (!webhookUrl) {
+        throw new Error("cron failure alert webhook requires a valid http(s) URL");
+      }
+      await postCronWebhookStrict({
+        webhookUrl,
+        webhookToken: normalizeOptionalString(params.webhookToken),
+        ssrfPolicy: params.ssrfPolicy,
+        onDeliveryAccepted: () => onDeliveryAttempt(true),
+        payload: {
+          jobId: params.job.id,
+          jobName: params.job.name,
+          message: params.payload.text ?? "",
+          runAtMs: params.runAtMs,
+        },
+      });
+      return { kind: "settled", outcome: { delivered: true, status: "delivered" } };
+    }
 
-  if (params.mode === "webhook") {
-    if (!params.to) {
-      throw new Error("cron failure alert webhook requires a URL");
-    }
-    const webhookUrl = normalizeHttpWebhookUrl(params.to);
-    if (!webhookUrl) {
-      throw new Error("cron failure alert webhook requires a valid http(s) URL");
-    }
-    await postCronWebhookStrict({
-      webhookUrl,
-      webhookToken: normalizeOptionalString(params.webhookToken),
-      ssrfPolicy: params.ssrfPolicy,
-      onDeliveryAccepted: () => params.onDeliveryAttempt?.(true),
-      payload: {
+    const abortController = new AbortController();
+    const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
+    // Release Gateway admission on deadline even when a transport ignores abort.
+    const result = await withTimeout(
+      sendCronAnnouncePayloadStrict({
+        deps: params.deps,
+        cfg: runtimeConfig,
+        agentId,
         jobId: params.job.id,
-        jobName: params.job.name,
-        message: params.payload.text ?? "",
-        runAtMs: params.runAtMs,
+        target: {
+          channel: params.channel,
+          to: params.to,
+          accountId: params.accountId,
+          threadId: params.threadId,
+          sessionKey: resolveCronDeliverySessionKey(params.job),
+          inheritSessionThread: params.inheritSessionThread,
+        },
+        payload: {
+          ...params.payload,
+          text: appendCronFailureAlertDetails(
+            params.payload.text ?? "",
+            params.job.id,
+            params.runAtMs,
+            runtimeConfig,
+          ),
+        },
+        abortSignal: abortController.signal,
+        onDeliveryAttempt,
+      }),
+      CRON_WEBHOOK_TIMEOUT_MS,
+      {
+        createError: () => {
+          abortController.abort(deliveryTimeoutError);
+          return deliveryTimeoutError;
+        },
       },
-    });
-    return;
+    );
+    if (result.status === "sent") {
+      return { kind: "settled", outcome: { delivered: true, status: "delivered" } };
+    }
+    const uncertain = result.reason === "adapter_returned_no_identity";
+    return {
+      kind: "settled",
+      outcome: {
+        delivered: uncertain ? undefined : false,
+        status: uncertain ? "unknown" : "not-delivered",
+        error: `cron failure alert ${uncertain ? "outcome is unknown" : "was suppressed"}: ${result.reason}`,
+      },
+    };
+  } catch (err) {
+    const error = formatErrorMessage(err);
+    return {
+      kind: "failed",
+      error: err,
+      outcome: {
+        delivered: mayHaveReachedRecipient ? undefined : false,
+        status: mayHaveReachedRecipient ? "unknown" : "not-delivered",
+        error,
+      },
+    };
   }
-
-  const abortController = new AbortController();
-  const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
-  // Release Gateway admission on deadline even when a transport ignores abort.
-  await withTimeout(
-    sendCronAnnouncePayloadStrict({
-      deps: params.deps,
-      cfg: runtimeConfig,
-      agentId,
-      jobId: params.job.id,
-      target: {
-        channel: params.channel,
-        to: params.to,
-        accountId: params.accountId,
-        threadId: params.threadId,
-        sessionKey: resolveCronDeliverySessionKey(params.job),
-        inheritSessionThread: params.inheritSessionThread,
-      },
-      payload: {
-        ...params.payload,
-        text: appendCronFailureAlertDetails(
-          params.payload.text ?? "",
-          params.job.id,
-          params.runAtMs,
-          runtimeConfig,
-        ),
-      },
-      abortSignal: abortController.signal,
-      onDeliveryAttempt: params.onDeliveryAttempt,
-    }),
-    CRON_WEBHOOK_TIMEOUT_MS,
-    {
-      createError: () => {
-        abortController.abort(deliveryTimeoutError);
-        return deliveryTimeoutError;
-      },
-    },
-  );
 }
 
 /** Fans out completion webhooks after a cron run finishes. */

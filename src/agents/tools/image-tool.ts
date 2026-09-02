@@ -30,12 +30,9 @@ import {
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { bundledStaticCatalogProviderUsesRuntimeAugment } from "../embedded-agent-runner/model.static-catalog.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
@@ -447,73 +444,6 @@ function resolveCompressionModelCandidates(params: {
   });
 }
 
-function imageCompressionPolicyHasDimensionLimit(policy: ImageCompressionModelPolicy): boolean {
-  return typeof policy.maxSidePx === "number" || typeof policy.maxPixels === "number";
-}
-
-function mergeImageCompressionPolicies(params: {
-  runtimePolicy: ImageCompressionModelPolicy;
-  staticPolicy: ImageCompressionModelPolicy;
-}): ImageCompressionModelPolicy {
-  return {
-    ...params.runtimePolicy,
-    ...params.staticPolicy,
-  };
-}
-
-function providerUsesRuntimeModelAugment(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-}): boolean {
-  const provider = normalizeMediaProviderId(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const config = params.cfg ?? {};
-  const snapshot =
-    params.preparedModelRuntime?.metadataSnapshot ??
-    getCurrentPluginMetadataSnapshot({
-      config,
-      env: process.env,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    });
-  if (
-    bundledStaticCatalogProviderUsesRuntimeAugment({
-      provider,
-      cfg: params.cfg,
-      ...(snapshot ? { metadataSnapshot: snapshot } : {}),
-      workspaceDir: params.workspaceDir,
-    })
-  ) {
-    return true;
-  }
-  if (!snapshot) {
-    return false;
-  }
-  return snapshot.plugins.some((plugin) => {
-    const ownsProvider =
-      plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === provider) ||
-      Boolean(plugin.modelCatalog?.providers?.[provider]);
-    if (!ownsProvider) {
-      return false;
-    }
-    const runtimeAugment =
-      plugin.modelCatalog?.runtimeAugment === true ||
-      (plugin.origin !== "bundled" &&
-        plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === provider));
-    if (!runtimeAugment) {
-      return false;
-    }
-    return isManifestPluginAvailableForControlPlane({
-      snapshot,
-      plugin,
-      config,
-    });
-  });
-}
-
 async function resolveCompressionModelPolicyWithHooks(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -557,22 +487,16 @@ async function resolveCompressionModelPolicy(params: {
     ...params,
     skipProviderRuntimeHooks: true,
   });
-  if (
-    imageCompressionPolicyHasDimensionLimit(staticPolicy) ||
-    !providerUsesRuntimeModelAugment({
-      cfg: params.cfg,
-      provider: params.provider,
-      workspaceDir: params.workspaceDir,
-      preparedModelRuntime: params.preparedModelRuntime,
-    })
-  ) {
+  if (typeof staticPolicy.maxSidePx === "number" || typeof staticPolicy.maxPixels === "number") {
     return staticPolicy;
   }
+  // Catalog augmentation governs row discovery, not model normalization. Missing
+  // limits still need the selected provider's hooks; explicit static values win.
   const runtimePolicy = await resolveCompressionModelPolicyWithHooks({
     ...params,
     skipProviderRuntimeHooks: false,
   });
-  return mergeImageCompressionPolicies({ runtimePolicy, staticPolicy });
+  return { ...runtimePolicy, ...staticPolicy };
 }
 
 async function resolveImageCompressionPolicy(params: {

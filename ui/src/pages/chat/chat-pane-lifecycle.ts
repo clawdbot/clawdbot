@@ -72,11 +72,7 @@ import { dismissThreadPortals } from "./components/chat-thread-interactions.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
-import {
-  admitInitialUserMessageHandoff,
-  readChatSessionProjectionScope,
-  reduceChatSessionProjection,
-} from "./history-merge.ts";
+import { admitChatSubmission } from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import {
   applyChatCacheSnapshot,
@@ -132,22 +128,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       }
       // The memory miss fences network replacement; the pane projection merges
       // live and pending rows that arrived while IndexedDB was pending.
-      const projection = reduceChatSessionProjection(
-        state,
-        { type: "snapshotLoaded", messages: snapshot.messages },
-        {
-          scope: readChatSessionProjectionScope(state, {
-            sessionKey,
-            sessionId: snapshot.sessionId,
-            ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
-              ? { activeLeafEntryId: snapshot.displayedLeafEntryId }
-              : {}),
-          }),
-        },
-      );
-      const mergedSnapshot = { ...snapshot, messages: [...projection.messages] };
+      applyChatCacheSnapshot(state, snapshot);
+      const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
       cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, mergedSnapshot);
-      applyChatCacheSnapshot(state, mergedSnapshot);
       state.requestUpdate?.();
     });
   }
@@ -381,7 +364,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
           pageState.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           pageState.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
         }
-        admitInitialUserMessageHandoff(pageState, initialSessionKey);
+        admitChatSubmission(pageState);
       }
     }
     chatState.attach(pageState);
@@ -441,6 +424,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     this.addEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt);
     chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));
     chatState.addCleanup(this.context.gateway.subscribe((next) => this.applyGatewaySnapshot(next)));
+    chatState.addCleanup(
+      this.context.theme.subscribe(() => {
+        pageState.settings = {
+          ...this.context.theme.settings,
+          token: this.context.gateway.connection.token,
+        };
+        pageState.requestUpdate();
+      }),
+    );
     chatState.addCleanup(
       this.context.agentSelection.subscribe((next) => {
         applySelectedChatAgent(this.state, this.agentId ?? next.selectedId);
@@ -547,7 +539,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         // would vanish instead of offering a retry, and the accepted prompt would
         // stay hidden until the transcript bootstrap resolved.
         const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
-        const acceptedPrompt = admitInitialUserMessageHandoff(this.state, nextSessionKey);
+        const acceptedPrompt = admitChatSubmission(this.state);
         if (rejectedTurn) {
           this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;

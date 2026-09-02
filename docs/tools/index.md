@@ -175,6 +175,10 @@ Choose the extension path by the job you need OpenClaw to do:
 
 ## Troubleshoot missing tools
 
+Configured `tools.exec` and `tools.fs` sections do not grant tool access. The
+profile migration warning suggests `alsoAllow` entries only when other active
+global, agent, and provider policies permit those tools.
+
 If the model cannot see or call a tool, start with the effective policy for
 the current turn:
 

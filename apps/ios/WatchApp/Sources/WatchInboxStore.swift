@@ -192,6 +192,7 @@ import WatchKit
     {
         self.defaults = defaults
         self.restorePersistedState()
+        self.expireVoiceTurnIfNeeded(nowMs: Self.nowMs())
         if [self.replyStatus?.code, self.appSnapshotStatus?.code, self.appCommandStatus?.code].contains(.sending) {
             // Attempt ownership never survives app restoration, so interrupted sends must be retryable.
             if self.replyStatus?.code == .sending {
@@ -594,8 +595,9 @@ import WatchKit
         let hasExistingAppSnapshot = self.appSnapshot != nil
         let previousGatewayID = Self.normalizedGatewayID(self.appSnapshot?.gatewayStableID)
         let nextGatewayID = Self.normalizedGatewayID(message.gatewayStableID)
+        let hasSameChatSession = self.appSnapshot?.chatSessionIdentity == message.chatSessionIdentity
         var merged = message
-        if hasExistingAppSnapshot, Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
+        if hasSameChatSession {
             if merged.chatItems == nil {
                 merged.chatItems = self.appSnapshot?.chatItems
             }
@@ -607,11 +609,16 @@ import WatchKit
         self.appSnapshotUpdatedAt = Date()
         self.activeAppSnapshotAttemptID = nil
         self.appSnapshotStatus = nil
-        if !hasExistingAppSnapshot || !Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
+        if !hasSameChatSession {
+            // A reply belongs to the chat that submitted it, even when only the
+            // session changes on the same gateway. Retire it before accepting more deliveries.
+            self.voiceTurnState.cancel()
             if hasExistingAppSnapshot {
                 self.activeAppCommandAttemptID = nil
                 self.appCommandStatus = nil
             }
+        }
+        if !hasExistingAppSnapshot || !Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
             self.hasCompletedExecApprovalSnapshotRefreshInSession = false
             if !Self.gatewayIDsMatch(self.gatewayStableID, nextGatewayID) {
                 self.clearMessagePrompt()
@@ -695,17 +702,19 @@ import WatchKit
     @discardableResult
     func markAppCommandResult(_ result: WatchReplySendResult, command: WatchAppCommand, attemptID: UUID) -> Bool {
         guard self.activeAppCommandAttemptID == attemptID else { return false }
-        if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
+        switch result.delivery {
+        case .notSent:
             self.appCommandStatus = WatchAppCommandStatus(
                 command: command,
                 code: .failed,
-                detail: errorMessage)
-        } else if result.deliveredImmediately {
+                detail: result.errorMessage)
+            if command == .sendChat {
+                self.voiceTurnState.cancel()
+            }
+        case .delivered:
             self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sent)
-        } else if result.queuedForDelivery {
+        case .queued:
             self.appCommandStatus = WatchAppCommandStatus(command: command, code: .queued)
-        } else {
-            self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sent)
         }
         self.persistState()
         return true
@@ -1412,7 +1421,6 @@ extension WatchInboxStore {
             ?? state.appCommandStatusText.flatMap(
                 WatchAppCommandStatus.decodeLegacyLocalizedText)
         self.voiceTurnState = state.voiceTurnState ?? WatchVoiceTurnState()
-        self.voiceTurnState.expireIfNeeded(nowMs: Self.nowMs())
         self.deferredGatewayPayloads = Array(
             (state.deferredGatewayPayloads ?? []).suffix(Self.maxDeferredGatewayPayloads))
         self.execApprovalTerminalTombstones = state.execApprovalTerminalTombstones ?? []

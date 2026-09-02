@@ -384,6 +384,54 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("Two");
   });
 
+  it.each(["status", "list"])(
+    "preserves recorded connection ages in nodes %s after a stale pairing snapshot",
+    async (command) => {
+      const now = Date.now();
+      const recent = now - 1_000;
+      const old = now - 2 * 24 * 60 * 60 * 1_000;
+      const nodes = [
+        {
+          nodeId: "reconnected",
+          paired: true,
+          connected: true,
+          connectedAtMs: recent,
+          lastConnectedAtMs: recent,
+        },
+        {
+          nodeId: "catalog-only",
+          paired: true,
+          connected: false,
+          lastConnectedAtMs: recent,
+        },
+        { nodeId: "old", paired: true, connected: false, lastConnectedAtMs: old },
+        { nodeId: "unknown", paired: true, connected: false },
+      ];
+      programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+        const { method } = (args[0] ?? {}) as { method?: string };
+        return method === "node.pair.list"
+          ? { pending: [], paired: [{ nodeId: "reconnected", lastConnectedAtMs: old }] }
+          : { ts: now, nodes };
+      });
+
+      await runProgram(["nodes", command, "--last-connected", "24h", "--json"]);
+
+      const result = writeJsonArgAt(0) as {
+        nodes?: Array<{ nodeId: string; lastConnectedAtMs?: number }>;
+        paired?: Array<{ nodeId: string; lastConnectedAtMs?: number }>;
+      };
+      expect(
+        (result.nodes ?? result.paired)?.map(({ nodeId, lastConnectedAtMs }) => ({
+          nodeId,
+          lastConnectedAtMs,
+        })),
+      ).toEqual([
+        { nodeId: "reconnected", lastConnectedAtMs: recent },
+        { nodeId: "catalog-only", lastConnectedAtMs: recent },
+      ]);
+    },
+  );
+
   it.each([
     { command: "status", duration: "24h" },
     { command: "status", duration: "1h30m" },

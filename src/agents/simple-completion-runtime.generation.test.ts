@@ -1,3 +1,4 @@
+import { createApiRegistry } from "@openclaw/ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -46,7 +47,10 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 
 vi.mock("./sessions/model-registry-runtime.js", () => ({
   initializeModelRegistryRuntime: vi.fn(),
-  getModelRegistryRuntime: () => ({ llmRuntime: { registry: {}, streamSimple: vi.fn() } }),
+  getModelRegistryRuntime: () => {
+    const apiRegistry = createApiRegistry();
+    return { apiRegistry, llmRuntime: { registry: apiRegistry, streamSimple: vi.fn() } };
+  },
 }));
 
 import {

@@ -42,7 +42,8 @@ import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
-  setChatSessionProjection,
+  publishChatSessionProjection,
+  publishChatSessionProjectionMessages,
 } from "./history-merge.ts";
 import {
   controlUiNowMs,
@@ -171,14 +172,14 @@ export async function hydrateChatHistory(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
-      const historyProjection = getChatSessionProjection(state, state.chatMessages);
+      const historyProjection = getChatSessionProjection(state);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
       state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
       // An accepted delta advances the same transcript generation, not a branch replacement.
       // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
-      setChatSessionProjection(state, {
+      publishChatSessionProjection(state, {
         ...historyProjection,
         scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
       });
@@ -274,7 +275,6 @@ export async function hydrateChatHistory(
       },
       {
         scope,
-        messages: retainsTranscriptIdentity ? state.chatMessages : [],
         runActive:
           res.sessionInfo &&
           (typeof res.sessionInfo.hasActiveRun === "boolean" ||
@@ -348,16 +348,22 @@ export async function hydrateChatHistory(
           visibleMessageCount: visibleMessages.length,
         });
       } else if (!state.chatRunId) {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleAssistantStreamMessages(state.chatMessages, state),
+        );
         maybeResetToolStream(state);
         state.chatStream = null;
         state.chatStreamStartedAt = null;
       } else if (historyReplacedSomeToolStream) {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
-          includeCurrent: false,
-          requirePersistedTool: !historyReplacedToolStream,
-          persistCommentary: true,
-        });
+        publishChatSessionProjectionMessages(
+          state,
+          materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+            includeCurrent: false,
+            requirePersistedTool: !historyReplacedToolStream,
+            persistCommentary: true,
+          }),
+        );
         if (!visibleCurrentAssistantStreamTail(state, streamReconciliation.isHiddenStreamText)) {
           state.chatStreamStartedAt = null;
         }

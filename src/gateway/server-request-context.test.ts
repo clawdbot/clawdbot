@@ -61,6 +61,7 @@ function makeContextParams(
     isTerminalEnabled: vi.fn(() => false),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
+    placementStandingGrants: undefined,
     validateAgentRuntimeApprovalAuthority: () => false,
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),

@@ -36,6 +36,7 @@ import {
   resolveSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
+import { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 import type {
   SessionAccessScope,
   LogicalSessionAccessScope,
@@ -88,6 +89,7 @@ export {
   // fresh-reads and checks sessionId inside its locked commit, and void/entry has no rebound signal.
   replaceSessionEntrySync,
   resolveSessionEntryFromStore,
+  readSessionStoreSummaryReadOnly,
   upsertSessionEntryCore,
 };
 
@@ -428,8 +430,3 @@ export async function patchSessionEntryWithKey(
   const entry = await patchSessionEntryCore(scope, update, options);
   return entry ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey), entry } : null;
 }
-
-/**
- * Copies one parent transcript into a new child transcript target.
- * This is for guarded callers that already own the eventual entry commit.
- */

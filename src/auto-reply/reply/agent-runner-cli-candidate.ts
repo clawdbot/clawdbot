@@ -1,10 +1,12 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
 import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
+import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
@@ -128,7 +130,7 @@ export async function runCliFallbackCandidate(
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
   turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   const result = await params.timing.measure("cli_run", () =>
-    withLocalSessionPlacementTurnAdmission(
+    withLocalSessionPlacementTurnSettlement(
       {
         sessionId: turn.followupRun.run.sessionId,
         sessionKey: turn.sessionKey,
@@ -185,25 +187,12 @@ export async function runCliFallbackCandidate(
             const textForTyping = classified.text;
             const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
             const onPartialReply = turn.opts?.onPartialReply;
-            if (!params.preserveProgressCallbackStartOrder) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              if (sanitized.skip || !sanitized.text || !onPartialReply) {
-                return false;
-              }
-              return await onPartialReply({ text: sanitized.text });
-            }
-            if (sanitized.skip || !sanitized.text) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              return false;
-            }
-            if (!onPartialReply) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              return false;
-            }
-            // Assistant and tool CLI bridges drain independently. Stage presentation first.
-            return await params.presentation.startPresentationWhileTyping(
+            return await params.presentation.presentWithTyping(
               turn.typingSignals.signalTextDelta(textForTyping),
-              () => onPartialReply({ text: sanitized.text }),
+              () =>
+                sanitized.skip || !sanitized.text || !onPartialReply
+                  ? false
+                  : onPartialReply({ text: sanitized.text }),
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
@@ -241,7 +230,7 @@ export async function runCliFallbackCandidate(
             // Tool and assistant bridges drain independently. Preserve source order.
             await Promise.all([
               summaryPromise,
-              params.presentation.startPresentationWhileTyping(
+              params.presentation.presentWithTyping(
                 turn.typingSignals.signalToolStart(),
                 async () => {
                   await turn.opts?.onToolStart?.({
@@ -332,6 +321,17 @@ export async function runCliFallbackCandidate(
             currentInboundEventKind: turn.followupRun.currentInboundEventKind,
             currentInboundContext: turn.followupRun.currentInboundContext,
             inputProvenance: turn.followupRun.run.inputProvenance,
+            // Candidate zero is the primary attempt; later candidates are
+            // fallbacks. Carry the runner-owned fact instead of inferring from
+            // this shared dispatch path, or primary CLI runs lose delegation.
+            ...buildCliMcpDelegationCapabilityBinding(
+              resolveDelegationCapability({
+                fallbackActive: params.isFallbackRetry,
+                inputProvenance: turn.followupRun.run.inputProvenance,
+                disableTools: turn.opts?.disableTools,
+                toolsAllow: turn.opts?.toolsAllow,
+              }),
+            ),
             modelProvider: params.provider,
             modelHasVision,
             modelContextWindow: selectedModelEntry?.contextWindow,
@@ -399,6 +399,7 @@ export async function runCliFallbackCandidate(
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
+            skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             disableTools: turn.opts?.disableTools,
             toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
               turn.followupRun,

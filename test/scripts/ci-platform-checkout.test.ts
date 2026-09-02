@@ -284,7 +284,7 @@ it.concurrent.each([
         },
       ].map((entry) => Object.assign(entry, { kind: "preflight", retained: false }))),
 ])(
-  "materializes $kind harness actions ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
+  "materializes $kind trusted harness ($event, workflow=$workflow, target=$target, retained=$retained) without mutating the candidate",
   async ({ kind, retained, event, workflow, target, code, fetches }) => {
     const linux = kind !== "platform";
     const preflight = kind === "preflight";
@@ -297,10 +297,17 @@ it.concurrent.each([
       ".github/actions/tool/with space.txt": "literal action bytes\n",
       ...(posix ? { [executable]: "#!/bin/sh\nexit 0\n" } : {}),
     };
+    const releasePolicy = Object.fromEntries(
+      ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].map((name) => [
+        name,
+        readFileSync(name, "utf8"),
+      ]),
+    );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
       "extensions/browser/icon.png": "complete binary path\0\xff",
       "ui/src/i18n/.i18n/de-DE.tm.jsonl": '{"fixture":"complete inventory"}\n',
+      "scripts/lib/candidate-only.mjs": "export const candidate = true;\n",
     };
     let revision = "";
     let workflowRevision = "";
@@ -332,7 +339,11 @@ it.concurrent.each([
             encoding: "utf8",
           }).trim();
         run("init");
-        for (const [name, contents] of Object.entries({ ...files, ...candidateFiles })) {
+        for (const [name, contents] of Object.entries({
+          ...files,
+          ...releasePolicy,
+          ...candidateFiles,
+        })) {
           mkdirSync(path.dirname(path.join(source, name)), { recursive: true });
           writeFileSync(path.join(source, name), contents);
         }
@@ -441,6 +452,14 @@ it.concurrent.each([
         expect(existsSync(path.join(harness, ".git"))).toBe(false);
         for (const [name, contents] of Object.entries(files)) {
           expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+        }
+        for (const [name, contents] of Object.entries(releasePolicy)) {
+          expect(existsSync(path.join(harness, name))).toBe(preflight);
+          if (preflight) {
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+            writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
+            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+          }
         }
         if (posix) {
           expect(statSync(path.join(harness, executable)).mode & 0o111).toBe(0o111);
@@ -769,7 +788,7 @@ it.skipIf(process.platform === "win32")(
   55_000,
 );
 
-it("does not revive an observed-dead fixture instance when its PID is reused", () => {
+it("does not revive a terminated fixture instance when its PID is reused", () => {
   const result = spawnSync(
     process.platform === "win32" ? "python" : "python3",
     [
@@ -777,7 +796,7 @@ it("does not revive an observed-dead fixture instance when its PID is reused", (
       "-S",
       "-c",
       String.raw`
-import json, os, pathlib, subprocess, sys, tempfile
+import json, os, pathlib, runpy, subprocess, sys, tempfile
 
 with tempfile.TemporaryDirectory(prefix="checkout-pid-reuse-") as directory:
     root = pathlib.Path(directory).resolve()
@@ -798,29 +817,43 @@ const inspected = new Set();
 cp.spawnSync = (command, args, options) => {
   if (command === "/bin/ps") {
     const index = args.indexOf("-p");
-    assert(index >= 0 && args.filter(arg => arg === "-p").length === 1 && /^[1-9][0-9]*$/.test(args[index + 1]), "fixture census must query exactly one PID");
+    assert(index >= 0 && args.filter(arg => arg === "-p").length === 1 && /^[1-9][0-9]*(?:,[1-9][0-9]*)*$/.test(args[index + 1]), "fixture census must query an explicit PID list");
+    const selected = args[index + 1].split(",").map(Number);
+    assert(process.platform === "linux" || selected.length === 1, "non-Linux census must query exactly one PID");
     assert(args.every(arg => !arg.startsWith("-") || ["-p", "-o"].includes(arg)), "fixture census must select owned PIDs only");
     const records = path.join(process.argv[3], "pids");
     const allowed = new Set(fs.readdirSync(records).filter(name => name.endsWith(".json")).map(name => JSON.parse(fs.readFileSync(path.join(records, name), "utf8"))).filter(record => !fs.existsSync(path.join(records, record.instance + ".dead"))).map(record => record.pid));
-    const pid = Number(args[index + 1]);
-    assert(allowed.has(pid) && !inspected.has(pid), "fixture census escaped deduplicated registered ownership");
-    inspected.add(pid);
+    for (const pid of selected) {
+      assert(allowed.has(pid) && !inspected.has(pid), "fixture census escaped deduplicated registered ownership");
+      inspected.add(pid);
+    }
   }
   return spawnSync(command, args, options);
 };
 require("node:module").syncBuiltinESMExports();
 ''')
-    with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"]) as child:
-        child.wait(timeout=10)
+    with subprocess.Popen([sys.executable, "-I", "-S", "-c", "import sys; sys.stdin.read()"],
+                          stdin=subprocess.PIPE) as child:
         retired = dict(pid=child.pid, role="grandchild", attempt=1, instance="retired")
         current = dict(pid=os.getpid(), role="grandchild", attempt=2, instance="current")
+        if os.name == "nt":
+            read_processes = runpy.run_path(sys.argv[3])["read_processes"]
+            identities = read_processes([child.pid, os.getpid()])
+            assert all(identity["alive"] for identity in identities)
+            retired["creationTime"], current["creationTime"] = (
+                identity["creationTime"] for identity in identities)
+        child.communicate(timeout=10)
         (records / "retired.json").write_text(json.dumps(retired))
         (records / "current.json").write_text(json.dumps(current))
+        (records / "sentinel.json").write_text(json.dumps(
+            dict(current, role="sentinel", attempt=0, instance="sentinel")))
 
         def observe():
             subprocess.run([sys.argv[1], "--require", str(guard), sys.argv[2], "git", str(root), "early-leader-exit",
                             "-C", str(workspace), "checkout"], cwd=workspace, check=True)
-            return json.loads((root / "events.jsonl").read_text().splitlines()[-1])["alive"]
+            observed = json.loads((root / "events.jsonl").read_text().splitlines()[-1])
+            assert observed["sentinelAlive"], "unrelated live sentinel was lost"
+            return observed["alive"]
 
         assert observe() == [current], "first boundary must observe real child termination"
         # Fault-inject PID reuse only after actual death was observed. The fresh
@@ -828,10 +861,17 @@ require("node:module").syncBuiltinESMExports();
         retired["pid"] = current["pid"]
         (records / "retired.json").write_text(json.dumps(retired))
         assert observe() == [current], "a retired instance was revived by a reused PID"
+        if os.name == "nt":
+            # No death receipt exists for this instance: birth identity must
+            # reject reuse even when no census observed the PID between lives.
+            (records / "unobserved.json").write_text(json.dumps(
+                dict(retired, instance="unobserved")))
+            assert observe() == [current], "an unobserved retired birth was revived by PID reuse"
 print("fixture lifetime contract passed")
 `,
       process.execPath,
       ciCheckoutFixture,
+      fileURLToPath(new URL("./fixtures/ci-windows-process-census.py", import.meta.url)),
     ],
     { encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
   );

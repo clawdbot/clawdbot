@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared owner for dispatch and completion around the immutable ClawHub receipt.
+# Shared owner for trusted release child dispatch, approval, and completion.
 set -euo pipefail
 
 openclaw_npm_expected_workflow_ref="${GITHUB_REF}"
@@ -11,6 +11,52 @@ is_stable_release() {
 
 is_android_release() {
   [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
+}
+
+resolve_child_workflow_ref() {
+  local workflow_full_ref="$1"
+  local workflow_sha="$2"
+  local workflow_prefix="${workflow_sha:0:12}"
+  local child_workflow_ref matching_ref_prefix matching_refs
+
+  if [[ "${workflow_full_ref}" =~ ^refs/tags/(release-publish/[a-f0-9]{12}-[1-9][0-9]*)$ ]]; then
+    # Request validation already proves this is the exact live
+    # lightweight tag; dispatch revalidates it immediately before use.
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "${workflow_full_ref}" =~ ^refs/heads/(tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+
+  if [[ "${workflow_full_ref}" != "refs/heads/main" ]]; then
+    echo "Publish children require trusted main, a protected release-publish tag, or a validated Tideclaw alpha branch." >&2
+    return 1
+  fi
+
+  matching_ref_prefix="$(
+    jq -rn --arg value "tags/release-publish/${workflow_prefix}-" '$value | @uri'
+  )"
+  matching_refs="$(
+    gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/${matching_ref_prefix}"
+  )"
+  if ! child_workflow_ref="$(
+    jq -er \
+      --arg prefix "${workflow_prefix}" \
+      --arg sha "${workflow_sha}" \
+      '[.[] |
+        select(.ref | test("^refs/tags/release-publish/" + $prefix + "-[1-9][0-9]*$")) |
+        select(.object.type == "commit" and .object.sha == $sha) |
+        .ref | sub("^refs/tags/"; "")
+      ] | sort | last | select(type == "string" and length > 0)' \
+      <<<"${matching_refs}"
+  )"; then
+    echo "Trusted main publication requires a direct protected release-publish tag for ${workflow_sha}." >&2
+    return 1
+  fi
+  printf '%s\n' "${child_workflow_ref}"
 }
 
 verify_child_run_sha() {
@@ -84,6 +130,12 @@ dispatch_workflow_at_ref() {
     --arg ref "$workflow_ref" \
     --argjson inputs "$inputs_json" \
     '{ref: $ref, inputs: $inputs}')"
+  # Ref and asset queries can outlive native qualification. Check the attested
+  # approval's exact native attempt after those reads and immediately before POST.
+  if [[ "$workflow" == "android-release.yml" ]]; then
+    node "${BASH_SOURCE[0]%/*}/../android-native-ci.mjs" \
+      "${RUNNER_TEMP}/android-release-approval/approval.json" || return 1
+  fi
   # API 2026-03-10 removed return_run_details and always returns the
   # workflow_run_id, API run_url, and browser html_url in a 200 response.
   dispatch_response="$(printf '%s' "$dispatch_body" | gh api \
@@ -150,12 +202,13 @@ print_pending_deployments() {
   done < <(printf '%s' "${pending_json}" | jq -r '.[] | [.environment.id, .environment.name, .current_user_can_approve] | @tsv')
 }
 
-# Returns 0 after an approval, 1 when no gate is ready yet, and 2 for
+# Returns 0 after a matching approval, 1 when no gate is ready yet, and 2 for
 # identity or mutation failures that must not be retried as "pending".
 approve_pending_deployments() {
   local workflow="$1"
   local run_id="$2"
   local expected_sha="$3"
+  local only_environment="${4:-}"
   local pending_json approved
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -184,7 +237,9 @@ approve_pending_deployments() {
       return 2
     fi
     approved=1
-  done < <(printf '%s' "${pending_json}" | jq -r '.[] | select(.current_user_can_approve == true) | [.environment.id, .environment.name] | @tsv')
+  done < <(printf '%s' "${pending_json}" | jq -r --arg environment "${only_environment}" '
+    .[] | select(.current_user_can_approve == true and ($environment == "" or .environment.name == $environment)) |
+    [.environment.id, .environment.name] | @tsv')
 
   if [[ "${approved}" == "1" ]]; then
     if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -201,7 +256,7 @@ print_failed_run_summary() {
   local failed_json
 
   failed_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs \
-    --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
+    --jq '.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped") | {databaseId, name, conclusion, url}' || true)"
   if [[ -z "${failed_json}" ]]; then
     return 0
   fi
@@ -222,7 +277,10 @@ wait_for_run() {
   local workflow="$1"
   local run_id="$2"
   local expected_sha="$3"
-  local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status
+  local started_job="${4:-}"
+  local approve_environments="${5:-true}"
+  local approved_environment="${6:-}"
+  local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status run_json jobs_json started_jobs state
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
     return 1
@@ -235,13 +293,27 @@ wait_for_run() {
     if [[ "$status" == "completed" ]]; then
       break
     fi
-    failed_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs \
-      --jq '[.jobs[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]' || true)"
+    jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs' || true)"
+    failed_json="$(jq -c '[.[] | select(.status == "completed" and .conclusion != "success" and .conclusion != "skipped")]' <<< "${jobs_json}")" || return 1
     if [[ -n "${failed_json}" ]] && jq -e 'length > 0' <<< "$failed_json" >/dev/null; then
       echo "${workflow} has failed jobs before the workflow completed: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}" >&2
       jq '.[] | {name, conclusion, url}' <<< "$failed_json" >&2 || true
       print_failed_run_summary "${run_id}"
       return 1
+    fi
+    if [[ -n "${started_job}" && -n "${jobs_json}" ]]; then
+      started_jobs="$(jq -c --arg name "${started_job}" '[.[] | select(.name == $name)]' <<< "${jobs_json}")" || return 1
+      if jq -e 'length > 1' <<< "${started_jobs}" >/dev/null; then
+        echo "${workflow} has ambiguous ${started_job} jobs." >&2
+        return 1
+      fi
+      # A running environment-backed job has passed its approval gate, even
+      # when a reviewer approved it before this watcher saw the deployment.
+      if jq -e 'length == 1 and (.[0].status == "in_progress" or (.[0].status == "completed" and .[0].conclusion == "success"))' <<< "${started_jobs}" >/dev/null; then
+        verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1
+        echo "${workflow} ${started_job} started: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+        return 0
+      fi
     fi
     url="$(printf '%s' "$run_json" | jq -r '.url')"
     updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"
@@ -254,11 +326,19 @@ wait_for_run() {
     # The deployment gate can appear after the run first reports
     # waiting without changing updatedAt. Retry every poll so that
     # propagation lag cannot strand an approved release.
-    approval_status=0
-    approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||
-      approval_status=$?
-    if (( approval_status > 1 )); then
-      return 1
+    if [[ "${approve_environments}" == "true" ]]; then
+      approval_status=0
+      approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" "${approved_environment}" ||
+        approval_status=$?
+      if (( approval_status > 1 )); then
+        return 1
+      fi
+      # The matching approval and post-approval SHA check are sufficient;
+      # runner allocation must not serialize other publication work.
+      if [[ -n "${started_job}" && -n "${approved_environment}" && "${approval_status}" == "0" ]]; then
+        echo "${workflow} ${approved_environment} approved: ${url}"
+        return 0
+      fi
     fi
     sleep 30
   done
@@ -298,8 +378,9 @@ wait_for_run_background() {
   local run_id="$2"
   local expected_sha="$3"
   local result_file="$4"
+  local approve_environments="${5:-true}"
   (
-    if wait_for_run "${workflow}" "${run_id}" "${expected_sha}"; then
+    if wait_for_run "${workflow}" "${run_id}" "${expected_sha}" "" "${approve_environments}"; then
       printf 'success\n' > "${result_file}"
     else
       printf 'failure\n' > "${result_file}"
@@ -508,7 +589,7 @@ resolve_openclaw_npm_publish_state() {
   manifest_dir="${RUNNER_TEMP}/openclaw-npm-resume-preflight"
   rm -rf "${manifest_dir}"
   mkdir -p "${manifest_dir}"
-  gh run download "${PREFLIGHT_RUN_ID}" \
+  gh run download "${PREFLIGHT_ARTIFACT_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
     --name "${artifact_name}" \
     --dir "${manifest_dir}"
@@ -516,7 +597,7 @@ resolve_openclaw_npm_publish_state() {
   manifest_sha="$(jq -er '.releaseSha' "${manifest_path}")"
   manifest_tarball_sha="$(jq -er '.tarballSha256' "${manifest_path}")"
   if [[ "${manifest_sha}" != "${TARGET_SHA}" ]]; then
-    echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
+    echo "openclaw@${release_version} is already on npm but preflight ${PREFLIGHT_ARTIFACT_RUN_ID} was built from ${manifest_sha}, not ${TARGET_SHA}; refusing to resume." >&2
     exit 1
   fi
   published_tarball_url="$(npm view "openclaw@${release_version}" dist.tarball)"
@@ -598,15 +679,19 @@ append_clawhub_dispatch_args() {
 }
 
 write_clawhub_runtime_state() {
-  local force_skip_clawhub="$1"
-  local output_path="$2"
+  local output_path="$1"
+  local force_skip_clawhub=false
+  # Verification and release notes project the same joined child outcomes.
+  if [[ "${clawhub_failed}" != "0" ]]; then
+    force_skip_clawhub=true
+  fi
   node --import tsx \
     "${GITHUB_WORKSPACE}/.release-harness/scripts/openclaw-release-clawhub-runtime-state.ts" \
     --repository "${GITHUB_REPOSITORY}" \
     --wait-for-clawhub "${WAIT_FOR_CLAWHUB}" \
     --force-skip-clawhub "${force_skip_clawhub}" \
     --normal-run-id "${plugin_clawhub_run_id:-}" \
-    --normal-publication-staged true \
+    --normal-publication-staged "${clawhub_authorized}" \
     --bootstrap-run-id "${plugin_clawhub_bootstrap_run_id:-}" \
     --bootstrap-completed "${plugin_clawhub_bootstrap_completed:-false}" > "${output_path}"
 }
@@ -917,7 +1002,7 @@ upload_dependency_evidence_release_asset() {
 
   rm -rf "${download_dir}" "${asset_path}"
   mkdir -p "${download_dir}"
-  gh run download "${PREFLIGHT_RUN_ID}" \
+  gh run download "${PREFLIGHT_ARTIFACT_RUN_ID}" \
     --repo "${GITHUB_REPOSITORY}" \
     --name "${artifact_name}" \
     --dir "${download_dir}"
@@ -1035,12 +1120,10 @@ upload_release_evidence_assets() {
 }
 
 verify_published_release() {
-  local release_version evidence_path skip_clawhub clawhub_runtime_state_path bootstrap_run_arg_present
+  local release_version evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
   local validation_file workflow_ref telegram_waiver
   local -a verify_args
-
-  skip_clawhub="${1:-false}"
 
   release_version="${RELEASE_TAG#v}"
   evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
@@ -1064,7 +1147,7 @@ verify_published_release() {
     verify_args+=(--openclaw-npm-run "${openclaw_npm_run_id}")
   fi
   clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-verify.json"
-  write_clawhub_runtime_state "${skip_clawhub}" "${clawhub_runtime_state_path}"
+  write_clawhub_runtime_state "${clawhub_runtime_state_path}"
   while IFS= read -r arg; do
     verify_args+=("${arg}")
   done < <(jq -r '.verifierArgs[]' "${clawhub_runtime_state_path}")
@@ -1173,7 +1256,7 @@ append_release_proof_to_github_release() {
     telegram_line="- npm Telegram beta E2E: not supplied"
   fi
   clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-proof.json"
-  write_clawhub_runtime_state false "${clawhub_runtime_state_path}"
+  write_clawhub_runtime_state "${clawhub_runtime_state_path}"
   clawhub_line="$(jq -r '.proofLines.normal' "${clawhub_runtime_state_path}")"
   clawhub_bootstrap_line="$(jq -r '.proofLines.bootstrap' "${clawhub_runtime_state_path}")"
   windows_line=""
@@ -1196,7 +1279,7 @@ append_release_proof_to_github_release() {
     RELEASE_TARBALL="${tarball}" \
     RELEASE_INTEGRITY="${integrity}" \
     RELEASE_PUBLISH_RUN_ID="${GITHUB_RUN_ID}" \
-    PREFLIGHT_RUN_ID="${PREFLIGHT_RUN_ID}" \
+    PREFLIGHT_ARTIFACT_RUN_ID="${PREFLIGHT_ARTIFACT_RUN_ID}" \
     RELEASE_VALIDATION_LABEL="${proof_label}" \
     RELEASE_VALIDATION_RUN_ID="${proof_run_id}" \
     PLUGIN_NPM_RUN_ID="${plugin_npm_run_id}" \
@@ -1223,7 +1306,7 @@ const section = [
   `- release SHA: \`${process.env.RELEASE_SHA}\``,
   `- full release CI report: https://github.com/openclaw/releases/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
   `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
-  `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
+  `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_ARTIFACT_RUN_ID}`,
   `- ${process.env.RELEASE_VALIDATION_LABEL}: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_VALIDATION_RUN_ID}`,
   `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
   process.env.CLAWHUB_LINE,

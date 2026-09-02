@@ -792,6 +792,21 @@ Current-conversation bindings and thread bindings both participate in step 2.
 If no target resolves, OpenClaw returns a clear error
 (`Unable to resolve session target: ...`).
 
+### Session owner and harness
+
+The OpenClaw agent that owns a session is separate from the external harness
+selected by ACP. For example, a session owned by `work` can run the `claude`
+harness. Owner-aware manager calls carry `agentId`; `agent` remains the harness
+name. Configured bindings use their OpenClaw agent owner and their configured
+ACP harness independently. Free ACP spawns keep their existing harness namespace.
+
+Bare keys such as `global` require an explicit owner when ownership is explicit.
+ACP keeps arbitrary logical keys such as `shared-project` unchanged; ACPX scopes
+the backend resource name by owner.
+An agent-qualified main alias retains its owner even when it resolves to `global`.
+Conflicting owner/key pairs fail visibly. A backend that cannot isolate bare
+sessions must be upgraded before those sessions can run.
+
 ## ACP controls
 
 | Command              | What it does                                              | Example                                                       |

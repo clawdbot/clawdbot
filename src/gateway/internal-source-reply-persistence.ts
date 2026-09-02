@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -18,6 +17,10 @@ import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session
 import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
+import {
+  readAssistantDisplayContent,
+  retainAssistantModelContent,
+} from "../shared/assistant-display-content.js";
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
@@ -26,7 +29,6 @@ import {
   prepareOutgoingMediaFromReplyPayload,
   removeManagedOutgoingMediaBlocks,
 } from "./managed-image-attachments.js";
-import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
 
 const internalSourceReplyPersistenceLeases = createKeyedFifoLeaseRegistry(
   Symbol.for("openclaw.internalSourceReplyPersistenceLeases"),
@@ -54,7 +56,7 @@ async function completePersistedInternalSourceReply(params: {
   scope.sessionKey = resolveSessionEntrySelection(scope).normalizedKey;
   const expected = {
     expectedSessionId: params.expectedSessionId,
-    ...getOwnedSessionTranscriptWriterFence(),
+    ...getOwnedSessionTranscriptWriterFence({ sessionKey: scope.sessionKey }),
   };
   const found = await findTranscriptEvent(scope, (event) => {
     const message = readTranscriptEventMessage(event);
@@ -114,10 +116,7 @@ async function completePersistedInternalSourceReply(params: {
 function attachSourceReplyMedia(result: TranscriptMessageAppendResult<unknown>): void {
   // This producer writes only text and managed-media blocks.
   const message = result.message;
-  const blocks =
-    isRecord(message) && Array.isArray(message.content)
-      ? message.content.filter(isRecord).filter((block) => block.type !== "text")
-      : [];
+  const blocks = readAssistantDisplayContent(message).filter((block) => block.type !== "text");
   if (
     blocks.length > 0 &&
     !attachManagedOutgoingMediaToMessage({ messageId: result.messageId, blocks })
@@ -171,7 +170,9 @@ export async function persistInternalSourceReply(params: {
         ...(params.payload.text ? [{ type: "text", text: params.payload.text }] : []),
         ...mediaBlocks,
       ];
-      const writerFence = getOwnedSessionTranscriptWriterFence();
+      const writerFence = getOwnedSessionTranscriptWriterFence({
+        sessionKey: params.sessionKey,
+      });
       const appended = await appendAssistantMessageToSessionTranscript({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -180,7 +181,8 @@ export async function persistInternalSourceReply(params: {
           ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
           : {}),
         ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-        content: prepareGatewayInjectedAssistantContent(content),
+        content: retainAssistantModelContent(content),
+        displayContent: content,
         idempotencyKey: params.idempotencyKey,
         runId: params.runId,
         ...(params.sourceReplyFinal !== undefined

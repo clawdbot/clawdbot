@@ -7,10 +7,8 @@ import {
   abortAndDrainEmbeddedAgentRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import {
-  installSessionPlacementAdmissionProvider,
-  resolveSessionPlacementForcedTerminalSettlement,
-} from "../../agents/session-placement-admission.js";
+import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
+import { resolveSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,

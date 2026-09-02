@@ -93,6 +93,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.tooling.config.ts",
     },
     {
+      title: "keeps native artifact fixtures in the serial tooling owner",
+      target: "test/scripts/mac-elevation-artifact.test.ts",
+      config: "test/vitest/vitest.tooling.config.ts",
+    },
+    {
       title: "routes config baseline integration tests to the contracts config",
       target: "src/config/doc-baseline.integration.test.ts",
       config: "test/vitest/vitest.tooling.config.ts",
@@ -595,7 +600,7 @@ describe("test-projects args", () => {
         expect(buildVitestRunPlans([file])).toEqual([
           {
             config: plan.config,
-            forwardedArgs: plan.includePatterns ? [] : [file],
+            forwardedArgs: plan.forwardedArgs.includes(file) ? [file] : [],
             includePatterns: plan.includePatterns ? [file] : null,
             watchMode: false,
           },

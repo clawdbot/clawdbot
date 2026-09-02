@@ -253,11 +253,16 @@ describe("runDaemonInstall integration", () => {
       const fixture = await fs.realpath(await fs.mkdtemp(path.join(tempHome, "manager-owner-")));
       const unitPath = path.join(fixture, ".config/systemd/user/openclaw-gateway.service");
       const extra = path.join(fixture, "global-user", "operator.conf");
-      await fs.mkdir(path.dirname(unitPath), { recursive: true });
-      await fs.mkdir(path.dirname(extra));
-      await fs.writeFile(extra, "[Service]\nEnvironment=TOKEN=operator-secret-canary\n");
+      // Reach the foreign-owner check even when the test process has a permissive umask.
+      await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o700 });
+      await fs.mkdir(path.dirname(extra), { mode: 0o700 });
+      await fs.writeFile(extra, "[Service]\nEnvironment=TOKEN=operator-secret-canary\n", {
+        mode: 0o600,
+      });
       if (kind === "drop-in") {
-        await fs.writeFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n");
+        await fs.writeFile(unitPath, "[Service]\nExecStart=/usr/bin/node gateway\n", {
+          mode: 0o600,
+        });
       }
       const originalLstat = fs.lstat.bind(fs);
       const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -313,18 +318,20 @@ describe("runDaemonInstall integration", () => {
     const plannedFile = path.join(plannedState, "gateway.systemd.env");
     const effectiveFile = path.join(effectiveState, "gateway.systemd.env");
     const invocation = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
-    await fs.mkdir(path.dirname(dropIn), { recursive: true });
-    await fs.mkdir(plannedState);
-    await fs.mkdir(effectiveState);
-    await fs.writeFile(plannedFile, "OPERATOR_VALUE=planned\n");
-    await fs.writeFile(effectiveFile, "OPERATOR_VALUE=effective\n");
+    await fs.mkdir(path.dirname(dropIn), { recursive: true, mode: 0o700 });
+    await fs.mkdir(plannedState, { mode: 0o700 });
+    await fs.mkdir(effectiveState, { mode: 0o700 });
+    await fs.writeFile(plannedFile, "OPERATOR_VALUE=planned\n", { mode: 0o600 });
+    await fs.writeFile(effectiveFile, "OPERATOR_VALUE=effective\n", { mode: 0o600 });
     await fs.writeFile(
       unit,
       `[Service]\nExecStart=/usr/bin/node gateway\nEnvironment=OPENCLAW_STATE_DIR=${plannedState}\nEnvironmentFile=${plannedFile}\n`,
+      { mode: 0o600 },
     );
     await fs.writeFile(
       dropIn,
       `[Service]\nEnvironment=OPENCLAW_STATE_DIR=${effectiveState}\nEnvironmentFile=\nEnvironmentFile=${effectiveFile}\n`,
+      { mode: 0o600 },
     );
     await fs.writeFile(
       configPath,
