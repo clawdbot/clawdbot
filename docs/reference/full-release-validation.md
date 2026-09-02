@@ -323,6 +323,9 @@ targets keep their required channel.
 
 `docker-release-prepare.yml` builds both native architectures, retains OCI
 indexes and their SBOM/provenance, and runs image smoke checks before approval.
+Its GitHub Actions cache exports final image layers with `mode=min`; intermediate
+build stages stay in the shared local builder for the browser variant. This
+avoids compressing and uploading build-only layers on the release critical path.
 The final manifest records `publicationArtifacts.docker`. Preparation has no
 publication secrets or registry-write permission. After approval, `Docker
 Release` verifies the source/tag, producer, artifact hashes, and image digests,
