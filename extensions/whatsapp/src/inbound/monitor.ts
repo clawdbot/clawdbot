@@ -39,19 +39,12 @@ function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
 const DEFAULT_OFFLINE_CATCH_UP_MS = 20 * 60_000;
 
 /**
- * Baileys tags an inbound stanza `append` when the server released it from this
- * device's offline queue, so a burst of them on connect is the backlog accrued
- * while we were gone. The caller supplies a window when it knows the socket
- * reopened mid-conversation; a process that just started has no such knowledge
- * and would otherwise fall back to a sixty-second cutoff that discards the
- * backlog. An already-synced credential is an established session, so it earns
- * the same bounded catch-up. A credential still awaiting its first sync does
- * not, because its replay is the phone's history rather than our backlog.
- *
- * The floor `shouldSkipStaleAppend` derives from this window rolls forward with
- * the clock, while the steady-state floor is pinned to connect. Retiring the
- * window one grace period early keeps the rolling floor from ever overtaking
- * the pinned one, so this can only widen what a socket answers, never narrow it.
+ * `append` stanzas are the backlog the server releases from this device's offline queue on
+ * connect. A caller that saw the socket reopen supplies the window. A fresh process has none
+ * and would fall back to the sixty-second cutoff, so an already-synced credential gets the same
+ * bounded catch-up, while one awaiting its first sync keeps the cutoff because its replay is the
+ * phone's history. Retiring the window one grace period early keeps its rolling floor from ever
+ * overtaking the pinned steady-state floor, so it can only widen what gets answered.
  */
 function resolveAppendReplyWindow(params: {
   requested: WhatsAppAppendReplyWindow | undefined;
