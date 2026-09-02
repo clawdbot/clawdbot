@@ -14,7 +14,7 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import "../../styles/chat.css";
+import "../../styles/chat/composer.css";
 import "../../styles/new-session.css";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
@@ -180,6 +180,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
       requestUpdate: () => this.requestUpdate(),
     });
     this.subscriptions = new SubscriptionsController(this)
+      .watch(
+        () => this.context?.theme,
+        (theme, notify) => theme.subscribe(notify),
+      )
       .watch(
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),
@@ -594,11 +598,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
       onDraftChange: (next) => this.setMessageFromUser(next),
       onSend: () => void this.submission.submit(),
       onOpenSession: (sessionKey) => {
-        if (this.submission.submitting || this.submission.pendingPlacement.sessionKey) {
-          return;
-        }
-        const context = this.context;
-        if (!context) {
+        const { context, submission } = this;
+        if (!context || submission.submitting || submission.pendingPlacement.sessionKey) {
           return;
         }
         selectApplicationSession({

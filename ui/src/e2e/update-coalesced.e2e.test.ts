@@ -162,6 +162,9 @@ suite.define(() => {
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
         expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+        // Failure triage navigates to Updates when Ask OpenClaw is unavailable.
+        await page.waitForURL("**/settings/updates");
+        await page.locator("openclaw-config-page").waitFor();
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await page.locator(".sidebar-issues-button").click();
         const updateIssue = page.locator(

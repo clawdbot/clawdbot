@@ -258,6 +258,12 @@ deletes the bootstrap credential. Direct mode covers only the commands below.
 Chat, Talk, approvals, and the existing `watch.*` notification flow remain
 iPhone-relay features and still require the paired iPhone.
 
+A `watch.notify` receipt reports Watch transport delivery or queuing, not
+completion of the best-effort iPhone notification mirror. Cancellation is
+checked before starting a new Watch transfer or phone mirror; it cannot recall
+work already handed to WatchConnectivity. Once the phone mirror is handed off,
+it proceeds independently of the invoke.
+
 Direct watchOS node commands:
 
 | Surface       | Commands                       | Notes                                                   |

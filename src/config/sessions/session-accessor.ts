@@ -71,6 +71,7 @@ export type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
+  SessionEntryReadScope,
   SessionEntryReadView,
   SessionEntryReplacement,
   SessionEntryReplacementSnapshot,

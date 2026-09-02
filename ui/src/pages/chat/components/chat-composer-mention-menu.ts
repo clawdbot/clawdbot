@@ -6,6 +6,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
+import "../../../styles/chat/reply-preview.css";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import {
   paneDomId,

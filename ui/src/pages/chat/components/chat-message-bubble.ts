@@ -32,6 +32,7 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import "../../../styles/chat/reply-preview.css";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";

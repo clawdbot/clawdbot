@@ -4,23 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
-let restoreDialogPolyfill: () => void;
+let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 
 beforeEach(() => {
-  restoreDialogPolyfill = installDialogPolyfill();
+  dialogs = createModalDialogTestFixture();
 });
 
-afterEach(() => {
-  document.body.replaceChildren();
-  restoreDialogPolyfill();
-});
+afterEach(() => dialogs.cleanup());
 
 describe("chat pane placement restart", () => {
   it("restarts a failed placement on a selected profile without creating a session", async () => {
-    const request = vi.fn(async (method: string) => {
+    const request = dialogs.mockRequest(async (method: string) => {
       if (method === "environments.list") {
         return {
           profiles: [{ id: "aws", providerId: "crabbox" }],
@@ -57,7 +54,7 @@ describe("chat pane placement restart", () => {
       },
     };
 
-    const restarting = pane.restartHeaderPlacement(session);
+    const restarting = dialogs.track(pane.restartHeaderPlacement(session));
     await vi.waitFor(() => {
       expect(document.body.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
     });

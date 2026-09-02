@@ -1,6 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
@@ -42,7 +41,8 @@ export function renderNewSessionDraftView(options: {
     onOpenImage,
   } = options;
   const capabilities = submission.capabilities;
-  const voiceControl = dictation.render(draftOwnerKey);
+  const preferences = context?.theme.settings;
+  const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
   const dictationLocked = dictation.active;
   const preparedTitle = titlePreparation.preparedTitle();
   return html`
@@ -92,7 +92,7 @@ export function renderNewSessionDraftView(options: {
               mode: submission.permission.value,
               onSelect: (permissionMode) => submission.permission.set(permissionMode ?? undefined),
             }),
-        requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
+        requiresModifier: preferences?.chatSendShortcut === "modifier-enter",
         requestUpdate,
         submitting: submission.submitting,
         textareaController: submission.composerTextarea,

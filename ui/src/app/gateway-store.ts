@@ -92,6 +92,10 @@ export function createApplicationGateway(
     persistDefaultConnectionSettings?: boolean;
     resourceBasePath?: string;
     bootstrapProfile?: ControlUiBootstrapProfileHint;
+    clientOptions?: Pick<
+      GatewayBrowserClientOptions,
+      "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
+    >;
   } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
@@ -421,11 +425,14 @@ export function createApplicationGateway(
         : undefined,
       bootstrapProfile: nextConnection.bootstrapProfile,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
-      clientName: "openclaw-control-ui",
+      clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
       clientBuildId: CONTROL_UI_BUILD_INFO.buildId,
-      mode: "webchat",
-      instanceId: generateUUID(),
+      platform: options.clientOptions?.platform,
+      deviceFamily: options.clientOptions?.deviceFamily,
+      mode: options.clientOptions?.mode ?? "webchat",
+      instanceId: options.clientOptions?.instanceId ?? generateUUID(),
+      scopes: options.clientOptions?.scopes,
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;

@@ -338,6 +338,8 @@ function enqueueFileLog(entry: FileLogQueueEntry): void {
   if (queue.length >= maxQueuedRecords) {
     const dropped = queue[queueStart];
     if (dropped) {
+      // The overflow marker retains this entry's metadata, so release its discarded text now.
+      dropped.payload = "";
       droppedTarget ??= dropped;
       droppedCount += 1;
     }

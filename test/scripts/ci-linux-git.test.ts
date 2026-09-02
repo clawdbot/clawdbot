@@ -258,6 +258,28 @@ linuxIt.each(preflightCases)(
   55_000,
 );
 
+linuxIt.each([
+  { job: "checks-fast-core", task: "bundled-protocol" },
+  { job: "check-shard", task: "guards" },
+  { job: "check-shard", task: "npm-lock" },
+])("$job checkout owns $task base history before credential cleanup", async ({ job }) => {
+  const report = await runCiGitStep({
+    job,
+    env: { CHECKOUT_BASE_SHA: base },
+    fetchResults: [0],
+  });
+  expect(report.code).toBe(0);
+  const checkoutFetch = report.fetches.find(({ args }) =>
+    args.includes(`+${candidate}:refs/remotes/origin/ci-target`),
+  );
+  expect(checkoutFetch?.args).toEqual(
+    expect.arrayContaining([
+      `+${candidate}:refs/remotes/origin/ci-target`,
+      `+${base}:refs/remotes/origin/ci-ratchet-base`,
+    ]),
+  );
+});
+
 const historyProfiles: {
   job: string;
   step: string;
@@ -281,30 +303,6 @@ const historyProfiles: {
     target: "+refs/pull/17/merge:refs/remotes/origin/ci-ratchet-merge",
     depth: 2,
     consumer: "",
-  },
-  {
-    job: "checks-fast-core",
-    step: "Run ${{ matrix.task }} (${{ matrix.runtime }})",
-    env: { TASK: "bundled-protocol" },
-    target: `+${base}:refs/remotes/origin/protocol-since-base`,
-    depth: 1,
-    consumer: "protocol:check",
-  },
-  {
-    job: "check-shard",
-    step: "Run check shard",
-    env: { TASK: "guards" },
-    target: `+${base}:refs/remotes/origin/ci-base`,
-    depth: 1,
-    consumer: "scripts/report-test-temp-creations.mjs",
-  },
-  {
-    job: "check-shard",
-    step: "Run check shard",
-    env: { TASK: "npm-lock" },
-    target: `+${base}:refs/remotes/origin/npm-lock-base`,
-    depth: 1,
-    consumer: "deps:npm-lock:check:changed",
   },
 ];
 
@@ -378,44 +376,6 @@ linuxIt(
     ).toEqual(["fetch:1", "show-parents", "fetch:2", "show-parents", "checkout"]);
     expect(report.checkouts.map(({ args }) => args.at(-1))).toEqual([merge]);
     expect(report.githubEnv).toBe(`RATCHET_BASE_REF=${base}\n`);
-  },
-  55_000,
-);
-
-linuxIt(
-  "cancellation during raw Git timeout cleanup prevents npm-lock fallback",
-  async () => {
-    const report = await runCiGitStep({
-      job: "check-shard",
-      step: "Run check shard",
-      env: { TASK: "npm-lock" },
-      fetchResults: ["hang"],
-      prepare: true,
-      cancelDuringCleanup: true,
-    });
-    expect(report.cancelledDuringCleanup).toBe(true);
-    expect(report.code).toBe(143);
-    expect(report.fetches).toHaveLength(1);
-    expect(report.commands.filter(({ tool }) => tool === "pnpm")).toEqual([]);
-  },
-  55_000,
-);
-
-linuxIt.each([23, "hang"] satisfies FetchResult[])(
-  "npm-lock safely falls back to a full sweep after joined fetch failure (%s)",
-  async (failure) => {
-    const report = await runCiGitStep({
-      job: "check-shard",
-      step: "Run check shard",
-      env: { TASK: "npm-lock" },
-      fetchResults: [failure],
-      prepare: true,
-    });
-    expect(report.code).toBe(0);
-    expect(report.fetches).toHaveLength(1);
-    expect(report.commands.filter(({ tool }) => tool === "pnpm").map(({ args }) => args)).toEqual([
-      ["deps:npm-lock:check"],
-    ]);
   },
   55_000,
 );

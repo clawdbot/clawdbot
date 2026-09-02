@@ -2559,7 +2559,7 @@ jobs:
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     env:
-      CHECKOUT_BASE_SHA: ${{ (matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}
+      CHECKOUT_BASE_SHA: ${{ (matrix.task == 'baseline-ratchets' || matrix.task == 'bundled-protocol' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}
     steps:
       - *linux_node_checkout_step
       - name: Smoke test trusted Git owner action
@@ -2650,8 +2650,7 @@ jobs:
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
-              python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 0 fetch --no-tags --no-recurse-submodules --depth=1 origin \
-                "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
+              test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PROTOCOL_SINCE_BASE_SHA"
               pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)
@@ -3184,6 +3183,8 @@ jobs:
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.release_gate && startsWith(inputs.dispatch_id, 'full-release-validation-') && needs.preflight.outputs.frozen_target == 'true' && matrix.task == 'lint') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && inputs.release_gate) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
+    env:
+      CHECKOUT_BASE_SHA: ${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}
     strategy:
       fail-fast: false
       max-parallel: 12
@@ -3350,8 +3351,8 @@ jobs:
                 exit 1
               fi
               if [ -n "$PR_BASE_SHA" ]; then
-                python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
+                test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PR_BASE_SHA"
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-ratchet-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
@@ -3368,14 +3369,8 @@ jobs:
               npm_lock_base=""
               if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" && -n "$DIFF_BASE_SHA" ]] &&
                 has_package_script "deps:npm-lock:check:changed"; then
-                if python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --checkout-git 120 fetch --no-tags --depth=1 origin "+${DIFF_BASE_SHA}:refs/remotes/origin/npm-lock-base"; then
-                  npm_lock_base="refs/remotes/origin/npm-lock-base"
-                else
-                  fetch_status="$?"
-                  # A full sweep also reuses this workspace; require verified cleanup first.
-                  case "$fetch_status" in 125|129|130|143) exit "$fetch_status" ;; esac
-                  echo "::warning::npm-lock base fetch failed; falling back to the full sweep"
-                fi
+                npm_lock_base="refs/remotes/origin/ci-ratchet-base"
+                test "$(git rev-parse "${npm_lock_base}^{commit}")" = "$DIFF_BASE_SHA"
               fi
               if [[ -n "$npm_lock_base" ]]; then
                 pnpm deps:npm-lock:check:changed --base "$npm_lock_base" --head HEAD
