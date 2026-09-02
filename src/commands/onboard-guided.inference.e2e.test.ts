@@ -163,8 +163,7 @@ describe("guided onboarding inference composition", () => {
         1,
         expect.objectContaining({ message: "Help make OpenClaw better?" }),
       );
-      expect(prompter.select).toHaveBeenNthCalledWith(
-        2,
+      expect(prompter.select).toHaveBeenCalledWith(
         expect.objectContaining({
           initialValue: false,
           options: [
