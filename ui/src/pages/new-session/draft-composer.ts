@@ -15,7 +15,7 @@ import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import { renderAssistantAttachments } from "../chat/components/chat-message-attachments.ts";
 import { renderMessageImages } from "../chat/components/chat-message-images.ts";
-import { extractImages, extractMessageAttachments } from "../chat/components/chat-message-media.ts";
+import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import {
   detectJson,
   renderMessageJson,
@@ -68,8 +68,7 @@ function renderNewSessionSubmission(
   const key = "new-session-submission";
   const normalized = normalizeMessage(message);
   const senderHue = normalized.sender ? resolveIdentityHue(normalized.sender) : null;
-  const images = extractImages(message);
-  const attachments = extractMessageAttachments(message, normalized.content);
+  const { images, attachments } = projectMessageMedia(message, normalized.content);
   const markdown = resolveMessageDisplayMarkdown(message, normalized);
   const json = detectJson(markdown);
   const imageOptions = { onOpenImage };
