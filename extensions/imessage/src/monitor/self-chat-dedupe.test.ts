@@ -163,6 +163,49 @@ describe("echo cache — backward compat for channels without messageId", () => 
   });
 });
 
+describe("reply-parent echo matching — #135704", () => {
+  it.each([
+    {
+      name: "drops matching text linked to the cached parent",
+      cachedScope: SELF_CHAT_SCOPE,
+      inboundText: "Agent reply",
+      expected: { kind: "drop", reason: "echo" },
+    },
+    {
+      name: "keeps different text linked to the cached parent",
+      cachedScope: SELF_CHAT_SCOPE,
+      inboundText: "Human follow-up",
+      expected: { kind: "dispatch" },
+    },
+    {
+      name: "keeps matching text in a different conversation scope",
+      cachedScope: "default:imessage:+15550000000",
+      inboundText: "Agent reply",
+      expected: { kind: "dispatch" },
+    },
+  ])("$name", async ({ cachedScope, inboundText, expected }) => {
+    const echoCache = createSentMessageCache();
+    echoCache.remember(cachedScope, {
+      text: "Agent reply",
+      messageId: "p:0/GUID-outbound",
+    });
+
+    const decision = await resolveDecision({
+      message: {
+        id: 200,
+        guid: "p:0/GUID-inbound",
+        reply_to_guid: "p:0/GUID-outbound",
+        sender: SELF_CHAT_HANDLE,
+        text: inboundText,
+        is_from_me: false,
+      },
+      echoCache,
+    });
+
+    expect(decision).toMatchObject(expected);
+  });
+});
+
 describe("self-chat dedupe — #47830", () => {
   afterEach(() => {
     vi.useRealTimers();

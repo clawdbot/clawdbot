@@ -141,6 +141,23 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has("acct:imessage:+1555", { messageId: "guid-1" })).toBe(true);
   });
 
+  it("binds reply-parent message ids to the text from the same cached send", () => {
+    const scope = "acct:imessage:+1555";
+    rememberPersistedIMessageEcho({ scope, text: "persisted reply", messageId: "guid-persisted" });
+    rememberPersistedIMessageEcho({ scope, text: "different reply" });
+    const cache = createSentMessageCache();
+    cache.remember(scope, { text: "memory reply", messageId: "guid-memory" });
+
+    for (const [text, messageId, expected] of [
+      ["persisted reply", "guid-persisted", true],
+      ["memory reply", "guid-memory", true],
+      ["different reply", "guid-persisted", false],
+      ["different reply", "guid-memory", false],
+    ] as const) {
+      expect(cache.has(scope, { text, messageId }, { requireTextMatchForId: true })).toBe(expected);
+    }
+  });
+
   it("persists text-only and id-only echoes without undefined fields", () => {
     const scope = "acct:imessage:+1555";
     rememberPersistedIMessageEcho({ scope, text: "text-only" });

@@ -13,6 +13,18 @@ type SentMessageLookup = {
 type SentMessageLookupOptions = {
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  requireTextMatchForId?: boolean;
+};
+
+type SentMessageFactCacheEntry = {
+  timestamp: number;
+  backedByMessageId: boolean;
+};
+
+type SentMessageIdCacheEntry = {
+  timestamp: number;
+  textKey?: string;
+  mediaKey?: string;
 };
 
 export type SentMessageCache = {
@@ -61,30 +73,33 @@ function normalizeEchoMessageIdKey(messageId: string | undefined): string | null
 }
 
 class DefaultSentMessageCache implements SentMessageCache {
-  private textCache = new Map<string, number>();
-  private textBackedByIdCache = new Map<string, number>();
-  private mediaCache = new Map<string, number>();
-  private mediaBackedByIdCache = new Map<string, number>();
-  private messageIdCache = new Map<string, number>();
+  private textCache = new Map<string, SentMessageFactCacheEntry>();
+  private mediaCache = new Map<string, SentMessageFactCacheEntry>();
+  private messageIdCache = new Map<string, SentMessageIdCacheEntry>();
 
   remember(scope: string, lookup: SentMessageLookup): void {
     const textKey = normalizeEchoTextKey(lookup.text);
-    if (textKey) {
-      this.textCache.set(`${scope}:${textKey}`, Date.now());
-    }
     const mediaKey = resolveIMessageEchoMediaKey(lookup.media);
-    if (mediaKey) {
-      this.mediaCache.set(`${scope}:${mediaKey}`, Date.now());
-    }
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
+    const timestamp = Date.now();
+    if (textKey) {
+      this.textCache.set(`${scope}:${textKey}`, {
+        timestamp,
+        backedByMessageId: messageIdKey != null,
+      });
+    }
+    if (mediaKey) {
+      this.mediaCache.set(`${scope}:${mediaKey}`, {
+        timestamp,
+        backedByMessageId: messageIdKey != null,
+      });
+    }
     if (messageIdKey) {
-      this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
-      if (textKey) {
-        this.textBackedByIdCache.set(`${scope}:${textKey}`, Date.now());
-      }
-      if (mediaKey) {
-        this.mediaBackedByIdCache.set(`${scope}:${mediaKey}`, Date.now());
-      }
+      this.messageIdCache.set(`${scope}:${messageIdKey}`, {
+        timestamp,
+        ...(textKey ? { textKey } : {}),
+        ...(mediaKey ? { mediaKey } : {}),
+      });
     }
     this.cleanup();
   }
@@ -105,6 +120,7 @@ class DefaultSentMessageCache implements SentMessageCache {
         messageId: lookup.messageId,
         skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
+        requireTextMatchForId: resolvedOptions.requireTextMatchForId,
       })
     ) {
       return true;
@@ -112,70 +128,59 @@ class DefaultSentMessageCache implements SentMessageCache {
     const textKey = normalizeEchoTextKey(lookup.text);
     const mediaKey = resolveIMessageEchoMediaKey(lookup.media);
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
+    const now = Date.now();
+    const textEntry = textKey ? this.textCache.get(`${scope}:${textKey}`) : undefined;
+    const mediaEntry = mediaKey ? this.mediaCache.get(`${scope}:${mediaKey}`) : undefined;
     let canUseMediaFallback = !messageIdKey;
     if (messageIdKey) {
-      const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
-      if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
-        return true;
+      const idEntry = this.messageIdCache.get(`${scope}:${messageIdKey}`);
+      if (idEntry && now - idEntry.timestamp <= SENT_MESSAGE_ID_TTL_MS) {
+        if (
+          !resolvedOptions.requireTextMatchForId ||
+          (textKey != null && idEntry.textKey === textKey)
+        ) {
+          return true;
+        }
       }
-      const textTimestamp = textKey ? this.textCache.get(`${scope}:${textKey}`) : undefined;
-      const textBackedByIdTimestamp = textKey
-        ? this.textBackedByIdCache.get(`${scope}:${textKey}`)
-        : undefined;
-      const hasTextOnlyMatch =
-        typeof textTimestamp === "number" &&
-        (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);
-      const mediaTimestamp = mediaKey ? this.mediaCache.get(`${scope}:${mediaKey}`) : undefined;
-      const mediaBackedByIdTimestamp = mediaKey
-        ? this.mediaBackedByIdCache.get(`${scope}:${mediaKey}`)
-        : undefined;
-      const hasMediaOnlyMatch =
-        typeof mediaTimestamp === "number" &&
-        (!mediaBackedByIdTimestamp || mediaTimestamp > mediaBackedByIdTimestamp);
+      // Reply-parent identities are only echoes when the same cached send also
+      // owns the inbound text; never fall through to a different text entry.
+      if (resolvedOptions.requireTextMatchForId) {
+        return false;
+      }
+      const hasTextOnlyMatch = textEntry?.backedByMessageId === false;
+      const hasMediaOnlyMatch = mediaEntry?.backedByMessageId === false;
       canUseMediaFallback = hasMediaOnlyMatch;
       if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch && !hasMediaOnlyMatch) {
         return false;
       }
     }
-    if (textKey) {
-      const textTimestamp = this.textCache.get(`${scope}:${textKey}`);
-      if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
-        return true;
-      }
+    if (textEntry && now - textEntry.timestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
+      return true;
     }
-    if (mediaKey && canUseMediaFallback) {
-      const mediaTimestamp = this.mediaCache.get(`${scope}:${mediaKey}`);
-      if (mediaTimestamp && Date.now() - mediaTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
-        return true;
-      }
+    if (
+      mediaEntry &&
+      canUseMediaFallback &&
+      now - mediaEntry.timestamp <= SENT_MESSAGE_TEXT_TTL_MS
+    ) {
+      return true;
     }
     return false;
   }
 
   private cleanup(): void {
     const now = Date.now();
-    for (const [key, timestamp] of this.textCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
+    for (const [key, entry] of this.textCache.entries()) {
+      if (now - entry.timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
         this.textCache.delete(key);
       }
     }
-    for (const [key, timestamp] of this.textBackedByIdCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
-        this.textBackedByIdCache.delete(key);
-      }
-    }
-    for (const [key, timestamp] of this.mediaCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
+    for (const [key, entry] of this.mediaCache.entries()) {
+      if (now - entry.timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
         this.mediaCache.delete(key);
       }
     }
-    for (const [key, timestamp] of this.mediaBackedByIdCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
-        this.mediaBackedByIdCache.delete(key);
-      }
-    }
-    for (const [key, timestamp] of this.messageIdCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
+    for (const [key, entry] of this.messageIdCache.entries()) {
+      if (now - entry.timestamp > SENT_MESSAGE_ID_TTL_MS) {
         this.messageIdCache.delete(key);
       }
     }

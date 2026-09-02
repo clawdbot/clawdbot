@@ -50,6 +50,7 @@ import {
   type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
+import type { SentMessageCache } from "./echo-cache.js";
 import {
   type IMessageReactionContext,
   resolveIMessageReactionContext,
@@ -254,17 +255,12 @@ export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
 }
 
 function hasIMessageEchoMatch(params: {
-  echoCache: {
-    has: (
-      scope: string,
-      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
-    ) => boolean;
-  };
+  echoCache: Pick<SentMessageCache, "has">;
   scope: string | readonly string[];
   text?: string;
   media?: MediaPlaceholderTextFact;
   messageIds: string[];
+  replyParentId?: string;
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
 }): boolean {
@@ -285,6 +281,17 @@ function hasIMessageEchoMatch(params: {
       if (params.echoCache.has(scope, { messageId })) {
         return true;
       }
+    }
+    if (
+      params.replyParentId &&
+      params.text &&
+      params.echoCache.has(
+        scope,
+        { text: params.text, messageId: params.replyParentId },
+        { requireTextMatchForId: true },
+      )
+    ) {
+      return true;
     }
     const fallbackMessageId = params.messageIds[0];
     if (!params.text && !params.media && !fallbackMessageId) {
@@ -415,13 +422,7 @@ export async function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  echoCache?: {
-    has: (
-      scope: string,
-      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
-    ) => boolean;
-  };
+  echoCache?: Pick<SentMessageCache, "has">;
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
   isKnownFromMeMessageId?: typeof isKnownFromMeIMessageMessageId;
@@ -732,6 +733,7 @@ export async function resolveIMessageInboundDecision(params: {
         text: bodyText || undefined,
         media: mediaFacts[0],
         messageIds: inboundMessageIds,
+        replyParentId: normalizeReplyField(params.message.reply_to_guid),
         includePendingText: isSelfChat,
       })
     ) {
