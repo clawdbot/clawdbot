@@ -5,11 +5,11 @@ import OpenClawKit
 /// Operator-owned recovery for a no-row, different-key native identity conflict.
 @MainActor
 enum DeviceIdentityConflictRecovery {
-    static func candidateMenuTitle(_ candidate: DeviceIdentityConflictCandidate) -> String {
+    nonisolated static func candidateMenuTitle(_ candidate: DeviceIdentityConflictCandidate) -> String {
         "\(candidate.sourcePath) [\(candidate.fingerprint)]"
     }
 
-    static func confirmRePairMessage() -> String {
+    nonisolated static func confirmRePairMessage() -> String {
         "Creating a new identity archives the preserved sources and requires re-approving this Mac on the Gateway."
     }
 

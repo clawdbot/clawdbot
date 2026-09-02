@@ -434,14 +434,6 @@ public actor GatewayChannelActor {
         }
     }
 
-    static func loadDeviceIdentityForConnect(
-        includeDeviceIdentity: Bool,
-        profile: GatewayDeviceIdentityProfile) throws -> DeviceIdentity?
-    {
-        guard includeDeviceIdentity else { return nil }
-        return try DeviceIdentityStore.loadOrCreatePersistedOrThrow(profile: profile)
-    }
-
     private func sendConnect(
         task: WebSocketTaskBox,
         attemptID: UUID,

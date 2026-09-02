@@ -4,7 +4,7 @@ import Foundation
 import Security
 #endif
 
-public enum GatewayDeviceIdentityProfile: String, Sendable, Equatable {
+public enum GatewayDeviceIdentityProfile: String, Sendable, Equatable, Hashable {
     case primary
     case node
     case shareExtension
@@ -239,8 +239,15 @@ public struct DeviceIdentityConflictError: Error, LocalizedError, Equatable, Sen
         self.profile = profile
     }
 
+    /// Recovery UI reads this map, not the thrown error. Key by profile and state
+    /// root so a successful primary load cannot hide a still-blocked node.
+    private struct RecordedConflictKey: Hashable, Sendable {
+        let profile: GatewayDeviceIdentityProfile
+        let stateRootPath: String
+    }
+
     private static let lock = NSLock()
-    private nonisolated(unsafe) static var lastRecordedError: DeviceIdentityConflictError?
+    private nonisolated(unsafe) static var lastRecordedErrors: [RecordedConflictKey: DeviceIdentityConflictError] = [:]
 
     public var errorDescription: String? {
         let listed = self.candidates.map { "\($0.sourcePath) [\($0.fingerprint)]" }
@@ -260,15 +267,30 @@ public struct DeviceIdentityConflictError: Error, LocalizedError, Equatable, Sen
     }
 
     public static func lastRecorded() -> DeviceIdentityConflictError? {
-        self.lock.withLock { self.lastRecordedError }
+        self.lock.withLock {
+            self.lastRecordedErrors.min { lhs, rhs in
+                if lhs.key.profile.rawValue != rhs.key.profile.rawValue {
+                    return lhs.key.profile.rawValue < rhs.key.profile.rawValue
+                }
+                return lhs.key.stateRootPath < rhs.key.stateRootPath
+            }?.value
+        }
     }
 
     static func record(_ error: DeviceIdentityConflictError) {
-        self.lock.withLock { self.lastRecordedError = error }
+        let key = Self.recordedConflictKey(profile: error.profile)
+        self.lock.withLock { self.lastRecordedErrors[key] = error }
     }
 
-    static func clearRecorded() {
-        self.lock.withLock { self.lastRecordedError = nil }
+    static func clearRecorded(profile: GatewayDeviceIdentityProfile) {
+        let key = Self.recordedConflictKey(profile: profile)
+        self.lock.withLock { _ = self.lastRecordedErrors.removeValue(forKey: key) }
+    }
+
+    private static func recordedConflictKey(profile: GatewayDeviceIdentityProfile) -> RecordedConflictKey {
+        RecordedConflictKey(
+            profile: profile,
+            stateRootPath: DeviceIdentityPaths.stateDirURL().standardizedFileURL.path)
     }
 
     static func redactedFingerprint(deviceId: String) -> String {
@@ -277,7 +299,8 @@ public struct DeviceIdentityConflictError: Error, LocalizedError, Equatable, Sen
 
     static func redactedSourcePath(_ url: URL) -> String {
         let path = url.standardizedFileURL.path
-        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
+        // NSHomeDirectory is available on iOS; FileManager.homeDirectoryForCurrentUser is not.
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL.path
         if path == home {
             return "~"
         }
@@ -364,7 +387,7 @@ public enum DeviceIdentityStore {
                 profile: profile,
                 legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile),
                 reconciliation: reconciliation)
-            DeviceIdentityConflictError.clearRecorded()
+            DeviceIdentityConflictError.clearRecorded(profile: profile)
             return identity
         } catch let conflict as DeviceIdentityConflictError {
             DeviceIdentityConflictError.record(conflict)

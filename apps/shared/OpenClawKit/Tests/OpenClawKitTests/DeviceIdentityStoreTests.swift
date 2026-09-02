@@ -799,6 +799,38 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `successful primary load keeps a recorded node conflict`() async throws {
+        let fixture = DeviceIdentityMigrationFixture(databasePath: "state/openclaw.sqlite")
+        let nodeConflict = DeviceIdentityConflictError(
+            candidates: [
+                DeviceIdentityConflictCandidate(
+                    sourcePath: "~/identity/node-device.json",
+                    fingerprint: "0123456789ab",
+                    createdAtMs: 1),
+            ],
+            profile: .node)
+        let otherRoot = fixture.root.appendingPathComponent("other-root", isDirectory: true)
+
+        try await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+            DeviceIdentityConflictError.record(nodeConflict)
+            #expect(DeviceIdentityConflictError.lastRecorded() == nodeConflict)
+
+            _ = try DeviceIdentityStore.loadOrCreatePersistedOrThrow(profile: .primary)
+            #expect(DeviceIdentityConflictError.lastRecorded() == nodeConflict)
+        }
+
+        try await DeviceIdentityStore.withStateDirectory(otherRoot) {
+            _ = try DeviceIdentityStore.loadOrCreatePersistedOrThrow(profile: .node)
+            #expect(DeviceIdentityConflictError.lastRecorded() == nodeConflict)
+        }
+
+        try await DeviceIdentityStore.withStateDirectory(fixture.destination) {
+            _ = try DeviceIdentityStore.loadOrCreatePersistedOrThrow(profile: .node)
+            #expect(DeviceIdentityConflictError.lastRecorded() != nodeConflict)
+        }
+    }
+
+    @Test
     func `operator select imports one divergent identity and archives the other`() throws {
         let fixture = DeviceIdentityMigrationFixture()
         let firstMaterial = DeviceIdentityStore.generateMaterial()

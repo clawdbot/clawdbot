@@ -316,6 +316,13 @@ final class MacNodeModeCoordinator: NSObject {
             computerControlProvider: ComputerControlProvider.current())
     }
 
+    /// Wakes the node connect loop after the operator reconciles a blocked identity.
+    /// Shipping recovery path: must stay outside `#if DEBUG` or Release menu recovery
+    /// cannot resume the paused node after a successful choice.
+    func retryAfterIdentityRecovery() {
+        self.enqueueRouteInvalidation(mode: .reconnectRefresh)
+    }
+
     func currentCanvasPluginSurfaceRoute() async -> GatewayCanvasHostRoute? {
         await self.session.currentCanvasHostRoute()
     }
@@ -854,11 +861,6 @@ final class MacNodeModeCoordinator: NSObject {
 
     func enqueueRouteInvalidationForTesting() {
         self.enqueueRouteInvalidation(mode: .ordinaryDisconnect)
-    }
-
-    /// Wakes the node connect loop after the operator reconciles a blocked identity.
-    func retryAfterIdentityRecovery() {
-        self.enqueueRouteInvalidation(mode: .reconnectRefresh)
     }
 
     func generationsForTesting() -> (endpointAttempt: UInt64, routeAuthority: UInt64, completedRouteAuthority: UInt64) {
