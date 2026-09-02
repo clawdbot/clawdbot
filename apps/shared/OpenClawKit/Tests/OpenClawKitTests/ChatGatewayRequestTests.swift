@@ -33,6 +33,20 @@ struct ChatGatewayRequestTests {
         }
     }
 
+    @Test(arguments: [[String]?.none, [], ["watch-run", "queued-source"]])
+    func `history requests consumption only for supplied input runs`(inputRunIDs: [String]?) {
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: "global",
+            agentID: "reviewer",
+            inputRunIDs: inputRunIDs)
+
+        #expect(request.method == "chat.history")
+        #expect(request.params["sessionKey"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["inputRunIds"]?.value as? [String] ==
+            (inputRunIDs?.isEmpty == false ? inputRunIDs : nil))
+    }
+
     @Test func `models list scopes worker catalogs and preserves default scope`() {
         let worker = OpenClawChatGatewayRequests.modelsList(agentID: " worker ")
         let defaultAgent = OpenClawChatGatewayRequests.modelsList(agentID: nil)
@@ -623,6 +637,23 @@ struct ChatGatewayPayloadCodecTests {
 
         #expect(hello.advertisedOperatorScopes() == ["operator.read", "operator.admin"])
         #expect(missing.advertisedOperatorScopes() == nil)
+    }
+
+    @Test(arguments: [
+        nil,
+        [],
+        [["runId": "watch-run", "consumedByEventId": "aggregate-user"]],
+    ] as [[[String: String]]?])
+    func `history decoding preserves optional input consumption receipts`(consumptions: [[String: String]]?) throws {
+        var object: [String: Any] = ["sessionKey": "main", "messages": []]
+        object["inputConsumptions"] = consumptions
+        let payload = try JSONDecoder().decode(
+            OpenClawChatHistoryPayload.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        let encoded = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(payload)) as? [String: Any])
+
+        #expect(encoded["inputConsumptions"] as? [[String: String]] == consumptions)
     }
 
     @Test func `session row decodes permission and every tool override family`() throws {
