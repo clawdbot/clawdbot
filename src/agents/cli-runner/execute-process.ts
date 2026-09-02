@@ -15,7 +15,7 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
-import { appendCliOutputTail } from "./execute-output-buffer.js";
+import { appendCliOutputTail, formatCliStderrTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import {
@@ -136,6 +136,7 @@ export async function executeCliProcess(params: {
   const stdoutHash = crypto.createHash("sha256");
   let stdoutParseExceeded = false;
   let stderrTail = "";
+  let stderrDroppedBytes = 0;
   let stderrParseBuffer: Buffer = Buffer.alloc(0);
   let stderrBytes = 0;
   const stderrHash = crypto.createHash("sha256");
@@ -145,7 +146,7 @@ export async function executeCliProcess(params: {
     params.diagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
     stdoutBytes += chunkBytes;
     stdoutHash.update(chunk);
-    stdoutTail = appendCliOutputTail(stdoutTail, chunk);
+    stdoutTail = appendCliOutputTail(stdoutTail, chunk).tail;
     if (!stdoutParseExceeded) {
       const next = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
       stdoutParseBuffer = next.buffer;
@@ -157,7 +158,9 @@ export async function executeCliProcess(params: {
     params.diagnostics?.observeCliOutput(chunk, "stderr");
     stderrBytes += Buffer.byteLength(chunk);
     stderrHash.update(chunk);
-    stderrTail = appendCliOutputTail(stderrTail, chunk);
+    const { tail, droppedBytes } = appendCliOutputTail(stderrTail, chunk);
+    stderrTail = tail;
+    stderrDroppedBytes += droppedBytes;
     if (!stderrParseExceeded) {
       const next = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
       stderrParseBuffer = next.buffer;
@@ -335,7 +338,7 @@ export async function executeCliProcess(params: {
   let stdout: string | undefined;
   const readStdout = () => (stdout ??= stdoutParseBuffer.toString("utf8").trim());
   const stdoutDiagnostic = stdoutTail.trim();
-  const stderrDiagnostic = stderrTail.trim();
+  const stderrDiagnostic = formatCliStderrTail(stderrTail, stderrDroppedBytes);
   const processDiagnostics = {
     backendId: context.backendResolved.id,
     processReason: result.reason,
