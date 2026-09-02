@@ -430,9 +430,13 @@ export async function claimTailscaleRoute(
       // Under a systemd user service there is no TTY and OpenClaw installs no
       // NOPASSWD sudoers rule, so `sudo -n` can only fail there. Name the
       // supported fix instead of surfacing a bare "a password is required".
+      // The operator grant itself crosses the same privilege boundary (the
+      // linked recovery used `sudo tailscale set --operator=...`), so the
+      // instruction must carry the elevation or it just produces another
+      // permission error.
       throw new Error(
         `Tailscale ${mode} needs elevated access and the sudo fallback failed: ${describeError(sudoError)}. ` +
-          `Run \`tailscale set --operator=${process.env.USER || "$USER"}\` (or the same with your operator username) so the unprivileged path succeeds, ` +
+          `Run \`sudo tailscale set --operator=${process.env.USER || "$USER"}\` once so the unprivileged path succeeds, ` +
           "or install a NOPASSWD sudoers rule for the tailscale binary.",
         { cause: sudoError },
       );

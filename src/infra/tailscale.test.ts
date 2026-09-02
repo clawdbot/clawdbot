@@ -238,7 +238,7 @@ describe("tailscale helpers", () => {
       process.env.OPENCLAW_TEST_TAILSCALE_BINARY = fixture;
 
       await expect(claimTailscaleRoute("serve", 18791, 18791, vi.fn())).rejects.toThrow(
-        /tailscale set --operator=/,
+        /sudo tailscale set --operator=/,
       );
     },
   );
