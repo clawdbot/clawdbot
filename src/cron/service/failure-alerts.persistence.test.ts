@@ -10,7 +10,8 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronFailureNotificationDelivery, CronJob, CronRunStatus } from "../types.js";
+import { stop as stopCronService } from "./ops-lifecycle.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import { createCronServiceState } from "./state.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -508,86 +509,57 @@ describe("cron failure alert outcome write-back", () => {
     return { store, state };
   }
 
-  it("persists a delivered outcome once the send settles", async () => {
-    const { store } = await runFailure({
-      id: "alert-outcome-delivered",
-      sendCronFailureAlert: vi.fn(async (params) => {
-        params.onDeliveryAttempt?.(true);
-      }),
-    });
-
-    await vi.waitFor(async () => {
-      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-        lastFailureAlertAtMs: endedAt,
-        lastFailureNotificationDelivered: true,
-        lastFailureNotificationDeliveryStatus: "delivered",
+  it.each([
+    {
+      name: "delivered",
+      outcome: { delivered: true, status: "delivered" },
+    },
+    {
+      name: "not delivered",
+      outcome: {
+        delivered: false,
+        status: "not-delivered",
+        error: "alert channel exploded",
+      },
+    },
+    {
+      name: "unknown",
+      outcome: { status: "unknown", error: "later delivery work failed" },
+    },
+  ] satisfies Array<{ name: string; outcome: CronFailureNotificationDelivery }>)(
+    "persists a $name outcome once the send settles",
+    async ({ name, outcome }) => {
+      const { store } = await runFailure({
+        id: `alert-outcome-${name.replaceAll(" ", "-")}`,
+        sendCronFailureAlert: vi.fn(async (params) => {
+          await params.onDeliverySettled(outcome);
+        }),
       });
-    });
-    expect(
-      (await loadCronStore(store.storePath)).jobs[0]?.state.lastFailureNotificationDeliveryError,
-    ).toBeUndefined();
-  });
 
-  it("persists a not-delivered outcome with the error when the send rejects", async () => {
-    const { store } = await runFailure({
-      id: "alert-outcome-rejected",
-      sendCronFailureAlert: vi.fn(async () => {
-        throw new Error("alert channel exploded");
-      }),
-    });
-
-    await vi.waitFor(async () => {
-      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-        lastFailureNotificationDelivered: false,
-        lastFailureNotificationDeliveryStatus: "not-delivered",
-        lastFailureNotificationDeliveryError: expect.stringContaining("alert channel exploded"),
+      await vi.waitFor(async () => {
+        expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+          lastFailureAlertAtMs: endedAt,
+          lastFailureNotificationDeliveryStatus: outcome.status,
+        });
       });
-    });
-  });
-
-  it("persists a not-delivered outcome when no delivery attempt reaches the recipient", async () => {
-    const { store } = await runFailure({
-      id: "alert-outcome-unreached",
-      sendCronFailureAlert: vi.fn(async (params) => {
-        params.onDeliveryAttempt?.(false);
-      }),
-    });
-
-    await vi.waitFor(async () => {
-      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-        lastFailureNotificationDelivered: false,
-        lastFailureNotificationDeliveryStatus: "not-delivered",
-        lastFailureNotificationDeliveryError: expect.stringContaining("recipient not reached"),
-      });
-    });
-  });
-
-  it("keeps the reach fact when the send rejects after a successful delivery attempt", async () => {
-    const { store } = await runFailure({
-      id: "alert-outcome-reach-then-reject",
-      sendCronFailureAlert: vi.fn(async (params) => {
-        params.onDeliveryAttempt?.(true);
-        throw new Error("later delivery work failed");
-      }),
-    });
-
-    await vi.waitFor(async () => {
-      expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-        lastFailureNotificationDelivered: true,
-        lastFailureNotificationDeliveryStatus: "delivered",
-        lastFailureNotificationDeliveryError: expect.stringContaining("later delivery work failed"),
-      });
-    });
-  });
+      const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+      expect(persisted?.lastFailureNotificationDelivered).toBe(outcome.delivered);
+      expect(persisted?.lastFailureNotificationDeliveryError).toBe(outcome.error);
+    },
+  );
 
   it("redacts transport errors before persisting them", async () => {
     const err = new Error(
-      "webhook rejected: token=abcdefghijklmnopqrstuvwxyz123456 for https://alerts.example.test",
+      `webhook rejected: token=abcdefghijklmnopqrstuvwxyz123456 ${"x".repeat(2_000)}`,
     );
     const { store } = await runFailure({
       id: "alert-outcome-redacted-error",
-      sendCronFailureAlert: vi.fn(async () => {
-        throw err;
+      sendCronFailureAlert: vi.fn(async (params) => {
+        await params.onDeliverySettled({
+          delivered: false,
+          status: "not-delivered",
+          error: err.message,
+        });
       }),
     });
 
@@ -598,7 +570,8 @@ describe("cron failure alert outcome write-back", () => {
     });
     const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state
       .lastFailureNotificationDeliveryError;
-    expect(persisted).toBe(formatErrorMessage(err));
+    expect(persisted).toHaveLength(1_000);
+    expect(formatErrorMessage(err).length).toBeGreaterThan(1_000);
     expect(persisted).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
   });
 
@@ -614,7 +587,7 @@ describe("cron failure alert outcome write-back", () => {
     });
     const sendA = vi.fn(async (params) => {
       await gateA;
-      params.onDeliveryAttempt?.(true);
+      await params.onDeliverySettled({ delivered: true, status: "delivered" });
     });
     const stateA = createAlertState({
       storePath: store.storePath,
@@ -633,7 +606,13 @@ describe("cron failure alert outcome write-back", () => {
     // Service B on the same store: a later failure past the cooldown starts a
     // newer alert cycle and commits it.
     const laterAt = endedAt + 600_000;
-    const sendB = vi.fn(async () => undefined);
+    const sendB = vi.fn(async (params) => {
+      await params.onDeliverySettled({
+        delivered: false,
+        status: "not-delivered",
+        error: "recipient not reached",
+      });
+    });
     const stateB = createAlertState({
       storePath: store.storePath,
       nowMs: () => laterAt,
@@ -680,7 +659,7 @@ describe("cron failure alert outcome write-back", () => {
     });
     const sendCronFailureAlert = vi.fn(async (params) => {
       await sendGate;
-      params.onDeliveryAttempt?.(true);
+      await params.onDeliverySettled({ delivered: false, status: "not-delivered" });
     });
     const state = createAlertState({
       storePath: store.storePath,
@@ -719,42 +698,77 @@ describe("cron failure alert outcome write-back", () => {
       expect(live?.lastFailureNotificationDeliveryStatus).toBe("unknown");
       expect(live?.lastFailureNotificationDelivered).toBeUndefined();
       expect(live?.lastFailureNotificationDeliveryError).toBeUndefined();
+      const durable = (await loadCronStore(store.storePath)).jobs[0]?.state;
+      expect(durable?.lastFailureNotificationDeliveryStatus).toBe("unknown");
+      expect(durable?.lastFailureNotificationDelivered).toBeUndefined();
+      expect(durable?.lastFailureNotificationDeliveryError).toBeUndefined();
+      expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_outcome_write;");
     }
   });
 
-  it("does not clobber a newer alert cycle that owns the fields", async () => {
+  it("does not overwrite a newer run in the same alert cooldown cycle", async () => {
     let resolveSend: (() => void) | undefined;
     const sendGate = new Promise<void>((resolve) => {
       resolveSend = resolve;
     });
     const sendCronFailureAlert = vi.fn(async (params) => {
       await sendGate;
-      params.onDeliveryAttempt?.(true);
+      await params.onDeliverySettled({ delivered: false, status: "not-delivered" });
     });
-    const { state } = await runFailure({
-      id: "alert-outcome-stale-cycle",
+    const { store, state } = await runFailure({
+      id: "alert-outcome-same-cycle-newer-run",
       sendCronFailureAlert,
     });
-
-    // A newer alert cycle re-requests the notification before the first send
-    // settles; the stale settle must not overwrite its fields.
-    const live = state.store?.jobs[0];
-    expect(live).toBeDefined();
-    live!.state.lastFailureAlertAtMs = endedAt + 60_000;
-    live!.state.lastFailureNotificationDelivered = undefined;
-    live!.state.lastFailureNotificationDeliveryStatus = "unknown";
-    live!.state.lastFailureNotificationDeliveryError = undefined;
+    const currentJob = state.store?.jobs[0];
+    if (!currentJob) {
+      throw new Error("expected persisted cron job");
+    }
+    const laterAt = endedAt + 1_000;
+    currentJob.state.runningAtMs = laterAt;
+    await finalizeAlertOutcome({
+      state,
+      job: currentJob,
+      status: "error",
+      error: "provider still unavailable",
+      startedAt: laterAt,
+      endedAt: laterAt + 10,
+    });
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
 
     resolveSend?.();
     await sendCronFailureAlert.mock.results[0]?.value;
-    await state.op;
+    const durable = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(durable).toMatchObject({
+      lastRunAtMs: laterAt,
+      lastFailureAlertAtMs: endedAt,
+      lastFailureNotificationDeliveryStatus: "not-requested",
+    });
+    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
 
-    expect(live!.state).toMatchObject({
-      lastFailureAlertAtMs: endedAt + 60_000,
+  it("does not write after the service lifecycle retires", async () => {
+    let resolveSend: (() => void) | undefined;
+    const sendGate = new Promise<void>((resolve) => {
+      resolveSend = resolve;
+    });
+    const sendCronFailureAlert = vi.fn(async (params) => {
+      await sendGate;
+      await params.onDeliverySettled({ delivered: false, status: "not-delivered" });
+    });
+    const { store, state } = await runFailure({
+      id: "alert-outcome-retired-lifecycle",
+      sendCronFailureAlert,
+    });
+
+    stopCronService(state);
+    resolveSend?.();
+    await sendCronFailureAlert.mock.results[0]?.value;
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
       lastFailureNotificationDeliveryStatus: "unknown",
     });
-    expect(live!.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
   });
 });
