@@ -283,7 +283,7 @@ export async function syncPluginsForUpdateChannel(params: {
         if (clawHubTrustWarning) {
           summary.warnings.push(clawHubTrustWarning);
         }
-        const message =
+        const failure =
           installSource === "clawhub"
             ? formatClawHubInstallFailure({
                 pluginId: targetPluginId,
@@ -297,6 +297,7 @@ export async function syncPluginsForUpdateChannel(params: {
                 phase: "update",
                 result,
               });
+        const message = `${failure}\nThe external plugin payload is missing after bundled relocation; run "openclaw update repair" to retry installation.`;
         summary.errors.push({ pluginId: targetPluginId, message, code: result.code });
         logger.error?.(message);
         continue;

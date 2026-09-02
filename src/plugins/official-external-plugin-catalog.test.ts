@@ -19,6 +19,7 @@ import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
+  isExternallyDistributedPlugin,
   isOfficialExternalPluginId,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalChannelEnvVars,
@@ -330,6 +331,23 @@ describe("official external plugin catalog", () => {
     expect(source).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
     expect(source).toContain('await import("../infra/net/fetch-guard.js")');
   });
+
+  it.each([
+    { pluginId: "google-meet", packageName: "@openclaw/google-meet", external: true },
+    { pluginId: "google-meet", packageName: "@example/google-meet", external: false },
+    { pluginId: "other-plugin", packageName: "@openclaw/google-meet", external: false },
+    {
+      pluginId: "source-external",
+      packageName: "@example/source-external",
+      packageBuild: { bundledDist: false },
+      external: true,
+    },
+  ])(
+    "classifies distribution ownership for $pluginId from $packageName",
+    ({ external, ...plugin }) => {
+      expect(isExternallyDistributedPlugin(plugin)).toBe(external);
+    },
+  );
 
   it("ships the official plugin catalog as a feed-shaped bundled fallback", () => {
     expect(isOfficialExternalPluginCatalogFeed(officialExternalPluginCatalog)).toBe(true);

@@ -22,6 +22,7 @@ import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-decl
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 import {
+  isExternallyDistributedPlugin,
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
@@ -94,9 +95,9 @@ export async function resolveConfiguredPluginInstallContext(params: {
     configuredChannelIds: params.configuredChannelIds,
   });
   const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>(
-    currentBundledPlugins.map(
-      (plugin) => [plugin.pluginId, { packageName: plugin.packageName }] as const,
-    ),
+    currentBundledPlugins
+      .filter((plugin) => !isExternallyDistributedPlugin(plugin))
+      .map((plugin) => [plugin.pluginId, { packageName: plugin.packageName }] as const),
   );
   const configuredPluginIdsWithStaleDescriptors =
     collectConfiguredPluginIdsWithMissingChannelConfigDescriptors({
@@ -206,6 +207,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
 
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
+  "extension entry not found",
   "extension entry escapes package directory",
   "extension entry unreadable",
   "requires compiled runtime output",

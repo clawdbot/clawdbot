@@ -173,6 +173,8 @@ describe("channel migration artifact consent", () => {
         expect(result.summary.errors).toEqual([
           expect.objectContaining({ pluginId, code: PLUGIN_CAPABILITY_CONSENT_REQUIRED }),
         ]);
+        expect(result.summary.errors[0]?.message).toContain("external plugin payload is missing");
+        expect(result.summary.errors[0]?.message).toContain("openclaw update repair");
         if (source !== "npm") {
           expect(result.summary.errors[0]?.message).toContain(`(ClawHub clawhub:${pluginId}).`);
         }
