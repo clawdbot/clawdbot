@@ -1,4 +1,5 @@
 /** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
+import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { logVerbose } from "../../globals.js";
@@ -167,13 +168,16 @@ export async function runManagerTurn(params: {
     });
     throw errorToRecord;
   };
-  const clearPersistedOneshotIdentity = async () => {
+  const clearPersistedOneshotIdentity = async (
+    expectedIdentity: ReturnType<typeof resolveSessionIdentityFromMeta>,
+  ) => {
     try {
       await clearPersistedManagerRuntimeIdentity({
         cfg: input.cfg,
         sessionKey,
         agentId,
         writeSessionMeta: params.writeSessionMeta,
+        expectedIdentity: expectedIdentity ?? null,
       });
     } catch (error) {
       logVerbose(
@@ -366,7 +370,8 @@ export async function runManagerTurn(params: {
               if (!activeTurn) {
                 return;
               }
-              const oneshotCloseSucceeded = await cleanupTimedOutTurn({
+              const closingIdentity = resolveSessionIdentityFromMeta(meta);
+              await cleanupTimedOutTurn({
                 sessionKey,
                 activeTurn,
                 mode: sessionMode,
@@ -377,10 +382,10 @@ export async function runManagerTurn(params: {
                     handle: turn.handle,
                   });
                 },
+                onOneshotCloseSucceeded: async () => {
+                  await clearPersistedOneshotIdentity(closingIdentity);
+                },
               });
-              if (oneshotCloseSucceeded) {
-                await clearPersistedOneshotIdentity();
-              }
             },
           });
           if (!turnOutcome.terminalStatus) {
@@ -519,7 +524,7 @@ export async function runManagerTurn(params: {
             // the identity so a later cache-miss ensure can reconnect to it instead of
             // orphaning it and opening a second backend session (#124852 follow-up).
             if (oneshotCloseSucceeded) {
-              await clearPersistedOneshotIdentity();
+              await clearPersistedOneshotIdentity(resolveSessionIdentityFromMeta(meta));
             }
           }
         }

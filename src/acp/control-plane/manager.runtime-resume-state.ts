@@ -1,6 +1,7 @@
 /** Recovery helpers for stale ACP persistent session ids and early runtime exits. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
+import type { SessionAcpIdentity } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
@@ -121,8 +122,10 @@ export async function clearPersistedManagerRuntimeIdentity(params: {
   sessionKey: string;
   agentId: string;
   writeSessionMeta: WriteManagerSessionMeta;
+  expectedIdentity?: SessionAcpIdentity | null;
 }): Promise<boolean> {
   const now = Date.now();
+  let identityStillOwned = true;
   const updated = await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -136,6 +139,13 @@ export async function clearPersistedManagerRuntimeIdentity(params: {
         return null;
       }
       const currentIdentity = resolveSessionIdentityFromMeta(base);
+      if (
+        params.expectedIdentity !== undefined &&
+        !matchesExpectedRuntimeSessionIdentity(currentIdentity, params.expectedIdentity)
+      ) {
+        identityStillOwned = false;
+        return base;
+      }
       if (!currentIdentity?.acpxSessionId && !currentIdentity?.agentSessionId) {
         return base;
       }
@@ -159,6 +169,9 @@ export async function clearPersistedManagerRuntimeIdentity(params: {
       };
     },
   });
+  if (!identityStillOwned) {
+    return false;
+  }
   if (!updated) {
     logVerbose(
       `acp-manager: unable to clear persisted runtime resume state for ${params.sessionKey}`,
@@ -166,6 +179,21 @@ export async function clearPersistedManagerRuntimeIdentity(params: {
     return false;
   }
   return true;
+}
+
+function matchesExpectedRuntimeSessionIdentity(
+  current: SessionAcpIdentity | undefined,
+  expected: SessionAcpIdentity | null,
+): boolean {
+  const expectedAcpxSessionId = expected?.acpxSessionId;
+  const expectedAgentSessionId = expected?.agentSessionId;
+  if (!expectedAcpxSessionId && !expectedAgentSessionId) {
+    return !current?.acpxSessionId && !current?.agentSessionId;
+  }
+  return (
+    (!expectedAcpxSessionId || current?.acpxSessionId === expectedAcpxSessionId) &&
+    (!expectedAgentSessionId || current?.agentSessionId === expectedAgentSessionId)
+  );
 }
 
 /** Clears persisted runtime resume identifiers while preserving the manager session shell. */

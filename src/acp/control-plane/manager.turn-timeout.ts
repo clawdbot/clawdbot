@@ -117,6 +117,7 @@ export async function cleanupTimedOutTurn(params: {
   activeTurn: ActiveTurnState;
   mode: AcpRuntimeSessionMode;
   clearCachedRuntimeStateIfHandleMatches: (activeTurn: ActiveTurnState) => void;
+  onOneshotCloseSucceeded: () => Promise<void>;
 }): Promise<boolean> {
   params.activeTurn.abortController.abort();
   if (!params.activeTurn.cancelPromise) {
@@ -144,11 +145,19 @@ export async function cleanupTimedOutTurn(params: {
   });
   if (closeFinished) {
     params.clearCachedRuntimeStateIfHandleMatches(params.activeTurn);
+    await params.onOneshotCloseSucceeded();
     return true;
   }
-  void Promise.allSettled([params.activeTurn.cancelPromise, closePromise]).then(() => {
-    params.clearCachedRuntimeStateIfHandleMatches(params.activeTurn);
-  });
+  void closePromise.then(
+    async () => {
+      params.clearCachedRuntimeStateIfHandleMatches(params.activeTurn);
+      await params.onOneshotCloseSucceeded();
+    },
+    async () => {
+      await Promise.allSettled([params.activeTurn.cancelPromise]);
+      params.clearCachedRuntimeStateIfHandleMatches(params.activeTurn);
+    },
+  );
   return false;
 }
 

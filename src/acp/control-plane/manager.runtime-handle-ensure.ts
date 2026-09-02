@@ -32,6 +32,16 @@ import {
   runtimeOptionsEqual,
 } from "./runtime-options.js";
 
+function clearRuntimeResumeIdentifiers(
+  identity: ReturnType<typeof resolveSessionIdentityFromMeta>,
+): ReturnType<typeof resolveSessionIdentityFromMeta> {
+  if (!identity) {
+    return undefined;
+  }
+  const { acpxSessionId: _acpxSessionId, agentSessionId: _agentSessionId, ...retained } = identity;
+  return { ...retained, state: "pending" };
+}
+
 /** Returns a reusable cached handle or initializes a fresh runtime session for the metadata. */
 export async function ensureManagerRuntimeHandle(params: {
   cfg: OpenClawConfig;
@@ -61,6 +71,7 @@ export async function ensureManagerRuntimeHandle(params: {
   const runtime = backend.runtime;
   assertAcpRuntimeOwnerSupport(runtime, params);
   const cached = params.runtimeHandles.get(params);
+  let closedMatchingOneshotHandle = false;
   if (cached) {
     const backendMatches = !configuredBackend || cached.backend === configuredBackend;
     const agentMatches = cached.agent === agent;
@@ -90,11 +101,12 @@ export async function ensureManagerRuntimeHandle(params: {
         meta: params.meta,
       };
     }
-    await params.runtimeHandles.close({
+    const closeSucceeded = await params.runtimeHandles.close({
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       reason: "runtime-handle-replaced",
     });
+    closedMatchingOneshotHandle = cached.mode === "oneshot" && handleMatchesMeta && closeSucceeded;
   }
 
   const previousMeta = params.meta;
@@ -103,16 +115,23 @@ export async function ensureManagerRuntimeHandle(params: {
   const backendOwnsPreviousIdentity = previousMeta.backend === backend.id;
   const previousIdentity = backendOwnsPreviousIdentity ? persistedIdentity : undefined;
   const persistedHandle = backendOwnsPreviousIdentity
-    ? persistedAcpRuntimeHandle(params, previousMeta)
+    ? {
+        ...persistedAcpRuntimeHandle(params, previousMeta),
+        ...(closedMatchingOneshotHandle
+          ? { backendSessionId: undefined, agentSessionId: undefined }
+          : {}),
+      }
     : undefined;
-  let identityForEnsure = previousIdentity;
+  let identityForEnsure = closedMatchingOneshotHandle
+    ? clearRuntimeResumeIdentifiers(previousIdentity)
+    : previousIdentity;
   // acpx's one-shot ensureSession intentionally opens a fresh backend session on every
   // independent call (openclaw/acpx#504); it does not offer a "reuse if unchanged" contract
   // for oneshot the way persistent mode does. So this caller must retain and resume the
   // identity from its own earlier ensure (e.g. spawn-init) whenever one exists, regardless of
   // mode, or a cache-miss re-ensure (cross-process turn dispatch, evicted cache) opens a second
   // backend session per spawn and orphans the first.
-  const persistedResumeSessionId = resolveRuntimeResumeSessionId(previousIdentity);
+  const persistedResumeSessionId = resolveRuntimeResumeSessionId(identityForEnsure);
   const shouldPrepareFreshPersistentSession =
     mode === "persistent" &&
     previousIdentity != null &&
@@ -158,17 +177,9 @@ export async function ensureManagerRuntimeHandle(params: {
         `acp-manager: resume init failed for ${params.sessionKey}; retrying without persisted ACP session id: ${acpError.message}`,
       );
       if (identityForEnsure) {
-        const {
-          acpxSessionId: _staleAcpxSessionId,
-          agentSessionId: _staleAgentSessionId,
-          ...retryIdentity
-        } = identityForEnsure;
         // The persisted resume identifiers already failed, so do not merge them back into the
         // fresh named-session handle returned by the retry path.
-        identityForEnsure = {
-          ...retryIdentity,
-          state: "pending",
-        };
+        identityForEnsure = clearRuntimeResumeIdentifiers(identityForEnsure);
       }
       ensured = await ensureSession();
     }

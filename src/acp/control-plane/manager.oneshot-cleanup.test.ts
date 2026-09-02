@@ -119,23 +119,59 @@ describe("AcpSessionManager oneshot cleanup", () => {
       advanceByMs: 4_100,
       expectedResumeSessionId: "agent-session-1",
       expectedCreatedSessions: 1,
+      lateCloseOutcome: "succeeds",
+      expectedResumeSessionIdAfterLateClose: undefined,
+      expectedCreatedSessionsAfterLateClose: 2,
+    },
+    {
+      closeOutcome: "exceeds the cleanup grace period and later rejects",
+      advanceByMs: 4_100,
+      expectedResumeSessionId: "agent-session-1",
+      expectedCreatedSessions: 1,
+      lateCloseOutcome: "rejects",
+      expectedResumeSessionIdAfterLateClose: "agent-session-1",
+      expectedCreatedSessionsAfterLateClose: 1,
+    },
+    {
+      closeOutcome: "exceeds the cleanup grace period after a newer session takes ownership",
+      advanceByMs: 4_100,
+      expectedResumeSessionId: "agent-session-1",
+      expectedCreatedSessions: 1,
+      lateCloseOutcome: "succeeds",
+      replacementIdentityBeforeLateClose: {
+        acpxSessionId: "acpx-session-new",
+        agentSessionId: "agent-session-new",
+      },
+      expectedResumeSessionIdAfterLateClose: "agent-session-new",
+      expectedCreatedSessionsAfterLateClose: 1,
     },
   ])(
     "handles a oneshot timeout whose terminal close $closeOutcome",
-    async ({ closeOutcome, advanceByMs, expectedResumeSessionId, expectedCreatedSessions }) => {
+    async ({
+      closeOutcome,
+      advanceByMs,
+      expectedResumeSessionId,
+      expectedCreatedSessions,
+      lateCloseOutcome,
+      replacementIdentityBeforeLateClose,
+      expectedResumeSessionIdAfterLateClose,
+      expectedCreatedSessionsAfterLateClose,
+    }) => {
       vi.useFakeTimers();
-      let resolvePendingClose: (() => void) | undefined;
+      let settlePendingClose: ((outcome: "succeeds" | "rejects") => void) | undefined;
       try {
         const runtimeState = createRuntime();
         let createdSessions = 0;
         runtimeState.ensureSession.mockImplementation(async (input) => {
-          const backendSessionId = input.resumeSessionId ?? `acpx-session-${++createdSessions}`;
+          const backendSessionId =
+            input.resumeSessionId?.replace(/^agent-session-/, "acpx-session-") ??
+            `acpx-session-${++createdSessions}`;
           return {
             sessionKey: input.sessionKey,
             backend: "acpx",
             runtimeSessionName: "runtime-1",
             backendSessionId,
-            agentSessionId: "agent-session-1",
+            agentSessionId: input.resumeSessionId ?? "agent-session-1",
           };
         });
         runtimeState.runTurn.mockImplementation(async function* () {
@@ -144,11 +180,17 @@ describe("AcpSessionManager oneshot cleanup", () => {
         });
         if (closeOutcome === "rejects") {
           runtimeState.close.mockRejectedValue(new Error("close failed: lease still held"));
-        } else if (closeOutcome === "exceeds the cleanup grace period") {
+        } else if (lateCloseOutcome) {
           runtimeState.close.mockImplementation(
             () =>
-              new Promise<void>((resolve) => {
-                resolvePendingClose = resolve;
+              new Promise<void>((resolve, reject) => {
+                settlePendingClose = (outcome) => {
+                  if (outcome === "succeeds") {
+                    resolve();
+                  } else {
+                    reject(new Error("late close failed: lease still held"));
+                  }
+                };
               }),
           );
         }
@@ -199,13 +241,101 @@ describe("AcpSessionManager oneshot cleanup", () => {
           expectedResumeSessionId,
         );
         expect(createdSessions).toBe(expectedCreatedSessions);
+
+        if (lateCloseOutcome) {
+          if (replacementIdentityBeforeLateClose) {
+            persisted.current = {
+              ...persisted.current!,
+              identity: {
+                state: "resolved",
+                source: "status",
+                ...replacementIdentityBeforeLateClose,
+                lastUpdatedAt: Date.now(),
+              },
+            };
+          }
+          settlePendingClose?.(lateCloseOutcome);
+          settlePendingClose = undefined;
+          await vi.advanceTimersByTimeAsync(0);
+          if (expectedResumeSessionIdAfterLateClose === undefined) {
+            await vi.waitFor(() => {
+              expectRecordFields(persisted.current?.identity, { state: "pending" });
+              expect(persisted.current?.identity?.acpxSessionId).toBeUndefined();
+              expect(persisted.current?.identity?.agentSessionId).toBeUndefined();
+            });
+          } else {
+            expectRecordFields(persisted.current?.identity, {
+              state: "resolved",
+              agentSessionId: expectedResumeSessionIdAfterLateClose,
+            });
+          }
+
+          const managerC = new AcpSessionManager();
+          await managerC.getSessionStatus({ cfg, sessionKey });
+
+          expect(runtimeState.ensureSession).toHaveBeenCalledTimes(3);
+          expect(mockCallArg(runtimeState.ensureSession, 2).resumeSessionId).toBe(
+            expectedResumeSessionIdAfterLateClose,
+          );
+          expect(createdSessions).toBe(expectedCreatedSessionsAfterLateClose);
+        }
       } finally {
-        resolvePendingClose?.();
+        settlePendingClose?.("succeeds");
         await Promise.resolve();
         vi.useRealTimers();
       }
     },
   );
+
+  it("starts a fresh oneshot session after replacing a successfully closed cached handle", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession
+      .mockResolvedValueOnce({
+        sessionKey: "agent:codex:acp:session-1",
+        backend: "acpx",
+        runtimeSessionName: "runtime-1",
+        backendSessionId: "acpx-session-1",
+        agentSessionId: "agent-session-1",
+      })
+      .mockResolvedValueOnce({
+        sessionKey: "agent:codex:acp:session-1",
+        backend: "acpx",
+        runtimeSessionName: "runtime-2",
+        backendSessionId: "acpx-session-2",
+        agentSessionId: "agent-session-2",
+      });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const persisted = installMutableSessionMeta();
+    const sessionKey = "agent:codex:acp:session-1";
+    const manager = new AcpSessionManager();
+
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey,
+      agent: "codex",
+      mode: "oneshot",
+    });
+    const changedCfg = {
+      ...baseCfg,
+      tools: { exec: { mode: "deny", safeBins: ["node"] } },
+    } satisfies OpenClawConfig;
+
+    await manager.getSessionStatus({ cfg: changedCfg, sessionKey });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(mockCallArg(runtimeState.ensureSession, 1).resumeSessionId).toBeUndefined();
+    expectRecordFields(mockCallArg(runtimeState.close), {
+      reason: "runtime-handle-replaced",
+      handle: expect.objectContaining({ agentSessionId: "agent-session-1" }),
+    });
+    expectRecordFields(persisted.current?.identity, {
+      acpxSessionId: "acpx-session-2",
+      agentSessionId: "agent-session-2",
+    });
+  });
 
   it("resumes one backend session across a manager cache miss and closes it after the prompt", async () => {
     const runtimeState = createRuntime();
