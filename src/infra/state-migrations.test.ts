@@ -1103,10 +1103,11 @@ describe("state migrations", () => {
       database.close();
     }
     const store = path.join(root, "legacy-jobs.json");
-    const result = await autoMigrateLegacyState({
-      cfg: { agents: { ownership: "explicit", entries: { main: {} } }, cron: { store } },
-      env,
-    });
+    const cfg: OpenClawConfig & { cron: { store: string } } = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      cron: { store },
+    };
+    const result = await autoMigrateLegacyState({ cfg, env });
     expect(result.warnings).toContainEqual(
       expect.stringContaining("invalid historical transcript migration cursor"),
     );

@@ -396,7 +396,9 @@ describe("gateway startup-migration refusal", () => {
 
     try {
       // Readiness must use the migration fixture without extra hooks or Control UI settings.
-      await instance.state.writeConfig({ gateway: { mode: "local", auth: { mode: "none" } } });
+      await instance.state.writeConfig({
+        gateway: { mode: "local", port, auth: { mode: "none" } },
+      });
       seedPluginStateConflict(stateDir);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       const job = {
@@ -432,7 +434,7 @@ describe("gateway startup-migration refusal", () => {
         expect(logs).toContain(STARTUP_RECOVERY);
         expect(logs).not.toContain(STARTUP_REFUSAL);
         const status = await instance.cli(["gateway", "call", "status", "--json"]);
-        expect(status.code, status.stderr).toBe(0);
+        expect(status.code, status.stdout + "\n" + status.stderr).toBe(0);
         expect(JSON.parse(status.stdout).startupMigrationWarning).toContain(warning);
         expect(fs.existsSync(path.join(stateDir, "plugin-state", "state.sqlite"))).toBe(true);
       } finally {

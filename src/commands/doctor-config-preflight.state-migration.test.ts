@@ -911,6 +911,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   );
 
   it("bounds and redacts startup warnings while preserving the Doctor follow-up", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
     const credential = "sk-" + "syntheticfixture".repeat(4);
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: false,
