@@ -224,6 +224,7 @@ function renderParticipantMenu(
     slot="content"
     class="session-hovercard__participant-menu"
     role="list"
+    style="min-width: 150px; max-height: min(280px, 60vh); overflow-y: auto;"
     aria-label=${t("sessionHovercard.moreParticipantsLabel", {
       count: String(participantCount),
     })}
@@ -238,7 +239,7 @@ function renderParticipantMenu(
         ${renderPersonName(
           label,
           activity,
-          "session-menu__item session-hovercard__participant-link",
+          "session-menu__item learn-more-link session-hovercard__participant-link",
         )}
       </div>`;
     })}
@@ -346,6 +347,7 @@ function renderSessionAttribution({
               <button
                 type="button"
                 class="session-hovercard__attribution-others"
+                style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit;"
                 aria-label=${t("sessionHovercard.moreParticipantsLabel", {
                   count: String(otherCount),
                 })}
