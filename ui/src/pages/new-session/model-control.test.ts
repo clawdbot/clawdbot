@@ -31,7 +31,7 @@ describe("new-session model runtime", () => {
     );
     const container = renderControl(control, context);
     expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
-      "Selection target: This session only",
+      "This session",
     );
     container
       .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/claude-sonnet-4-6"]')

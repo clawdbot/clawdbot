@@ -604,7 +604,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                               : nothing}
                             ${params.sessionModelPinned && params.modelOptions.length > 0
                               ? html`<button
-                                  class="chat-controls__model-reset"
+                                  class="btn btn--ghost btn--xs chat-controls__model-reset"
                                   data-chat-model-reset="true"
                                   type="button"
                                   title=${t("chat.modelControls.useDefaultModel", {
@@ -634,7 +634,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                     }
                                   }}
                                 >
-                                  ${t("chat.modelControls.useDefault")}
+                                  ${t("chat.modelControls.resetSessionModel")}
                                 </button>`
                               : nothing}
                           </footer>`

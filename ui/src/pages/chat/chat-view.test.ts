@@ -7234,7 +7234,7 @@ describe("chat model controls", () => {
       details.open = true;
     }
     expect(reset).toBeInstanceOf(HTMLButtonElement);
-    expect(reset?.textContent?.trim()).toBe("Use default");
+    expect(reset?.textContent?.trim()).toBe("Reset session model");
     expect(reset?.title).toBe("Use default (GPT-5) for this session");
     reset?.focus();
     reset?.click();
@@ -7270,6 +7270,7 @@ describe("chat model controls", () => {
         targetLabel,
       );
       const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
+      expect(reset?.textContent?.trim()).toBe("Reset session model");
       expect(reset?.title).toContain("for this session");
       reset?.click();
 

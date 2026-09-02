@@ -116,7 +116,7 @@ suite.define(() => {
       picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
       await picker.locator('[data-chat-model-select="true"]').tap();
       await picker.getByText("Global default", { exact: true }).waitFor();
-      await picker.getByRole("button", { name: "Use default", exact: true }).waitFor();
+      await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
       await expect
         .poll(() =>
           picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
@@ -193,7 +193,7 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').click();
-      await picker.getByRole("button", { name: "Use default", exact: true }).waitFor();
+      await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
       await screenshot(page, "03-pin-matching-default.png");
       await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.patch");

@@ -5816,7 +5816,7 @@ export const en: TranslationMap & {
       selectionTargetSession: "This session",
       selectionTargetAgent: "Agent default",
       selectionTargetGlobal: "Global default",
-      useDefault: "Use default",
+      resetSessionModel: "Reset session model",
       useDefaultModel: "Use default ({model}) for this session",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
