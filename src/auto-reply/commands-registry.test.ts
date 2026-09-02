@@ -983,6 +983,51 @@ describe("commands registry args", () => {
     expect(formatCommandArgMenuTitle({ command, menu })).toContain("xhigh");
   });
 
+  it("resolves /model choices through the routed agent policy", () => {
+    const command = requireNativeCommand("model");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
+        },
+        entries: {
+          research: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }] },
+          anthropic: {
+            models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+          },
+        },
+      },
+    } as never;
+
+    const defaultMenu = requireCommandArgMenu({ command, cfg });
+    const researchMenu = requireCommandArgMenu({ command, cfg, agentId: "research" });
+
+    expect(defaultMenu.choices).toEqual([
+      { label: "openai/GPT-5.6 Luna", value: "openai/gpt-5.6-luna" },
+    ]);
+    expect(researchMenu.choices).toEqual([
+      { label: "anthropic/Claude Sonnet 4.6", value: "anthropic/claude-sonnet-4-6" },
+    ]);
+    expect(formatCommandArgMenuTitle({ command, menu: researchMenu })).toBe(
+      "Choose a model for /model.",
+    );
+  });
+
+  it("keeps bare /model status dispatch when no configured choices exist", () => {
+    const command = requireNativeCommand("model");
+
+    expect(resolveCommandArgMenu({ command, cfg: {} as never })).toBeNull();
+  });
+
   it("does not show menus when args were provided as raw text only", () => {
     const command = createUsageModeCommand("none", "on or off");
 

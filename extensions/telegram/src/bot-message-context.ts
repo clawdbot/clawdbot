@@ -38,6 +38,7 @@ import {
   buildTelegramInboundOriginTarget,
   buildTypingThreadParams,
   extractTelegramForumFlag,
+  resolveTelegramCommandAuthorization,
   resolveTelegramForumFlag,
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramMessageThreadSpec,
@@ -273,13 +274,32 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  const senderUsername = msg.from?.username ?? "";
+  const revalidatedCommandAccess = options?.revalidateCommandOwnerAccess
+    ? resolveTelegramCommandAuthorization({
+        cfg,
+        accountId: account.accountId,
+        chatId,
+        isGroup,
+        threadSpec,
+        senderId,
+        senderUsername,
+      })
+    : undefined;
+  const effectiveStoreAllowFrom =
+    (revalidatedCommandAccess?.senderIsOwner || revalidatedCommandAccess?.isAuthorizedSender) &&
+    !isGroup &&
+    senderId &&
+    !storeAllowFrom.includes(senderId)
+      ? [...storeAllowFrom, senderId]
+      : storeAllowFrom;
   const dmAllow = await resolveTelegramDmAllow({
     cfg,
     groupAllowOverride,
     allowFrom,
     accountId: account.accountId,
     senderId,
-    storeAllowFrom,
+    storeAllowFrom: effectiveStoreAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });
   const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
@@ -290,7 +310,6 @@ export const buildTelegramMessageContext = async ({
   });
   const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
-  const senderUsername = msg.from?.username ?? "";
   const baseAccess = evaluateTelegramGroupBaseAccess({
     isGroup,
     groupConfig,

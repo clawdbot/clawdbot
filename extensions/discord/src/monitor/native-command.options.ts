@@ -19,6 +19,23 @@ const log = createSubsystemLogger("discord/native-command");
 // Discord application command and option descriptions are limited to 1-100 chars.
 // https://discord.com/developers/docs/interactions/application-commands#application-command-object-application-command-structure
 const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
+// Choice names and string values have the same 100-character upper bound.
+const DISCORD_COMMAND_CHOICE_TEXT_MAX = 100;
+
+function buildDiscordCommandChoices(
+  choices: ReadonlyArray<{ label: string; value: string }>,
+): Array<{ name: string; value: string }> {
+  return choices.flatMap((choice) =>
+    choice.value.length <= DISCORD_COMMAND_CHOICE_TEXT_MAX
+      ? [
+          {
+            name: truncateUtf16Safe(choice.label, DISCORD_COMMAND_CHOICE_TEXT_MAX),
+            value: choice.value,
+          },
+        ]
+      : [],
+  );
+}
 
 export function truncateDiscordCommandDescription(params: {
   value: string;
@@ -105,6 +122,7 @@ export function buildDiscordCommandOptions(params: {
     const resolvedChoices = resolveCommandArgChoices({ command, arg, cfg });
     const shouldAutocomplete =
       arg.preferAutocomplete === true ||
+      resolvedChoices.some((choice) => choice.value.length > DISCORD_COMMAND_CHOICE_TEXT_MAX) ||
       (resolvedChoices.length > 0 &&
         (typeof arg.choices === "function" || resolvedChoices.length > 25));
     const autocomplete = shouldAutocomplete
@@ -124,6 +142,10 @@ export function buildDiscordCommandOptions(params: {
             typeof arg.choices === "function" && resolveChoiceContext
               ? await resolveChoiceContext(interaction)
               : null;
+          if (command.key === "model" && resolveChoiceContext && !context) {
+            await interaction.respond([]);
+            return;
+          }
           const currentCfg = resolveConfig?.() ?? cfg;
           const choiceCatalog =
             command.key === "think"
@@ -141,6 +163,7 @@ export function buildDiscordCommandOptions(params: {
             command,
             arg,
             cfg: currentCfg,
+            agentId: context?.agentId,
             provider: context?.provider,
             model: context?.model,
             agentRuntime: context?.agentRuntime,
@@ -148,20 +171,19 @@ export function buildDiscordCommandOptions(params: {
           });
           const filtered = focusValue
             ? choices.filter((choice) =>
-                normalizeLowercaseStringOrEmpty(choice.label).includes(focusValue),
+                [choice.label, choice.value].some((candidate) =>
+                  normalizeLowercaseStringOrEmpty(candidate).includes(focusValue),
+                ),
               )
             : choices;
-          await interaction.respond(
-            filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
-          );
+          // A truncated value would silently select a different ref. Leave oversized
+          // values available as exact typed input while bounding every offered choice.
+          await interaction.respond(buildDiscordCommandChoices(filtered).slice(0, 25));
         }
       : undefined;
     const choices =
       resolvedChoices.length > 0 && !autocomplete
-        ? resolvedChoices.slice(0, 25).map((choice) => ({
-            name: choice.label,
-            value: choice.value,
-          }))
+        ? buildDiscordCommandChoices(resolvedChoices).slice(0, 25)
         : undefined;
     return {
       name: arg.name,

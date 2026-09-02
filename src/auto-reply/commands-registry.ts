@@ -1,10 +1,11 @@
 /** Command-registry facade for native specs, text aliases, argument parsing, and menus. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
+  buildAllowedModelSet,
   buildConfiguredModelCatalog,
-  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -337,28 +338,34 @@ export function buildCommandTextFromArgs(
   return buildCommandText(commandName, serializeCommandArgs(command, args));
 }
 
-function resolveDefaultCommandContext(cfg?: OpenClawConfig): {
+function resolveDefaultCommandContext(
+  cfg?: OpenClawConfig,
+  agentId?: string,
+): {
   provider: string;
   model: string;
 } {
-  const resolved = resolveConfiguredModelRef({
-    cfg: cfg ?? ({} as OpenClawConfig),
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  return {
-    provider: resolved.provider ?? DEFAULT_PROVIDER,
-    model: resolved.model ?? DEFAULT_MODEL,
-  };
+  return resolveDefaultModelForAgent({ cfg: cfg ?? ({} as OpenClawConfig), agentId });
 }
 
 export type ResolvedCommandArgChoice = { value: string; label: string };
+
+function toModelCatalogEntries(catalog: readonly ThinkingCatalogEntry[]): ModelCatalogEntry[] {
+  return catalog.map((entry) => ({
+    provider: entry.provider,
+    id: entry.id,
+    name: entry.name?.trim() || entry.id,
+    ...(entry.reasoning !== undefined ? { reasoning: entry.reasoning } : {}),
+    ...(entry.params ? { params: entry.params } : {}),
+  }));
+}
 
 /** Resolves static or context-aware choices for one command argument. */
 export function resolveCommandArgChoices(params: {
   command: ChatCommandDefinition;
   arg: CommandArgDefinition;
   cfg?: OpenClawConfig;
+  agentId?: string;
   provider?: string;
   model?: string;
   agentRuntime?: string;
@@ -372,13 +379,24 @@ export function resolveCommandArgChoices(params: {
   const raw = Array.isArray(provided)
     ? provided
     : (() => {
-        const defaults = resolveDefaultCommandContext(cfg);
+        const defaults = resolveDefaultCommandContext(cfg, params.agentId);
+        const catalog = params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
+        const choiceCatalog =
+          cfg && command.key === "model"
+            ? buildAllowedModelSet({
+                cfg,
+                catalog: toModelCatalogEntries(catalog ?? []),
+                defaultProvider: defaults.provider,
+                defaultModel: defaults.model,
+                agentId: params.agentId,
+              }).allowedCatalog
+            : catalog;
         const context: CommandArgChoiceContext = {
           cfg,
           provider: params.provider ?? defaults.provider,
           model: params.model ?? defaults.model,
           agentRuntime: params.agentRuntime,
-          catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
+          catalog: choiceCatalog,
           command,
           arg,
         };
@@ -394,12 +412,13 @@ export function resolveCommandArgMenu(params: {
   command: ChatCommandDefinition;
   args?: CommandArgs;
   cfg?: OpenClawConfig;
+  agentId?: string;
   provider?: string;
   model?: string;
   agentRuntime?: string;
   catalog?: ThinkingCatalogEntry[];
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
-  const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
+  const { command, args, cfg, agentId, provider, model, agentRuntime, catalog } = params;
   if (!command.args || !command.argsMenu) {
     return null;
   }
@@ -416,6 +435,7 @@ export function resolveCommandArgMenu(params: {
               command,
               arg,
               cfg,
+              agentId,
               provider,
               model,
               agentRuntime,
@@ -440,6 +460,7 @@ export function resolveCommandArgMenu(params: {
     command,
     arg,
     cfg,
+    agentId,
     provider,
     model,
     agentRuntime,

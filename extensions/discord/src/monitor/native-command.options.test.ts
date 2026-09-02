@@ -42,6 +42,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 }));
 
 let listNativeCommandSpecs: typeof import("openclaw/plugin-sdk/command-auth-native").listNativeCommandSpecs;
+let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth-native").findCommandByNativeName;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let buildDiscordCommandOptions: typeof import("./native-command.options.js").buildDiscordCommandOptions;
 let resolveDiscordNativeAutocompleteAuthorized: typeof import("./native-command-auth.js").resolveDiscordNativeAutocompleteAuthorized;
@@ -224,7 +225,8 @@ async function resolveAutocompleteAuthorized(params: {
 
 describe("createDiscordNativeCommand option wiring", () => {
   beforeAll(async () => {
-    ({ listNativeCommandSpecs } = await import("openclaw/plugin-sdk/command-auth-native"));
+    ({ findCommandByNativeName, listNativeCommandSpecs } =
+      await import("openclaw/plugin-sdk/command-auth-native"));
     ({ createDiscordNativeCommand } = await import("./native-command.js"));
     ({ buildDiscordCommandOptions } = await import("./native-command.options.js"));
     ({ resolveDiscordNativeAutocompleteAuthorized } = await import("./native-command-auth.js"));
@@ -351,6 +353,177 @@ describe("createDiscordNativeCommand option wiring", () => {
       { name: "max", value: "max" },
       { name: "ultra", value: "ultra" },
     ]);
+  });
+
+  it("filters /model autocomplete through the routed agent policy", async () => {
+    const command = findCommandByNativeName("model", "discord");
+    if (!command) {
+      throw new Error("missing model command definition");
+    }
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
+        },
+        entries: {
+          research: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: { models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }] },
+          anthropic: {
+            models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const options = buildDiscordCommandOptions({
+      command,
+      cfg,
+      authorizeChoiceContext: async () => true,
+      resolveChoiceContext: async () => ({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        agentId: "research",
+      }),
+    });
+    const model = options?.find((option) => option.name === "model");
+    if (!model) {
+      throw new Error("missing route-aware model option");
+    }
+    const autocomplete = requireAutocomplete(
+      model,
+      "model option did not wire route-aware autocomplete",
+    );
+
+    const respond = await runAutocomplete(autocomplete, {
+      userId: "owner",
+      channelType: ChannelType.DM,
+      channelId: "dm-1",
+      channelName: "dm-1",
+      focusedValue: "sonnet",
+    });
+
+    expect(respond).toHaveBeenCalledWith([
+      { name: "anthropic/Claude Sonnet 4.6", value: "anthropic/claude-sonnet-4-6" },
+    ]);
+
+    const canonicalRespond = await runAutocomplete(autocomplete, {
+      userId: "owner",
+      channelType: ChannelType.DM,
+      channelId: "dm-1",
+      channelName: "dm-1",
+      focusedValue: "anthropic/claude-sonnet-4-6",
+    });
+    expect(canonicalRespond).toHaveBeenCalledWith([
+      { name: "anthropic/Claude Sonnet 4.6", value: "anthropic/claude-sonnet-4-6" },
+    ]);
+  });
+
+  it("returns no /model autocomplete choices when route context cannot resolve", async () => {
+    const command = findCommandByNativeName("model", "discord");
+    if (!command) {
+      throw new Error("missing model command definition");
+    }
+    const options = buildDiscordCommandOptions({
+      command,
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-luna" },
+            modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
+          },
+        },
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna" }] },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      authorizeChoiceContext: async () => true,
+      resolveChoiceContext: async () => null,
+    });
+    const model = options?.find((option) => option.name === "model");
+    if (!model) {
+      throw new Error("missing route-aware model option");
+    }
+
+    const respond = await runAutocomplete(
+      requireAutocomplete(model, "model option did not wire route-aware autocomplete"),
+      {
+        userId: "owner",
+        channelType: ChannelType.DM,
+        channelId: "dm-1",
+        channelName: "dm-1",
+        focusedValue: "",
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith([]);
+  });
+
+  it("bounds autocomplete choice names and keeps only exact resolvable values at 100 chars", async () => {
+    const boundaryName = "n".repeat(100);
+    const boundaryValue = "v".repeat(100);
+    const oversizedName = "l".repeat(101);
+    const oversizedValue = "r".repeat(101);
+    const command: ChatCommandDefinition = {
+      key: "bounded",
+      nativeName: "bounded",
+      description: "Bounded choices",
+      textAliases: ["/bounded"],
+      acceptsArgs: true,
+      args: [
+        {
+          name: "ref",
+          description: "Reference",
+          type: "string",
+          choices: () => [
+            { label: boundaryName, value: boundaryValue },
+            { label: oversizedName, value: "long-label" },
+            { label: "Must not be truncated into a different ref", value: oversizedValue },
+            { label: "Later valid ref", value: "later-valid-ref" },
+          ],
+        },
+      ],
+      argsParsing: "positional",
+      argsMenu: "auto",
+      scope: "both",
+    };
+    const options = buildDiscordCommandOptions({
+      command,
+      cfg: {},
+      authorizeChoiceContext: async () => true,
+      resolveChoiceContext: async () => ({}),
+    });
+    const ref = options?.find((option) => option.name === "ref");
+    if (!ref) {
+      throw new Error("missing bounded ref option");
+    }
+    const autocomplete = requireAutocomplete(ref, "bounded ref did not wire autocomplete");
+    const respond = await runAutocomplete(autocomplete, {
+      userId: "owner",
+      channelType: ChannelType.DM,
+      channelId: "dm-1",
+      channelName: "dm-1",
+      focusedValue: "",
+    });
+
+    const choices = respond.mock.calls[0]?.[0] as Array<{ name: string; value: string }>;
+    expect(choices).toEqual([
+      { name: boundaryName, value: boundaryValue },
+      { name: "l".repeat(100), value: "long-label" },
+      { name: "Later valid ref", value: "later-valid-ref" },
+    ]);
+    expect(choices.every((choice) => choice.name.length <= 100 && choice.value.length <= 100)).toBe(
+      true,
+    );
+    expect(choices.some((choice) => choice.value === oversizedValue.slice(0, 100))).toBe(false);
   });
 
   it("keeps static choices for non-acp string action arguments", () => {

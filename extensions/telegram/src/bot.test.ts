@@ -2623,7 +2623,7 @@ describe("createTelegramBot", () => {
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
       expect(String(firstEditMessageTextArg(2))).toContain(
-        "Session model selection cleared. Runtime set to <b>openclaw</b> from configured policy. New replies use the agent's configured default.",
+        "Session model selection cleared. Session runtime remains <b>openclaw</b>. New replies use the agent's configured default.",
       );
 
       const entry = readOnlySessionEntry(storePath);
@@ -2678,7 +2678,7 @@ describe("createTelegramBot", () => {
     expect(entry?.modelOverride).toBeUndefined();
     expect(entry?.agentRuntimeOverride).toBeUndefined();
     expect(String(firstEditMessageTextArg(2))).toBe(
-      `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. Runtime set to <b>openclaw</b> from configured policy. New replies use the agent's configured default.`,
+      `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. Incompatible session runtime reset to <b>openclaw</b> from configured policy. New replies use the agent's configured default.`,
     );
   });
 
@@ -2815,7 +2815,7 @@ describe("createTelegramBot", () => {
           expect(entry?.modelOverride).toBeUndefined();
           const confirmation = String(firstEditMessageTextArg(2));
           expect(confirmation).toBe(
-            `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. ${outcomeText} Runtime set to <b>${expectedRuntime}</b> from configured policy. New replies use the agent's configured default.`,
+            `${CHECK_MARK_EMOJI} Model reset to default\n\nSession model selection cleared. ${outcomeText} Session runtime remains <b>${expectedRuntime}</b>. New replies use the agent's configured default.`,
           );
           expect(confirmation).not.toContain("team:prod");
         }
@@ -2860,7 +2860,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(firstEditMessageTextArg(2)).toContain(
-      "Selecting a model also applies its configured runtime.",
+      "Selecting a model preserves a compatible session runtime.",
     );
     const params = firstEditMessageTextArg(3);
     const inlineKeyboard = (
@@ -2933,7 +2933,7 @@ describe("createTelegramBot", () => {
     expect(editCall[0]).toBe(1234);
     expect(editCall[1]).toBe(17);
     expect(editCall[2]).toBe(
-      `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime set to <b>openclaw</b> from configured policy. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
+      `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Session runtime remains <b>openclaw</b>. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`,
     );
     expect(requireRecord(editCall[3], "edit params").parse_mode).toBe("HTML");
 
@@ -2941,7 +2941,7 @@ describe("createTelegramBot", () => {
     expect(entry?.providerOverride).toBe("openai");
     expect(entry?.modelOverride).toBe("gpt-5.4");
     expect(entry?.modelOverrideSource).toBe("user");
-    expect(entry?.agentRuntimeOverride).toBeUndefined();
+    expect(entry?.agentRuntimeOverride).toBe("openclaw");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
   });
 

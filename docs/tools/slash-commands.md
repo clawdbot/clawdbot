@@ -357,6 +357,9 @@ User-invocable skills are exposed as slash commands:
     args are omitted. Telegram and Slack show a button menu for commands with
     choices. Dynamic choices resolve against the target session model, so model-
     specific options like `/think` levels follow the session's `/model` override.
+    Native Slack and Telegram `/model` menus list the finite choices allowed for
+    the routed agent; without any finite choices, the normal status or browse
+    response remains available.
   </Accordion>
 </AccordionGroup>
 
@@ -412,7 +415,11 @@ Numeric selections such as `/model 3` are not supported.
 On Discord, the bare native `/model` and `/models` commands open an interactive
 picker. Choose a provider and model from the dropdowns, then select **Submit**.
 Discord follows the direct command behavior, including `modelSelectionScope`.
-Telegram model browsing uses callback buttons; selections always remain session-only.
+Native Slack `/model` lists the routed agent's finite configured choices when
+available and dispatches the selected ref through the direct command flow.
+Native Telegram `/model` shows the same routed choices when available and falls
+back to the provider browser otherwise. Telegram button selections always remain
+session-only.
 The picker respects `agents.defaults.modelPolicy.allow`,
 including `provider/*` entries. Without an explicit allowlist, model entries and
 aliases do not restrict selection.

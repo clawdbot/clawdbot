@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import type {
+  ModelsProviderData,
+  ModelsRuntimeChoice,
+} from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
@@ -46,8 +49,13 @@ export type DiscordModelPickerState = {
   action: DiscordModelPickerAction;
   view: DiscordModelPickerView;
   userId: string;
+  providerToken?: string;
+  /** Legacy pre-token component state; new renders use providerToken. */
   provider?: string;
+  runtimeToken?: string;
+  /** Legacy pre-token component state; new renders use runtimeToken. */
   runtime?: string;
+  /** Legacy positional runtime state; new renders use runtimeToken. */
   runtimeIndex?: number;
   page: number;
   providerPage?: number;
@@ -73,13 +81,106 @@ const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELECT_OPTIO
 
 /** Target items per alpha bucket. Discord caps selects at 25 options. */
 const DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE = 20;
-const DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
+const DISCORD_MODEL_PICKER_TOKEN_PATTERN = /^[A-Za-z0-9_-]{8}$/u;
+
+function createDiscordModelPickerToken(payload: string): string {
+  return createHash("sha256").update(payload, "utf8").digest("base64url").slice(0, 8);
+}
+
+export function createDiscordModelPickerProviderToken(provider: string): string {
+  return createDiscordModelPickerToken(normalizeProviderId(provider));
+}
 
 export function createDiscordModelPickerModelToken(provider: string, model: string): string {
-  return createHash("sha256")
-    .update(JSON.stringify([normalizeProviderId(provider), model]), "utf8")
-    .digest("base64url")
-    .slice(0, 8);
+  return createDiscordModelPickerToken(JSON.stringify([normalizeProviderId(provider), model]));
+}
+
+export function createDiscordModelPickerRuntimeToken(provider: string, runtime: string): string {
+  return createDiscordModelPickerToken(JSON.stringify([normalizeProviderId(provider), runtime]));
+}
+
+function resolveDiscordModelPickerTokenizedSelection(params: {
+  raw: string;
+  prefix: string;
+  values: readonly string[];
+  createToken: (value: string) => string;
+}): string | undefined {
+  if (!params.raw.startsWith(params.prefix)) {
+    return params.raw;
+  }
+  // Shipped picker messages can still contain raw IDs with these prefixes.
+  // Decode both interpretations and reject the value when they disagree.
+  const exactMatch = params.values.includes(params.raw) ? params.raw : undefined;
+  const token = params.raw.slice(params.prefix.length);
+  const tokenMatches = DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(token)
+    ? params.values.filter((value) => params.createToken(value) === token)
+    : [];
+  if (tokenMatches.length > 1) {
+    return undefined;
+  }
+  const tokenMatch = tokenMatches[0];
+  if (exactMatch && tokenMatch && exactMatch !== tokenMatch) {
+    return undefined;
+  }
+  return exactMatch ?? tokenMatch;
+}
+
+export function getDiscordModelPickerRuntimeChoices(params: {
+  data: ModelsProviderData;
+  provider: string;
+}): ModelsRuntimeChoice[] {
+  const choices = params.data.runtimeChoicesByProvider?.get(normalizeProviderId(params.provider));
+  if (choices?.length) {
+    return choices;
+  }
+  return [
+    {
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
+    },
+  ];
+}
+
+export function resolveDiscordModelPickerProviderSelection(
+  data: ModelsProviderData,
+  raw: string,
+): string | undefined {
+  return resolveDiscordModelPickerTokenizedSelection({
+    raw,
+    prefix: "p:",
+    values: data.providers,
+    createToken: createDiscordModelPickerProviderToken,
+  });
+}
+
+export function resolveDiscordModelPickerModelSelectionValue(params: {
+  data: ModelsProviderData;
+  provider: string;
+  raw: string;
+}): string | undefined {
+  return resolveDiscordModelPickerTokenizedSelection({
+    raw: params.raw,
+    prefix: "m:",
+    values: [...(params.data.byProvider.get(params.provider) ?? [])],
+    createToken: (model) => createDiscordModelPickerModelToken(params.provider, model),
+  });
+}
+
+export function resolveDiscordModelPickerRuntimeSelectionValue(params: {
+  data: ModelsProviderData;
+  provider: string;
+  raw: string;
+}): string | undefined {
+  return resolveDiscordModelPickerTokenizedSelection({
+    raw: params.raw,
+    prefix: "r:",
+    values: getDiscordModelPickerRuntimeChoices({
+      data: params.data,
+      provider: params.provider,
+    }).map((runtime) => runtime.id),
+    createToken: (runtime) => createDiscordModelPickerRuntimeToken(params.provider, runtime),
+  });
 }
 
 export type DiscordModelPickerBucket = {
@@ -205,8 +306,7 @@ export function buildDiscordModelPickerCustomId(params: {
   view: DiscordModelPickerView;
   userId: string;
   provider?: string;
-  runtime?: string;
-  runtimeIndex?: number;
+  runtimeToken?: string;
   page?: number;
   providerPage?: number;
   modelIndex?: number;
@@ -226,8 +326,12 @@ export function buildDiscordModelPickerCustomId(params: {
   const modelIndex = normalizeOptionalModelPickerIndex(params.modelIndex);
   const recentSlot = normalizeOptionalModelPickerIndex(params.recentSlot);
   const modelToken = params.modelToken?.trim();
-  if (modelToken && !DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN.test(modelToken)) {
+  if (modelToken && !DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(modelToken)) {
     throw new Error("Discord model picker model token is invalid");
+  }
+  const runtimeToken = params.runtimeToken?.trim();
+  if (runtimeToken && !DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(runtimeToken)) {
+    throw new Error("Discord model picker runtime token is invalid");
   }
 
   const parts = [
@@ -238,15 +342,10 @@ export function buildDiscordModelPickerCustomId(params: {
     `g=${String(page)}`,
   ];
   if (normalizedProvider) {
-    parts.push(`p=${encodeCustomIdComponent(normalizedProvider)}`);
+    parts.push(`pt=${createDiscordModelPickerProviderToken(normalizedProvider)}`);
   }
-  const runtime = params.runtime?.trim();
-  if (runtime) {
-    parts.push(`r=${encodeCustomIdComponent(runtime)}`);
-  }
-  const runtimeIndex = normalizeOptionalModelPickerIndex(params.runtimeIndex);
-  if (runtimeIndex) {
-    parts.push(`ri=${String(runtimeIndex)}`);
+  if (runtimeToken) {
+    parts.push(`rt=${runtimeToken}`);
   }
   if (providerPage) {
     parts.push(`pp=${String(providerPage)}`);
@@ -290,14 +389,23 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
   const action = decodeCustomIdComponent(coerceString(data.a ?? data.act));
   const view = decodeCustomIdComponent(coerceString(data.v ?? data.view));
   const userId = decodeCustomIdComponent(coerceString(data.u));
+  const providerTokenRaw = coerceString(data.pt).trim();
+  const providerToken = DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(providerTokenRaw)
+    ? providerTokenRaw
+    : undefined;
   const providerRaw = decodeCustomIdComponent(coerceString(data.p));
+  const runtimeTokenRaw = coerceString(data.rt).trim();
+  const runtimeToken = DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(runtimeTokenRaw)
+    ? runtimeTokenRaw
+    : undefined;
   const runtimeRaw = decodeCustomIdComponent(coerceString(data.r));
+  const runtimeIndexRaw = coerceString(data.ri).trim();
   const runtimeIndex = parseStrictPositiveInteger(data.ri);
   const page = parseRawPage(data.g ?? data.pg);
   const providerPage = parseStrictPositiveInteger(data.pp);
   const modelIndex = parseStrictPositiveInteger(data.mi);
   const modelTokenRaw = coerceString(data.m).trim();
-  const modelToken = DISCORD_MODEL_PICKER_MODEL_TOKEN_PATTERN.test(modelTokenRaw)
+  const modelToken = DISCORD_MODEL_PICKER_TOKEN_PATTERN.test(modelTokenRaw)
     ? modelTokenRaw
     : undefined;
   const recentSlot = parseStrictPositiveInteger(data.rs);
@@ -309,7 +417,12 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
   }
 
   const trimmedUserId = userId.trim();
-  if (!trimmedUserId) {
+  if (
+    !trimmedUserId ||
+    (providerTokenRaw && !providerToken) ||
+    (runtimeTokenRaw && !runtimeToken) ||
+    (runtimeIndexRaw && runtimeIndex === undefined)
+  ) {
     return null;
   }
 
@@ -321,8 +434,10 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
     action,
     view,
     userId: trimmedUserId,
-    provider,
-    runtime,
+    ...(providerToken ? { providerToken } : {}),
+    ...(provider ? { provider } : {}),
+    ...(runtimeToken ? { runtimeToken } : {}),
+    ...(runtime ? { runtime } : {}),
     ...(typeof runtimeIndex === "number" ? { runtimeIndex } : {}),
     page,
     ...(typeof providerPage === "number" ? { providerPage } : {}),

@@ -38,6 +38,7 @@ export type TelegramMessageContextOptions = {
   threadSpec?: TelegramThreadSpec;
   commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
+  revalidateCommandOwnerAccess?: boolean;
   messageIdOverride?: string;
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";

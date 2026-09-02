@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
+import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramCallbackMessageRuntime } from "./bot-handlers.callback-router-controls.js";
@@ -103,6 +103,7 @@ describe("Telegram model callback loopback", () => {
     try {
       const apiRoot = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       const storePath = join(stateDir, "sessions.json");
+      const sessionKey = "agent:main:telegram:direct:1234";
       const config: OpenClawConfig = {
         agents: {
           defaults: {
@@ -118,6 +119,15 @@ describe("Telegram model callback loopback", () => {
         },
         session: { store: storePath },
       };
+      await upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: {
+          sessionId: "existing-session",
+          updatedAt: 1_786_404_800_000,
+          agentRuntimeOverride: "openclaw",
+        },
+      });
       const buttons = buildModelsKeyboard({
         provider: PROVIDER,
         models: [MODEL],
@@ -182,8 +192,15 @@ describe("Telegram model callback loopback", () => {
           callbackSteps.push("sender");
           return true;
         },
-        isTelegramModelCallbackAuthorized: async () => {
+        resolveTelegramModelCallbackAuthorization: async () => {
           callbackSteps.push("model");
+          return {
+            authorized: true,
+            ownerAccess: { ownerList: [], senderIsOwner: true },
+          };
+        },
+        reauthorizeTelegramModelCallback: async () => {
+          callbackSteps.push("context", "model");
           return true;
         },
       } as unknown as TelegramHandlerAuthorization;
@@ -200,7 +217,7 @@ describe("Telegram model callback loopback", () => {
         resolveTelegramSessionState: () => ({
           agentId: "main",
           sessionEntry: undefined,
-          sessionKey: "agent:main:telegram:direct:1234",
+          sessionKey,
           storePath,
           model: undefined,
         }),
@@ -235,11 +252,20 @@ describe("Telegram model callback loopback", () => {
         "answerCallbackQuery",
         "editMessageText",
       ]);
-      expect(callbackSteps).toEqual(["context", "sender", "model", "catalog"]);
+      expect(callbackSteps).toEqual([
+        "context",
+        "sender",
+        "model",
+        "catalog",
+        "catalog",
+        "context",
+        "model",
+      ]);
       expect(listSessionEntries({ storePath })[0]?.entry).toMatchObject({
         providerOverride: PROVIDER,
         modelOverride: MODEL,
         modelOverrideSource: "user",
+        agentRuntimeOverride: "openclaw",
         liveModelSwitchPending: true,
       });
       expect(requests.at(-1)?.payload.text).toContain(

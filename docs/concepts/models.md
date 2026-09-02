@@ -249,7 +249,8 @@ Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"sessi
 - In text chat, `/model` shows the current selection. `/model list` (or `/models`) browses providers; `/models <provider>` lists model refs.
 - Select with `/model <provider/model>` or `/model <alias>` (for example, `/model Opus` with the alias configured above). Numeric selections such as `/model 3` are not supported.
 - On Discord, native `/model` and `/models` without arguments open an interactive picker. Choose a provider and model, then press **Submit**. Discord pickers follow the direct command behavior, including `modelSelectionScope`.
-- On Telegram, `/model` offers a **Browse providers** button; `/model list` and `/models` open the provider menu directly. Tap a provider, then a model. Telegram callback selections always stay session-only.
+- On Slack, native `/model` shows the routed agent's finite configured choices when available and dispatches the selected ref through the direct command flow.
+- On Telegram, native `/model` shows the same routed choices when available and otherwise offers a **Browse providers** button; `/model list` and `/models` open the provider menu directly. Telegram button selections always stay session-only.
 - `/models add` is deprecated and returns a message instead of registering models from chat.
 - **Current session:** `/model <model> -s` (or `--session`) changes only this session, regardless of `modelSelectionScope`. Neither configured default changes.
 - **Agent default:** Owner/admin `/model <model> -a` (or `--agent`) selects the model for this session and requests an update for `agents.entries.<agent>.model`. It creates an explicit primary for that configured agent when needed and never falls through to the shared global default.

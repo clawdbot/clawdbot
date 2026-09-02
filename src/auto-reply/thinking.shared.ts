@@ -30,6 +30,7 @@ type UsageDisplayLevel = "off" | "tokens" | "full";
 export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
+  name?: string;
   api?: string;
   baseUrl?: string;
   contextWindow?: number;

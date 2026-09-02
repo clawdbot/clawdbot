@@ -498,7 +498,13 @@ async function dispatchDiscordCommandInteraction(params: {
 
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
+  // Bare Discord model commands own a richer staged picker; generic argument menus must not intercept it.
+  const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
+    command,
+    commandArgs,
+  });
   const menuNeedsModelContext =
+    !pickerCommandContext &&
     !(commandArgs?.raw && !commandArgs.values) &&
     command.args?.some(
       (arg) => typeof arg.choices === "function" && commandArgs?.values?.[arg.name] == null,
@@ -525,15 +531,18 @@ async function dispatchDiscordCommandInteraction(params: {
           readOnly: true,
         })
       : undefined;
-  const menu = resolveCommandArgMenu({
-    command,
-    args: commandArgs,
-    cfg,
-    provider: menuModelContext?.provider,
-    model: menuModelContext?.model,
-    agentRuntime: menuModelContext?.agentRuntime,
-    ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
-  });
+  const menu = pickerCommandContext
+    ? null
+    : resolveCommandArgMenu({
+        command,
+        args: commandArgs,
+        cfg,
+        agentId: menuModelContext?.agentId,
+        provider: menuModelContext?.provider,
+        model: menuModelContext?.model,
+        agentRuntime: menuModelContext?.agentRuntime,
+        ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
+      });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({
       command,
@@ -630,10 +639,6 @@ async function dispatchDiscordCommandInteraction(params: {
     return { accepted: true, effectiveRoute };
   }
 
-  const pickerCommandContext = shouldOpenDiscordModelPickerFromCommand({
-    command,
-    commandArgs,
-  });
   if (pickerCommandContext) {
     await replyWithDiscordModelPickerProviders({
       interaction,

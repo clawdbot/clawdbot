@@ -314,6 +314,118 @@ describe("Telegram native command built-ins", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it("uses session-scoped command callbacks for short models and bounded canonical refs for long models", async () => {
+    const longModel = `model-${"x".repeat(80)}`;
+    commandAuthMocks.resolveCommandArgMenu.mockImplementation(({ command, agentId }) => {
+      if (command.key !== "model") {
+        return null;
+      }
+      const arg = command.args?.[0];
+      if (!arg) {
+        return null;
+      }
+      expect(agentId).toBe("main");
+      return {
+        arg,
+        choices: [
+          { label: "Short Model", value: "openrouter/short-model" },
+          { label: "Long Model", value: `amazon-bedrock/${longModel}` },
+        ],
+        title: "Choose a model for /model.",
+      };
+    });
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "model",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(commandAuthMocks.findCommandByNativeName).toHaveBeenCalledWith("model", "telegram", {
+      includeBundledChannelFallback: false,
+    });
+    const options = expectSendMessageCall({
+      sendMessage,
+      chatId: 100,
+      textIncludes: "Choose a model for /model.",
+      requireReplyMarkup: true,
+      label: "model menu",
+    });
+    expect(options.reply_markup).toEqual({
+      inline_keyboard: [
+        [
+          {
+            text: "Short Model",
+            callback_data: "tgcmd:/model openrouter/short-model -s",
+          },
+          {
+            text: "Long Model",
+            callback_data: expect.stringMatching(/^mdl1~m:[A-Za-z0-9_-]{43}$/),
+          },
+        ],
+      ],
+    });
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the ordinary /model response when routed choices exceed Telegram's keyboard limit", async () => {
+    commandAuthMocks.resolveCommandArgMenu.mockImplementation(({ command }) => {
+      if (command.key !== "model") {
+        return null;
+      }
+      const arg = command.args?.[0];
+      if (!arg) {
+        return null;
+      }
+      return {
+        arg,
+        choices: Array.from({ length: 101 }, (_, index) => ({
+          label: `Model ${index}`,
+          value: `openrouter/model-${index}`,
+        })),
+        title: "Choose a model for /model.",
+      };
+    });
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "model",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches an ordinary command when its only menu callback would exceed Telegram's limit", async () => {
+    commandAuthMocks.resolveCommandArgMenu.mockImplementation(({ command }) => {
+      if (command.key !== "usage") {
+        return null;
+      }
+      const arg = command.args?.[0];
+      if (!arg) {
+        return null;
+      }
+      return {
+        arg,
+        choices: [{ label: "Too long", value: "x".repeat(80) }],
+        title: "Choose usage mode.",
+      };
+    });
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "usage",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the read-only catalog for Claude CLI thinking menus", async () => {
     const cfg = {
       agents: {

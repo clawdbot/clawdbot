@@ -6,7 +6,7 @@ import {
 } from "./external-arg-menu-store.js";
 
 describe("createSlackExternalArgMenuStore", () => {
-  const choices = [{ label: "Daily", value: "day" }];
+  const choices = [{ label: "Daily", value: "encoded-day", searchValue: "day" }];
 
   it("returns entries before their expiry", () => {
     const store = createSlackExternalArgMenuStore();
@@ -39,7 +39,9 @@ describe("createSlackExternalArgMenuStore", () => {
     const token = store.create({ choices, userId: "U1" }, 1_700_000_000_000);
 
     expect(store.readToken(`${SLACK_EXTERNAL_ARG_MENU_PREFIX}${token}`)).toBe(token);
+    expect(store.readToken(`${SLACK_EXTERNAL_ARG_MENU_PREFIX}${token}:2`)).toBe(token);
     expect(store.readToken(token)).toBeUndefined();
     expect(store.readToken(`${SLACK_EXTERNAL_ARG_MENU_PREFIX}not a token`)).toBeUndefined();
+    expect(store.readToken(`${SLACK_EXTERNAL_ARG_MENU_PREFIX}${token}:bad!row`)).toBeUndefined();
   });
 });

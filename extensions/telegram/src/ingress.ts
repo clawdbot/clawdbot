@@ -38,7 +38,7 @@ export function telegramAllowEntries(allow: NormalizedAllowFrom): string[] {
   return [...(allow.hasWildcard ? ["*"] : []), ...allow.entries];
 }
 
-type TelegramOwnerCommandAccess = { ownerList: string[]; senderIsOwner: boolean };
+export type TelegramOwnerCommandAccess = { ownerList: string[]; senderIsOwner: boolean };
 
 function telegramConversation(params: {
   isGroup: boolean;

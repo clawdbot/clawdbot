@@ -55,6 +55,7 @@ import {
 import {
   buildTelegramGroupPeerId,
   buildTelegramInboundOriginTarget,
+  resolveTelegramCommandAuthorization,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
@@ -209,6 +210,17 @@ export async function resolveTelegramInboundBody(params: {
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
     botUsername,
   });
+  const commandOwnerAccess = options?.revalidateCommandOwnerAccess
+    ? resolveTelegramCommandAuthorization({
+        cfg,
+        accountId: accountId ?? "default",
+        chatId: Number(chatId),
+        isGroup,
+        threadSpec,
+        senderId,
+        senderUsername,
+      })
+    : { ownerList: [], senderIsOwner: false };
   const commandGate = await resolveTelegramCommandIngressAuthorization({
     accountId: accountId ?? "default",
     cfg,
@@ -219,7 +231,7 @@ export async function resolveTelegramInboundBody(params: {
     senderId,
     effectiveDmAllow,
     effectiveGroupAllow,
-    ownerAccess: { ownerList: [], senderIsOwner: false },
+    ownerAccess: commandOwnerAccess,
     eventKind: "message",
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
