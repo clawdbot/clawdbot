@@ -13309,32 +13309,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(telegramProvenanceHelper).not.toContain(".baseRefName ==");
   });
 
-  it("checks out the complete Release Decision evidence validator closure", () => {
+  it("checks out the complete trusted Release Decision scripts tree", () => {
     const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
     const checkout = workflow.jobs.release_decision.steps.find(
       (step: WorkflowStep) => step.name === "Checkout release decision tooling",
     );
-    const sparseCheckoutPaths = String(checkout?.with?.["sparse-checkout"] ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
 
-    expect(sparseCheckoutPaths).toEqual([
-      "scripts/full-release-validation-state.mjs",
-      "scripts/full-release-validation-policy.mjs",
-      "scripts/full-release-candidate-contract.mjs",
-      "scripts/release-ci-summary.mjs",
-      "scripts/lib/canonical-json.mjs",
-      "scripts/lib/plain-gh.mjs",
-      "scripts/lib/record-shared.mjs",
-      "scripts/lib/upgrade-survivor-policy.mjs",
-    ]);
-    for (const sparsePath of sparseCheckoutPaths) {
-      expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({
-        sparsePath,
-        exists: true,
-      });
-    }
+    expect(checkout?.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      "sparse-checkout": "scripts",
+      "sparse-checkout-cone-mode": false,
+      "persist-credentials": false,
+    });
   });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {

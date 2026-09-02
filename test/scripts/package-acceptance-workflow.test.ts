@@ -4763,9 +4763,7 @@ describe("package artifact reuse", () => {
       workflowStep(candidateBinding, "Checkout candidate binding authority"),
       workflowStep(summary, "Checkout release state verifier"),
     ]) {
-      expect(checkout.with?.["sparse-checkout"]).toContain(
-        "scripts/lib/full-release-candidate-reuse.mjs",
-      );
+      expect(checkout.with?.["sparse-checkout"]).toBe("scripts");
     }
     expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(
