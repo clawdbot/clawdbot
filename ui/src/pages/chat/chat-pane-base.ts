@@ -66,6 +66,7 @@ import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatSessionSharingState } from "./components/chat-session-sharing.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
@@ -497,6 +498,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     super();
     observeNativeGateway(this);
     void new SubscriptionsController(this)
+      .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
       .watch(
         () => this.context && chatInputOwnerForContext(this.context),
         (owner, notify) => owner.subscribe(notify),

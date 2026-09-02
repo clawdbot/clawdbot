@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
@@ -13,6 +13,7 @@ import {
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import * as realtimeTalkInput from "./realtime-talk-input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
@@ -109,6 +110,7 @@ function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number):
 }
 
 beforeEach(() => {
+  onTestFinished(installChatComposerPickerDismissal(document));
   // ESM imports remain live when the composer was cached by another test file.
   // Patch the shared dependencies instead of clearing isolate:false's registry.
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(

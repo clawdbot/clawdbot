@@ -44,7 +44,6 @@ import {
 } from "./chat-composer-status.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import {
-  ensureChatComposerPickerDismissal,
   handleChatComposerDropdownShow,
   markPointerOpenedChatComposerDropdown,
   restorePointerOpenedChatComposerTrigger,
@@ -128,9 +127,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuAnnouncementId,
     goalComposer,
   } = context;
-  if (slashMenuVisible || skillMenuVisible) {
-    ensureChatComposerPickerDismissal();
-  }
   const disabledBanner = props.disabledBanner
     ? html`
         <div

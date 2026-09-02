@@ -20,6 +20,7 @@ import "../../styles/new-session.css";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
+import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
@@ -174,6 +175,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       requestUpdate: () => this.requestUpdate(),
     });
     this.subscriptions = new SubscriptionsController(this)
+      .effect(() => this.ownerDocument, installChatComposerPickerDismissal)
       .watch(
         () => this.context?.gateway,
         (gateway, notify) => gateway.subscribe(notify),

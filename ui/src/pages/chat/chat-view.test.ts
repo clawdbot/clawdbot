@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render, type LitElement } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -56,6 +56,7 @@ import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
   resetThreadPresentation,
   resetTranscriptSession,
@@ -300,6 +301,7 @@ function renderWorkGroupSummaryMock(
 }
 
 beforeEach(() => {
+  onTestFinished(installChatComposerPickerDismissal(document));
   vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
