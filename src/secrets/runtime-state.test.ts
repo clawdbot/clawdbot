@@ -7,6 +7,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   noteRuntimeAuthProfileStorePersistedMutation,
   prepareRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
@@ -95,6 +96,7 @@ function preparedSnapshot(
     sourceConfig: {},
     config: {},
     authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
     warnings: [],
     webTools: {
       search: { providerSource: "none", diagnostics: [] },
@@ -487,6 +489,53 @@ describe("secrets runtime state", () => {
     expect(
       getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.profiles["anthropic:candidate"],
     ).toBeUndefined();
+  });
+
+  it("publishes a durable order loaded after a separate-process write", () => {
+    const agentDir = "/tmp/openclaw-auth-order-durable-refresh";
+    const profiles = {
+      "openai:a": { type: "api_key" as const, provider: "openai", key: "sk-a" },
+      "openai:b": { type: "api_key" as const, provider: "openai", key: "sk-b" },
+    };
+    const snapshot = (order: string[]) =>
+      preparedSnapshot({
+        authStores: [{ agentDir, store: { version: 1, profiles, order: { openai: order } } }],
+      });
+    activateSnapshot(snapshot(["openai:a", "openai:b"]));
+    const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+
+    const refreshed = snapshot(["openai:b", "openai:a"]);
+    expect(activateSnapshotIfCurrent(refreshed, { expectedRevision: previousRevision })).toBe(true);
+
+    expect(getRuntimeAuthProfileStoreSnapshotCore(agentDir)?.order?.openai).toEqual([
+      "openai:b",
+      "openai:a",
+    ]);
+  });
+
+  it("keeps live bookkeeping mutated after the candidate was loaded", () => {
+    const agentDir = "/tmp/openclaw-auth-order-concurrent-mutation";
+    const profiles = {
+      "openai:a": { type: "api_key" as const, provider: "openai", key: "sk-a" },
+      "openai:b": { type: "api_key" as const, provider: "openai", key: "sk-b" },
+    };
+    const snapshot = (order: string[]) =>
+      preparedSnapshot({
+        authStores: [{ agentDir, store: { version: 1, profiles, order: { openai: order } } }],
+      });
+    activateSnapshot(snapshot(["openai:a", "openai:b"]));
+    const previousRevision = getActiveSecretsRuntimeSnapshotRevisionState();
+    const candidate = snapshot(["openai:b", "openai:a"]);
+
+    const live = getRuntimeAuthProfileStoreSnapshotCore(agentDir)!;
+    live.order = { openai: ["openai:a"] };
+    live.lastGood = { openai: "openai:a" };
+    setRuntimeAuthProfileStoreSnapshot(live, agentDir);
+    expect(activateSnapshotIfCurrent(candidate, { expectedRevision: previousRevision })).toBe(true);
+
+    const published = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
+    expect(published?.order?.openai).toEqual(["openai:a"]);
+    expect(published?.lastGood?.openai).toBe("openai:a");
   });
 
   it("rolls back candidate credentials against the activation-time auth baseline", () => {

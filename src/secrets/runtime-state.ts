@@ -12,6 +12,8 @@ import { loadRuntimeAuthProfileOwnerSnapshot } from "../agents/auth-profiles/run
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   listOwnedRuntimeAuthProfileStoreSnapshots,
   replaceOwnedRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
@@ -56,6 +58,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   config: OpenClawConfig;
   authStores: OwnedRuntimeAuthProfileStoreSnapshotEntry[];
   authStoreCredentialsRevision: number;
+  authStoreSnapshotsRevision?: number;
   warnings: SecretResolverWarning[];
   degradedOwners?: DegradedSecretOwner[];
   secretOwners?: SecretOwnerRefState[];
@@ -247,6 +250,7 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     config: cloneConfigWithResolutionFacts(snapshot.config),
     authStores: structuredClone(snapshot.authStores),
     authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
+    authStoreSnapshotsRevision: snapshot.authStoreSnapshotsRevision,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
     degradedOwners: (snapshot.degradedOwners ?? []).map(cloneDegradedSecretOwner),
     secretOwners: (snapshot.secretOwners ?? []).map(cloneSecretOwnerRefState),
@@ -257,6 +261,7 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
 function mergeLiveAuthStoreBookkeeping(
   authStores: PreparedSecretsRuntimeSnapshot["authStores"],
   degradedOwners: readonly DegradedSecretOwner[] = [],
+  preparedSnapshotsRevision?: number,
 ): PreparedSecretsRuntimeSnapshot["authStores"] {
   const liveEntries = new Map(
     listOwnedRuntimeAuthProfileStoreSnapshots().map((entry) => [entry.databasePath, entry]),
@@ -268,6 +273,13 @@ function mergeLiveAuthStoreBookkeeping(
     }
     let bookkeeping = entry.store;
     if (isDeepStrictEqual(snapshotMutationOwner(entry), snapshotMutationOwner(live))) {
+      if (
+        preparedSnapshotsRevision !== undefined &&
+        getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(entry.databasePath) <=
+          preparedSnapshotsRevision
+      ) {
+        return entry;
+      }
       bookkeeping = live.store;
     } else if (entry.owner.kind === "resolved" && live.owner.kind === "resolved") {
       // Effective state cannot separate old inherited values from local overrides or clears.
@@ -927,6 +939,7 @@ export function graftActiveSecretsRuntimeAuthState(snapshot: PreparedSecretsRunt
   }
   snapshot.authStores = getLiveSecretsRuntimeAuthStores();
   snapshot.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+  snapshot.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, activeRefreshContext);
 }
 
@@ -964,7 +977,11 @@ export function activateSecretsRuntimeSnapshotState(params: {
   }
   const next = cloneSnapshot(params.snapshot);
   if (params.mergeLiveAuthBookkeeping !== false) {
-    next.authStores = mergeLiveAuthStoreBookkeeping(next.authStores, next.degradedOwners);
+    next.authStores = mergeLiveAuthStoreBookkeeping(
+      next.authStores,
+      next.degradedOwners,
+      next.authStoreSnapshotsRevision,
+    );
   }
   const activationAuthStores = listOwnedRuntimeAuthProfileStoreSnapshots();
   const previousLineageAuthStores = activeSnapshotLineageAuthStores;
@@ -979,6 +996,7 @@ export function activateSecretsRuntimeSnapshotState(params: {
   setRuntimeConfigSnapshot(next.config, params.runtimeSourceConfig ?? next.sourceConfig);
   replaceOwnedRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+  next.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const previousLineageStartRevision = activeSnapshotLineageStartRevision;
   activeSnapshot = next;
   activeSnapshotRevision += 1;
@@ -1110,8 +1128,10 @@ export function restoreSecretsRuntimeSnapshotStateIfCurrent(
           ...independentEntries,
         ],
         params.snapshot.degradedOwners,
+        params.snapshot.authStoreSnapshotsRevision,
       ).toSorted((left, right) => left.agentDir.localeCompare(right.agentDir)),
       authStoreCredentialsRevision: currentCredentialsRevision,
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
     },
     mergeLiveAuthBookkeeping: false,
     preserveActivationLineage: false,
@@ -1129,6 +1149,7 @@ export function getActiveSecretsRuntimeSnapshotState(): PreparedSecretsRuntimeSn
   const snapshot = cloneSnapshot(activeSnapshot);
   snapshot.authStores = listOwnedRuntimeAuthProfileStoreSnapshots();
   snapshot.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+  snapshot.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   if (activeRefreshContext) {
     preparedSnapshotRefreshContext.set(
       snapshot,
