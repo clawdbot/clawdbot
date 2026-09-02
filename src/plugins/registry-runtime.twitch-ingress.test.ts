@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   configureChannelAdmissionEvidenceCollection,
@@ -8,6 +9,7 @@ import { importBundledChannelContractSourceArtifact } from "../channels/plugins/
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runChannelInboundEvent } from "../plugin-sdk/channel-inbound.js";
+import { resolveBundledPluginPublicModulePath } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
@@ -73,7 +75,12 @@ const transport = await vi.hoisted(async () => {
   return { ChatClient, createDeferred };
 });
 
-vi.mock("@twurple/chat", () => ({
+const requireTwitch = createRequire(
+  resolveBundledPluginPublicModulePath({ pluginId: "twitch", artifactBasename: "api.js" }),
+);
+
+// Transport dependencies resolve from their owning plugin, not the core test package.
+vi.doMock(requireTwitch.resolve("@twurple/chat"), () => ({
   ChatClient: transport.ChatClient,
   LogLevel: { WARNING: "warning" },
 }));
