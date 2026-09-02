@@ -2,7 +2,6 @@
 import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
-import type { ConfigUiHints } from "./schema.hints.js";
 import {
   applySensitiveUrlHints,
   buildBaseHints,
@@ -14,6 +13,7 @@ import {
   asSchemaObject,
   cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
+  type ConfigSchemaResponse,
 } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
@@ -94,14 +94,7 @@ function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly
   }
 }
 
-type BaseConfigSchemaResponse = {
-  schema: ConfigSchema;
-  uiHints: ConfigUiHints;
-  version: string;
-  generatedAt: string;
-};
-
-type BaseConfigSchemaStablePayload = Omit<BaseConfigSchemaResponse, "generatedAt">;
+type BaseConfigSchemaStablePayload = Omit<ConfigSchemaResponse, "generatedAt">;
 
 function preparePublicSchema(schema: ConfigSchema): ConfigSchema {
   // Zod returns an independent JSON tree; prepare it before publishing the cache.
@@ -162,7 +155,7 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
 
 export function computeBaseConfigSchemaResponse(params?: {
   generatedAt?: string;
-}): BaseConfigSchemaResponse {
+}): ConfigSchemaResponse {
   const stablePayload = computeBaseConfigSchemaStablePayload();
   return {
     schema: cloneSchema(stablePayload.schema),

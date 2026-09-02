@@ -811,11 +811,17 @@ describe("redactConfigSnapshot", () => {
     expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
   });
 
-  it("redacts parsed and resolved objects", () => {
-    const snapshot = makeSnapshot({
+  it("redacts each projection without using its secrets to rewrite another projection", () => {
+    const config = {
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },
       gateway: { auth: { token: "supersecrettoken123456" } },
-    });
+      meta: { lastTouchedVersion: "resolved-only-value migration-only-value" },
+    };
+    const snapshot = {
+      ...makeSnapshot(config, JSON.stringify(config)),
+      resolved: { ...config, gateway: { auth: { token: "resolved-only-value" } } },
+      sourceConfigBeforeMigrations: { gateway: { auth: { token: "migration-only-value" } } },
+    };
     const result = redactConfigSnapshot(snapshot);
     const parsed = result.parsed as Record<string, Record<string, Record<string, string>>>;
     const sourceConfig = result.sourceConfig as Record<
@@ -841,6 +847,8 @@ describe("redactConfigSnapshot", () => {
     expect(runtimeDiscord.token).toBe(REDACTED_SENTINEL);
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
+    expect(result).not.toHaveProperty("sourceConfigBeforeMigrations");
+    expect(result.raw).toContain('"lastTouchedVersion":"resolved-only-value migration-only-value"');
   });
 
   it("handles null raw gracefully", () => {

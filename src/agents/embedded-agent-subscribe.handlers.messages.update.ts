@@ -1,21 +1,18 @@
 /**
  * Handles assistant message deltas, reasoning, directives, and block replies.
  */
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { coerceChatContentText } from "../shared/chat-content.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
+import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
 import { updateLiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
   mergeReplyDirectiveResults,
   recordPendingAssistantReplyDirectives,
-  resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
-  buildAssistantStreamData,
   emitAssistantCommentaryStreamData,
   emitAssistantMessageStart,
   emitReasoningEnd,
@@ -41,12 +38,12 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { appendRawStream } from "./embedded-agent-subscribe.raw-stream.js";
 import {
+  createAssistantVisibleStreamText,
   createThinkingTagStreamState,
   extractAssistantCommentaryText,
   extractAssistantThinking,
   extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
-  sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 
@@ -68,6 +65,9 @@ export function handleMessageUpdate(
       ? (assistantEvent as Record<string, unknown>)
       : undefined;
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
+  if (evtType !== "text_delta") {
+    ctx.flushAssistantStream();
+  }
   const liveEditDiff = updateLiveEditDiffProgress(ctx.state.liveEditDiffStateById, assistantRecord);
   if (liveEditDiff) {
     const data = { phase: "input_delta", ...liveEditDiff };
@@ -88,7 +88,9 @@ export function handleMessageUpdate(
   const assistantPhase = resolveAssistantMessagePhase(msg);
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   if (suppressVisibleAssistantOutput && !isResponsesTextEvent) {
-    const commentaryText = coerceChatContentText(extractAssistantCommentaryText(msg));
+    // Even hidden commentary closes the preceding visible-text scope.
+    ctx.flushAssistantStream();
+    const commentaryText = extractAssistantCommentaryText(msg);
     if (commentaryText) {
       appendRawStream(() => ({
         ts: Date.now(),
@@ -222,6 +224,7 @@ export function handleMessageUpdate(
   }
   if (streamContentIndex !== undefined) {
     if (streamContentIndex !== ctx.state.lastAssistantStreamContentIndex) {
+      ctx.flushAssistantStream();
       ctx.state.streamBlockText = "";
       ctx.state.streamBlockOffset = ctx.blockChunker.sourceLength;
     }
@@ -249,18 +252,18 @@ export function handleMessageUpdate(
     }
     const commentaryText = isResponsesCommentary
       ? ctx.state.deltaBuffer
-      : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
-    const commentaryData =
-      commentaryText && (chunk || !hadResponsesCommentaryText)
-        ? buildAssistantStreamData({
-            text: commentaryText,
-            replace: true,
-            phase: "commentary",
-            itemId: deliveryItemId,
-          })
-        : undefined;
-    if (commentaryData) {
-      ctx.emitAssistantStreamData(commentaryData);
+      : extractAssistantCommentaryText(streamAssistant);
+    if (commentaryText && (chunk || !hadResponsesCommentaryText || evtType === "text_end")) {
+      ctx.emitAssistantStreamData(
+        {
+          text: commentaryText,
+          delta: "",
+          replace: true,
+          phase: "commentary",
+          itemId: deliveryItemId,
+        },
+        { finalMessage: evtType === "text_end" },
+      );
     }
     return undefined;
   }
@@ -308,6 +311,7 @@ export function handleMessageUpdate(
   const wasThinking = ctx.state.partialBlockState.thinking;
   let visibleDelta = "";
   let textIsAppend = false;
+  let appendDelta: string | null = null;
   let previousText = ctx.state.assistantStream?.raw ?? "";
   // A text_start partial may already contain text that the following text_delta replays.
   // Use starts only for lifecycle boundaries; consume their text from delta/end events.
@@ -348,31 +352,18 @@ export function handleMessageUpdate(
   if (!next && evtType !== "text_end") {
     next = undefined;
   }
+  const hasSnapshotText = next !== undefined;
   let nextRawStreamText = next ?? "";
-  let sanitized: NonNullable<EmbeddedAgentSubscribeState["assistantStream"]>["sanitized"];
+  let projection: NonNullable<EmbeddedAgentSubscribeState["assistantStream"]>["projection"];
   if (next === undefined && deliveryPhase === "final_answer" && (reprojectBlockReply || chunk)) {
     // A late phase can reveal inline examples; retain already scoped snapshots above.
-    const previousStream = reprojectBlockReply ? undefined : ctx.state.assistantStream;
-    const previousRawText = previousStream?.raw ?? "";
     visibleDelta = reprojectBlockReply
       ? ctx.state.deltaBuffer
       : ctx.params.enforceFinalTag
         ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState, { final: finalText })
         : chunk;
-    nextRawStreamText = `${previousRawText}${visibleDelta}`;
-    const sanitizerPhase = ctx.params.enforceFinalTag ? undefined : deliveryPhase;
-    next = sanitizeAssistantVisibleStreamText(nextRawStreamText, sanitizerPhase).trim();
-    sanitized = { phase: sanitizerPhase, text: next };
-    previousText =
-      previousStream?.sanitized && previousStream.sanitized.phase === sanitizerPhase
-        ? previousStream.sanitized.text
-        : sanitizeAssistantVisibleStreamText(previousRawText, sanitizerPhase).trim();
-    textIsAppend = next.startsWith(previousText);
-    visibleDelta = textIsAppend
-      ? next.slice(previousText.length)
-      : previousText.startsWith(next)
-        ? ""
-        : next;
+    next = visibleDelta;
+    textIsAppend = true;
     if (reprojectBlockReply) {
       ctx.resetPartialReplyDirectives();
     }
@@ -390,7 +381,7 @@ export function handleMessageUpdate(
       });
       const isFullStreamReplacement = !recomputedRawText.startsWith(previousText);
       textIsAppend = !isFullStreamReplacement;
-      next = recomputedRawText.trim();
+      next = recomputedRawText;
       visibleDelta = isFullStreamReplacement
         ? recomputedRawText
         : recomputedRawText.slice(previousText.length);
@@ -408,8 +399,7 @@ export function handleMessageUpdate(
         next = ctx.state.assistantStream?.text ?? "";
         nextRawStreamText = ctx.state.assistantStream?.raw ?? "";
       } else {
-        nextRawStreamText = `${ctx.state.assistantStream?.raw ?? ""}${visibleDelta}`;
-        next = nextRawStreamText;
+        next = visibleDelta;
         textIsAppend = true;
       }
     }
@@ -419,6 +409,38 @@ export function handleMessageUpdate(
     });
   }
   if (next !== undefined) {
+    if (!hasSnapshotText) {
+      const kind =
+        deliveryPhase !== "final_answer"
+          ? "raw"
+          : ctx.params.enforceFinalTag
+            ? "delivery"
+            : "final";
+      const previousStream = reprojectBlockReply ? undefined : ctx.state.assistantStream;
+      projection = previousStream?.projection;
+      if (!projection || projection.kind !== kind) {
+        projection = {
+          kind,
+          projector:
+            kind === "raw"
+              ? createTextProjection([trimTextFilter("both")])
+              : createAssistantVisibleStreamText(kind === "final" ? "final_answer" : undefined),
+        };
+        projection.projector.replace(previousStream?.raw ?? "");
+      }
+      previousText = projection.projector.text;
+      const projected = textIsAppend
+        ? projection.projector.append(visibleDelta)
+        : projection.projector.replace(nextRawStreamText);
+      nextRawStreamText = projection.projector.source;
+      next = projected.text;
+      appendDelta = projected.delta;
+      // Generic directives retain their raw chunk coordinates: restored trim whitespace
+      // could otherwise make an inline tag look like an indented code block.
+      if (kind !== "raw") {
+        visibleDelta = projected.delta ?? (previousText.startsWith(next) ? "" : next);
+      }
+    }
     if (
       !suppressMessageToolOnlySourceReplyOutput &&
       !wasThinking &&
@@ -457,20 +479,16 @@ export function handleMessageUpdate(
       previousText,
       previousCleaned,
       visibleDelta,
-      textIsAppend,
+      appendDelta,
       parsedStreamDirectives,
     });
-    const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedStreamDirectives ?? {});
-    const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);
     const hasAudio = Boolean(parsedStreamDirectives?.audioAsVoice);
 
-    const hasVisibleReply = hasText || hasMedia || hasAudio;
+    const hasVisibleReply = hasText || hasAudio;
     const deltaText = hasVisibleReply ? replyDelta : "";
     let shouldEmit =
       (hasVisibleReply || replace) &&
-      (replace
-        ? cleanedText !== previousCleaned || hasMedia || hasAudio
-        : Boolean(deltaText || hasMedia || hasAudio));
+      (replace ? cleanedText !== previousCleaned || hasAudio : Boolean(deltaText || hasAudio));
 
     if (snapshot) {
       const undrained = ctx.state.lastBlockReplyText == null;
@@ -529,8 +547,8 @@ export function handleMessageUpdate(
       ctx.state.streamBlockText = content;
     }
 
-    // Snapshot recovery must not seed the next streaming sanitizer result.
-    ctx.state.assistantStream = { raw: nextRawStreamText, text: cleanedText, sanitized };
+    // Snapshot recovery discards incremental state; its scoped source seeds the next append.
+    ctx.state.assistantStream = { raw: nextRawStreamText, text: cleanedText, projection };
 
     if (
       ctx.params.silentExpected ||
@@ -550,15 +568,15 @@ export function handleMessageUpdate(
             })
           : { hold: false, text: cleanedText };
       const releaseHeldSnapshot = currentSourcePartial.text !== cleanedText;
-      const data = buildAssistantStreamData({
-        text: currentSourcePartial.text,
-        delta: releaseHeldSnapshot ? currentSourcePartial.text : deltaText,
-        replace: releaseHeldSnapshot || replace,
-        mediaUrls,
-        managedMediaUrls,
-        phase: deliveryPhase ?? assistantPhase,
-      });
-      ctx.emitAssistantStreamData(data, { emitPartialReply: !currentSourcePartial.hold });
+      ctx.emitAssistantStreamData(
+        {
+          text: currentSourcePartial.text,
+          delta: releaseHeldSnapshot ? currentSourcePartial.text : deltaText,
+          replace: releaseHeldSnapshot || replace || undefined,
+          phase: deliveryPhase ?? assistantPhase,
+        },
+        { emitPartialReply: !currentSourcePartial.hold },
+      );
     }
   }
 

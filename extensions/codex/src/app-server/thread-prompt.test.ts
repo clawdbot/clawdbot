@@ -158,3 +158,79 @@ describe("buildDeveloperInstructions credential guidance", () => {
     expect(instructions).toContain("safe external setup");
   });
 });
+
+describe("buildDeveloperInstructions UI presentation guidance", () => {
+  const uiTools = ["show_widget", "dashboard", "portal"].map(
+    (name) =>
+      ({
+        type: "function",
+        name,
+        description: `Use ${name}`,
+        inputSchema: { type: "object" },
+      }) satisfies CodexDynamicToolSpec,
+  );
+
+  it.each([
+    { name: "direct", dynamicTools: uiTools, prefix: "" },
+    {
+      name: "deferred",
+      dynamicTools: uiTools.map((tool) => ({ ...tool, deferLoading: true })),
+      prefix: "",
+    },
+    {
+      name: "namespaced deferred",
+      dynamicTools: [
+        {
+          type: "namespace",
+          name: "openclaw",
+          description: "OpenClaw tools",
+          tools: uiTools.map((tool) => ({ ...tool, deferLoading: true })),
+        },
+      ],
+      prefix: "openclaw.",
+    },
+  ] satisfies { name: string; dynamicTools: CodexDynamicToolSpec[]; prefix: string }[])(
+    "explains the actual $name presentation routes",
+    ({ dynamicTools, prefix }) => {
+      const instructions = buildDeveloperInstructions(createParams(), { dynamicTools });
+
+      expect(instructions).toContain("## UI Presentation");
+      for (const tool of uiTools) {
+        expect(instructions).toContain(`\`${prefix}${tool.name}\``);
+      }
+      expect(instructions).toContain("pin=true");
+      expect(instructions).toContain("publicUrl");
+      expect(instructions).toContain("result.presentation");
+      expect(instructions).toContain("inline support varies by surface");
+    },
+  );
+
+  it("distinguishes unavailable custom authoring from dashboard and portal support", () => {
+    const instructions = buildDeveloperInstructions(createParams(), {
+      dynamicTools: uiTools.filter((tool) => tool.name !== "show_widget"),
+    });
+
+    expect(instructions).toContain("`dashboard`");
+    expect(instructions).toContain("`portal`");
+    expect(instructions).toContain(
+      "Custom authoring is unavailable this turn, not unsupported by dashboards.",
+    );
+    expect(instructions).not.toContain("`show_widget`");
+  });
+
+  it.each([
+    { name: "absent", dynamicTools: [], overrides: {} },
+    { name: "unsupplied", dynamicTools: undefined, overrides: {} },
+    { name: "disabled", dynamicTools: uiTools, overrides: { disableTools: true } },
+    { name: "minimal", dynamicTools: uiTools, overrides: { promptMode: "minimal" } },
+    { name: "none", dynamicTools: uiTools, overrides: { promptMode: "none" } },
+  ] satisfies {
+    name: string;
+    dynamicTools: CodexDynamicToolSpec[] | undefined;
+    overrides: Partial<EmbeddedRunAttemptParams>;
+  }[])("omits presentation guidance when $name", ({ dynamicTools, overrides }) => {
+    const instructions = buildDeveloperInstructions(createParams(overrides), { dynamicTools });
+
+    expect(instructions).not.toContain("## UI Presentation");
+  });
+});

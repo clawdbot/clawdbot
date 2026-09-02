@@ -28,21 +28,19 @@
   flex-shrink: 0;
 }
 
-.compaction-indicator:is(.compaction-indicator--active, .compaction-indicator--complete) {
-  gap: 10px;
-  max-width: 100%;
-  min-width: 0;
-  padding: 6px 12px;
-  border: 0;
-  border-radius: var(--radius-md);
-  background: var(--bg);
-  box-shadow: 0 0 12px 8px var(--bg);
-  color: var(--muted);
-  white-space: normal;
-  animation: none;
+.chat-compaction {
+  margin: var(--space-5) 8px;
 }
 
-.compaction-indicator__glyph {
+.chat-compaction .chat-divider__label {
+  gap: 10px;
+  font-weight: 400;
+  font-size: 13px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.chat-compaction__glyph {
   position: relative;
   flex: 0 0 28px;
   width: 28px;
@@ -50,7 +48,7 @@
   color: var(--accent);
 }
 
-.compaction-indicator__line {
+.chat-compaction__line {
   position: absolute;
   left: 1px;
   height: 2px;
@@ -60,7 +58,7 @@
   transform: translate(3px, var(--fold-y)) scaleX(var(--fold-scale));
 }
 
-.compaction-indicator__line:nth-child(1) {
+.chat-compaction__line:nth-child(1) {
   top: 3px;
   width: 26px;
   --fold-y: 6px;
@@ -68,7 +66,7 @@
   --fold-opacity: 0.85;
 }
 
-.compaction-indicator__line:nth-child(2) {
+.chat-compaction__line:nth-child(2) {
   top: 8px;
   width: 20px;
   --fold-y: 1px;
@@ -76,7 +74,7 @@
   --fold-opacity: 0;
 }
 
-.compaction-indicator__line:nth-child(3) {
+.chat-compaction__line:nth-child(3) {
   top: 13px;
   width: 24px;
   --fold-y: 0px;
@@ -84,7 +82,7 @@
   --fold-opacity: 1;
 }
 
-.compaction-indicator__line:nth-child(4) {
+.chat-compaction__line:nth-child(4) {
   top: 18px;
   width: 16px;
   --fold-y: -1px;
@@ -92,7 +90,7 @@
   --fold-opacity: 0;
 }
 
-.compaction-indicator__line:nth-child(5) {
+.chat-compaction__line:nth-child(5) {
   top: 23px;
   width: 22px;
   --fold-y: -6px;
@@ -100,31 +98,34 @@
   --fold-opacity: 0.85;
 }
 
-.compaction-indicator__glyph svg {
+.chat-compaction__glyph svg {
   position: absolute;
   inset: 4px;
   width: 20px;
   height: 20px;
-  color: var(--ok);
+  color: var(--muted);
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
   opacity: 0;
   transform: scale(0.75);
 }
 
-.compaction-indicator--complete .compaction-indicator__line {
+.chat-compaction--complete .chat-compaction__line {
   visibility: hidden;
 }
 
-.compaction-indicator--complete .compaction-indicator__glyph svg {
+.chat-compaction--complete .chat-compaction__glyph svg {
   opacity: 1;
   transform: scale(1);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .compaction-indicator--active .compaction-indicator__line {
+  .chat-compaction--active .chat-compaction__line {
     animation: compaction-fold 3.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
 
-  .compaction-indicator__glyph svg {
+  .chat-compaction__glyph svg {
     transition:
       opacity 0.25s,
       transform 0.25s;
@@ -132,7 +133,7 @@
 }
 
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  .compaction-indicator--active .compaction-indicator__label {
+  .chat-compaction--active .chat-divider__title {
     background: linear-gradient(105deg, var(--muted) 35%, var(--text) 48%, var(--muted) 61%);
     background-size: 260% 100%;
     background-clip: text;

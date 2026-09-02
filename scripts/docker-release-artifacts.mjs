@@ -28,6 +28,7 @@ const SEAL_JOB_NAME = "Seal prepared Docker images";
 const WORKFLOW_PATH = ".github/workflows/docker-release-prepare.yml";
 const PRODUCER_WORKFLOWS = new Set([
   ".github/workflows/full-release-validation.yml",
+  ".github/workflows/full-release-artifacts.yml",
   ".github/workflows/openclaw-release-publish.yml",
   ".github/workflows/docker-image-refresh.yml",
   WORKFLOW_PATH,
@@ -107,10 +108,15 @@ export function preparedDockerEvidenceFromFullRelease({ manifest, sourceSha, run
       String(manifest.runAttempt) === String(runAttempt),
     "Docker qualification does not match the selected full release run.",
   );
+  // FRV authorizes the release; its recorded producer owns the immutable bytes.
+  // Parent retries retain that producer's run and attempt.
   requireValue(
-    prepared?.preparedRunId === String(runId) &&
-      prepared.preparedRunAttempt === String(runAttempt) &&
-      prepared.preparedArtifactName === dockerReleaseArtifactName(sourceSha, runAttempt) &&
+    typeof prepared?.preparedRunId === "string" &&
+      POSITIVE_INTEGER.test(prepared.preparedRunId) &&
+      typeof prepared.preparedRunAttempt === "string" &&
+      POSITIVE_INTEGER.test(prepared.preparedRunAttempt) &&
+      prepared.preparedArtifactName ===
+        dockerReleaseArtifactName(sourceSha, prepared.preparedRunAttempt) &&
       /^[a-f0-9]{64}$/u.test(prepared.preparedManifestSha256),
     "Full release Docker qualification tuple is incomplete or stale.",
   );
@@ -508,12 +514,8 @@ export function validateDockerReleaseManifest(manifest, expected) {
   return manifest;
 }
 
-/** A reusable workflow can finish while its FRV parent remains active. Trust the
- * exact completed seal job, never infer successful preparation from parent state. */
-export function verifyDockerReleaseProducer(manifest, { publisherSha, readApi = ghJson }) {
+function verifyDockerProducerRun(runInfo, manifest, runAttempt) {
   const { repository, toolingSha, producer } = manifest;
-  requireValue(SHA.test(publisherSha), "Invalid Docker publisher tooling SHA.");
-  const runInfo = readApi(`repos/${repository}/actions/runs/${producer.runId}`);
   const workflowPath = String(runInfo.path).split("@", 1)[0];
   const prefix = `${repository}/${workflowPath}@`;
   requireValue(
@@ -533,22 +535,63 @@ export function verifyDockerReleaseProducer(manifest, { publisherSha, readApi = 
       fullRef === "refs/heads/main");
   requireValue(
     String(runInfo.id) === producer.runId &&
-      String(runInfo.run_attempt) === producer.runAttempt &&
+      String(runInfo.run_attempt) === runAttempt &&
       runInfo.head_sha === toolingSha &&
       runInfo.repository?.full_name === repository &&
       runInfo.head_repository?.full_name === repository &&
       trustedEvent,
     "Docker producer run/attempt/source mismatch.",
   );
+  return { workflowPath, fullRef };
+}
+
+/** Preparation belongs to its exact successful seal job. A publisher retry
+ * advances the parent attempt without rebuilding that immutable payload. */
+export function verifyDockerReleaseProducer(
+  manifest,
+  { publisherSha, publisherRunId = "", publisherRunAttempt = "", readApi = ghJson },
+) {
+  const { repository, toolingSha, producer } = manifest;
+  requireValue(SHA.test(publisherSha), "Invalid Docker publisher tooling SHA.");
+  const currentRun = readApi(`repos/${repository}/actions/runs/${producer.runId}`);
+  const currentAttempt = String(currentRun.run_attempt);
   requireValue(
-    (runInfo.status === "completed" && runInfo.conclusion === "success") ||
-      (runInfo.status === "in_progress" && runInfo.conclusion === null),
+    POSITIVE_INTEGER.test(currentAttempt) && BigInt(currentAttempt) >= BigInt(producer.runAttempt),
+    "Docker producer attempt is not available.",
+  );
+  const { workflowPath, fullRef } = verifyDockerProducerRun(currentRun, manifest, currentAttempt);
+  requireValue(
+    (currentRun.status === "completed" && currentRun.conclusion === "success") ||
+      (currentRun.status === "in_progress" && currentRun.conclusion === null),
     "Docker producer is neither active nor successfully completed.",
   );
+  let preparedRun = currentRun;
+  if (currentAttempt !== producer.runAttempt) {
+    preparedRun = readApi(
+      `repos/${repository}/actions/runs/${producer.runId}/attempts/${producer.runAttempt}`,
+    );
+    verifyDockerProducerRun(preparedRun, manifest, producer.runAttempt);
+    // Failed publication may reuse its own successful seal; unrelated publishers
+    // still require a successful producer parent, even when that run is retried.
+    const resumingOwnPublication =
+      producer.runId === publisherRunId &&
+      currentAttempt === publisherRunAttempt &&
+      currentRun.head_sha === publisherSha &&
+      currentRun.status === "in_progress" &&
+      preparedRun.status === "completed" &&
+      ["failure", "cancelled", "timed_out"].includes(preparedRun.conclusion);
+    requireValue(
+      (preparedRun.status === "completed" && preparedRun.conclusion === "success") ||
+        resumingOwnPublication,
+      "Historical Docker producer did not qualify for this publication.",
+    );
+  }
+  // Preparation linkage belongs to its recorded attempt; a publisher-only retry
+  // need not list that completed reusable workflow in its current attempt.
   requireValue(
     producer.preparationWorkflowRef === `${repository}/${WORKFLOW_PATH}@${fullRef}` &&
       (workflowPath === WORKFLOW_PATH ||
-        runInfo.referenced_workflows?.some(
+        preparedRun.referenced_workflows?.some(
           (workflow) =>
             workflow.path === `${repository}/${WORKFLOW_PATH}@${toolingSha}` &&
             workflow.sha === toolingSha &&
@@ -604,7 +647,11 @@ function loadPreparedManifest(values, env) {
     runId: values["run-id"],
     runAttempt: values["run-attempt"],
   });
-  return verifyDockerReleaseProducer(manifest, { publisherSha: env.GITHUB_WORKFLOW_SHA });
+  return verifyDockerReleaseProducer(manifest, {
+    publisherSha: env.GITHUB_WORKFLOW_SHA,
+    publisherRunId: env.GITHUB_RUN_ID,
+    publisherRunAttempt: env.GITHUB_RUN_ATTEMPT,
+  });
 }
 
 function verifyFinalTag(manifest, readApi = ghJson) {

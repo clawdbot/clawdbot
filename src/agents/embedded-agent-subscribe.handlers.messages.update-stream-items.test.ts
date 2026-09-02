@@ -10,6 +10,7 @@ import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
+import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
 describe("handleMessageUpdate text signatures", () => {
   it("emits the full incrementally extracted reasoning value on every delta", async () => {
@@ -293,9 +294,12 @@ describe("handleMessageUpdate text signatures", () => {
     "openclaw-openai-responses-transport",
     "openclaw-openai-chatgpt-responses-transport",
     "openclaw-azure-openai-responses-transport",
-  ])("streams %s commentary bytes exactly once across start, deltas, and end", async (api) => {
+  ])("streams %s commentary with one complete-preamble boundary", async (api) => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
+    // Exercise the real projection/deduplication owner. A raw callback mock
+    // mistakes completion metadata for another assistant text message.
+    context.emitAssistantStreamData = createReplyDelivery(context).emitAssistantStreamData;
     const createPartial = (text: string) => ({
       ...createOpenAiResponsesPartial({
         text,
@@ -323,24 +327,34 @@ describe("handleMessageUpdate text signatures", () => {
       message: finalPartial,
     });
 
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
       {
-        stream: "assistant",
+        stream: "item",
         data: {
-          text: "Work",
-          delta: "",
-          replace: true,
-          phase: "commentary",
+          kind: "preamble",
+          title: "Preamble",
+          progressText: "Work",
+          phase: "update",
           itemId: "item-commentary",
         },
       },
       {
-        stream: "assistant",
+        stream: "item",
         data: {
-          text: "Working...",
-          delta: "",
-          replace: true,
-          phase: "commentary",
+          kind: "preamble",
+          title: "Preamble",
+          progressText: "Working...",
+          phase: "update",
+          itemId: "item-commentary",
+        },
+      },
+      {
+        stream: "item",
+        data: {
+          kind: "preamble",
+          title: "Preamble",
+          progressText: "Working...",
+          phase: "end",
           itemId: "item-commentary",
         },
       },
@@ -352,6 +366,7 @@ describe("handleMessageUpdate text signatures", () => {
   it("keeps same-index commentary snapshot extensions on the original live item key", async () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
+    context.emitAssistantStreamData = createReplyDelivery(context).emitAssistantStreamData;
     const createPartial = (text: string, id: string) =>
       createOpenAiResponsesPartial({
         text,
@@ -374,24 +389,26 @@ describe("handleMessageUpdate text signatures", () => {
     }
     await endMessage(context, { message: extendedPartial });
 
-    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+    // Both snapshots finish the same logical item. The later message_end must
+    // not publish its already-observed completion again.
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
       {
-        stream: "assistant",
+        stream: "item",
         data: {
-          text: "Working",
-          delta: "",
-          replace: true,
-          phase: "commentary",
+          kind: "preamble",
+          title: "Preamble",
+          progressText: "Working",
+          phase: "end",
           itemId: "item-1",
         },
       },
       {
-        stream: "assistant",
+        stream: "item",
         data: {
-          text: "Working now",
-          delta: "",
-          replace: true,
-          phase: "commentary",
+          kind: "preamble",
+          title: "Preamble",
+          progressText: "Working now",
+          phase: "end",
           itemId: "item-1",
         },
       },

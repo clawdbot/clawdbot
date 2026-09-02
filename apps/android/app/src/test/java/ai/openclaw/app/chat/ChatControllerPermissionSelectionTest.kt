@@ -1,7 +1,10 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -538,57 +541,128 @@ class ChatControllerPermissionSelectionTest {
       verifyUnacknowledgedPermissionWrite(cancelWrite = true)
     }
 
-  private suspend fun TestScope.verifyUnacknowledgedPermissionWrite(cancelWrite: Boolean) {
+  @Test
+  fun acceptedPermissionOnRetiredLeaseWaitsForExactSettingsRead() =
+    runTest {
+      verifyUnacknowledgedPermissionWrite(acceptResponseOnRetiredLease = true)
+    }
+
+  @Test
+  fun acceptedFastModeDoesNotClearAnEarlierUnknownPermissionWrite() =
+    runTest {
+      verifyUnacknowledgedPermissionWrite(queueFastMode = true)
+    }
+
+  private suspend fun TestScope.verifyUnacknowledgedPermissionWrite(
+    cancelWrite: Boolean = false,
+    acceptResponseOnRetiredLease: Boolean = false,
+    queueFastMode: Boolean = false,
+  ) {
     val patchStarted = CompletableDeferred<Unit>()
     val releasePatch = CompletableDeferred<Unit>()
     val releaseHistory = CompletableDeferred<Unit>()
+    val gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+    var physicalConnection = 0
+    var settingsReadConnection: Int? = null
     var mode = "guarded"
-    val (controller, requests) =
-      chatControllerTestSetup {
-        gatewayAdvertisesMethod = { it == "sessions.patch" }
-        gatewayAdvertisesCapability = permissionCapabilities::contains
-        respond("sessions.list") {
-          """{"sessions":[{"key":"main","sessionId":"permission-session","permissionMode":"$mode"}]}"""
-        }
-        respond("sessions.patch") {
-          mode = "workspace"
-          patchStarted.complete(Unit)
-          releasePatch.await()
-          throw GatewayRequestOutcomeUnknown("Patch response lost")
+    var fastMode = false
+
+    fun sessionRow() = """{"key":"main","agentId":"main","sessionId":"permission-session","permissionMode":"$mode","fastMode":$fastMode,"effectiveFastMode":$fastMode}"""
+    val gateway =
+      ScriptedGateway(json).apply {
+        respond("sessions.list") { """{"sessions":[${sessionRow()}]}""" }
+        respond("sessions.patch") { paramsJson ->
+          val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+          if ("fastMode" in params) {
+            fastMode = true
+            """{"entry":{"key":"main","fastMode":true},"resolved":{}}"""
+          } else {
+            assertEquals(JsonPrimitive("permission-session"), params["expectedSessionId"])
+            assertEquals(JsonPrimitive("guarded"), params["expectedPermissionMode"])
+            mode = "workspace"
+            patchStarted.complete(Unit)
+            releasePatch.await()
+            if (!acceptResponseOnRetiredLease) throw GatewayRequestOutcomeUnknown("Patch response lost")
+            """{"entry":${sessionRow()},"resolved":{}}"""
+          }
         }
         respond("chat.history") {
           releaseHistory.await()
-          """{"sessionId":"permission-session","messages":[],"sessionInfo":{"key":"main","sessionId":"permission-session","permissionMode":"$mode"}}"""
+          """{"sessionId":"permission-session","messages":[],"sessionInfo":${sessionRow()}}"""
         }
-        respond("chat.send", """{"runId":"run-ok","status":"ok"}""")
+        respondWith("chat.send", """{"runId":"run-ok","status":"ok"}""")
       }
+
+    fun requestLease(connection: Int) =
+      GatewaySession.RequestLease(
+        endpointStableId = gatewayScope.gatewayId,
+        isCurrentImpl = { physicalConnection == connection },
+      ) { method, paramsJson, _, withEnqueue ->
+        if (physicalConnection != connection) throw GatewayRequestNotEnqueued("gateway request lease changed")
+        withEnqueue {
+          if (method == "chat.history") settingsReadConnection = connection
+        }
+        gateway.request(method, paramsJson)
+      }
+    val originalLease = requestLease(physicalConnection)
+    val controller =
+      createChatController(
+        cacheScope = { gatewayScope },
+        gatewayAdvertisesMethod = { it == "sessions.patch" },
+        gatewayAdvertisesCapability = permissionCapabilities::contains,
+        captureRequestLease = { capturedScope ->
+          assertEquals(gatewayScope, capturedScope)
+          if (physicalConnection == 0) originalLease else requestLease(physicalConnection)
+        },
+        requestGateway = gateway::request,
+      )
     controller.handleGatewayEvent("health", null)
     controller.refreshSessions()
     advanceUntilIdle()
     val patch = async { controller.setSessionPermissionModeAwait("main", ChatPermissionMode.Workspace) }
+    var send: Deferred<Boolean>? = null
 
     try {
       runCurrent()
       assertTrue(patchStarted.isCompleted)
+      if (queueFastMode) controller.setSessionFastMode("main", enabled = true)
+      if (acceptResponseOnRetiredLease) physicalConnection = 1
       if (cancelWrite) {
         patch.cancelAndJoin()
       } else {
         releasePatch.complete(Unit)
-        assertFalse(patch.await())
+        assertEquals(acceptResponseOnRetiredLease, patch.await())
       }
-      val send = async { controller.sendMessageAwaitAcceptance("keep this draft", "off", emptyList()) }
+      val pendingSend = async { controller.sendMessageAwaitAcceptance("keep this draft", "off", emptyList()) }
+      send = pendingSend
       runCurrent()
 
+      assertFalse("An unconfirmed permission write must not release Send", gateway.calls.any { it.method == "chat.send" })
+      assertFalse(pendingSend.isCompleted)
       assertEquals(setOf("main"), controller.pendingSessionSettingsKeys.value)
-      assertFalse(requests.any { it.first == "chat.send" })
-      val refresh = json.parseToJsonElement(requests.single { it.first == "chat.history" }.second.orEmpty()) as JsonObject
+      assertEquals(
+        ChatPermissionMode.Guarded,
+        controller.sessions.value
+          .single()
+          .permissionMode,
+      )
+      if (acceptResponseOnRetiredLease) assertFalse(originalLease.isCurrent())
+      assertEquals(if (acceptResponseOnRetiredLease) 1 else 0, settingsReadConnection)
+      val refresh =
+        json.parseToJsonElement(
+          gateway.calls
+            .single { it.method == "chat.history" }
+            .paramsJson
+            .orEmpty(),
+        ) as JsonObject
       assertEquals(JsonPrimitive("main"), refresh["sessionKey"])
       assertEquals(JsonPrimitive("main"), refresh["agentId"])
       assertEquals(JsonPrimitive(1), refresh["limit"])
 
       releaseHistory.complete(Unit)
       advanceUntilIdle()
-      assertFalse(send.await())
+      val sendAccepted = acceptResponseOnRetiredLease || queueFastMode
+      assertEquals(sendAccepted, pendingSend.await())
       assertEquals(
         ChatPermissionMode.Workspace,
         controller.sessions.value
@@ -596,12 +670,19 @@ class ChatControllerPermissionSelectionTest {
           .permissionMode,
       )
       assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
-      assertTrue(controller.sendMessageAwaitAcceptance("keep this draft", "off", emptyList()))
-      assertEquals(1, requests.count { it.first == "chat.send" })
+      if (!sendAccepted) assertTrue(controller.sendMessageAwaitAcceptance("keep this draft", "off", emptyList()))
+      assertEquals(1, gateway.callCount("chat.send"))
+      assertEquals(
+        if (queueFastMode) ChatFastMode.On else ChatFastMode.Off,
+        controller.sessions.value
+          .single()
+          .fastMode,
+      )
     } finally {
       releasePatch.complete(Unit)
       releaseHistory.complete(Unit)
       patch.cancelAndJoin()
+      send?.cancelAndJoin()
       advanceUntilIdle()
     }
   }

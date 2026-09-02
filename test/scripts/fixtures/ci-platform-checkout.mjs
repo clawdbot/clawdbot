@@ -163,15 +163,16 @@ function liveRecords() {
       if (identity.alive) alive.add(identity.pid);
     }
   } else {
-    // Apple ps uses KERN_PROC_ALL for multiple PIDs, including an observer anchor.
-    // Singleton queries avoid that host-wide scan and share one census budget.
+    // Linux can census the owned PID set in one ps call. Apple ps scans the
+    // whole host for multiple PIDs; keep its singleton queries under one budget.
+    const pidLists = process.platform === "linux" ? [[...pids]] : [...pids].map((pid) => [pid]);
     const deadline = Date.now() + 1_000;
-    for (const pid of pids) {
+    for (const selectedPids of pidLists) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
         throw new Error("Fixture process census failed (ETIMEDOUT)");
       }
-      const result = spawnSync("/bin/ps", ["-o", "pid=,stat=", "-p", String(pid)], {
+      const result = spawnSync("/bin/ps", ["-o", "pid=,stat=", "-p", selectedPids.join(",")], {
         encoding: "utf8",
         timeout: remaining,
       });
@@ -180,20 +181,23 @@ function liveRecords() {
           `Fixture process census failed (${result.error?.code ?? result.signal ?? "unverified"})`,
         );
       }
-      // Apple ps and procps exit 1 without output when the selected PID is absent.
+      // Apple ps and procps exit 1 without output when all selected PIDs are absent.
       if (result.status === 1 && result.stdout === "") {
         continue;
       }
-      // Darwin can expose ?E during exit. Count it as live until a later census
-      // proves termination; never turn that transient state into a dead receipt.
-      const row = /^(\d+)\s+([RSDTtXZxKWPIU?][<+NLlsEVWX]*)$/u.exec(result.stdout.trim());
-      if (result.status !== 0 || !row || Number(row[1]) !== pid) {
-        throw new Error(
-          `Fixture process census returned an invalid row (exit ${result.status}, pid ${pid}, stdout ${JSON.stringify(result.stdout)})`,
-        );
-      }
-      if (!row[2].startsWith("Z")) {
-        alive.add(pid);
+      const remainingPids = new Set(selectedPids);
+      for (const line of result.stdout.trim().split("\n")) {
+        // Darwin can expose ?E during exit. Count it as live until a later census
+        // proves termination; never turn that transient state into a dead receipt.
+        const row = /^(\d+)\s+([RSDTtXZxKWPIU?][<+NLlsEVWX]*)$/u.exec(line.trim());
+        if (result.status !== 0 || !row || !remainingPids.delete(Number(row[1]))) {
+          throw new Error(
+            `Fixture process census returned an invalid row (exit ${result.status}, pids ${selectedPids.join(",")}, stdout ${JSON.stringify(result.stdout)})`,
+          );
+        }
+        if (!row[2].startsWith("Z")) {
+          alive.add(Number(row[1]));
+        }
       }
     }
   }
@@ -920,7 +924,12 @@ async function supervise() {
   for (const tool of extraTools) {
     writeConsumer(path.join(bin, tool), tool);
   }
-  if (options.performance || options.pluginRelease || options.releaseAdmission) {
+  if (
+    options.performance ||
+    options.pluginRelease ||
+    options.releaseAdmission ||
+    options.publisher
+  ) {
     fs.writeFileSync(
       path.join(bin, "timeout"),
       '#!/bin/bash\nwhile [[ "$1" == --* ]]; do shift; done\nshift\nexec "$@"\n',

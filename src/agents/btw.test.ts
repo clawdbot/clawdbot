@@ -72,7 +72,7 @@ const resolveAgentWorkspaceDirMock = vi.fn();
 const listAgentEntriesMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
-const resolveEmbeddedAgentStreamFnMock = vi.fn();
+const resolveEmbeddedAgentStreamMock = vi.fn();
 const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
@@ -358,7 +358,7 @@ vi.mock("./provider-stream.js", () => ({
 }));
 
 vi.mock("./embedded-agent-runner/stream-resolution.js", () => ({
-  resolveEmbeddedAgentStreamFn: (...args: unknown[]) => resolveEmbeddedAgentStreamFnMock(...args),
+  resolveEmbeddedAgentStream: (...args: unknown[]) => resolveEmbeddedAgentStreamMock(...args),
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -734,7 +734,7 @@ describe("runBtwSideQuestion", () => {
     listAgentEntriesMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
-    resolveEmbeddedAgentStreamFnMock.mockReset();
+    resolveEmbeddedAgentStreamMock.mockReset();
     prepareCliRunContextMock.mockReset();
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
@@ -814,9 +814,12 @@ describe("runBtwSideQuestion", () => {
     listAgentEntriesMock.mockReturnValue([]);
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
     registerProviderStreamForModelMock.mockReturnValue(undefined);
-    resolveEmbeddedAgentStreamFnMock.mockImplementation(
+    resolveEmbeddedAgentStreamMock.mockImplementation(
       (params: { currentStreamFn: unknown; providerStreamFn?: unknown }) => {
-        return params.providerStreamFn ?? params.currentStreamFn;
+        return {
+          streamFn: params.providerStreamFn ?? params.currentStreamFn,
+          strategy: "session-custom",
+        };
       },
     );
   });
@@ -2446,7 +2449,10 @@ describe("runBtwSideQuestion", () => {
     const resolvedStreamFn = vi
       .fn()
       .mockReturnValue(makeAsyncEvents([createDoneEvent("MiniMax answer.")]));
-    resolveEmbeddedAgentStreamFnMock.mockReturnValueOnce(resolvedStreamFn);
+    resolveEmbeddedAgentStreamMock.mockReturnValueOnce({
+      streamFn: resolvedStreamFn,
+      strategy: "boundary-aware:anthropic-messages",
+    });
 
     const result = await runSideQuestion({
       provider: "minimax-portal",
@@ -2454,7 +2460,7 @@ describe("runBtwSideQuestion", () => {
     });
 
     expect(result).toEqual({ text: "MiniMax answer." });
-    const resolverParams = expectRecordFields(mockArg(resolveEmbeddedAgentStreamFnMock, 0, 0), {
+    const resolverParams = expectRecordFields(mockArg(resolveEmbeddedAgentStreamMock, 0, 0), {
       sessionId: "session-1",
       resolvedApiKey: "secret",
       authProfileId: undefined,
@@ -2477,7 +2483,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Fallback answer." });
-    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
+    expect(resolveEmbeddedAgentStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({
         currentStreamFn: expect.any(Function),
         providerStreamFn: undefined,

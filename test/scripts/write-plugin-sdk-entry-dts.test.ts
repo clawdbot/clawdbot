@@ -150,7 +150,8 @@ describe("write-plugin-sdk-entry-dts", () => {
     expect(
       (privateQa.stdout + privateQa.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
     ).toHaveLength(2);
-    expectOutputs(root, qa, Object.keys(treeHashes(path.join(root, "dist"))));
+    const priorOutputs = treeHashes(path.join(root, "dist"));
+    expectOutputs(root, qa, Object.keys(priorOutputs));
     expectStagingClean(root);
 
     writeDeclarations("after");
@@ -195,10 +196,12 @@ describe("write-plugin-sdk-entry-dts", () => {
     for (const [relative, content] of Object.entries(preserved)) {
       writeRelocated(relative, content);
     }
-    // Seed only unowned history; current cache outputs must come from the restore below.
-    for (const file of Object.keys(first).filter(
+    // The QA build can add shared chunks after the production snapshot. Seed
+    // only unowned history; current cache outputs must come from the restore.
+    for (const file of Object.keys(priorOutputs).filter(
       (entry) => !entry.startsWith("plugin-sdk/") && !cachedDistFiles.has(entry),
     )) {
+      expect(first[file]).toBe(priorOutputs[file]);
       writeRelocated(`dist/${file}`, fs.readFileSync(path.join(root, "dist", file), "utf8"));
     }
     writeRelocated("dist/plugin-sdk/obsolete.d.ts", "obsolete restored declaration");

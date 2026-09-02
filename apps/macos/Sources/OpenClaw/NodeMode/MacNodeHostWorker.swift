@@ -101,17 +101,13 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private var process: ManagedProcess?
     private var processCleanupTask: Task<Void, Never>?
     private var stdinPipe: Pipe?
-    private var stdoutPipe: Pipe?
-    private var stderrPipe: Pipe?
-    private var stdoutSource: DispatchSourceRead?
-    private var stderrSource: DispatchSourceRead?
+    private var readers: [PipeReadStream] = []
     private var processGeneration: UUID?
     private var launchedWorker: MacNodeHostWorkerLaunch?
     private var stdoutBuffer = Data()
     // Bounded head of worker stderr. CLI startup failures print their cause
     // first; without this the operator-visible error is just "exited(1)".
-    private var stderrHead = ""
-    private static let maxStderrHeadLength = 700
+    private var stderrCapture = PipeTextCapture(characterLimit: 700, retention: .head)
     private var manifest: MacNodeHostManifest?
     private var route: GatewayNodeSessionRoute?
     private var routeAuthorityGeneration: UInt64 = 0
@@ -373,8 +369,36 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
+        defer {
+            try? stdoutPipe.fileHandleForReading.close()
+            try? stderrPipe.fileHandleForReading.close()
+        }
         guard stdinPipe.fileHandleForWriting.disableSIGPIPE() else {
             self.finishStartLocked(.failure(WorkerError.unavailable(reason: "could not protect worker input pipe")))
+            return
+        }
+        let processGeneration = UUID()
+        let stderrCapture = self.stderrCapture
+        let consumeStderr: @Sendable (Data, Bool) -> Void = { [weak self] data, atEOF in
+            guard let self, self.processGeneration == processGeneration, self.processCleanupTask == nil else { return }
+            let message = stderrCapture.append(data, atEOF: atEOF)
+            if !message.isEmpty { self.logger.error("node-host worker stderr: \(message, privacy: .private)") }
+        }
+        do {
+            self.readers = try [
+                PipeReadStream(handle: stdoutPipe.fileHandleForReading, queue: self.queue, onData: { [weak self] data in
+                    guard let self, self.processGeneration == processGeneration,
+                          self.processCleanupTask == nil else { return }
+                    self.consumeStdoutLocked(data)
+                }),
+                PipeReadStream(
+                    handle: stderrPipe.fileHandleForReading,
+                    queue: self.queue,
+                    onData: { consumeStderr($0, false) },
+                    onClose: { consumeStderr(Data(), true) }),
+            ]
+        } catch {
+            self.finishStartLocked(.failure(WorkerError.unavailable(reason: "could not read worker output")))
             return
         }
         var environment = ProcessInfo.processInfo.environment.filter { key, _ in
@@ -387,9 +411,6 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         environment["OPENCLAW_NODE_EXEC_FALLBACK"] = "0"
         self.launchedWorker = launch
         self.stdinPipe = stdinPipe
-        self.stdoutPipe = stdoutPipe
-        self.stderrPipe = stderrPipe
-        let processGeneration = UUID()
         self.processGeneration = processGeneration
 
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
@@ -431,58 +452,14 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         generation: UUID)
     {
         guard self.processGeneration == generation, self.processCleanupTask == nil else { return }
-        guard started,
-              let process = self.process,
-              let stdoutPipe = self.stdoutPipe,
-              let stderrPipe = self.stderrPipe
-        else {
+        guard started, let process else {
             self.stopLocked(reason: "worker launch failed")
             return
         }
-        let stdoutSource = DispatchSource.makeReadSource(
-            fileDescriptor: stdoutPipe.fileHandleForReading.fileDescriptor,
-            queue: self.queue)
-        stdoutSource.setEventHandler { [weak self] in
-            guard let self, self.processGeneration == generation else { return }
-            let data = Self.readAvailable(
-                fileDescriptor: stdoutPipe.fileHandleForReading.fileDescriptor,
-                byteCount: stdoutSource.data)
-            if data.isEmpty {
-                self.stdoutSource?.cancel()
-            } else {
-                self.consumeStdoutLocked(data)
-            }
-        }
-        self.stdoutSource = stdoutSource
-        stdoutSource.resume()
-
-        let stderrSource = DispatchSource.makeReadSource(
-            fileDescriptor: stderrPipe.fileHandleForReading.fileDescriptor,
-            queue: self.queue)
-        stderrSource.setEventHandler { [weak self] in
-            guard let self, self.processGeneration == generation else { return }
-            let data = Self.readAvailable(
-                fileDescriptor: stderrPipe.fileHandleForReading.fileDescriptor,
-                byteCount: stderrSource.data)
-            guard !data.isEmpty else {
-                self.stderrSource?.cancel()
-                return
-            }
-            if let message = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                !message.isEmpty
-            {
-                self.logger.error("node-host worker stderr: \(message, privacy: .private)")
-                if self.stderrHead.count < Self.maxStderrHeadLength {
-                    self.stderrHead.append(self.stderrHead.isEmpty ? message : "\n" + message)
-                    self.stderrHead = String(self.stderrHead.prefix(Self.maxStderrHeadLength))
-                }
-            }
-        }
-        self.stderrSource = stderrSource
-        stderrSource.resume()
         Task { [weak self, completionTask = process.completionTask] in
             let status = await completionTask.value
+            // Retire the route before draining queued worker messages; unlike
+            // diagnostic-only pipes, stdout can request privileged operations.
             self?.queue.async { [weak self] in
                 guard let self,
                       self.processGeneration == generation,
@@ -718,8 +695,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         // A worker that dies before its ready manifest still needs its stderr
         // surfaced: the raw exit status alone cannot explain a CLI bootstrap
         // refusal (missing runtime, incompatible state database, bad install).
-        let diagnostic = self.stderrHead.nonEmpty
-        self.stderrHead = ""
+        let diagnostic = self.stderrCapture.snapshot().nonEmpty
+        self.stderrCapture = PipeTextCapture(characterLimit: 700, retention: .head)
         self.startTimer?.cancel()
         self.startTimer = nil
         self.launchedWorker = nil
@@ -730,6 +707,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             self.finishStartLocked(.failure(WorkerError.unavailable(reason: reason, diagnostic: diagnostic)))
         }
         if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
+        let readers = self.readers
+        self.readers.removeAll()
         let pending = self.invokeContinuations
         self.invokeContinuations.removeAll()
         self.pendingInvokeControls.removeAll()
@@ -747,25 +726,23 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             return nil
         }
         let cleanupTask = Task { [weak self] in
+            // Keep draining through TERM cleanup: closing the pipes early can
+            // interrupt the child's shutdown handler with SIGPIPE.
             await process.terminate()
+            readers.forEach { $0.close() }
+            for reader in readers {
+                await reader.finish()
+            }
             await withCheckedContinuation { continuation in
                 guard let self else {
                     continuation.resume()
                     return
                 }
                 self.queue.async {
-                    self.stdoutSource?.cancel()
-                    self.stdoutSource = nil
-                    self.stderrSource?.cancel()
-                    self.stderrSource = nil
                     try? self.stdinPipe?.fileHandleForWriting.close()
-                    try? self.stdoutPipe?.fileHandleForReading.close()
-                    try? self.stderrPipe?.fileHandleForReading.close()
                     self.process = nil
                     self.processCleanupTask = nil
                     self.stdinPipe = nil
-                    self.stdoutPipe = nil
-                    self.stderrPipe = nil
                     self.processGeneration = nil
                     continuation.resume()
                 }
@@ -797,16 +774,5 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private static func jsonData(_ object: Any) -> Data? {
         guard JSONSerialization.isValidJSONObject(object) else { return nil }
         return try? JSONSerialization.data(withJSONObject: object)
-    }
-
-    private static func readAvailable(fileDescriptor: Int32, byteCount: UInt) -> Data {
-        let count = max(1, min(Int(byteCount), 64 * 1024))
-        var data = Data(count: count)
-        let bytesRead = data.withUnsafeMutableBytes { buffer in
-            Darwin.read(fileDescriptor, buffer.baseAddress, count)
-        }
-        guard bytesRead > 0 else { return Data() }
-        data.removeSubrange(bytesRead..<data.count)
-        return data
     }
 }

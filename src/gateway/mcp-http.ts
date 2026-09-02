@@ -295,8 +295,9 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           return;
         }
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
-        const scopedTools = toolCache.resolve({
+        const scopedTools = await toolCache.resolve({
           cfg,
+          signal: requestAbort.signal,
           sessionKey: requestContext.sessionKey,
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
           runtimePolicyAgentId: requestContext.runtimePolicyAgentId,
@@ -351,6 +352,14 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           groupSpace: requestContext.groupSpace,
           spawnedBy: requestContext.spawnedBy,
         });
+
+        // Discovery may outlive the requesting connection or grant.
+        requestAbort.signal.throwIfAborted();
+        if (boundClientGrant && !boundClientGrant.isCurrent()) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "unauthorized" }));
+          return;
+        }
 
         logMcpLoopbackTraffic("request", {
           batchSize: messages.length,

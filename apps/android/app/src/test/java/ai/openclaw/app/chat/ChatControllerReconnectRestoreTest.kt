@@ -682,19 +682,26 @@ class ChatControllerReconnectRestoreTest {
   @Test
   fun explicitRefreshClearsPriorHistoryError() =
     runTest {
-      val gateway = ScriptedGateway(json)
-      val controller = loadController(gateway, history(emptyList()))
+      for (automaticLoad in listOf(false, true)) {
+        val gateway = ScriptedGateway(json)
+        val controller = loadController(gateway, history(emptyList()))
 
-      gateway.respond("chat.history") { error("history unavailable") }
-      controller.refresh()
-      runCurrent()
-      assertEquals("history unavailable", controller.errorText.value)
+        gateway.respond("chat.history") { error("history unavailable") }
+        controller.refresh()
+        runCurrent()
+        assertEquals("history unavailable", controller.errorText.value)
 
-      gateway.respondWith("chat.history", history(emptyList()))
-      controller.refresh()
-      assertNull(controller.errorText.value)
-      runCurrent()
-      assertNull(controller.errorText.value)
+        gateway.respondWith("chat.history", history(emptyList()))
+        if (automaticLoad) {
+          controller.load("main")
+        } else {
+          controller.refresh()
+        }
+        assertNull(controller.errorText.value)
+        runCurrent()
+        assertNull(controller.errorText.value)
+        assertEquals(3, gateway.callCount("chat.history"))
+      }
     }
 
   @Test

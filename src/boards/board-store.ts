@@ -359,11 +359,6 @@ export function createBoardWidgetPutSnapshot(
       move: params.placement?.tabId !== undefined || params.placement?.after !== undefined,
     },
   );
-  if (!declaredSummary) {
-    const widget = layout.widgets.find((candidate) => candidate.name === params.name)!;
-    delete widget.declaredSummary;
-    delete widget.declared;
-  }
   return {
     sessionKey: params.sessionKey,
     revision: prior.revision + 1,

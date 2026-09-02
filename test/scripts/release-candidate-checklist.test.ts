@@ -1306,10 +1306,17 @@ describe("release candidate checklist", () => {
     { profile: "beta", coveragePolicy: "npm-beta-v1", skipTelegram: true, expected: "skipped" },
     { profile: "beta", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
     { profile: "stable", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
+    {
+      profile: "stable",
+      coveragePolicy: "npm-stable-v1",
+      skipTelegram: false,
+      expected: "passed",
+      producerRunId: 444,
+    },
     { profile: "full", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
   ])(
     "records candidate Telegram $expected for $profile qualification ($coveragePolicy)",
-    async ({ profile, coveragePolicy, skipTelegram, expected }) => {
+    async ({ profile, coveragePolicy, skipTelegram, expected, producerRunId = 222 }) => {
       const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
       const telegramOwner = source.match(/^async function runTelegramIfNeeded\([\s\S]*?^\}/mu)?.[0];
       const telegramCall = source.match(
@@ -1345,7 +1352,7 @@ describe("release candidate checklist", () => {
             id: 9,
             name: "npm-package",
             digest: `sha256:${"a".repeat(64)}`,
-            workflowRunId: 222,
+            workflowRunId: producerRunId,
           },
           npmManifest: {
             tarballName: "openclaw.tgz",
@@ -1374,7 +1381,7 @@ describe("release candidate checklist", () => {
           options.workflowRef,
           expect.objectContaining({
             package_artifact_id: 9,
-            package_artifact_run_id: "222",
+            package_artifact_run_id: String(producerRunId),
             package_source_sha: "c".repeat(40),
           }),
         );
@@ -1733,24 +1740,23 @@ ${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
   });
 
   it("builds the complete immutable Telegram artifact identity tuple", () => {
-    expect(
-      buildTelegramArtifactInputs({
-        artifact: {
-          digest: `sha256:${"a".repeat(64)}`,
-          id: 123,
-          name: "openclaw-npm-preflight-v2026.7.2-beta.1",
-          workflowRunId: 456,
-        },
-        manifest: {
-          packageVersion: "2026.7.2-beta.1",
-          tarballName: "openclaw-2026.7.2-beta.1.tgz",
-          tarballSha256: "b".repeat(64),
-        },
-        runAttempt: 2,
-        runId: "456",
-        sourceSha: "c".repeat(40),
-      }),
-    ).toEqual({
+    const input = {
+      artifact: {
+        digest: `sha256:${"a".repeat(64)}`,
+        id: 123,
+        name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+        workflowRunId: 456,
+      },
+      manifest: {
+        packageVersion: "2026.7.2-beta.1",
+        tarballName: "openclaw-2026.7.2-beta.1.tgz",
+        tarballSha256: "b".repeat(64),
+      },
+      runAttempt: 2,
+      runId: "456",
+      sourceSha: "c".repeat(40),
+    };
+    expect(buildTelegramArtifactInputs(input)).toEqual({
       package_artifact_digest: "a".repeat(64),
       package_artifact_id: 123,
       package_artifact_name: "openclaw-npm-preflight-v2026.7.2-beta.1",
@@ -1761,6 +1767,13 @@ ${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
       package_source_sha: "c".repeat(40),
       package_version: "2026.7.2-beta.1",
     });
+    expect(() =>
+      buildTelegramArtifactInputs({
+        ...input,
+        artifact: { ...input.artifact, workflowRunId: undefined },
+        runId: "undefined",
+      }),
+    ).toThrow("belongs to run");
   });
 
   it("bounds GitHub API requests with a timeout signal", async () => {

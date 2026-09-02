@@ -207,8 +207,8 @@ const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
 // hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
-// Hosted-only rows do not consume Blacksmith registrations; hybrid keeps its
-// existing registration budget even though retries use hosted runners.
+// Trusted forks can use the GitHub profile on Blacksmith, so both compact
+// caps remain part of the conservative runner-registration budget.
 const COMPACT_GITHUB_NODE_TEST_JOB_CAP = 112;
 const COMPACT_HYBRID_NODE_TEST_JOB_CAP = 96;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
@@ -1755,6 +1755,14 @@ function createCoreRuntimeMediaUiSplitShards(): NodeTestSplitShard[] {
   ];
 }
 
+function partitionRuntimeTestFiles(configs: string[], files: string[]) {
+  const runtimeFiles = new Set(listVitestRuntimeConsumerFiles(configs));
+  return {
+    runtimeFiles: files.filter((file) => runtimeFiles.has(file)),
+    otherFiles: files.filter((file) => !runtimeFiles.has(file)),
+  };
+}
+
 function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   const unitFastFiles = new Set(getUnitFastTestFiles());
   const excludedGatewayFiles = new Set([
@@ -1779,21 +1787,22 @@ function createAgenticGatewayCoreSplitShards(): NodeTestSplitShard[] {
   // these files pays it for the whole stripe. Striping spreads them, which made
   // every gateway-core job pay a 275s build to run ~120s of tests. Keep them in
   // one shard so exactly one job builds.
-  const runtimeFiles = new Set(listVitestRuntimeConsumerFiles(configs));
-  const allFiles = [...gatewayFiles, ...packageFiles];
-  const runtimeShardFiles = allFiles.filter((file) => runtimeFiles.has(file));
+  const { runtimeFiles, otherFiles } = partitionRuntimeTestFiles(configs, [
+    ...gatewayFiles,
+    ...packageFiles,
+  ]);
   return [
     ...createStripedSplitShards({
       configs,
-      files: allFiles.filter((file) => !runtimeFiles.has(file)),
+      files: otherFiles,
       shardName: "agentic-gateway-core",
       stripeCount: AGENTIC_GATEWAY_CORE_STRIPES,
     }),
-    ...(runtimeShardFiles.length > 0
+    ...(runtimeFiles.length > 0
       ? [
           {
             configs,
-            includePatterns: runtimeShardFiles,
+            includePatterns: runtimeFiles,
             requiresDist: false,
             shardName: "agentic-gateway-core-runtime",
           },
@@ -2379,6 +2388,7 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
 function splitOversizedCompactGroup(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
+  runtimePartition?: ReturnType<typeof partitionRuntimeTestFiles>,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
   // Hybrid groups must fit both the first-attempt runner and hosted retries;
   // a faster retry estimate must not leave a slow first attempt unsplit.
@@ -2391,6 +2401,7 @@ function splitOversizedCompactGroup(
   );
   if (
     !isCliProcess &&
+    !runtimePartition &&
     !hasSplitTimingHistory &&
     Math.max(measuredProfileSeconds, measuredHostedSeconds) <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS
   ) {
@@ -2406,9 +2417,10 @@ function splitOversizedCompactGroup(
   // A measured whole-config parent can lag newly cataloged files. Its old
   // aggregate must not hide the complete process owner's file costs.
   const profileSeconds = Math.max(measuredProfileSeconds, isCliProcess ? totalWeight : 0);
-  const splitBuildMode = isCliProcess
-    ? resolveVitestPretestBuildMode([{ configs: group.configs, includePatterns }])
-    : undefined;
+  const splitBuildMode =
+    isCliProcess && !runtimePartition
+      ? resolveVitestPretestBuildMode([{ configs: group.configs, includePatterns }])
+      : undefined;
   const splitBuildSeconds = splitBuildMode ? VITEST_PRETEST_BUILD_SECONDS[splitBuildMode] : 0;
   const hostedProfileSeconds = Math.max(measuredHostedSeconds, isCliProcess ? totalWeight : 0);
   const splitSeconds = Math.max(
@@ -2433,6 +2445,7 @@ function splitOversizedCompactGroup(
       : [],
   );
   const createStripes = (seconds: number) => {
+    const files = runtimePartition?.otherFiles ?? includePatterns;
     const batchWeight = (patterns: readonly string[]) => {
       const mode = mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file)));
       const weight = patterns.reduce((sum, file) => sum + weightForFile(file), 0);
@@ -2446,25 +2459,33 @@ function splitOversizedCompactGroup(
     };
     const weightForValue =
       isCliProcess || packTooling ? (file: string) => batchWeight([file]) : weightForFile;
+    let stripes: string[][];
     if (packTooling) {
       // Balanced thirds of a ~301s parent each consume a 150s job. Fill the
       // budget first so unrelated families can share the small remainder.
       // Hybrid retains balanced children for its faster Blacksmith admission.
-      const discoveryOrder = (a: string, b: string) =>
-        includePatterns.indexOf(a) - includePatterns.indexOf(b);
-      return packNodeTestGroups(
-        includePatterns.toSorted(
-          (a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b),
-        ),
+      const discoveryOrder = (a: string, b: string) => files.indexOf(a) - files.indexOf(b);
+      stripes = packNodeTestGroups(
+        files.toSorted((a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b)),
         (bin, file) => batchWeight([...bin, file]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
       ).map((patterns) => patterns.toSorted(discoveryOrder));
+    } else {
+      // The fixed build stays with its runtime child; only remaining test
+      // work benefits from more stripes. Empty include lists run the whole config.
+      const remainingSeconds = runtimePartition
+        ? (seconds * files.reduce((sum, file) => sum + weightForFile(file), 0)) / totalWeight
+        : seconds;
+      stripes = createStripedBatches(
+        files,
+        Math.min(
+          files.length,
+          Math.max(1, Math.ceil(remainingSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS)),
+        ),
+        weightForValue,
+        isCliProcess ? batchWeight : undefined,
+      );
     }
-    return createStripedBatches(
-      includePatterns,
-      Math.min(includePatterns.length, Math.ceil(seconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS)),
-      weightForValue,
-      isCliProcess ? batchWeight : undefined,
-    );
+    return runtimePartition ? [runtimePartition.runtimeFiles, ...stripes] : stripes;
   };
   let stripes = createStripes(splitSeconds);
   let timingGeneration = createCompactSplitTimingGeneration({
@@ -2487,7 +2508,10 @@ function splitOversizedCompactGroup(
       : runnerBackend === "hybrid"
         ? Math.max(completeBlacksmithSeconds ?? 0, completeHostedSeconds ?? 0)
         : (completeBlacksmithSeconds ?? 0);
-  if (Math.max(splitSeconds, completeMeasuredSeconds) <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
+  if (
+    !runtimePartition &&
+    Math.max(splitSeconds, completeMeasuredSeconds) <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS
+  ) {
     return [{ group, seconds: profileSeconds }];
   }
   if (completeMeasuredSeconds > splitSeconds) {
@@ -2560,12 +2584,19 @@ function createCompactNodeTestShardBundles(
       runner,
       shard_name: shard.shardName,
     });
-    // A whole-config runtime consumer can exceed native admission before its
-    // build. Reuse the same complete-file splitter and keep the build with its child.
+    const partition =
+      group.pretestBuildMode && group.includePatterns
+        ? partitionRuntimeTestFiles(group.configs, group.includePatterns)
+        : undefined;
+    const runtimePartition =
+      partition?.runtimeFiles.length && partition.otherFiles.length ? partition : undefined;
+    // Mixed selections keep their build consumers together. Whole-config
+    // consumers still use the complete-file splitter for oversized test work.
     const plannedGroups =
       usesExpandedRunnerProfile(options.runnerBackend) ||
+      runtimePartition !== undefined ||
       (group.pretestBuildMode !== undefined && group.includePatterns === undefined)
-        ? splitOversizedCompactGroup(group, options.runnerBackend)
+        ? splitOversizedCompactGroup(group, options.runnerBackend, runtimePartition)
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       planned.group.runner = resolveCiNodeTestRunner(

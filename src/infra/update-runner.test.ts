@@ -3070,7 +3070,7 @@ describe("runGatewayUpdate", () => {
         argv[0] === "npm" &&
         argv[1] === "i" &&
         argv[2] === "-g" &&
-        argv[3] === "--allow-scripts=./openclaw-2.0.0.tgz" &&
+        argv[3] === `--allow-scripts=${argv[4]}` &&
         path.basename(argv[4] ?? "") === "openclaw-2.0.0.tgz" &&
         argv.slice(5).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
       tag: "main",
@@ -3078,6 +3078,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(result.mode).toBe("npm");
+    expect(result.after?.version).toBe("2.0.0");
     expect(result.steps.map((step) => step.name)).toContain("global update pack");
     expect(
       calls.some((call) => call.startsWith(`npm pack ${sourceSpec} --pack-destination `)),
@@ -3087,7 +3088,7 @@ describe("runGatewayUpdate", () => {
     expect(installCall).not.toContain(sourceSpec);
   });
 
-  it("runs doctor after global npm updates before reporting success", async () => {
+  it("keeps service repair external during staged global npm Doctor", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     await seedGlobalPackageRoot(pkgRoot);
@@ -3098,7 +3099,7 @@ describe("runGatewayUpdate", () => {
       npmRootOutput: nodeModules,
       installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async () => {
-        await writeGlobalPackageVersion(pkgRoot);
+        await writeGlobalPackageVersion(pkgRoot, "2026.5.1");
         await writeGatewayEntrypoint(pkgRoot);
       },
     });
@@ -3126,9 +3127,10 @@ describe("runGatewayUpdate", () => {
     expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART).toBe("1");
-    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("0");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe("0");
-    expect(doctorEnv?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2.0.0");
+    expect(doctorEnv?.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
+    expect(doctorEnv?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.5.1");
   });
 
   it("fails global npm updates when post-update doctor fails", async () => {
@@ -3141,7 +3143,7 @@ describe("runGatewayUpdate", () => {
       npmRootOutput: nodeModules,
       installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async () => {
-        await writeGlobalPackageVersion(pkgRoot);
+        await writeGlobalPackageVersion(pkgRoot, "2026.5.1");
         await writeGatewayEntrypoint(pkgRoot);
       },
     });

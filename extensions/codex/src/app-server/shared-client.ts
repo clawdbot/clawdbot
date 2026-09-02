@@ -59,7 +59,6 @@ type SharedCodexAppServerClientEntry = {
   startup?: SharedCodexAppServerClientStartup;
   activeLeases: number;
   pendingAcquires: number;
-  leaseGeneration: number;
   closeWhenIdle: boolean;
   closeError?: Error;
   startupAbort?: AbortController;
@@ -1324,12 +1323,17 @@ export function clearSharedCodexAppServerClientIfCurrent(
 export function captureSharedCodexAppServerCatalogLifetime(
   client: CodexAppServerClient,
 ): () => boolean {
+  const isCurrent = captureSharedClientRegistration(client);
+  const revision = client.getModelCatalogRevision();
+  return () => isCurrent() && client.getModelCatalogRevision() === revision;
+}
+
+/** Registration ends on retirement even when sibling leases keep the process alive. */
+function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
   const state = getSharedCodexAppServerClientState();
   const entry = state.entriesByClient.get(client);
   const key = [...state.clients].find(([, candidate]) => candidate === entry)?.[0];
   const generation = readCodexAppServerClientDesktopGeneration(client);
-  const revision = client.getModelCatalogRevision();
-  // Detachment retires an owner even while outstanding leases keep its process alive.
   return () =>
     key !== undefined &&
     state.clients.get(key) === entry &&
@@ -1337,7 +1341,6 @@ export function captureSharedCodexAppServerCatalogLifetime(
     !entry.closeWhenIdle &&
     !entry.closeError &&
     !client.getCloseError() &&
-    client.getModelCatalogRevision() === revision &&
     (!generation || isCodexDesktopGenerationCurrent(generation));
 }
 
@@ -1375,14 +1378,14 @@ export function retainSharedCodexAppServerClientByInstanceId(
   return undefined;
 }
 
-/** Captures the required connection or native-process ownership across awaited work. */
-export function captureExclusiveSharedCodexAppServerClient(
+/** Captures physical ownership, independently of unrelated thread and reader leases. */
+export function captureCodexAppServerClientLifetime(
   client: CodexAppServerClient,
   requiredOwnership: "connection" | "native-process",
 ): () => void {
   const state = getSharedCodexAppServerClientState();
   // Ordinary refresh needs a process, not a connection to an external server.
-  // Supervision/release retain their existing shared connection-lease contract.
+  // Supervision/release require only their original registered connection.
   const start = getCodexAppServerClientStartMetadata().get(client)?.startOptions;
   if (
     requiredOwnership === "native-process" &&
@@ -1392,41 +1395,20 @@ export function captureExclusiveSharedCodexAppServerClient(
       "Codex ordinary configuration refresh requires an OpenClaw-managed local stdio process, not an external socket or app-server proxy. No turn was sent; reconnect through managed local stdio before continuing.",
     );
   }
-  if (requiredOwnership === "native-process" && state.isolatedClients.has(client)) {
-    // Worker clients already have a sole per-attempt owner, not a shared-pool lease.
-    // Host/placement authority is checked by the caller across every awaited handoff.
-    const assertIsolated = () => {
-      if (!state.isolatedClients.has(client) || client.getCloseError()) {
-        throw new CodexAdoptedThreadActiveError();
-      }
-    };
-    assertIsolated();
-    return assertIsolated;
-  }
-  for (const [key, entry] of state.clients) {
-    if (entry.client !== client) {
-      continue;
+  const isolated = requiredOwnership === "native-process" && state.isolatedClients.has(client);
+  const isCurrent = isolated
+    ? () => state.isolatedClients.has(client) && !client.getCloseError()
+    : captureSharedClientRegistration(client);
+  const assertCurrent = () => {
+    if (!isCurrent()) {
+      throw new CodexAdoptedThreadActiveError(
+        "Codex app-server connection changed during thread preparation; reconnect before continuing",
+      );
     }
-    const generation = entry.leaseGeneration;
-    const assertExclusive = () => {
-      // A sibling can resume native children without OpenClaw's thread queue.
-      // Even a completed intervening lease invalidates this configuration proof.
-      if (
-        state.clients.get(key) !== entry ||
-        entry.client !== client ||
-        entry.closeWhenIdle ||
-        entry.closeError ||
-        entry.activeLeases !== 1 ||
-        entry.pendingAcquires !== 0 ||
-        entry.leaseGeneration !== generation
-      ) {
-        throw new CodexAdoptedThreadActiveError();
-      }
-    };
-    assertExclusive();
-    return assertExclusive;
-  }
-  throw new CodexAdoptedThreadActiveError();
+    assertCodexAppServerClientStartSelectionCurrent({ client });
+  };
+  assertCurrent();
+  return assertCurrent;
 }
 
 /**
@@ -1622,7 +1604,6 @@ function getOrCreateSharedClientEntry(
     entry = {
       activeLeases: 0,
       pendingAcquires: 0,
-      leaseGeneration: 0,
       closeWhenIdle: false,
       onStartedClientCallbacks: new Set(),
     };
@@ -1662,7 +1643,6 @@ export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
 
 function retainPendingSharedClientAcquire(entry: SharedCodexAppServerClientEntry): () => void {
   let released = false;
-  entry.leaseGeneration += 1;
   entry.pendingAcquires += 1;
   return () => {
     if (released) {
@@ -1677,7 +1657,6 @@ function retainPendingSharedClientAcquire(entry: SharedCodexAppServerClientEntry
 
 function retainSharedClientEntry(entry: SharedCodexAppServerClientEntry): () => void {
   let released = false;
-  entry.leaseGeneration += 1;
   entry.activeLeases += 1;
   return () => {
     if (released) {

@@ -187,25 +187,12 @@ export async function runCliFallbackCandidate(
             const textForTyping = classified.text;
             const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
             const onPartialReply = turn.opts?.onPartialReply;
-            if (!params.preserveProgressCallbackStartOrder) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              if (sanitized.skip || !sanitized.text || !onPartialReply) {
-                return false;
-              }
-              return await onPartialReply({ text: sanitized.text });
-            }
-            if (sanitized.skip || !sanitized.text) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              return false;
-            }
-            if (!onPartialReply) {
-              await turn.typingSignals.signalTextDelta(textForTyping);
-              return false;
-            }
-            // Assistant and tool CLI bridges drain independently. Stage presentation first.
-            return await params.presentation.startPresentationWhileTyping(
+            return await params.presentation.presentWithTyping(
               turn.typingSignals.signalTextDelta(textForTyping),
-              () => onPartialReply({ text: sanitized.text }),
+              () =>
+                sanitized.skip || !sanitized.text || !onPartialReply
+                  ? false
+                  : onPartialReply({ text: sanitized.text }),
             );
           },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
@@ -243,7 +230,7 @@ export async function runCliFallbackCandidate(
             // Tool and assistant bridges drain independently. Preserve source order.
             await Promise.all([
               summaryPromise,
-              params.presentation.startPresentationWhileTyping(
+              params.presentation.presentWithTyping(
                 turn.typingSignals.signalToolStart(),
                 async () => {
                   await turn.opts?.onToolStart?.({

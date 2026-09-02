@@ -34,7 +34,7 @@ describe("GitHub CLI authorization preflight", () => {
         "call",
         "tools.github.authorize.start",
         "--params",
-        '{"scope":"system","agentId":"main"}',
+        '{"scope":"agent","agentId":"main"}',
         "--json",
       ]);
 

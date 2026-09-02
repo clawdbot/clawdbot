@@ -37,12 +37,14 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const network = vi.hoisted(() => ({
+  assertCli: vi.fn(),
   start: vi.fn(),
   poll: vi.fn(),
   refresh: vi.fn(),
@@ -50,12 +52,17 @@ const network = vi.hoisted(() => ({
   command: vi.fn(),
 }));
 vi.mock("../../agents/github-oauth-client.js", () => ({
+  clearGitHubCredentialVerificationCache: vi.fn(),
   requestGitHubOAuthDeviceCode: network.start,
   pollGitHubOAuthDeviceToken: network.poll,
   refreshGitHubOAuthToken: network.refresh,
   verifyGitHubCredential: network.verify,
 }));
 vi.mock("../../process/exec.js", () => ({ runCommandBuffered: network.command }));
+vi.mock("../github-cli-preflight.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../github-cli-preflight.js")>();
+  return { ...actual, assertGitHubCliAvailable: network.assertCli };
+});
 
 const tokens = {
   accessToken: "synthetic-access",
@@ -137,6 +144,7 @@ beforeEach(async () => {
   clients = new Set();
   alice = user("alice@example.test");
   bob = user("bob@example.test");
+  network.assertCli.mockReset();
   network.start.mockReset().mockResolvedValue({
     deviceCode: "d".repeat(40),
     userCode: "ABCD-1234",
@@ -209,7 +217,9 @@ afterEach(async () => {
 
 describe("personal GitHub through authenticated Gateway RPC", () => {
   it("rejects a missing GitHub CLI before creating personal authorization state", async () => {
-    vi.stubEnv("PATH", state.root);
+    network.assertCli.mockImplementationOnce(() => {
+      throw new GitHubCliUnavailableError();
+    });
 
     const response = await rpc(alice, "users.github.authorize.start");
 

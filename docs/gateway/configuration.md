@@ -109,10 +109,11 @@ does. If `openclaw.json` remains invalid after eligible startup migrations (incl
 plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
 the current runtime keeps the last accepted config. A rejected write is also saved as
 `<path>.rejected.<timestamp>` for inspection.
-The Gateway blocks writes that look like accidental clobbers - dropping `gateway.mode`,
-losing the `meta` block, or shrinking the file by more than half - unless the write
-explicitly allows destructive changes. Promotion to last-known-good is skipped when a
-candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+The Gateway blocks writes that look like accidental clobbers - dropping the effective
+`gateway.mode` or shrinking the file by more than half - unless the write explicitly
+allows destructive changes. Mode checks resolve `$include` and environment references
+first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
+skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
 ## Common tasks
 

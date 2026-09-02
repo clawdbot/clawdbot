@@ -326,7 +326,9 @@ describe("tsdown config", () => {
       const { nativePackages } = worker
         ? { nativePackages: [] }
         : copyFsSafePackageFixture(sourceRoot);
-      if (!worker) expect(nativePackages.length).toBeGreaterThan(0);
+      if (!worker) {
+        expect(nativePackages.length).toBeGreaterThan(0);
+      }
       const sdkSource = path.resolve("src/plugin-sdk/memory-core-host-engine-fs.ts");
       const observerSource = path.join(sourceRoot, "observer.ts");
       fs.writeFileSync(
@@ -411,7 +413,9 @@ describe("tsdown config", () => {
           const errors = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : [],
           );
-          if (errors.length) throw new AggregateError(errors, "fs-safe package probes failed");
+          if (errors.length) {
+            throw new AggregateError(errors, "fs-safe package probes failed");
+          }
         };
         if (worker) {
           await join([
@@ -428,10 +432,11 @@ describe("tsdown config", () => {
             probe("shared-config", "configured", "native"),
             probe("default", "off", "fallback"),
           ]);
-          for (const nativePackage of nativePackages)
+          for (const nativePackage of nativePackages) {
             fs.rmSync(path.join(relocatedRoot, path.relative(sourceRoot, nativePackage.root)), {
               recursive: true,
             });
+          }
           await join([
             probe("missing", "require", "missing", { FS_SAFE_NATIVE_MODE: "require" }),
             ...["off", "auto"].map((mode) =>
@@ -440,7 +445,9 @@ describe("tsdown config", () => {
           ]);
         }
       } finally {
-        for (const bundle of bundles) await bundle[Symbol.asyncDispose]();
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
       }
     },
   );
@@ -525,6 +532,7 @@ describe("tsdown config", () => {
             !bundleAll &&
             packageName === name &&
             name !== "@lancedb/lancedb" &&
+            name !== "@openclaw/crabline" &&
             (name !== "zod" || declarations)
           ) {
             expectedImports.push(...imports);

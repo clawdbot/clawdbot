@@ -16,7 +16,7 @@ import {
   resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
 import { consumeGitHubSetupHandoff } from "../../secrets/store/secret-store.js";
-import { GitHubCliUnavailableError, GITHUB_CLI_REQUIRED_MESSAGE } from "../github-cli-preflight.js";
+import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { updateGitHubToolIdentityConfig } from "../github-tool-identity-config.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -182,7 +182,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.UNAVAILABLE,
           error instanceof GitHubCliUnavailableError
-            ? GITHUB_CLI_REQUIRED_MESSAGE
+            ? error.message
             : "GitHub authorization could not start",
         ),
       );

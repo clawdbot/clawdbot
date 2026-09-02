@@ -1,6 +1,6 @@
 import { clearExecutablePathCache, resolveExecutablePath } from "../infra/executable-path.js";
 
-export const GITHUB_CLI_REQUIRED_MESSAGE =
+const GITHUB_CLI_REQUIRED_MESSAGE =
   "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.";
 
 export class GitHubCliUnavailableError extends Error {

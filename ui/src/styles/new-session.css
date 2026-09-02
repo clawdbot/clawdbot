@@ -1276,3 +1276,15 @@ wa-popover.new-session-page__project-popover::part(body) {
     max-height: 48px;
   }
 }
+
+.new-session-page__title-notice {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.new-session-page__prepared-title {
+  color: var(--text);
+}

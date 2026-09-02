@@ -273,12 +273,21 @@ function acceptActivityEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     }
     return true;
   }
-  if (payload.stream !== "item" || payload.data?.kind !== "preamble") {
+  let identity: string;
+  const terminalLifecycle =
+    payload.stream === "lifecycle" &&
+    (payload.data?.phase === "end" || payload.data?.phase === "error");
+  if (payload.stream === "compaction" || terminalLifecycle) {
+    // One visible compaction per run: older items and retry completions must
+    // not replace a newer operation restored or received on the live stream.
+    identity = `compaction:${payload.runId}`;
+  } else if (payload.stream === "item" && payload.data?.kind === "preamble") {
+    const itemId =
+      toTrimmedString(payload.data.itemId) ?? toTrimmedString(payload.data.id) ?? "latest";
+    identity = `preamble:${payload.runId}:${itemId}`;
+  } else {
     return true;
   }
-  const itemId =
-    toTrimmedString(payload.data.itemId) ?? toTrimmedString(payload.data.id) ?? "latest";
-  const identity = `preamble:${payload.runId}:${itemId}`;
   const previous = host.activityEventSeqById?.get(identity);
   if (previous !== undefined && seq <= previous) {
     return false;
@@ -455,7 +464,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return false;
   }
   // History can replay an older active-run snapshot after newer live activity.
-  // Fence each tool/preamble identity by Gateway sequence so restore fills gaps
+  // Fence activity by Gateway sequence so restore fills gaps
   // without regressing a result or newer progress already rendered by this pane.
   if (!acceptActivityEvent(host, payload)) {
     return false;

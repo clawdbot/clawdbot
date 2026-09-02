@@ -222,17 +222,6 @@ internal fun resolvePendingAssistantAutoSend(
   return queued
 }
 
-/** Chooses the session key to load for initial chat hydration, if any. */
-internal fun resolveInitialChatLoadSessionKey(
-  sessionKey: String,
-  mainSessionKey: String,
-): String? {
-  val current = sessionKey.trim()
-  val main = mainSessionKey.trim().ifEmpty { "main" }
-  if (current.isNotEmpty() && current != "main" && current != main) return null
-  return main
-}
-
 /** Reserves a viewport strip so the jump-to-latest target never covers chat content. */
 internal fun chatReaderListBottomInset(showJumpToLatest: Boolean): Dp =
   if (showJumpToLatest) {
@@ -576,10 +565,7 @@ fun ChatScreen(
   }
 
   LaunchedEffect(Unit) {
-    val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
-    if (loadSessionKey != null) {
-      viewModel.loadChat(loadSessionKey, sessionOwnerAgentId)
-    }
+    viewModel.loadCurrentChat()
     viewModel.refreshChatSessions(limit = 100)
     viewModel.refreshChatCommands()
   }

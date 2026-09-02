@@ -4718,95 +4718,32 @@ describe("message tool boot-echo guard", () => {
     });
   });
 
-  it("sanitizes boot echo text and still sends when media content remains", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
+  it.each([
+    ["mediaUrl", "text", "file:///tmp/status.png"],
+    ["media_url", "text", "file:///tmp/status.png"],
+    ["media_urls", "text", ["file:///tmp/one.png", "file:///tmp/two.png"]],
+    ["attachments", "message", [{ media: "file:///tmp/status.png" }]],
+    ["attachments", "message", [{ file_path: "/tmp/status.png" }]],
+  ] as const)(
+    "preserves %s after sanitizing boot echo in %s: %j",
+    async (mediaField, textField, media) => {
+      setBootEchoContextForSession("agent:main", longBootPrompt);
+      mockSendResult({ channel: "telegram", to: "telegram:123" });
 
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        mediaUrl: "file:///tmp/status.png",
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.mediaUrl).toBe("file:///tmp/status.png");
-  });
-
-  it("sanitizes boot echo text and still sends when snake_case media content remains", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        media_url: "file:///tmp/status.png",
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.media_url).toBe("file:///tmp/status.png");
-  });
-
-  it("sanitizes boot echo text and still sends when snake_case media arrays remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: echoedText,
-        media_urls: ["file:///tmp/one.png", "file:///tmp/two.png"],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.text).toBe("");
-    expect(call?.params?.media_urls).toEqual(["file:///tmp/one.png", "file:///tmp/two.png"]);
-  });
-
-  it("sanitizes boot echo text and still sends when structured attachments remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        message: echoedText,
-        attachments: [{ media: "file:///tmp/status.png" }],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.message).toBe("");
-    expect(call?.params?.attachments).toEqual([{ media: "file:///tmp/status.png" }]);
-  });
-
-  it("sanitizes boot echo text and still sends when structured attachment aliases remain", async () => {
-    setBootEchoContextForSession("agent:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const echoedText =
-      "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        message: echoedText,
-        attachments: [{ file_path: "/tmp/status.png" }],
-      },
-      toolOptions: { agentSessionKey: "agent:main" },
-    });
-    expect(call?.params?.message).toBe("");
-    expect(call?.params?.attachments).toEqual([{ file_path: "/tmp/status.png" }]);
-  });
+      const echoedText =
+        "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
+      const call = await executeSend({
+        action: {
+          target: "telegram:123",
+          [textField]: echoedText,
+          [mediaField]: structuredClone(media),
+        },
+        toolOptions: { agentSessionKey: "agent:main" },
+      });
+      expect(call?.params?.[textField]).toBe("");
+      expect(call?.params?.[mediaField]).toEqual(media);
+    },
+  );
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
     setBootEchoContextForSession("agent:main", longBootPrompt);
