@@ -64,9 +64,6 @@ export function createEmbeddedAgentSubscribeState(
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
-    pendingAssistantUsage: undefined,
-    assistantUsageCommitted: false,
-    retryUsage: undefined,
     compactionInFlight: false,
     lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,
