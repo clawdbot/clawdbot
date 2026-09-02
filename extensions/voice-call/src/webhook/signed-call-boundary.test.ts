@@ -21,8 +21,13 @@ import { VoiceCallWebhookServer } from "../webhook.js";
 import { connectWs, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
-const MATCHING_CALL_SID = "CA-signed-boundary";
-const MISMATCHED_CALL_SID = "CA-other-boundary";
+const MATCHING_CALL_SID = "CA22222222222222222222222222222222";
+const MISMATCHED_CALL_SID = "CA33333333333333333333333333333333";
+const MISMATCH_SESSION_CALL_SID = "CA77777777777777777777777777777777";
+const ACCOUNT_SID = "AC11111111111111111111111111111111";
+const MATCHING_STREAM_SID = "MZ44444444444444444444444444444444";
+const MISMATCHED_STREAM_SID = "MZ55555555555555555555555555555555";
+const MULAW_SILENCE = Buffer.alloc(160, 0xff).toString("base64");
 const REDACTED_CALL_SID = "CA…redacted";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -62,10 +67,26 @@ async function postSignedTwilioWebhook(params: {
   attempt: "missing" | "blank" | "matching" | "mismatched";
 }): Promise<{ response: Response; responseBody: string; streamUrl?: string }> {
   const url = requireBoundRequestUrl(params.server, params.baseUrl);
+  // Fixtures follow Twilio's documented voice POST and Media Streams frames:
+  // https://www.twilio.com/docs/voice/twiml#twilios-request-to-your-application and https://www.twilio.com/docs/voice/media-streams/websocket-messages
   const bodyParams = new URLSearchParams({
-    Direction: "inbound",
+    AccountSid: ACCOUNT_SID,
+    From: "+14155550100",
+    To: "+14155550101",
     CallStatus: "ringing",
-    BoundaryAttempt: params.attempt,
+    ApiVersion: "2010-04-01",
+    Direction: "inbound",
+    ForwardedFrom: "+14155550102",
+    CallerName: "Carrier Boundary",
+    ParentCallSid: "CA66666666666666666666666666666666",
+    FromCity: "SAN FRANCISCO",
+    FromState: "CA",
+    FromZip: "94105",
+    FromCountry: "US",
+    ToCity: "OAKLAND",
+    ToState: "CA",
+    ToZip: "94612",
+    ToCountry: "US",
   });
   if (params.callSid !== undefined) {
     bodyParams.set("CallSid", params.callSid);
@@ -73,7 +94,7 @@ async function postSignedTwilioWebhook(params: {
   const body = bodyParams.toString();
   let signedMaterial = url.toString();
   for (const [key, value] of [...new URLSearchParams(body)].toSorted(([left], [right]) =>
-    left.localeCompare(right),
+    left < right ? -1 : left > right ? 1 : 0,
   )) {
     signedMaterial += key + value;
   }
@@ -102,9 +123,10 @@ async function postSignedTwilioWebhook(params: {
 
 function createExternalRealtimeProviderDouble() {
   const bridgeEntries: Array<() => void> = [];
+  const sendAudio = vi.fn();
   const bridge: RealtimeVoiceBridge = {
     connect: async () => {},
-    sendAudio: () => {},
+    sendAudio,
     setMediaTimestamp: () => {},
     submitToolResult: () => {},
     acknowledgeMark: () => {},
@@ -125,11 +147,57 @@ function createExternalRealtimeProviderDouble() {
   return {
     createBridge,
     provider,
+    sendAudio,
     waitForBridgeEntry: () =>
       new Promise<void>((resolve) => {
         bridgeEntries.push(resolve);
       }),
   };
+}
+
+function documentedTwilioStart(callSid: string, streamSid: string) {
+  return {
+    event: "start",
+    sequenceNumber: "1",
+    start: {
+      accountSid: ACCOUNT_SID,
+      streamSid,
+      callSid,
+      tracks: ["inbound"],
+      customParameters: { proof: "signed-call-boundary" },
+      mediaFormat: { encoding: "audio/x-mulaw", sampleRate: 8000, channels: 1 },
+    },
+    streamSid,
+  };
+}
+
+function sendDocumentedTwilioMedia(ws: WebSocket, streamSid: string): void {
+  for (let index = 0; index < 3; index += 1) {
+    ws.send(
+      JSON.stringify({
+        event: "media",
+        sequenceNumber: String(index + 2),
+        media: {
+          track: "inbound",
+          chunk: String(index + 1),
+          timestamp: String(index * 20),
+          payload: MULAW_SILENCE,
+        },
+        streamSid,
+      }),
+    );
+  }
+}
+
+function sendDocumentedTwilioStop(ws: WebSocket, callSid: string, streamSid: string): void {
+  ws.send(
+    JSON.stringify({
+      event: "stop",
+      sequenceNumber: "5",
+      stop: { accountSid: ACCOUNT_SID, callSid },
+      streamSid,
+    }),
+  );
 }
 
 async function connectSignedStream(streamUrl: string): Promise<WebSocket> {
@@ -144,11 +212,11 @@ async function createSignedBoundaryHarness() {
   installProductionStateStore();
   const storePath = tempDirs.make("openclaw-signed-call-boundary-");
   const authToken = "signed-realtime-boundary-token";
-  const twilioProvider = new TwilioProvider({ accountSid: "AC123", authToken });
+  const twilioProvider = new TwilioProvider({ accountSid: ACCOUNT_SID, authToken });
   const config = VoiceCallConfigSchema.parse({
     provider: "twilio",
     inboundPolicy: "open",
-    twilio: { accountSid: "AC123", authToken },
+    twilio: { accountSid: ACCOUNT_SID, authToken },
     serve: { port: 1 },
     realtime: {
       enabled: true,
@@ -166,6 +234,7 @@ async function createSignedBoundaryHarness() {
   const {
     createBridge,
     provider: realtimeProvider,
+    sendAudio,
     waitForBridgeEntry,
   } = createExternalRealtimeProviderDouble();
   const server = new VoiceCallWebhookServer(
@@ -204,6 +273,7 @@ async function createSignedBoundaryHarness() {
     createBridge,
     lookupCall,
     processEvent,
+    sendAudio,
     realtimeHandler,
     server,
     sockets,
@@ -272,6 +342,7 @@ it("binds signed Twilio calls before entering realtime lookup and bridge setup",
     createBridge,
     lookupCall,
     processEvent,
+    sendAudio,
     server,
     sockets,
     waitForBridgeEntry,
@@ -293,12 +364,8 @@ it("binds signed Twilio calls before entering realtime lookup and bridge setup",
     sockets.add(matchingWs);
     const matchingClose = waitForClose(matchingWs);
     const matchingBridgeEntry = waitForBridgeEntry();
-    matchingWs.send(
-      JSON.stringify({
-        event: "start",
-        start: { streamSid: "MZ-matching-boundary", callSid: MATCHING_CALL_SID },
-      }),
-    );
+    matchingWs.send(JSON.stringify({ event: "connected", protocol: "Call", version: "1.0.0" }));
+    matchingWs.send(JSON.stringify(documentedTwilioStart(MATCHING_CALL_SID, MATCHING_STREAM_SID)));
     const prematureClose = await Promise.race([
       matchingBridgeEntry.then(() => null),
       matchingClose,
@@ -310,6 +377,9 @@ it("binds signed Twilio calls before entering realtime lookup and bridge setup",
     }
     expect(processEvent).toHaveBeenCalledTimes(2);
     expect(lookupCall).toHaveBeenCalledOnce();
+    sendDocumentedTwilioMedia(matchingWs, MATCHING_STREAM_SID);
+    await vi.waitFor(() => expect(sendAudio).toHaveBeenCalledTimes(3));
+    sendDocumentedTwilioStop(matchingWs, MATCHING_CALL_SID, MATCHING_STREAM_SID);
     console.info(
       `[boundary-proof] start frame sent CallSid=${REDACTED_CALL_SID} -> entry reached; lookup=${lookupCall.mock.calls.length} event=${processEvent.mock.calls.length} bridge=${createBridge.mock.calls.length}`,
     );
@@ -326,7 +396,7 @@ it("binds signed Twilio calls before entering realtime lookup and bridge setup",
       server,
       baseUrl,
       authToken,
-      callSid: MATCHING_CALL_SID,
+      callSid: MISMATCH_SESSION_CALL_SID,
       attempt: "mismatched",
     });
     expect(mismatched.response.status).toBe(200);
@@ -337,11 +407,9 @@ it("binds signed Twilio calls before entering realtime lookup and bridge setup",
     sockets.add(mismatchedWs);
     const mismatchedClose = waitForClose(mismatchedWs);
     const mismatchedBridgeEntry = waitForBridgeEntry();
+    mismatchedWs.send(JSON.stringify({ event: "connected", protocol: "Call", version: "1.0.0" }));
     mismatchedWs.send(
-      JSON.stringify({
-        event: "start",
-        start: { streamSid: "MZ-mismatched-boundary", callSid: MISMATCHED_CALL_SID },
-      }),
+      JSON.stringify(documentedTwilioStart(MISMATCHED_CALL_SID, MISMATCHED_STREAM_SID)),
     );
     const mismatchOutcome = await Promise.race([
       mismatchedClose.then((close) => ({ kind: "close", close }) as const),
