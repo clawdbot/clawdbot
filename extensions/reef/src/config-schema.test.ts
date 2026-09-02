@@ -107,6 +107,7 @@ describe("Reef configuration boundary", () => {
     const requestFriend = vi.fn();
     const removeFriend = vi.fn();
     const setAutonomy = vi.fn();
+    const setInboundAllowed = vi.fn();
     const decide = vi.fn().mockResolvedValue(true);
     const listFriends = vi.fn().mockResolvedValue([]);
     createReefRuntimeAuthority().activate({
@@ -117,6 +118,7 @@ describe("Reef configuration boundary", () => {
         list: listFriends,
         remove: removeFriend,
         setAutonomy,
+        setInboundAllowed,
       },
       reviews: { list: vi.fn(), decide },
     } as never);
@@ -125,6 +127,9 @@ describe("Reef configuration boundary", () => {
     };
     await expect(
       command.handler({ args: "friend autonomy peer extended", senderIsOwner: false }),
+    ).resolves.toEqual(ownerRequired);
+    await expect(
+      command.handler({ args: "friend inbound peer block", senderIsOwner: false }),
     ).resolves.toEqual(ownerRequired);
     await expect(
       command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: false }),
@@ -136,6 +141,7 @@ describe("Reef configuration boundary", () => {
     expect(requestFriend).not.toHaveBeenCalled();
     expect(removeFriend).not.toHaveBeenCalled();
     expect(setAutonomy).not.toHaveBeenCalled();
+    expect(setInboundAllowed).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();
 
     await expect(command.handler({ args: "friend list", senderIsOwner: false })).resolves.toEqual({
@@ -147,11 +153,15 @@ describe("Reef configuration boundary", () => {
       command.handler({ args: "friend autonomy peer extended", senderIsOwner: true }),
     ).resolves.toEqual({ text: "Reef friend @peer autonomy set to extended." });
     await expect(
+      command.handler({ args: "friend inbound peer block", senderIsOwner: true }),
+    ).resolves.toEqual({ text: "Reef friend @peer inbound messages blocked." });
+    await expect(
       command.handler({ args: `review approve ${"a".repeat(64)}`, senderIsOwner: true }),
     ).resolves.toEqual({
       text: "Reef review approved. Retry the identical message to re-run the guard.",
     });
     expect(setAutonomy).toHaveBeenCalledWith("peer", "extended");
+    expect(setInboundAllowed).toHaveBeenCalledWith("peer", false);
     expect(decide).toHaveBeenCalledWith("a".repeat(64), true);
 
     await expect(

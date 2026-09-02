@@ -21,6 +21,8 @@ type ReefPairingApprovals = {
 type ListedReefFriend = RelayFriend & {
   fingerprint: string;
   autonomy?: ReefAutonomy;
+  inbound_allowed: boolean;
+  outbound_allowed: boolean;
 };
 
 type ReefPairingApproval = {
@@ -128,6 +130,16 @@ export class ReefFriendManager {
     });
   }
 
+  setInboundAllowed(peer: string, inboundAllowed: boolean): Promise<void> {
+    return this.#serialize(async (signal) => {
+      const normalized = normalizeReefTarget(peer);
+      if (!normalized) {
+        throw new Error(`Invalid Reef peer handle: ${peer}`);
+      }
+      await this.transport.setInboundAllowed(normalized, inboundAllowed, signal);
+    });
+  }
+
   async list(): Promise<ListedReefFriend[]> {
     const signal = this.authoritySignal;
     signal?.throwIfAborted();
@@ -139,6 +151,9 @@ export class ReefFriendManager {
       const autonomy = local.get(friend.peer)?.autonomy;
       listed.push({
         ...friend,
+        // Older relays predate directional permissions and allow both ways.
+        inbound_allowed: friend.inbound_allowed ?? true,
+        outbound_allowed: friend.outbound_allowed ?? true,
         fingerprint: fingerprint(friend.ed25519_pub, friend.x25519_pub),
         ...(autonomy ? { autonomy } : {}),
       });

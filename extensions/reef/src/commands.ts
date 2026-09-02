@@ -10,7 +10,7 @@ export async function handleReefCommand({
 }): Promise<{ text: string }> {
   const words = (args ?? "").trim().split(/\s+/).filter(Boolean);
   const changesFriendship =
-    words[0] === "friend" && /^(code|request|remove|block|autonomy)$/.test(words[1] ?? "");
+    words[0] === "friend" && /^(code|request|remove|block|autonomy|inbound)$/.test(words[1] ?? "");
   const decidesReview = words[0] === "review" && /^(approve|deny)$/.test(words[1] ?? "");
   if ((changesFriendship || decidesReview) && senderIsOwner !== true) {
     return {
@@ -35,7 +35,7 @@ export async function handleReefCommand({
         ? friends
             .map(
               (friend) =>
-                `@${friend.peer} ${friend.status} epoch=${friend.key_epoch} fingerprint=${friend.fingerprint} autonomy=${friend.autonomy ?? "unapproved"}`,
+                `@${friend.peer} ${friend.status} epoch=${friend.key_epoch} fingerprint=${friend.fingerprint} autonomy=${friend.autonomy ?? "unapproved"} inbound=${friend.inbound_allowed ? "allow" : "block"} outbound=${friend.outbound_allowed ? "allow" : "block"}`,
             )
             .join("\n")
         : "No Reef friends.",
@@ -51,6 +51,19 @@ export async function handleReefCommand({
     const autonomy = ReefAutonomySchema.parse(words[3]);
     await active.friends.setAutonomy(peer, autonomy);
     return { text: `Reef friend @${peer} autonomy set to ${autonomy}.` };
+  }
+  if (
+    words[0] === "friend" &&
+    words[1] === "inbound" &&
+    words[2] &&
+    /^(allow|block)$/.test(words[3] ?? "")
+  ) {
+    const peer = words[2].replace(/^@/, "").toLowerCase();
+    const inboundAllowed = words[3] === "allow";
+    await active.friends.setInboundAllowed(peer, inboundAllowed);
+    return {
+      text: `Reef friend @${peer} inbound messages ${inboundAllowed ? "allowed" : "blocked"}.`,
+    };
   }
   if (words[0] === "review" && words[1] === "list") {
     const reviews = await active.reviews.list();
@@ -78,6 +91,6 @@ export async function handleReefCommand({
     };
   }
   return {
-    text: "Usage: /reef friend code|request <handle> [code]|list|remove <handle>|autonomy <handle> <notify-only|bounded|extended>; /reef review list|approve <digest>|deny <digest>",
+    text: "Usage: /reef friend code|request <handle> [code]|list|remove <handle>|autonomy <handle> <notify-only|bounded|extended>|inbound <handle> <allow|block>; /reef review list|approve <digest>|deny <digest>",
   };
 }

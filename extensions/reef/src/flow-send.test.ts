@@ -19,12 +19,76 @@ import {
 } from "./flow.test-helpers.js";
 import { reefPeerIdentity } from "./friend-types.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
-import type { ReefTransportClient } from "./transport.js";
+import { ReefRelayError, type ReefTransportClient } from "./transport.js";
 
 beforeEach(resetFlowStoresForTests);
 afterEach(resetFlowStoresForTests);
 
 describe("ReefMessageFlow send recovery", () => {
+  it("discards a delivery binding after the recipient disables its direction", async () => {
+    const alice = reefKeys();
+    const bob = generateIdentity();
+    const cfg = config();
+    cfg.handle = "alice";
+    const trusted = trust({ bob: peerTrust(bob) });
+    const relay = transport();
+    relay.sendEnvelope.mockRejectedValueOnce(
+      new ReefRelayError(
+        403,
+        "Reef peer @bob has disabled inbound messages from this friendship.",
+        "friendship_direction_disabled",
+      ),
+    );
+    const flow = new ReefMessageFlow({
+      config: cfg,
+      trust: trusted.store,
+      keys: alice,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
+      replay: new MemoryReplayStore(),
+      ...flowStores(),
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+    const id = "01JZ0000000000000000000202";
+
+    await expect(flow.send("bob", "blocked", { messageId: id })).rejects.toMatchObject({
+      status: 403,
+      code: "friendship_direction_disabled",
+    });
+
+    expect(trusted.deliveries.has(`bob:${id}`)).toBe(false);
+  });
+
+  it("retains a delivery binding when the relay outcome is ambiguous", async () => {
+    const alice = reefKeys();
+    const bob = generateIdentity();
+    const cfg = config();
+    cfg.handle = "alice";
+    const trusted = trust({ bob: peerTrust(bob) });
+    const relay = transport();
+    const cause = new Error("relay outcome unknown");
+    relay.sendEnvelope.mockRejectedValueOnce(cause);
+    const flow = new ReefMessageFlow({
+      config: cfg,
+      trust: trusted.store,
+      keys: alice,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(7)),
+      replay: new MemoryReplayStore(),
+      ...flowStores(),
+      onIngress: async () => {},
+      onOwnerNotice: async () => {},
+    });
+    const id = "01JZ0000000000000000000203";
+
+    await expect(flow.send("bob", "uncertain", { messageId: id })).rejects.toBe(cause);
+
+    expect(trusted.deliveries.has(`bob:${id}`)).toBe(true);
+  });
+
   it("persists automatic resends as non-resendable deliveries", async () => {
     const alice = reefKeys();
     const bob = generateIdentity();

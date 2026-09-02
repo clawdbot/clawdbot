@@ -6,7 +6,14 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import WebSocket from "ws";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
+import {
+  ReefProtocolCompatibilityError,
+  ReefRelayError,
+  ReefRelayUnavailableError,
+} from "./transport-errors.js";
 import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
+
+export { ReefProtocolCompatibilityError, ReefRelayError } from "./transport-errors.js";
 
 type FetchLike = typeof fetch;
 
@@ -43,36 +50,6 @@ function redactReefRelayErrorMessage(message: string, secrets: readonly string[]
     }
   }
   return redactSensitiveText(redacted, { mode: "tools" });
-}
-
-export class ReefRelayError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-    readonly code?: string,
-  ) {
-    super(message);
-    this.name = "ReefRelayError";
-  }
-}
-
-export class ReefProtocolCompatibilityError extends ReefRelayError {
-  constructor(
-    status: 400 | 409,
-    code: "invalid_request" | "client_upgrade_required",
-    readonly upgradeRequired: "reef-relay" | "openclaw-client",
-    message: string,
-  ) {
-    super(status, message, code);
-    this.name = "ReefProtocolCompatibilityError";
-  }
-}
-
-class ReefRelayUnavailableError extends Error {
-  constructor(cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-    this.name = "ReefRelayUnavailableError";
-  }
 }
 
 export function isDefinitiveReefRegistrationFailure(error: unknown): boolean {
@@ -229,15 +206,59 @@ export class ReefTransportClient {
   listFriends(signal?: AbortSignal): Promise<{ friendships: RelayFriend[] }> {
     return this.signed("GET", "/v1/friends", undefined, signal);
   }
+  async setInboundAllowed(
+    peer: string,
+    inboundAllowed: boolean,
+    signal?: AbortSignal,
+  ): Promise<{ peer: string; inbound_allowed: boolean }> {
+    let result: unknown;
+    try {
+      result = await this.signed(
+        "PATCH",
+        `/v1/friends/${encodeURIComponent(peer)}`,
+        { inbound_allowed: inboundAllowed },
+        signal,
+      );
+    } catch (error) {
+      if (error instanceof ReefRelayError && error.status === 404 && error.code === "not_found") {
+        throw new ReefProtocolCompatibilityError(
+          404,
+          error.code,
+          "reef-relay",
+          "The Reef relay does not support directional friendship permissions. Update OpenClaw and the Reef relay together.",
+        );
+      }
+      throw error;
+    }
+    if (!isRecord(result) || result.peer !== peer || result.inbound_allowed !== inboundAllowed) {
+      throw new Error("invalid Reef relay inbound-permission response");
+    }
+    return { peer, inbound_allowed: inboundAllowed };
+  }
   removeFriend(peer: string, signal?: AbortSignal): Promise<void> {
     return this.signed("DELETE", `/v1/friends/${encodeURIComponent(peer)}`, undefined, signal);
   }
-  sendEnvelope(
+  async sendEnvelope(
     peer: string,
     envelope: Envelope,
     signal?: AbortSignal,
   ): Promise<{ id: string; status: string }> {
-    return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}`, envelope, signal);
+    try {
+      return await this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}`, envelope, signal);
+    } catch (error) {
+      if (
+        error instanceof ReefRelayError &&
+        error.status === 403 &&
+        error.code === "friendship_direction_disabled"
+      ) {
+        throw new ReefRelayError(
+          error.status,
+          `Reef peer @${peer} has disabled inbound messages from this friendship.`,
+          error.code,
+        );
+      }
+      throw error;
+    }
   }
   acknowledge(peer: string, id: string, receipt: SignedReceipt): Promise<{ result: string }> {
     return this.signed("POST", `/v1/mail/${encodeURIComponent(peer)}/ack`, { id, receipt });

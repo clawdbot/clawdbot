@@ -33,7 +33,7 @@ import {
 } from "./friend-types.js";
 import { reefMessageTextHash } from "./rejection-resend.js";
 import { ReefDeliveredStore, ReviewApprovalStore } from "./state.js";
-import { ReefInboxEntryParkedError, ReefTransportClient } from "./transport.js";
+import { ReefInboxEntryParkedError, ReefRelayError, ReefTransportClient } from "./transport.js";
 import {
   REEF_OUTBOUND_DELIVERY_MAX_ENTRIES,
   REEF_OUTBOUND_DELIVERY_TTL_MS,
@@ -110,6 +110,9 @@ class ReefOutboundRejectedError extends Error {
 }
 
 export function isPermanentReefOutboundRejection(error: unknown): boolean {
+  if (isReefFriendshipDirectionDisabled(error)) {
+    return true;
+  }
   if (error instanceof ReefOutboundRejectedError) {
     return true;
   }
@@ -125,6 +128,14 @@ export function isPermanentReefOutboundRejection(error: unknown): boolean {
     error.stage === "guard" &&
     error.verdict?.decision === "deny" &&
     error.verdict.category !== "guard_failure"
+  );
+}
+
+function isReefFriendshipDirectionDisabled(error: unknown): error is ReefRelayError {
+  return (
+    error instanceof ReefRelayError &&
+    error.status === 403 &&
+    error.code === "friendship_direction_disabled"
   );
 }
 
@@ -201,21 +212,29 @@ export class ReefMessageFlow {
         `Reef peer @${peer} changed keys while composing the message`,
       );
     }
+    const delivery = {
+      bodyHash: hashMessageBody(body),
+      textHash: reefMessageTextHash(text),
+      recipient,
+    };
     this.options.trust.recordOutboundDelivery(
       peer,
       id,
-      {
-        bodyHash: hashMessageBody(body),
-        textHash: reefMessageTextHash(text),
-        recipient,
-      },
+      delivery,
       context.resendDisabled ? { resendDisabled: true } : {},
     );
     // Guard/review/encryption are local and may reject safely. Mark ambiguity
     // only at the relay boundary so recovery never treats those failures as sent.
     await context.onPlatformSendDispatch?.();
     signal?.throwIfAborted();
-    await this.options.transport.sendEnvelope(peer, result.envelope, signal);
+    try {
+      await this.options.transport.sendEnvelope(peer, result.envelope, signal);
+    } catch (error) {
+      if (isReefFriendshipDirectionDisabled(error)) {
+        this.options.trust.discardOutboundDelivery(peer, id, delivery);
+      }
+      throw error;
+    }
     signal?.throwIfAborted();
     return id;
   }

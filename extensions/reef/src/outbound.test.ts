@@ -21,7 +21,7 @@ import {
 } from "./flow.test-helpers.js";
 import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { createReefRuntimeAuthority, getActiveReef } from "./runtime.js";
-import type { ReefTransportClient } from "./transport.js";
+import { ReefRelayError, type ReefTransportClient } from "./transport.js";
 
 describe("reefOutboundAdapter", () => {
   it("delegates delivery to the Gateway that owns the active encrypted flow", () => {
@@ -230,6 +230,39 @@ describe("reefOutboundAdapter", () => {
       },
       retryable: false,
     });
+  });
+
+  it("terminally rejects a recipient-disabled friendship direction after dispatch", async () => {
+    const cause = new ReefRelayError(
+      403,
+      "friendship_direction_disabled",
+      "friendship_direction_disabled",
+    );
+    const send = vi.fn(
+      async (
+        _peer: string,
+        _text: string,
+        context: { onPlatformSendDispatch?: () => Promise<void> },
+      ) => {
+        await context.onPlatformSendDispatch?.();
+        throw cause;
+      },
+    );
+    const onPlatformSendDispatch = vi.fn(async () => {});
+    createReefRuntimeAuthority().activate({ flow: { send }, friends: {}, reviews: {} } as never);
+
+    const error = await reefMessageAdapter.send
+      .text({
+        cfg: {},
+        to: "reef:Alice",
+        text: "hello",
+        onPlatformSendDispatch,
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({ cause, retryable: false });
   });
 
   it("keeps guard availability failures retryable before dispatch", async () => {

@@ -441,6 +441,8 @@ export function registerReefCli({ program }: { program: Command }): void {
               peer: friend.peer,
               status: friend.status,
               autonomy: friend.autonomy ?? null,
+              inboundAllowed: friend.inbound_allowed,
+              outboundAllowed: friend.outbound_allowed,
               fingerprint: friend.fingerprint,
             })),
           },
@@ -450,7 +452,7 @@ export function registerReefCli({ program }: { program: Command }): void {
             `Fingerprint: ${printed}`,
             ...friends.map(
               (friend) =>
-                `- @${friend.peer}: ${friend.status}${friend.autonomy ? ` (${friend.autonomy})` : ""}`,
+                `- @${friend.peer}: ${friend.status}${friend.autonomy ? ` (${friend.autonomy})` : ""} inbound=${friend.inbound_allowed ? "allow" : "block"} outbound=${friend.outbound_allowed ? "allow" : "block"}`,
             ),
             ...(friends.length === 0 ? ["No friendships yet."] : []),
           ],
@@ -490,6 +492,27 @@ export function registerReefCli({ program }: { program: Command }): void {
     );
 
   friend
+    .command("inbound <handle> <access>")
+    .description("Allow or block new inbound messages from a friend")
+    .option("--json", "Emit JSON", false)
+    .action(
+      reefCliAction<{ json: boolean }, [string, string]>(
+        async (output, _options, handle, access) => {
+          if (access !== "allow" && access !== "block") {
+            throw new Error("Reef inbound access must be allow or block");
+          }
+          const { manager } = await loadConfiguredManager(output);
+          const peer = handle.replace(/^@/, "").toLowerCase();
+          const inboundAllowed = access === "allow";
+          await manager.setInboundAllowed(peer, inboundAllowed);
+          emit(output, { peer, inboundAllowed }, [
+            `${inboundAllowed ? "Allowed" : "Blocked"} new inbound messages from @${peer}.`,
+          ]);
+        },
+      ),
+    );
+
+  friend
     .command("request <handle>")
     .description("Request a friendship (adopted automatically once accepted)")
     .option("--code <code>", "Friend code minted by the recipient")
@@ -520,6 +543,8 @@ export function registerReefCli({ program }: { program: Command }): void {
               peer: entry.peer,
               status: entry.status,
               autonomy: entry.autonomy ?? null,
+              inboundAllowed: entry.inbound_allowed,
+              outboundAllowed: entry.outbound_allowed,
               keyEpoch: entry.key_epoch,
               fingerprint: entry.fingerprint,
             })),
@@ -527,7 +552,7 @@ export function registerReefCli({ program }: { program: Command }): void {
           friends.length
             ? friends.map(
                 (entry) =>
-                  `@${entry.peer} ${entry.status} epoch=${entry.key_epoch} fingerprint=${entry.fingerprint}${entry.autonomy ? ` autonomy=${entry.autonomy}` : ""}`,
+                  `@${entry.peer} ${entry.status} epoch=${entry.key_epoch} fingerprint=${entry.fingerprint}${entry.autonomy ? ` autonomy=${entry.autonomy}` : ""} inbound=${entry.inbound_allowed ? "allow" : "block"} outbound=${entry.outbound_allowed ? "allow" : "block"}`,
               )
             : ["No friendships yet."],
         );

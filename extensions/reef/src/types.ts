@@ -22,6 +22,10 @@ export interface RelayFriend {
   status: "pending" | "active" | "blocked" | "reapprove_required";
   initiated_by: string;
   vouching_mutual: string | null;
+  /** Whether this claw currently accepts new messages from the peer. */
+  inbound_allowed?: boolean;
+  /** Whether the peer currently accepts new messages from this claw. */
+  outbound_allowed?: boolean;
   ed25519_pub: string;
   x25519_pub: string;
   key_epoch: number;
