@@ -1,4 +1,5 @@
 // Android Fastlane release gate tests keep Play uploads tied to mobile release refs.
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -58,6 +59,7 @@ describe("Android Fastlane release upload gates", () => {
     const uploadBuild = functionBody(fastfile, "upload_play_store_build!");
     const atomicUpload = functionBody(fastfile, "upload_play_builds_atomically!");
     const booleanEnv = functionBody(fastfile, "fastlane_boolean_env");
+    const intentContext = functionBody(fastfile, "mobile_release_intent_context!");
 
     expect(fastfile).toContain("def mobile_release_ref_command");
     expect(fastfile).toContain("def release_git_sha");
@@ -65,17 +67,27 @@ describe("Android Fastlane release upload gates", () => {
     expect(fastfile).toContain('"--sha"');
     expect(fastfile).toContain("repo_root");
     expect(uploadBuild).toContain("release_sha = release_git_sha");
+    expect(uploadBuild).toContain(
+      "intent_context = mobile_release_intent_context!(gateway_version: version_metadata.fetch(:version))",
+    );
     expect(uploadBuild).toContain("ensure_mobile_release_ref_available!");
     expect(uploadBuild).toContain("finalize_mobile_release_ref!");
     expect(uploadBuild.match(/sha: release_sha/g)).toHaveLength(2);
     expect(uploadBuild.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
       uploadBuild.indexOf("upload_play_builds_atomically!("),
     );
+    expect(uploadBuild.indexOf("mobile_release_intent_context!")).toBeLessThan(
+      uploadBuild.indexOf("upload_play_builds_atomically!("),
+    );
     expect(uploadBuild.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
       uploadBuild.indexOf("upload_play_builds_atomically!("),
     );
     expect(uploadBuild).toContain("accepted = upload_play_builds_atomically!(");
+    expect(uploadBuild).toContain("phone_track: play_track");
     expect(uploadBuild).toContain("phone_version_code: accepted.fetch(:phone_version_code)");
+    expect(uploadBuild).toContain('play_edit_state: "committed"');
+    expect(uploadBuild).toContain("release_status: play_release_status");
+    expect(uploadBuild).toContain("wear_track: wear_play_track");
     expect(uploadBuild).toContain("wear_version_code: accepted.fetch(:wear_version_code)");
     expect(uploadBuild).toContain("unless play_validate_only?");
     expect(atomicUpload.match(/client\.upload_bundle\(/g)).toHaveLength(2);
@@ -91,6 +103,10 @@ describe("Android Fastlane release upload gates", () => {
     expect(fastfile).toContain("%w(phoneScreenshots wearScreenshots)");
     expect(booleanEnv).toContain('["1", "yes", "true", "on"]');
     expect(booleanEnv).toContain('["0", "no", "false", "off"]');
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_REF_MODE");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_INTENT_PATH");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_TARGET_REF");
     expect(atomicUpload).toContain(
       'fastlane_boolean_env("ACK_BUNDLE_INSTALLATION_WARNING", default: false)',
     );
@@ -102,20 +118,84 @@ describe("Android Fastlane release upload gates", () => {
   it("keeps local ref recording as the default and emits a closed intent only in CI mode", () => {
     const fastfile = readFastfile();
     const finalizer = functionBody(fastfile, "finalize_mobile_release_ref!");
+    const intentContext = functionBody(fastfile, "mobile_release_intent_context!");
 
-    expect(finalizer).toContain('ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip');
+    expect(finalizer).toContain("unless intent_context");
     expect(finalizer).toContain("record_mobile_release_ref!(");
-    expect(finalizer).toContain('unless mode == "intent"');
+    expect(intentContext).toContain('unless mode == "intent"');
     expect(finalizer).toContain('"mobile-release-intent.mjs"');
     expect(finalizer).toContain('"--authority-receipt-digest"');
     expect(finalizer).toContain('"--gateway-version"');
+    expect(finalizer).toContain('"--phone-track"');
     expect(finalizer).toContain('"--version-name"');
     expect(finalizer).toContain('"--phone-version-code"');
+    expect(finalizer).toContain('"--play-edit-state"');
+    expect(finalizer).toContain('"--release-status"');
+    expect(finalizer).toContain('"--wear-track"');
     expect(finalizer).toContain('"--wear-version-code"');
     expect(finalizer).toContain('"--target-ref"');
     expect(finalizer).toContain('"--target-sha"');
     expect(finalizer).not.toContain('"git"');
     expect(finalizer).not.toContain("push");
+  });
+
+  it("validates the complete Android intent context before store mutation", () => {
+    const intentContext = functionBody(readFastfile(), "mobile_release_intent_context!");
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+def mobile_release_intent_context!${intentContext}
+cases = [
+  {},
+  { "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "invalid" },
+  { "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent" },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:receipt",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.2-mobile"
+  },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:#{"a" * 64}",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.3-mobile"
+  },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:#{"a" * 64}",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.2-mobile"
+  }
+]
+cases.each do |values|
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_REF_MODE")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_INTENT_PATH")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_TARGET_REF")
+  values.each { |key, value| ENV[key] = value }
+  begin
+    context = mobile_release_intent_context!(gateway_version: "2026.9.2")
+    puts context ? "ok:#{context.fetch(:target_ref)}" : "ok:local"
+  rescue => error
+    puts "error:#{error.message}"
+  end
+end
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "ok:local",
+      "error:OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.",
+      "error:OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.",
+      "error:OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST must be a canonical SHA-256 digest.",
+      "error:OPENCLAW_MOBILE_RELEASE_TARGET_REF must exactly match the mobile gateway version.",
+      "ok:release/2026.9.2-mobile",
+    ]);
   });
 
   it("fails before upload when planned Play codes are already consumed", () => {

@@ -900,11 +900,15 @@ function validateIntentTuple(intent, receipt, receiptDigest) {
   }
   if (
     platform === "android" &&
-    (intent.versionName !== receipt.androidVersionName ||
+    (intent.phoneTrack !== "internal" ||
+      intent.wearTrack !== "wear:internal" ||
+      intent.releaseStatus !== "completed" ||
+      intent.playEditState !== "committed" ||
+      intent.versionName !== receipt.androidVersionName ||
       intent.phoneVersionCode !== receipt.androidPhoneVersionCode ||
       intent.wearVersionCode !== receipt.androidWearVersionCode)
   ) {
-    fail("Android release intent does not match the cutter-selected Play identity.");
+    fail("Android release intent does not match the approved Play destination and store result.");
   }
 }
 

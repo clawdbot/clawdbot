@@ -40,12 +40,16 @@ function androidIntent() {
     authorityReceiptDigest: RECEIPT_DIGEST,
     gatewayVersion: "2026.9.2",
     kind: "openclaw-mobile-release-ref-intent",
+    phoneTrack: "internal",
     phoneVersionCode: "2026090201",
+    playEditState: "committed",
     platform: "android",
+    releaseStatus: "completed",
     schemaVersion: 2,
     targetRef: "release/2026.9.2-mobile",
     targetSha: TARGET_SHA,
     versionName: "2026.9.2",
+    wearTrack: "wear:internal",
     wearVersionCode: "2026090251",
   });
 }
@@ -59,19 +63,33 @@ describe("mobile release intent", () => {
     writeMobileReleaseIntent(iosPath, iosIntent());
     writeMobileReleaseIntent(androidPath, androidIntent());
 
-    expect(readMobileReleaseIntent(iosPath)).toEqual(iosIntent());
-    expect(readMobileReleaseIntent(androidPath)).toEqual(androidIntent());
-    expect(readMobileReleaseIntent(iosPath)).toMatchObject({
+    const readIos = readMobileReleaseIntent(iosPath);
+    const readAndroid = readMobileReleaseIntent(androidPath);
+    expect(readIos).toEqual(iosIntent());
+    expect(readAndroid).toEqual(androidIntent());
+    expect(readIos).toMatchObject({
       appStoreVersion: "2026.9.20",
       buildNumber: "8",
       gatewayVersion: "2026.9.2",
+      schemaVersion: 2,
     });
-    expect(mobileReleaseRefForIntent(readMobileReleaseIntent(iosPath))).toBe(
+    expect(mobileReleaseRefForIntent(readIos)).toBe(
       "refs/openclaw/mobile-releases/ios/2026.9.20-8",
     );
-    expect(mobileReleaseRefForIntent(readMobileReleaseIntent(androidPath))).toBe(
+    expect(mobileReleaseRefForIntent(readAndroid)).toBe(
       "refs/openclaw/mobile-releases/android/2026.9.2-2026090201",
     );
+    expect(readAndroid).toMatchObject({
+      phoneTrack: "internal",
+      playEditState: "committed",
+      releaseStatus: "completed",
+      schemaVersion: 2,
+      wearTrack: "wear:internal",
+    });
+    for (const intent of [readIos, readAndroid]) {
+      const { planDigest, ...unsigned } = intent;
+      expect(planDigest).toBe(mobileReleasePlanDigest(unsigned));
+    }
     expect(fs.statSync(iosPath).size).toBeLessThanOrEqual(MOBILE_RELEASE_INTENT_MAX_BYTES);
   });
 
@@ -117,6 +135,16 @@ describe("mobile release intent", () => {
         wearVersionCode: "2026090252",
       }),
     ).toThrow("plus 50");
+    for (const override of [
+      { phoneTrack: "production" },
+      { wearTrack: "wear:production" },
+      { releaseStatus: "draft" },
+      { playEditState: "validated" },
+    ]) {
+      expect(() =>
+        validateMobileReleaseIntent(signIntent({ ...androidIntent(), ...override })),
+      ).toThrow("bind internal and wear:internal tracks");
+    }
   });
 
   it("rejects malformed distribution identity and oversized intent files", () => {

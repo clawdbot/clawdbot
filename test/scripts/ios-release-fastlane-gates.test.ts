@@ -475,7 +475,11 @@ describe("iOS Fastlane release upload gates", () => {
 
   it("keeps local upload-only behavior but requires explicit internal distribution in CI", () => {
     const releaseUpload = laneBody(readFastfile(), "release_upload");
+    const intentContext = functionBody(readFastfile(), "mobile_release_intent_context!");
 
+    expect(releaseUpload).toContain(
+      "intent_context = mobile_release_intent_context!(gateway_version: context[:version])",
+    );
     expect(releaseUpload).toContain("skip_waiting_for_build_processing: false");
     expect(releaseUpload).toContain("upload_options[:skip_submission] = true");
     expect(releaseUpload).toContain("skip_submission: false");
@@ -486,6 +490,9 @@ describe("iOS Fastlane release upload gates", () => {
       "wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS",
     );
     expect(releaseUpload).not.toContain("skip_waiting_for_build_processing: true");
+    expect(releaseUpload.indexOf("mobile_release_intent_context!")).toBeLessThan(
+      releaseUpload.indexOf("upload_to_testflight(**upload_options)"),
+    );
     expect(releaseUpload.indexOf("resolve_ci_testflight_internal_group!")).toBeLessThan(
       releaseUpload.indexOf("upload_to_testflight(**upload_options)"),
     );
@@ -495,6 +502,9 @@ describe("iOS Fastlane release upload gates", () => {
     expect(releaseUpload.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
       releaseUpload.indexOf("verify_ci_testflight_internal_assignment!"),
     );
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_INTENT_PATH");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_TARGET_REF");
   });
 
   it("fails closed for missing, duplicate, or external TestFlight group matches", () => {
@@ -529,6 +539,65 @@ end
       "error:Expected exactly one TestFlight group matching the approved identity.",
       "error:The approved TestFlight group must be internal.",
       "ok:internal-id",
+    ]);
+  });
+
+  it("validates the complete iOS intent context before store mutation", () => {
+    const intentContext = functionDefinition(readFastfile(), "mobile_release_intent_context!");
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+${intentContext}
+cases = [
+  {},
+  { "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "invalid" },
+  { "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent" },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:receipt",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.2-mobile"
+  },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:#{"a" * 64}",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.3-mobile"
+  },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:#{"a" * 64}",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.2-mobile"
+  }
+]
+cases.each do |values|
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_REF_MODE")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_INTENT_PATH")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_TARGET_REF")
+  values.each { |key, value| ENV[key] = value }
+  begin
+    context = mobile_release_intent_context!(gateway_version: "2026.9.2")
+    puts context ? "ok:#{context.fetch(:target_ref)}" : "ok:local"
+  rescue => error
+    puts "error:#{error.message}"
+  end
+end
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "ok:local",
+      "error:OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.",
+      "error:OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.",
+      "error:OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST must be a canonical SHA-256 digest.",
+      "error:OPENCLAW_MOBILE_RELEASE_TARGET_REF must exactly match the mobile gateway version.",
+      "ok:release/2026.9.2-mobile",
     ]);
   });
 
@@ -802,10 +871,11 @@ end
 
   it("keeps local ref recording as the default and emits a closed intent only in CI mode", () => {
     const finalizer = functionBody(readFastfile(), "finalize_mobile_release_ref!");
+    const intentContext = functionBody(readFastfile(), "mobile_release_intent_context!");
 
-    expect(finalizer).toContain('ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip');
+    expect(finalizer).toContain("unless intent_context");
     expect(finalizer).toContain("record_mobile_release_ref!(");
-    expect(finalizer).toContain('unless mode == "intent"');
+    expect(intentContext).toContain('unless mode == "intent"');
     expect(finalizer).toContain('"mobile-release-intent.mjs"');
     expect(finalizer).toContain('"--authority-receipt-digest"');
     expect(finalizer).toContain('"--gateway-version"');

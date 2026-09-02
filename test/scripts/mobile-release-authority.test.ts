@@ -481,8 +481,12 @@ function signIntentFile(fixture: Fixture, outputs: Record<string, string>): void
         }
       : {
           ...common,
+          phoneTrack: "internal",
           phoneVersionCode: "2026090201",
+          playEditState: "committed",
+          releaseStatus: "completed",
           versionName: "2026.9.2",
+          wearTrack: "wear:internal",
           wearVersionCode: "2026090251",
         };
   writeMobileReleaseIntent(destination, {
@@ -727,28 +731,39 @@ describe("mobile release authority", () => {
     expect(conflict.stderr).toContain("already points at a different commit");
   });
 
-  it("supports protected record-only recovery and rejects stale recovery main or successful source runs", () => {
+  it("recovers from newer trusted main with pinned original tooling and rejects recovery-time drift", () => {
     const fixture = createFixture();
     const outputs = authorize(fixture);
     signIntentFile(fixture, outputs);
+    git(fixture.source, "checkout", "-b", "trusted-main-after-upload", fixture.baseSha);
+    git(fixture.source, "commit", "--allow-empty", "-m", "advance trusted main after upload");
+    const recoveryWorkflowSha = git(fixture.source, "rev-parse", "HEAD");
+    git(fixture.trusted, "fetch", "origin", recoveryWorkflowSha);
+    git(fixture.trusted, "checkout", "--detach", recoveryWorkflowSha);
     resetState(fixture);
     const recovery = {
       ...recordOverrides(fixture, outputs),
       GH_ORIGINAL_CONCLUSION: '"failure"',
       GH_ORIGINAL_STATUS: "completed",
+      GH_MAIN_REFS: `${recoveryWorkflowSha},${recoveryWorkflowSha}`,
       GITHUB_RUN_ID: "999",
+      GITHUB_SHA: recoveryWorkflowSha,
       MOBILE_RECOVERY: "true",
+      MOBILE_WORKFLOW_SHA: recoveryWorkflowSha,
     };
     const validation = runAuthority(fixture, "validate-record", recovery);
     expect(validation.status, validation.stderr).toBe(0);
+    expect(fs.readFileSync(fixture.ghLog, "utf8")).toContain(
+      `"--source-digest","${fixture.baseSha}"`,
+    );
 
     resetState(fixture);
     const staleMain = runAuthority(fixture, "validate-record", {
       ...recovery,
-      GH_MAIN_REFS: `${OTHER_SHA},${OTHER_SHA}`,
+      GH_MAIN_REFS: `${recoveryWorkflowSha},${OTHER_SHA}`,
     });
     expect(staleMain.status).toBe(1);
-    expect(staleMain.stderr).toContain("exact main branch head");
+    expect(staleMain.stderr).toContain("Main changed during initial mobile release authorization");
 
     resetState(fixture);
     const successful = runAuthority(fixture, "validate-record", {

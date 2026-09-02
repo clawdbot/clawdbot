@@ -78,12 +78,30 @@ def play_validate_only?
   ENV["GOOGLE_PLAY_VALIDATE_ONLY"] == "1"
 end
 
-def mobile_release_intent_mode?
-  ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip == "intent"
+def mobile_release_intent_context!(gateway_version:)
+  mode = ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip
+  return nil if mode.empty?
+
+  UI.user_error!("OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.") unless mode == "intent"
+  intent_path = ENV.fetch("OPENCLAW_MOBILE_RELEASE_INTENT_PATH", "").strip
+  receipt_digest = ENV.fetch("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST", "").strip
+  target_ref = ENV.fetch("OPENCLAW_MOBILE_RELEASE_TARGET_REF", "").strip
+  UI.user_error!("OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.") if intent_path.empty?
+  unless receipt_digest.match?(/\Asha256:[0-9a-f]{64}\z/)
+    UI.user_error!("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST must be a canonical SHA-256 digest.")
+  end
+  unless target_ref == "release/#{gateway_version}-mobile"
+    UI.user_error!("OPENCLAW_MOBILE_RELEASE_TARGET_REF must exactly match the mobile gateway version.")
+  end
+  {
+    intent_path: intent_path,
+    receipt_digest: receipt_digest,
+    target_ref: target_ref
+  }
 end
 
-def validate_ci_play_destination!
-  return unless mobile_release_intent_mode?
+def validate_ci_play_destination!(intent_context:)
+  return unless intent_context
   return if play_track == "internal" && wear_play_track == "wear:internal"
 
   UI.user_error!("Protected Android beta CI may upload only to internal and wear:internal.")
@@ -437,9 +455,8 @@ def record_mobile_release_ref!(platform:, version:, build: nil, version_code: ni
   )
 end
 
-def finalize_mobile_release_ref!(platform:, gateway_version:, version_name:, phone_version_code:, wear_version_code:, sha:)
-  mode = ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip
-  if mode.empty?
+def finalize_mobile_release_ref!(platform:, gateway_version:, version_name:, phone_track:, phone_version_code:, wear_track:, wear_version_code:, release_status:, play_edit_state:, intent_context:, sha:)
+  unless intent_context
     record_mobile_release_ref!(
       platform: platform,
       version: version_name,
@@ -448,34 +465,34 @@ def finalize_mobile_release_ref!(platform:, gateway_version:, version_name:, pho
     )
     return
   end
-  UI.user_error!("OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.") unless mode == "intent"
-
-  intent_path = ENV.fetch("OPENCLAW_MOBILE_RELEASE_INTENT_PATH", "").strip
-  receipt_digest = ENV.fetch("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST", "").strip
-  target_ref = ENV.fetch("OPENCLAW_MOBILE_RELEASE_TARGET_REF", "").strip
-  UI.user_error!("OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.") if intent_path.empty?
-  UI.user_error!("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST is required in intent mode.") if receipt_digest.empty?
-  UI.user_error!("OPENCLAW_MOBILE_RELEASE_TARGET_REF is required in intent mode.") if target_ref.empty?
   sh(shell_join([
     "node",
     File.join(repo_root, "scripts", "mobile-release-intent.mjs"),
     "write",
     "--output",
-    intent_path,
+    intent_context.fetch(:intent_path),
     "--platform",
     platform,
     "--authority-receipt-digest",
-    receipt_digest,
+    intent_context.fetch(:receipt_digest),
     "--gateway-version",
     gateway_version,
+    "--phone-track",
+    phone_track,
     "--version-name",
     version_name,
     "--phone-version-code",
     phone_version_code.to_s,
+    "--play-edit-state",
+    play_edit_state,
+    "--release-status",
+    release_status,
+    "--wear-track",
+    wear_track,
     "--wear-version-code",
     wear_version_code.to_s,
     "--target-ref",
-    target_ref,
+    intent_context.fetch(:target_ref),
     "--target-sha",
     sha
   ]))
@@ -576,7 +593,8 @@ end
 
 def upload_play_store_build!(version_metadata, upload_metadata: false, upload_images: false, upload_screenshots: false)
   release_sha = release_git_sha
-  validate_ci_play_destination!
+  intent_context = mobile_release_intent_context!(gateway_version: version_metadata.fetch(:version))
+  validate_ci_play_destination!(intent_context: intent_context)
   ensure_mobile_release_ref_available!(
     platform: "android",
     version: version_metadata.fetch(:version),
@@ -607,8 +625,13 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
       platform: "android",
       gateway_version: version_metadata.fetch(:version),
       version_name: version_metadata.fetch(:version),
+      phone_track: play_track,
       phone_version_code: accepted.fetch(:phone_version_code),
+      wear_track: wear_play_track,
       wear_version_code: accepted.fetch(:wear_version_code),
+      release_status: play_release_status,
+      play_edit_state: "committed",
+      intent_context: intent_context,
       sha: release_sha
     )
   end

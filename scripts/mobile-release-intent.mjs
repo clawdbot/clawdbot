@@ -116,6 +116,16 @@ function androidStoreIdentity(value, gatewayVersion) {
   if (versionName !== gatewayVersion) {
     fail("Android versionName must exactly match the mobile gateway version.");
   }
+  if (
+    value.phoneTrack !== "internal" ||
+    value.wearTrack !== "wear:internal" ||
+    value.releaseStatus !== "completed" ||
+    value.playEditState !== "committed"
+  ) {
+    fail(
+      "Android beta intent must bind internal and wear:internal tracks, completed status, and a committed Play edit.",
+    );
+  }
   const phoneVersionCode = positiveInteger(value.phoneVersionCode, "Android phone versionCode");
   const wearVersionCode = positiveInteger(value.wearVersionCode, "Android Wear versionCode");
   const prefix = androidVersionCodePrefix(gatewayVersion);
@@ -132,7 +142,15 @@ function androidStoreIdentity(value, gatewayVersion) {
   if (BigInt(wearVersionCode) !== BigInt(phoneVersionCode) + 50n) {
     fail("Android Wear versionCode must be the phone versionCode plus 50.");
   }
-  return { phoneVersionCode, versionName, wearVersionCode };
+  return {
+    phoneTrack: value.phoneTrack,
+    phoneVersionCode,
+    playEditState: value.playEditState,
+    releaseStatus: value.releaseStatus,
+    versionName,
+    wearTrack: value.wearTrack,
+    wearVersionCode,
+  };
 }
 
 function planPayload(value) {
@@ -178,7 +196,15 @@ export function validateMobileReleaseIntent(value) {
     platform === "ios"
       ? ["appStoreVersion", "buildNumber", "internalGroupId", "internalGroupName"]
       : platform === "android"
-        ? ["phoneVersionCode", "versionName", "wearVersionCode"]
+        ? [
+            "phoneTrack",
+            "phoneVersionCode",
+            "playEditState",
+            "releaseStatus",
+            "versionName",
+            "wearTrack",
+            "wearVersionCode",
+          ]
         : [];
   exactKeys(value, [...commonKeys, ...platformKeys]);
   const payload = planPayload(value);
@@ -276,8 +302,12 @@ function main(argv) {
           internalGroupName: option(argv, "--internal-group-name"),
         }
       : {
+          phoneTrack: option(argv, "--phone-track"),
           phoneVersionCode: option(argv, "--phone-version-code"),
+          playEditState: option(argv, "--play-edit-state"),
+          releaseStatus: option(argv, "--release-status"),
           versionName: option(argv, "--version-name"),
+          wearTrack: option(argv, "--wear-track"),
           wearVersionCode: option(argv, "--wear-version-code"),
         };
   const unsigned = { ...common, ...storeIdentity };
