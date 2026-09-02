@@ -3,7 +3,7 @@
  */
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isProvenDeliveryNotSentError } from "../../../infra/delivery-recovery.shared.js";
+import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import {
   isOutboundDeliveryError,
@@ -78,6 +78,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /bot was blocked by the user/i,
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
+  /outbound not configured for channel/i,
   WRITER_CLAIM_REBOUND_ANNOUNCE_RE,
 ];
 
@@ -145,7 +146,16 @@ function isPermanentNonWriterAnnounceError(error: unknown): boolean {
 function isTransientAnnounceDeliveryError(error: unknown): boolean {
   // Any committed platform send makes another attempt a possible duplicate;
   // permanent owner rejections also override transient-looking wrapped causes.
-  if (hasAnnounceSendEvidence(error) || isPermanentNonWriterAnnounceError(error)) {
+  if (hasAnnounceSendEvidence(error)) {
+    return false;
+  }
+
+  const typedRetryability = resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return typedRetryability;
+  }
+
+  if (isPermanentNonWriterAnnounceError(error)) {
     return false;
   }
 
@@ -155,11 +165,6 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 
   return hasAnnounceErrorMatch(error, (candidate) => {
     if (isTransientFailoverAnnounceError(candidate)) {
-      return true;
-    }
-    // A channel adapter that cannot be resolved yet is a local, proven-not-sent
-    // failure, not a provider verdict; retry it so adapter registration can finish.
-    if (isProvenDeliveryNotSentError(candidate)) {
       return true;
     }
     const message = summarizeDeliveryError(candidate);
@@ -176,6 +181,10 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 }
 
 export function isPermanentAnnounceDeliveryError(error: unknown): boolean {
+  const typedRetryability = resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return !typedRetryability;
+  }
   return isPermanentNonWriterAnnounceError(error) || hasWriterClaimReboundAnnounceError(error);
 }
 

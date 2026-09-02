@@ -1714,7 +1714,7 @@ describe("buildGatewayCronService", () => {
   });
 
   it.each(["command", "script"] as const)(
-    "retries proven pre-dispatch failure before delivering one-shot %s cron output",
+    "runs the full retry schedule for typed adapter-resolution failure before delivering one-shot %s cron output",
     async (payloadKind) => {
       vi.stubEnv("OPENCLAW_TEST_FAST", "1");
       const cfg = createCronConfig(`server-cron-${payloadKind}-announce-retry`);
@@ -1725,14 +1725,14 @@ describe("buildGatewayCronService", () => {
         notify: "scheduled result",
         stateChanged: false,
       });
-      sendCronAnnouncePayloadStrictMock.mockRejectedValueOnce(
-        new PlatformMessageNotDispatchedError("platform unavailable before dispatch", {
-          cause: Object.assign(new Error("connect ECONNREFUSED"), {
-            code: "ECONNREFUSED",
-            syscall: "connect",
-          }),
-        }),
+      const adapterUnavailable = new PlatformMessageNotDispatchedError(
+        "Outbound not configured for channel: telegram",
+        { cause: new Error("adapter unavailable") },
       );
+      sendCronAnnouncePayloadStrictMock
+        .mockRejectedValueOnce(adapterUnavailable)
+        .mockRejectedValueOnce(adapterUnavailable)
+        .mockRejectedValueOnce(adapterUnavailable);
 
       const state = createCronService(cfg);
       try {
@@ -1753,16 +1753,16 @@ describe("buildGatewayCronService", () => {
 
         await state.cron.run(job.id, "force");
 
-        expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledTimes(2);
+        expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledTimes(4);
         const firstAttempt = requireRecord(
           callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "first cron announce attempt"),
           "first cron announce attempt",
         );
-        const secondAttempt = requireRecord(
-          callArg(sendCronAnnouncePayloadStrictMock, 1, 0, "second cron announce attempt"),
-          "second cron announce attempt",
+        const finalAttempt = requireRecord(
+          callArg(sendCronAnnouncePayloadStrictMock, 3, 0, "final cron announce attempt"),
+          "final cron announce attempt",
         );
-        expect(secondAttempt.abortSignal).toBe(firstAttempt.abortSignal);
+        expect(finalAttempt.abortSignal).toBe(firstAttempt.abortSignal);
         expect(state.cron.getJob(job.id)).toBeUndefined();
         const finished = runCronChangedMock.mock.calls
           .map(([event]) => requireRecord(event, "cron_changed event"))
