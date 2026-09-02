@@ -8,6 +8,14 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
+  createGatewayProfile,
+  loadGatewayRegistry,
+  removeGatewayProfile,
+  selectGatewayProfile,
+  upsertGatewayProfile,
+  type GatewayRegistry,
+} from "../../app/gateway-registry.ts";
+import {
   loadGatewaySessionSelection,
   loadSettings,
   resolveGatewayCredentialsForUrlEdit,
@@ -15,6 +23,7 @@ import {
 } from "../../app/settings.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import {
   GatewayPageController,
@@ -35,6 +44,12 @@ export class ConnectionPage extends OpenClawLightDomElement {
   @state() private settings: UiSettings = loadSettings();
   @state() private password = "";
   @state() private gatewaySecretVisible = false;
+  @state() private gatewayRegistry: GatewayRegistry = loadGatewayRegistry({
+    url: this.settings.gatewayUrl,
+  });
+  @state() private gatewayRegistryError = "";
+  @state() private newGatewayName = "";
+  @state() private newGatewayUrl = "";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
 
@@ -160,9 +175,60 @@ export class ConnectionPage extends OpenClawLightDomElement {
       sessionKey,
       lastActiveSessionKey: sessionKey,
     };
+    this.gatewayRegistry = loadGatewayRegistry({ url: gatewayUrl });
     this.password = password;
     this.sessionKeyDirty = false;
     this.resetSensitiveUi();
+  }
+
+  private addGateway() {
+    const profile = createGatewayProfile({ name: this.newGatewayName, url: this.newGatewayUrl });
+    if (!profile) {
+      this.gatewayRegistryError = t("connection.registry.invalidUrl");
+      return;
+    }
+    this.gatewayRegistry = upsertGatewayProfile(profile, { select: true });
+    this.gatewayRegistryError = "";
+    this.newGatewayName = "";
+    this.newGatewayUrl = "";
+    this.sessionKeyDirty = false;
+    this.context.gateway.connect({
+      gatewayUrl: profile.url,
+      sessionKey: loadGatewaySessionSelection(profile.url).sessionKey,
+    });
+  }
+
+  private selectGateway(id: string) {
+    const profile = this.gatewayRegistry.gateways.find((gateway) => gateway.id === id);
+    if (!profile) {
+      return;
+    }
+    this.gatewayRegistry = selectGatewayProfile(id, {
+      url: this.context.gateway.connection.gatewayUrl,
+    });
+    this.gatewayRegistryError = "";
+    this.sessionKeyDirty = false;
+    this.context.gateway.connect({
+      gatewayUrl: profile.url,
+      sessionKey: loadGatewaySessionSelection(profile.url).sessionKey,
+    });
+  }
+
+  private removeGateway(id: string) {
+    const profile = this.gatewayRegistry.gateways.find((gateway) => gateway.id === id);
+    if (!profile || this.gatewayRegistry.gateways.length <= 1) {
+      return;
+    }
+    if (!window.confirm(t("connection.registry.removeConfirm", { name: profile.name }))) {
+      return;
+    }
+    const wasActive = this.gatewayRegistry.activeGatewayId === id;
+    this.gatewayRegistry = removeGatewayProfile(id, {
+      url: this.context.gateway.connection.gatewayUrl,
+    });
+    if (wasActive && this.gatewayRegistry.activeGatewayId) {
+      this.selectGateway(this.gatewayRegistry.activeGatewayId);
+    }
   }
 
   private connect() {
@@ -207,6 +273,10 @@ export class ConnectionPage extends OpenClawLightDomElement {
     const body = renderConnection({
       connected: gateway.phase === "connected",
       hello: gateway.hello,
+      gatewayRegistry: this.gatewayRegistry,
+      newGatewayName: this.newGatewayName,
+      newGatewayUrl: this.newGatewayUrl,
+      gatewayRegistryError: this.gatewayRegistryError,
       settings: this.settings,
       liveGatewayUrl: live.gatewayUrl,
       secret: this.settings.token || this.password,
@@ -220,6 +290,11 @@ export class ConnectionPage extends OpenClawLightDomElement {
         this.password = "";
         this.updateConnection({ token });
       },
+      onNewGatewayNameChange: (name) => (this.newGatewayName = name),
+      onNewGatewayUrlChange: (url) => (this.newGatewayUrl = url),
+      onAddGateway: () => this.addGateway(),
+      onSelectGateway: (id) => this.selectGateway(id),
+      onRemoveGateway: (id) => this.removeGateway(id),
       onSessionKeyChange: (sessionKey) => {
         this.sessionKeyDirty = true;
         this.settings = {

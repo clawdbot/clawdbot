@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { createGatewayProfile } from "../app/gateway-registry.ts";
 import "../test-helpers/load-styles.ts";
 
 afterEach(() => document.body.replaceChildren());
@@ -76,5 +77,48 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     expect((await onThemeChange).detail.mode).toBe("light");
     await userEvent.keyboard("{Tab}");
     await expect.poll(() => (menu as HTMLElement & { open: boolean }).open).toBe(false);
+  });
+
+  it("shows saved gateways in the Account menu and selects one", async () => {
+    await import("./app-sidebar.ts");
+    const { createGatewayHarness, createSessions, mountSidebar } =
+      await import("../test-helpers/app-sidebar.ts");
+    const { userEvent } = await import("vitest/browser");
+    const personal = createGatewayProfile({ name: "Personal Claw", url: "wss://personal.example" });
+    const team = createGatewayProfile({ name: "Team Claw", url: "wss://team.example" });
+    if (!personal || !team) {
+      throw new Error("test fixtures must produce gateway profiles");
+    }
+    const onSelectGateway = vi.fn();
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    sidebar.connected = true;
+    sidebar.canPairDevice = false;
+    sidebar.gatewayRegistry = {
+      gateways: [personal, team],
+      activeGatewayId: personal.id,
+    };
+    sidebar.onSelectGateway = onSelectGateway;
+    await sidebar.updateComplete;
+
+    const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
+    identity?.focus();
+    await userEvent.keyboard("{Enter}");
+    const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
+    const teamItem = menu?.querySelector<HTMLElement>(
+      `.sidebar-identity-menu__gateway[value="gateway:${encodeURIComponent(team.id)}"]`,
+    );
+    expect(teamItem).not.toBeNull();
+    expect(teamItem?.textContent).toContain("Team Claw");
+    menu?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        cancelable: true,
+        detail: { item: teamItem },
+      }),
+    );
+    expect(onSelectGateway).toHaveBeenCalledWith(team.id);
   });
 });

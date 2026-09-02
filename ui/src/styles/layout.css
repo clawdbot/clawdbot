@@ -4045,6 +4045,44 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   height: 15px;
 }
 
+.sidebar-identity-menu__gateway-heading {
+  padding: 5px 8px 2px;
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar-identity-menu__gateway-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.2;
+}
+
+.sidebar-identity-menu__gateway-name,
+.sidebar-identity-menu__gateway-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-identity-menu__gateway-name {
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+}
+
+.sidebar-identity-menu__gateway-url {
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+}
+
+.sidebar-identity-menu__gateway--active .sidebar-identity-menu__gateway-name {
+  font-weight: 600;
+}
+
 .sidebar-identity-menu__help::part(submenu-icon) {
   inset-inline-end: 4px;
   width: 16px;

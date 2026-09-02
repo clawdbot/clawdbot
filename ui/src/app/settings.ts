@@ -18,6 +18,11 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import {
+  createGatewayProfile,
+  loadGatewayRegistry,
+  upsertGatewayProfile,
+} from "./gateway-registry.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
@@ -490,14 +495,27 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
   };
 
   try {
+    const legacySelectedGatewayUrl = normalizeOptionalString(
+      storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
+    );
+    const registry = loadGatewayRegistry();
+    const registeredActiveGateway = registry.gateways.find(
+      (gateway) => gateway.id === registry.activeGatewayId,
+    );
     const selectedGatewayUrl =
-      targetGatewayUrl ??
-      normalizeOptionalString(storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)));
+      targetGatewayUrl ?? registeredActiveGateway?.url ?? legacySelectedGatewayUrl;
     const source =
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
       (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));
     if (!source) {
-      return defaults;
+      const gatewayUrl = selectedGatewayUrl ?? defaultUrl;
+      const selection = loadGatewaySessionSelection(gatewayUrl);
+      return {
+        ...defaults,
+        gatewayUrl,
+        token: loadSessionToken(gatewayUrl),
+        ...selection,
+      };
     }
     const parsed = source.parsed;
     const parsedGatewayUrl = source.gatewayUrl;
@@ -764,6 +782,10 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     storage?.setItem(scopedKey, serialized);
     if (options.selectGateway || storage?.getItem(selectionKey) == null) {
       storage?.setItem(selectionKey, next.gatewayUrl);
+    }
+    const profile = createGatewayProfile({ url: next.gatewayUrl });
+    if (profile) {
+      upsertGatewayProfile(profile, { select: options.selectGateway === true });
     }
     storage?.removeItem(LEGACY_SETTINGS_KEY);
     if (storage) {

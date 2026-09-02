@@ -184,6 +184,9 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     onNavigate: (routeId, options) => host.onNavigate?.(routeId, options),
     onPairMobile: () => host.onPairMobile?.(),
     onRetryConnect: host.onRetryConnect,
+    gatewayRegistry: host.gatewayRegistry,
+    onSelectGateway: (id) => host.onSelectGateway?.(id),
+    onManageGateways: () => host.onManageGateways?.(),
   });
 }
 
