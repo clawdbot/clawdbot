@@ -18,20 +18,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const cardboardProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/workboard-cardboard",
-);
-const workboardPinProofDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/workboard-pin");
-const workboardPinFailureProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/workboard-pin-failure",
-);
-const pluginWidgetsProofDir = path.resolve(
-  process.cwd(),
-  ".artifacts/control-ui-e2e/workboard-plugin-widgets",
-);
-
 const sessionKey = "agent:main:dashboard";
 const boardSnapshot = {
   sessionKey,
@@ -268,7 +254,7 @@ suite.define(() => {
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(workboardPinProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "workboard-pin"), { recursive: true });
     }
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
@@ -362,13 +348,14 @@ suite.define(() => {
         .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
       await previewBubble.screenshot({
-        path: path.join(workboardPinProofDir, "01-pin-hover.png"),
+        path: path.join(path.join(suite.artifactDir, "workboard-pin"), "01-pin-hover.png"),
       });
     }
     await preview.getByRole("button", { name: "Pin to dashboard" }).click();
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
     expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
       sessionKey,
+      agentId: "main",
       name: "canvas-cv_release",
       title: "Release status",
       content: { kind: "canvas-doc", docId: "cv_release" },
@@ -377,7 +364,9 @@ suite.define(() => {
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     if (recordProof) {
-      await previewBubble.screenshot({ path: path.join(workboardPinProofDir, "02-pinned.png") });
+      await previewBubble.screenshot({
+        path: path.join(path.join(suite.artifactDir, "workboard-pin"), "02-pinned.png"),
+      });
     }
     await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 
@@ -418,14 +407,14 @@ suite.define(() => {
   it("shows a bounded visible outcome when a Canvas dashboard pin fails", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(workboardPinFailureProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "workboard-pin-failure"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 1280 },
       ...(recordProof
         ? {
             recordVideo: {
-              dir: workboardPinFailureProofDir,
+              dir: path.join(suite.artifactDir, "workboard-pin-failure"),
               size: { height: 900, width: 1280 },
             },
           }
@@ -495,7 +484,9 @@ suite.define(() => {
     expect(await hint.textContent()).toContain("Could not pin to dashboard. Try again.");
     expect(await page.getByText("internal path detail", { exact: false }).count()).toBe(0);
     if (recordProof) {
-      await page.screenshot({ path: path.join(workboardPinFailureProofDir, "pin-failed.png") });
+      await page.screenshot({
+        path: path.join(path.join(suite.artifactDir, "workboard-pin-failure"), "pin-failed.png"),
+      });
     }
     await context.close();
   });
@@ -559,6 +550,7 @@ suite.define(() => {
     await expect.poll(async () => (await gateway.getRequests("board.widget.put")).length).toBe(1);
     expect((await gateway.getRequests("board.widget.put"))[0]?.params).toEqual({
       sessionKey,
+      agentId: "main",
       name: "mcp-app-28b65635ecaa78ac",
       title: "Demo App",
       content: { kind: "mcp-app", viewId: "view-session-bound" },
@@ -572,12 +564,17 @@ suite.define(() => {
   it("renders and updates active Workboard plugin widgets", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(pluginWidgetsProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "workboard-plugin-widgets"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 1280 },
       ...(recordProof
-        ? { recordVideo: { dir: pluginWidgetsProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "workboard-plugin-widgets"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -641,7 +638,10 @@ suite.define(() => {
       );
       if (recordProof) {
         await page.screenshot({
-          path: path.join(pluginWidgetsProofDir, "01-plugin-widgets-ready.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "workboard-plugin-widgets"),
+            "01-plugin-widgets-ready.png",
+          ),
         });
       }
 
@@ -728,14 +728,22 @@ suite.define(() => {
         .toBe("2 Running");
       if (recordProof) {
         await page.screenshot({
-          path: path.join(pluginWidgetsProofDir, "02-plugin-widgets-running.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "workboard-plugin-widgets"),
+            "02-plugin-widgets-running.png",
+          ),
         });
       }
     } finally {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(path.join(pluginWidgetsProofDir, "workboard-plugin-widgets.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "workboard-plugin-widgets"),
+            "workboard-plugin-widgets.webm",
+          ),
+        );
       }
     }
   });
@@ -797,12 +805,17 @@ suite.define(() => {
   it("links a dispatched Workboard card and its live session dashboard in both directions", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(cardboardProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "workboard-cardboard"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 1280 },
       ...(recordProof
-        ? { recordVideo: { dir: cardboardProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "workboard-cardboard"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -847,7 +860,12 @@ suite.define(() => {
       await expect.poll(() => chip.textContent()).toContain("Running");
       expect(await chip.getAttribute("href")).toBe("/workboard?board=platform");
       if (recordProof) {
-        await page.screenshot({ path: path.join(cardboardProofDir, "01-dashboard-card-chip.png") });
+        await page.screenshot({
+          path: path.join(
+            path.join(suite.artifactDir, "workboard-cardboard"),
+            "01-dashboard-card-chip.png",
+          ),
+        });
       }
 
       const completedCard = { ...card, status: "done", updatedAt: 3 };
@@ -898,7 +916,10 @@ suite.define(() => {
       await cardDashboard.locator("openclaw-board-view").waitFor();
       if (recordProof) {
         await page.screenshot({
-          path: path.join(cardboardProofDir, "02-workboard-card-dashboard.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "workboard-cardboard"),
+            "02-workboard-card-dashboard.png",
+          ),
         });
       }
 
@@ -916,7 +937,12 @@ suite.define(() => {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(path.join(cardboardProofDir, "workboard-cardboard.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "workboard-cardboard"),
+            "workboard-cardboard.webm",
+          ),
+        );
       }
     }
   });

@@ -39,7 +39,7 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
   readonly string[],
   Record<string, unknown>
 >({
-  eventKinds: ["exec", "plugin"],
+  eventKinds: ["exec", "plugin", "system-agent"],
   availability: {
     isConfigured: ({ cfg, accountId }) => isMSTeamsNativeApprovalClientEnabled({ cfg, accountId }),
     shouldHandle: ({ cfg, accountId, approvalKind, request }) =>

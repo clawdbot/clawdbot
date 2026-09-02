@@ -255,7 +255,7 @@ describe("system-agent setup transaction", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", opTempDirs.make("openclaw-recovery-complete-"));
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
-    const beforePersistentApply = vi.fn(async () => {});
+    const beforePersistentApply = vi.fn(() => {});
     const { runtime } = createSystemAgentTestRuntime();
 
     const result = await executeSystemAgentOperation({ kind: "setup" }, runtime, {
@@ -267,7 +267,7 @@ describe("system-agent setup transaction", () => {
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: pending.workspace, resume: true, surface: "cli" }),
-      { commit: expect.any(Function) },
+      { beforePersistentApply },
     );
     expect(localOnboarding.complete).toHaveBeenCalledWith({
       configPath: pending.configPath,
@@ -295,7 +295,7 @@ describe("system-agent setup transaction", () => {
 
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      commit: expect.any(Function),
+      beforePersistentApply: undefined,
     });
     expect(localOnboarding.complete).not.toHaveBeenCalled();
     expect(localOnboarding.states.get(pending.configPath)).toEqual(pending);
@@ -512,7 +512,7 @@ describe("system-agent setup transaction", () => {
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
     let authorizations = 0;
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (++authorizations > 1) {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
@@ -538,7 +538,7 @@ describe("system-agent setup transaction", () => {
     const pending = createPendingLocalOnboarding();
     const applySetup = vi.fn(async () => createRecoverySetupResult());
     let authorizations = 0;
-    const beforePersistentApply = vi.fn(async () => {
+    const beforePersistentApply = vi.fn(() => {
       if (++authorizations > 1) {
         setRecoveryConfig(pending, "2026-08-03T00:00:00.000Z");
       }
@@ -593,7 +593,7 @@ describe("system-agent setup transaction", () => {
 
     expect(result.applied).toBe(true);
     expect(applySetup).toHaveBeenCalledWith(expect.not.objectContaining({ resume: true }), {
-      commit: expect.any(Function),
+      beforePersistentApply: undefined,
     });
     expect(localOnboarding.readForConfig).not.toHaveBeenCalled();
     expect(localOnboarding.complete).not.toHaveBeenCalled();

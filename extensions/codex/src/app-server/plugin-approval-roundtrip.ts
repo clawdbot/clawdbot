@@ -11,7 +11,9 @@ type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"]
 
 const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
-const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
+// Matches the gateway protocol's PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH; the card
+// must fit the MCP server line, the operator remedy, and the tool parameters.
+const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 512;
 const ANSI_OSC_SEQUENCE_RE = new RegExp(
   String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
   "g",
@@ -59,15 +61,19 @@ type ApprovalRequestResult = {
 /** Starts a two-phase plugin approval request through the OpenClaw gateway. */
 export async function requestPluginApproval(params: {
   hostCapabilities: AgentHarnessHostCapabilities;
+  signal?: AbortSignal;
   title: string;
   description: string;
   severity: "info" | "warning";
   toolName: string;
   toolCallId?: string;
   allowedDecisions?: ExecApprovalDecision[];
+  mcpTool?: { server: string; tool: string };
+  isMcpToolApprovalActive?: () => boolean;
 }): Promise<ApprovalRequestResult | undefined> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return params.hostCapabilities.requestApproval({
+    signal: params.signal,
     title: truncateCodexApprovalDisplayText(params.title, MAX_PLUGIN_APPROVAL_TITLE_LENGTH),
     description: truncateCodexApprovalDisplayText(
       params.description,
@@ -76,6 +82,9 @@ export async function requestPluginApproval(params: {
     severity: params.severity,
     toolName: params.toolName,
     toolCallId: params.toolCallId,
+    ...(params.mcpTool
+      ? { mcpTool: params.mcpTool, isMcpToolApprovalActive: params.isMcpToolApprovalActive }
+      : {}),
     timeoutMs,
     transportTimeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs),
     ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),

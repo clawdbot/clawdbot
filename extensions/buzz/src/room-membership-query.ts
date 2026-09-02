@@ -1,8 +1,8 @@
 import type { Relay } from "nostr-tools";
+import { isNewerBuzzRevision } from "./event-order.js";
 import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 import {
   BUZZ_ROOM_MEMBERSHIP_KIND,
-  isNewerBuzzRoomMembership,
   parseBuzzRoomMembershipEvent,
   type BuzzRoomMembership,
 } from "./room-membership.js";
@@ -39,7 +39,7 @@ async function queryBuzzRoomMembershipBatch(params: {
       if (
         membership &&
         configuredRooms.has(membership.roomId) &&
-        isNewerBuzzRoomMembership(membership, memberships.get(membership.roomId))
+        isNewerBuzzRevision(membership, memberships.get(membership.roomId))
       ) {
         memberships.set(membership.roomId, membership);
       }
@@ -62,7 +62,7 @@ export async function queryBuzzRoomMemberships(params: {
       channelIds: params.channelIds.slice(index, index + RELAY_QUERY_EVENT_LIMIT),
     });
     for (const [roomId, membership] of batch) {
-      if (isNewerBuzzRoomMembership(membership, memberships.get(roomId))) {
+      if (isNewerBuzzRevision(membership, memberships.get(roomId))) {
         memberships.set(roomId, membership);
       }
     }

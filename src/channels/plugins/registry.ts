@@ -1,5 +1,6 @@
 /** Active channel plugin registry with bundled fallback. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getBundledChannelPlugin } from "./bundled.js";
 import {
@@ -44,7 +45,10 @@ export function resolveChannelPluginRegistration(id: ChannelId):
   }
   // Resolve implementation and provenance together. Loaded overrides win and
   // must never borrow bundled authority from the fallback with the same id.
-  const loadedEntry = getLoadedChannelPluginEntryById(resolvedId);
+  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const loadedEntry =
+    (scopedRegistry ? getLoadedChannelPluginEntryById(resolvedId, scopedRegistry) : undefined) ??
+    getLoadedChannelPluginEntryById(resolvedId);
   if (loadedEntry) {
     const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
     return {

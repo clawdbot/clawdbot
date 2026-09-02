@@ -68,13 +68,14 @@ export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
 /** Mark ref-bearing lines that were absent from the previous compatible snapshot. */
 function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
   lines: string[];
+  lineRefs: readonly (string | undefined)[];
   refs: Record<string, T>;
   mode: RoleSnapshotIdentityMode;
   previousKeys: ReadonlySet<string>;
 }): boolean {
   const markedKeys = new Set<string>();
   for (const [index, line] of params.lines.entries()) {
-    const ref = findRoleSnapshotLineRef(line);
+    const ref = params.lineRefs[index];
     const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
     if (!ref || !value) {
       continue;
@@ -93,18 +94,20 @@ function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
   return true;
 }
 
-function truncateRoleSnapshot(lines: readonly string[], maxChars: number): string {
+function truncateRoleSnapshot(lines: readonly string[], maxChars: number) {
   const marker =
     maxChars >= ROLE_SNAPSHOT_TRUNCATION_MARKER.length ? ROLE_SNAPSHOT_TRUNCATION_MARKER : "…";
   let prefix = "";
+  let lineCount = 0;
   for (const line of lines) {
     const candidate = prefix ? `${prefix}\n${line}` : line;
     if (candidate.length + 2 + marker.length > maxChars) {
       break;
     }
     prefix = candidate;
+    lineCount += 1;
   }
-  return prefix ? `${prefix}\n\n${marker}` : marker;
+  return { snapshot: prefix ? `${prefix}\n\n${marker}` : marker, lineCount };
 }
 
 /** Apply the final output budget, then keep only refs present on complete output lines. */
@@ -131,22 +134,28 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
   const delta = params.delta;
   const previousKeys = delta?.previousKeys;
   const sourceLines = params.snapshot.split("\n");
-  const annotated =
-    delta && previousKeys !== undefined
-      ? annotateRoleSnapshotDelta({
-          lines: sourceLines,
-          refs: params.refs,
-          mode: delta.mode,
-          previousKeys,
-        })
-      : false;
+  let lineRefs: (string | undefined)[] | undefined;
+  let annotated = false;
+  if (delta && previousKeys !== undefined) {
+    lineRefs = sourceLines.map(findRoleSnapshotLineRef);
+    annotated = annotateRoleSnapshotDelta({
+      lines: sourceLines,
+      lineRefs,
+      refs: params.refs,
+      mode: delta.mode,
+      previousKeys,
+    });
+  }
   const sourceSnapshot = annotated ? sourceLines.join("\n") : params.snapshot;
   const truncated = maxChars !== undefined && sourceSnapshot.length > maxChars;
-  const snapshot = truncated ? truncateRoleSnapshot(sourceLines, maxChars) : sourceSnapshot;
+  const bounded = truncated ? truncateRoleSnapshot(sourceLines, maxChars) : undefined;
+  const snapshot = bounded?.snapshot ?? sourceSnapshot;
   const outputLines = truncated ? snapshot.split("\n") : sourceLines;
   const visibleRefs = new Set<string>();
-  for (const line of outputLines) {
-    const ref = findRoleSnapshotLineRef(line);
+  // Delta suffixes and the truncation marker cannot introduce formatter-owned refs.
+  const visibleLineCount = bounded?.lineCount ?? sourceLines.length;
+  for (let index = 0; index < visibleLineCount; index += 1) {
+    const ref = lineRefs ? lineRefs[index] : findRoleSnapshotLineRef(sourceLines[index]!);
     if (ref) {
       visibleRefs.add(ref);
     }
@@ -238,57 +247,27 @@ function decodeSnapshotName(nameToken: string | undefined): string | undefined {
   return nameToken?.startsWith('"') ? JSON.parse(nameToken) : nameToken;
 }
 
-type RoleNameTracker = {
-  counts: Map<string, number>;
-  refsByKey: Map<string, string[]>;
-  getKey: (role: string, name?: string) => string;
-  getNextIndex: (role: string, name?: string) => number;
-  trackRef: (role: string, name: string | undefined, ref: string) => void;
-  getDuplicateKeys: () => Set<string>;
-};
-
-function createRoleNameTracker(): RoleNameTracker {
-  const counts = new Map<string, number>();
-  const refsByKey = new Map<string, string[]>();
-  return {
-    counts,
-    refsByKey,
-    getKey(role: string, name?: string) {
-      return `${role}:${name ?? ""}`;
-    },
-    getNextIndex(role: string, name?: string) {
-      const key = this.getKey(role, name);
-      const current = counts.get(key) ?? 0;
-      counts.set(key, current + 1);
-      return current;
-    },
-    trackRef(role: string, name: string | undefined, ref: string) {
-      const key = this.getKey(role, name);
-      const list = refsByKey.get(key) ?? [];
-      list.push(ref);
-      refsByKey.set(key, list);
-    },
-    getDuplicateKeys() {
-      const out = new Set<string>();
-      for (const [key, refs] of refsByKey) {
-        if (refs.length > 1) {
-          out.add(key);
-        }
+function createRoleNameTracker() {
+  const groups = new Map<string, { count: number; first: RoleRef }>();
+  return (role: string, name?: string): RoleRef => {
+    const key = `${role}:${name ?? ""}`;
+    const group = groups.get(key);
+    const data: RoleRef = { role, name };
+    if (group) {
+      // The first generated ref gains index zero only when a duplicate appears.
+      if (group.count === 1) {
+        group.first.nth = 0;
       }
-      return out;
-    },
+      data.nth = group.count;
+      group.count += 1;
+    } else {
+      groups.set(key, { count: 1, first: data });
+    }
+    return data;
   };
 }
 
-function removeNthFromNonDuplicates(refs: RoleRefMap, tracker: RoleNameTracker) {
-  const duplicates = tracker.getDuplicateKeys();
-  for (const [ref, data] of Object.entries(refs)) {
-    const key = tracker.getKey(data.role, data.name);
-    if (!duplicates.has(key)) {
-      delete refs[ref]?.nth;
-    }
-  }
-}
+type RoleNameTracker = ReturnType<typeof createRoleNameTracker>;
 
 function compactTree(tree: string) {
   const lines = tree.split("\n");
@@ -374,13 +353,9 @@ function processLine(
   }
 
   const ref = nextRef();
-  const nth = tracker.getNextIndex(role, name);
-  tracker.trackRef(role, name, ref);
-  refs[ref] = {
-    role,
-    name,
-    nth,
-  };
+  const data = tracker(role, name);
+  refs[ref] = data;
+  const nth = data.nth ?? 0;
 
   let enhanced = `${prefix}${roleRaw}`;
   if (name) {
@@ -403,8 +378,8 @@ type InteractiveSnapshotLine = NonNullable<ReturnType<typeof parseSnapshotLine>>
 function buildInteractiveSnapshotLines(params: {
   lines: string[];
   options: RoleSnapshotOptions;
-  resolveRef: (parsed: InteractiveSnapshotLine) => { ref: string; nth?: number } | null;
-  recordRef: (parsed: InteractiveSnapshotLine, ref: string, nth?: number) => void;
+  refs: RoleRefMap;
+  resolveRef: (parsed: InteractiveSnapshotLine) => { ref: string; data: RoleRef } | null;
   formatSuffix: (suffix: string, ref: string) => string;
 }): string[] {
   const out: string[] = [];
@@ -424,15 +399,15 @@ function buildInteractiveSnapshotLines(params: {
     if (!resolved?.ref) {
       continue;
     }
-    params.recordRef(parsed, resolved.ref, resolved.nth);
+    params.refs[resolved.ref] = resolved.data;
 
     let enhanced = `- ${parsed.roleRaw}`;
     if (parsed.name) {
       enhanced += ` ${JSON.stringify(parsed.name)}`;
     }
     enhanced += ` [ref=${resolved.ref}]`;
-    if ((resolved.nth ?? 0) > 0) {
-      enhanced += ` [nth=${resolved.nth}]`;
+    if ((resolved.data.nth ?? 0) > 0) {
+      enhanced += ` [nth=${resolved.data.nth}]`;
     }
     enhanced += params.formatSuffix(parsed.suffix, resolved.ref);
     out.push(enhanced);
@@ -479,23 +454,10 @@ export function buildRoleSnapshotFromAriaSnapshot(
     const result = buildInteractiveSnapshotLines({
       lines,
       options,
-      resolveRef: ({ role, name }) => {
-        const ref = nextRef();
-        const nth = tracker.getNextIndex(role, name);
-        tracker.trackRef(role, name, ref);
-        return { ref, nth };
-      },
-      recordRef: ({ role, name }, ref, nth) => {
-        refs[ref] = {
-          role,
-          name,
-          nth,
-        };
-      },
+      refs,
+      resolveRef: ({ role, name }) => ({ ref: nextRef(), data: tracker(role, name) }),
       formatSuffix: (suffix) => (suffix.includes("[") ? suffix : ""),
     });
-
-    removeNthFromNonDuplicates(refs, tracker);
 
     return {
       snapshot: result.join("\n") || "(no interactive elements)",
@@ -510,8 +472,6 @@ export function buildRoleSnapshotFromAriaSnapshot(
       result.push(processed);
     }
   }
-
-  removeNthFromNonDuplicates(refs, tracker);
 
   const tree = result.join("\n") || "(empty)";
   return {
@@ -541,12 +501,12 @@ export function buildRoleSnapshotFromAiSnapshot(
     const out = buildInteractiveSnapshotLines({
       lines,
       options,
+      refs,
       resolveRef: (parsed) => {
         const ref = parseAiSnapshotRef(parsed.ref);
-        return ref ? { ref } : null;
-      },
-      recordRef: ({ role, name }, ref) => {
-        refs[ref] = { role, ...(name ? { name } : {}) };
+        return ref
+          ? { ref, data: { role: parsed.role, ...(parsed.name ? { name: parsed.name } : {}) } }
+          : null;
       },
       formatSuffix: (suffix, ref) => suffix.replace(` [ref=${ref}]`, ""),
     });

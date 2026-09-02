@@ -33,6 +33,11 @@
       "import": "./dist/model-catalog-normalize.mjs",
       "default": "./dist/model-catalog-normalize.mjs"
     },
+    "./model-catalog-pricing": {
+      "types": "./dist/model-catalog-pricing.d.mts",
+      "import": "./dist/model-catalog-pricing.mjs",
+      "default": "./dist/model-catalog-pricing.mjs"
+    },
     "./model-catalog-types": {
       "types": "./dist/model-catalog-types.d.mts",
       "import": "./dist/model-catalog-types.mjs",

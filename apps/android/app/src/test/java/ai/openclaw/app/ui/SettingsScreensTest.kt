@@ -8,6 +8,7 @@ import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.GatewayUsageWindowSummary
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.appearanceAccentPalette
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
@@ -426,6 +427,16 @@ class SettingsScreensTest {
     // Discovered gateways surface inside Add Gateway with a per-row connect.
     val discoveredRows = source.indexOf("discoveredGateways.forEachIndexed", screenStart)
     assertTrue(discoveredRows > addPanel && discoveredRows < pairedPanel)
+  }
+
+  @Test
+  fun accentSwatchDescriptionsNameDefaultAndEveryColor() {
+    val descriptions =
+      (listOf<Long?>(null) + appearanceAccentPalette).map(::appearanceAccentSwatchDescription)
+
+    assertEquals(appearanceAccentPalette.size + 1, descriptions.toSet().size)
+    assertEquals("Accent color, Default", descriptions.first())
+    assertTrue(descriptions.drop(1).all { it.startsWith("Accent color, #") })
   }
 
   private fun settingsScreensSource(): String {

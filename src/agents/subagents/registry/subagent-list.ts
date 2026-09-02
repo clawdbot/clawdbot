@@ -97,10 +97,9 @@ function buildLatestSubagentRunIndex(
 ) {
   const now = options?.now ?? Date.now();
   const readIndex = buildSubagentRunReadIndexFromRuns({ runs, now });
-  const latestByChildSessionKey = new Map(readIndex.latestRunsByChildSessionKey);
 
   const childSessionsByController = new Map<string, string[]>();
-  for (const [childSessionKey, entry] of latestByChildSessionKey.entries()) {
+  for (const [childSessionKey, entry] of readIndex.latestRunsByChildSessionKey) {
     const controllerSessionKey =
       entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
     if (!controllerSessionKey) {
@@ -128,7 +127,6 @@ function buildLatestSubagentRunIndex(
   }
 
   return {
-    latestByChildSessionKey,
     childSessionsByController,
     readIndex,
   };

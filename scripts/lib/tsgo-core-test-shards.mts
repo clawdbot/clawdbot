@@ -60,6 +60,15 @@ export const TSGO_CORE_TEST_SHARDS = [
   },
 ] as const;
 
+export const TSGO_CORE_GRAPHS = [
+  { name: "core", config: "tsconfig.core.json" },
+  { name: "ui", config: "tsconfig.ui.json" },
+  ...TSGO_CORE_TEST_SHARDS.map((shard) => ({
+    name: `core-test-${shard.name}`,
+    config: shard.config,
+  })),
+];
+
 export type TsgoCoreTestShard = (typeof TSGO_CORE_TEST_SHARDS)[number];
 
 export const TSGO_TARGETED_TEST_SHARED_SHARDS = [
@@ -142,4 +151,37 @@ export function findTsgoCoreTestShardViolations(params: {
   }
 
   return violations;
+}
+
+/** Select every consuming graph, not just the file's declared root partition. */
+export function selectChangedTsgoCoreTestShards(
+  paths: readonly string[],
+  graphs: readonly { config: string; roots: readonly string[]; files: readonly string[] }[],
+): readonly { name: string; config: string }[] | undefined {
+  if (
+    paths.length === 0 ||
+    paths.some((file) => !/^(?:src|ui|packages)\/.+\.test\.tsx?$/u.test(file))
+  ) {
+    return undefined;
+  }
+  const testConfigs = new Set<string>(TSGO_CORE_TEST_SHARDS.map((shard) => shard.config));
+  const testGraphs = graphs.filter((graph) => testConfigs.has(graph.config));
+  if (
+    graphs.length !== TSGO_CORE_GRAPHS.length ||
+    TSGO_CORE_GRAPHS.some(
+      (expected) => graphs.filter((graph) => graph.config === expected.config).length !== 1,
+    ) ||
+    paths.some((file) => testGraphs.filter((graph) => graph.roots.includes(file)).length !== 1) ||
+    paths.some((file) => !testGraphs.some((graph) => graph.files.includes(file))) ||
+    graphs.some(
+      (graph) => !testConfigs.has(graph.config) && paths.some((file) => graph.files.includes(file)),
+    )
+  ) {
+    return undefined;
+  }
+  return TSGO_CORE_TEST_SHARDS.filter((shard) =>
+    testGraphs.some(
+      (graph) => graph.config === shard.config && paths.some((file) => graph.files.includes(file)),
+    ),
+  );
 }

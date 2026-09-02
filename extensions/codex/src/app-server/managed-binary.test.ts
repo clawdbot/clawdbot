@@ -1,5 +1,5 @@
 // Codex tests cover managed binary plugin behavior.
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -56,6 +56,51 @@ describe("managed Codex app-server binary", () => {
     ).toBe(expected);
   });
 
+  it("resolves native dependencies from the real package behind an isolated install shim", async () => {
+    const installRoot = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-isolated-")),
+    );
+    try {
+      const platform = process.platform === "win32" ? "win32" : "linux";
+      const modulesDir = path.join(installRoot, "node_modules");
+      const realScopeDir = path.join(modulesDir, ".pnpm", "codex-slot", "node_modules", "@openai");
+      const packageRoot = path.join(realScopeDir, "codex");
+      const platformPackage = `@openai/codex-${platform}-x64`;
+      const platformRoot = path.join(realScopeDir, `codex-${platform}-x64`);
+      const native = path.join(
+        platformRoot,
+        "vendor",
+        platform === "win32" ? "x86_64-pc-windows-msvc" : "x86_64-unknown-linux-musl",
+        "bin",
+        platform === "win32" ? "codex.exe" : "codex",
+      );
+      const command = managedCommandPath(installRoot, platform);
+      await mkdir(packageRoot, { recursive: true });
+      await mkdir(path.dirname(native), { recursive: true });
+      await mkdir(path.dirname(command), { recursive: true });
+      await mkdir(path.join(modulesDir, "@openai"), { recursive: true });
+      await writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "@openai/codex" }),
+      );
+      await writeFile(
+        path.join(platformRoot, "package.json"),
+        JSON.stringify({ name: platformPackage }),
+      );
+      await writeFile(native, "native artifact fixture");
+      await writeFile(command, "launcher fixture");
+      await symlink(
+        packageRoot,
+        path.join(modulesDir, "@openai", "codex"),
+        platform === "win32" ? "junction" : "dir",
+      );
+
+      expect(resolveManagedCodexNativeCommand(command, { platform, arch: "x64" })).toBe(native);
+    } finally {
+      await rm(installRoot, { recursive: true, force: true });
+    }
+  });
+
   it("reports the desktop bundle binary as its native artifact", () => {
     expect(
       resolveManagedCodexNativeCommand(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, {
@@ -64,6 +109,27 @@ describe("managed Codex app-server binary", () => {
       }),
     ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
+
+  it.each([true, false])(
+    "uses embedded vendor binaries only when the platform package is absent (present=%s)",
+    (platformPackagePresent) => {
+      const packageRoot = "/repo/node_modules/@openai/codex";
+      const embedded = `${packageRoot}/vendor/aarch64-apple-darwin/bin/codex`;
+      expect(
+        resolveManagedCodexNativeCommand(`${packageRoot}/bin/codex.js`, {
+          platform: "darwin",
+          arch: "arm64",
+          resolvePackageJson: (name) =>
+            name === "@openai/codex"
+              ? `${packageRoot}/package.json`
+              : platformPackagePresent
+                ? "/repo/node_modules/@openai/codex-darwin-arm64/package.json"
+                : undefined,
+          pathExists: (candidate) => candidate === embedded,
+        }),
+      ).toBe(platformPackagePresent ? undefined : embedded);
+    },
+  );
 
   it("leaves explicit command overrides unchanged without probing managed paths", async () => {
     const explicitOptions = startOptions("config");

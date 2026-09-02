@@ -90,7 +90,7 @@ describe("incomplete Responses loopback SSE", () => {
           messages: [{ role: "user", content: "Reply with a partial sentence", timestamp: 0 }],
           tools: [],
         },
-        { apiKey: "test-key", maxRetries: 0 },
+        { apiKey: "test-key" },
       );
       const events = [];
       for await (const event of stream) {

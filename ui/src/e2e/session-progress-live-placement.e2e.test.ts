@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledGatewayUrl,
@@ -16,23 +16,27 @@ import {
 } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-progress-live-placement",
-);
-
 async function captureProof(page: Page, fileName: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "session-progress-live-placement"), { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(proofDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "session-progress-live-placement"), fileName),
   });
+}
+
+async function expectInsideProgressBody(item: Locator): Promise<void> {
+  const inside = await item.evaluate((node) => {
+    const itemBounds = node.getBoundingClientRect();
+    const bodyBounds = node
+      .closest<HTMLElement>(".session-progress-card__body")!
+      .getBoundingClientRect();
+    return itemBounds.bottom <= bodyBounds.bottom + 1 && itemBounds.top >= bodyBounds.top - 1;
+  });
+  expect(inside).toBe(true);
 }
 
 const suite = createChatFlowE2eSuite();
@@ -214,6 +218,112 @@ suite.define(() => {
         await captureProof(page, "composer-adjacent.png");
       },
     );
+  });
+
+  it("keeps tall markdown-only and mixed progress cards scroll-reachable", async () => {
+    const markdown = [
+      "| Gate | State |",
+      "| --- | --- |",
+      ...Array.from(
+        { length: 24 },
+        (_, index) => `| Gate ${index + 1} | Detailed state for gate ${index + 1} |`,
+      ),
+    ].join("\n");
+    const variants = [
+      { name: "markdown-only", steps: undefined },
+      {
+        name: "markdown-and-plan",
+        steps: Array.from({ length: 8 }, (_, index) => ({
+          status: index < 3 ? ("completed" as const) : ("pending" as const),
+          step: `Plan step ${index + 1}`,
+        })),
+      },
+    ];
+
+    for (const variant of variants) {
+      const sessionKey = `agent:main:progress-${variant.name}`;
+      await suite.withPage(
+        {
+          colorScheme: "dark",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 700, width: 980 },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+            methodResponses: {
+              "progressCard.get": {
+                card: {
+                  markdown,
+                  revision: 1,
+                  sessionKey,
+                  steps: variant.steps,
+                  updatedAt: 1,
+                },
+              },
+              "sessions.list": chatSessionListResponse([
+                {
+                  key: sessionKey,
+                  kind: "direct",
+                  label: `Progress ${variant.name}`,
+                  updatedAt: 1,
+                },
+              ]),
+            },
+            sessionKey,
+          });
+
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
+          const card = page.locator('[data-progress-card-placement="composer"]');
+          const body = card.locator(".session-progress-card__body");
+          await expect.poll(() => card.isVisible()).toBe(true);
+          await expect.poll(() => card.getAttribute("open")).toBe("");
+
+          const bodyLayout = await body.evaluate((node) => ({
+            clientHeight: node.clientHeight,
+            overflowY: getComputedStyle(node).overflowY,
+            scrollHeight: node.scrollHeight,
+          }));
+          expect(bodyLayout.overflowY).toBe("auto");
+          expect(bodyLayout.scrollHeight).toBeGreaterThan(bodyLayout.clientHeight);
+
+          if (captureUiProofEnabled && variant.name === "markdown-only") {
+            const parentStyle = await page.addStyleTag({
+              content: `.session-progress-card--composer .session-progress-card__body {
+                overflow: hidden !important;
+                overscroll-behavior: auto !important;
+                scrollbar-width: auto !important;
+              }`,
+            });
+            expect(await body.evaluate((node) => getComputedStyle(node).overflowY)).toBe("hidden");
+            await captureProof(page, "tall-markdown-before-clipped.png");
+            await parentStyle.evaluate((node) => node.parentNode?.removeChild(node));
+          }
+
+          const lastMarkdownRow = card.locator("tbody tr:last-child");
+          await lastMarkdownRow.scrollIntoViewIfNeeded();
+          await expectInsideProgressBody(lastMarkdownRow);
+          expect(await body.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+          expect(await page.evaluate(() => window.scrollY)).toBe(0);
+          await captureProof(page, `tall-${variant.name}-after-scrolled.png`);
+
+          if (variant.steps) {
+            const lastStep = card.locator(".session-progress-card__step:last-child");
+            await lastStep.scrollIntoViewIfNeeded();
+            await expectInsideProgressBody(lastStep);
+            expect(
+              await card
+                .locator(".session-progress-card__steps")
+                .evaluate((node) => node.clientHeight),
+            ).toBeGreaterThan(0);
+            expect(await page.evaluate(() => window.scrollY)).toBe(0);
+            await captureProof(page, `tall-${variant.name}-final-step.png`);
+          }
+        },
+      );
+    }
   });
 
   it("presents completed disclosure states and dismisses the card across reload", async () => {

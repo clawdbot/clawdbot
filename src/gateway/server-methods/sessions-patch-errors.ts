@@ -9,6 +9,10 @@ import { SessionWorktreeLifecycleError } from "../../sessions/session-worktree-l
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { sessionLog } from "./sessions-shared.js";
 
+export function invalidSessionPatchOutcome(message: string) {
+  return { ok: false as const, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
+}
+
 export function unexpectedPatchError(key: string, error: unknown): ErrorShape {
   if (error instanceof SessionMutationAuthorizationChangedError) {
     return error.error;

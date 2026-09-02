@@ -39,7 +39,7 @@ import {
   strictlyValidateConfigSnapshotForCli,
 } from "./config-cli-validation.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
-import type { ConfigSetOptions } from "./config-set-input.js";
+import { parseConfigSetCurrentExpectation, type ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -73,18 +73,28 @@ export async function runConfigSet(opts: {
   value?: string;
   cliOptions: ConfigSetOptions;
   runtime?: RuntimeEnv;
+  beforePersistentApply?: () => void;
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
+    const currentExpectation = parseConfigSetCurrentExpectation(opts.cliOptions);
+    const operations = buildConfigSetOperations({
+      path: opts.path,
+      value: opts.value,
+      opts: opts.cliOptions,
+    });
+    if (currentExpectation && operations.length !== 1) {
+      throw new Error(
+        "config set mode error: conditional expectations require exactly one resolved operation.",
+      );
+    }
     await runConfigOperations({
       runtime,
-      operations: buildConfigSetOperations({
-        path: opts.path,
-        value: opts.value,
-        opts: opts.cliOptions,
-      }),
+      operations,
       options: opts.cliOptions,
       successMode: "set",
+      ...(currentExpectation ? { currentExpectation } : {}),
+      ...(opts.beforePersistentApply ? { beforePersistentApply: opts.beforePersistentApply } : {}),
     });
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: opts.cliOptions });
@@ -337,6 +347,11 @@ export function registerConfigCli(program: Command) {
     .argument("[value]", "Value (JSON/JSON5 or raw string)")
     .option("--strict-json", "Strict JSON parsing (error instead of raw string fallback)", false)
     .option("--json", "Legacy alias for --strict-json", false)
+    .option("--expect-current-absent", "Write only when the authored path is absent", false)
+    .option(
+      "--expect-current-json <json>",
+      "Write only when the authored path exactly matches this strict JSON value",
+    )
     .option(
       "--dry-run",
       "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",

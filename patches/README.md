@@ -2,6 +2,10 @@
 
 Keep existing insertion anchors when extending these patches: pnpm 12 can apply a zero-context, zero-length insertion one line early. After regeneration and installation, verify installed files against the patch's target blob hashes before testing.
 
+`matrix-js-sdk@42.2.0` has an approved temporary patch for saved-sync verification replay. Classic sync propagates its existing cache provenance through ordinary client events, and the crypto listener ignores restored events. This preserves room history, sync cursors, ordinary event listeners, fresh verification events, and to-device processing while preventing cached verification requests from restarting after a clean client shutdown.
+
+Remove the Matrix patch, its registration, and its exact-version guard exception when an upstream release passes `node scripts/run-vitest.mjs extensions/matrix/src/matrix/client/file-sync-store.sdk.test.ts` and the full Matrix QA catalog, including the original DM SAS-to-QR sequence. The regression exercises the real SQLite sync store, SDK cache hydration, and crypto event wiring; it observes crypto input rather than substituting for native verification proof.
+
 `@vitest/runner@4.1.11` has an approved temporary pnpm patch for lost trailing task updates. It accepts the exact batching deadline and clears the consumed timer handle before re-entering the throttle, allowing an early callback to rearm. The 100 ms batching interval and immediate-call cancellation stay unchanged; this is not a maintained fork or a reporting SLA.
 
 Remove the runner patch, its registration, and its exact-version guard exception when upgrading to an upstream fixed version with `test/scripts/vitest-runner-task-updates.test.ts` green. Keep that regression to verify completion delivery without later task events or file-finalization rescue. Generate and register patches through pnpm; never edit installed dependency files manually.

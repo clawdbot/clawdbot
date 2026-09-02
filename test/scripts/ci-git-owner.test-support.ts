@@ -42,19 +42,19 @@ const moved = "d".repeat(40);
 const merge = "e".repeat(40);
 const defaults: Record<string, string> = {
   CHECKOUT_REPO: "fixture/checkout",
+  CHECKOUT_TOKEN: "",
   CHECKOUT_REF: candidate,
   CHECKOUT_SHA: candidate,
   CHECKOUT_FALLBACK_REF: candidate,
   CHECKOUT_EVENT_REF: "refs/heads/main",
   WORKFLOW_SHA: harness,
+  CHECKOUT_GIT_COMMITS_JSON: "null",
   GITHUB_EVENT_NAME: "push",
   GITHUB_REPOSITORY: "fixture/checkout",
   DEFAULT_BRANCH: "main",
   EVENT_BASE_SHA: base,
   GH_TOKEN: "",
   PULL_REQUEST_NUMBER: "17",
-  PR_COMMIT_COUNT: "5",
-  PR_MERGE_SHA: merge,
   TARGET_SHA: candidate,
   RELEASE_GATE: "false",
   FROZEN_TARGET: "false",
@@ -115,6 +115,7 @@ export async function runCiGitStep(options: {
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
+  stepOutputs?: Record<string, Record<string, string>>;
   env?: Record<string, string>;
   fetchResults: FetchResult[];
   cloneResults?: FetchResult[];
@@ -212,8 +213,9 @@ export async function runCiGitStep(options: {
     `linux:${options.scenario ?? "configured"}`,
     (root) => {
       const actions = path.join(root, "trusted-actions");
-      if (options.performance)
+      if (options.performance) {
         performanceFixture = preparePerformanceFixture(root, options.performance);
+      }
       env = stepEnvironment(step, {
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",
@@ -409,6 +411,11 @@ def main():`,
         }),
       );
       let run = renderGitTestClock(step.run, clock);
+      for (const [stepId, outputs] of Object.entries(options.stepOutputs ?? {})) {
+        for (const [name, value] of Object.entries(outputs)) {
+          run = run.replaceAll(`\${{ steps.${stepId}.outputs.${name} }}`, value);
+        }
+      }
       if (externalOwner) {
         const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
           runs: { steps: { run?: string }[] };

@@ -12,7 +12,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   createAssistant,
@@ -61,7 +61,7 @@ import {
   resolveContextEngineMock,
   resolveDefaultAgentDirMock,
   resolveEffectiveCompactionModeMock,
-  resolveEmbeddedAgentStreamFnMock,
+  resolveEmbeddedAgentStreamMock,
   resolveMemorySearchConfigMock,
   resolveModelAsyncMock,
   resolveModelMock,
@@ -838,7 +838,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         return options?.authProfileId === "openai:missing";
       }),
     ).toBe(true);
-    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
+    expect(resolveEmbeddedAgentStreamMock).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileId: "openai:backup" }),
     );
     expect(buildAgentRuntimePlanMock).toHaveBeenCalledWith(
@@ -1123,12 +1123,64 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     );
   });
 
+  it.each([
+    ["global", undefined, undefined],
+    ["global", "global", undefined],
+    ["global", "agent:main:policy", undefined],
+    ["agent:marketing:review", "global", "marketing"],
+  ] as const)(
+    "prepares compaction with the selected sandbox policy (%s / %s)",
+    async (sessionKey, sandboxSessionKey, sandboxAgentId) => {
+      const agentScope =
+        await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
+      const { resolveSandboxContext } = await import("../sandbox/context.js");
+      const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
+      resolveSessionAgentIdMock.mockImplementation(agentScope.resolveSessionAgentId);
+      resolveSessionAgentIdsMock.mockImplementation(agentScope.resolveSessionAgentIds);
+      resolveSandboxContextMock.mockImplementation(resolveSandboxContext);
+      const config = {
+        agents: {
+          ownership: "explicit" as const,
+          defaults: { sandbox: { mode: "off" as const } },
+          list: [{ id: "main" }, { id: "marketing" }],
+        },
+      };
+      const { snapshot } = await acquireAgentRunPreparedModelRuntimeMock({
+        config,
+        agentId: "marketing",
+        workspaceDir: TEST_WORKSPACE_DIR,
+      });
+
+      const result = await prepareDirectCompactionAttempt({
+        config,
+        agentId: "marketing",
+        sessionId: TEST_SESSION_ID,
+        sessionKey,
+        sandboxSessionKey,
+        sandboxAgentId,
+        sessionFile: sessionKey,
+        workspaceDir: TEST_WORKSPACE_DIR,
+        preparedModelRuntime: snapshot as never,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          earlyAgentIds: { sessionAgentId: "marketing" },
+          effectiveWorkspace: TEST_WORKSPACE_DIR,
+          sandbox: null,
+        },
+      });
+    },
+  );
+
   it("uses subagent prompt surface and guidance for compacted subagent prompt rebuilds", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
       sessionKey: "agent:main:subagent:worker",
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+      cwd: join(TEST_WORKSPACE_DIR, "task-repo"),
     });
 
     expect(listRegisteredPluginAgentPromptGuidanceMock).toHaveBeenCalledWith({
@@ -1137,6 +1189,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(buildEmbeddedSystemPromptMock).toHaveBeenCalledWith(
       expect.objectContaining({
         promptMode: "minimal",
+        workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
+        runtimeCwd: join(TEST_WORKSPACE_DIR, "task-repo"),
         promptSurface: "subagent",
         nativeCommandGuidanceLines: ["Subagent compact command guidance."],
       }),
@@ -1243,7 +1297,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       mockResolvedModel(
         "providerTimeoutMs" in scenario ? { requestTimeoutMs: scenario.providerTimeoutMs } : {},
       );
-      resolveEmbeddedAgentStreamFnMock.mockReturnValue(vi.fn(() => providerRequest.promise));
+      resolveEmbeddedAgentStreamMock.mockReturnValue({
+        streamFn: vi.fn(() => providerRequest.promise),
+        strategy: "session-custom",
+      });
       attemptServerEndpointCompactionMock.mockImplementationOnce(async (input) => {
         const { context, model, streamFn } = input;
         const messages = context.messages.filter(
@@ -1306,7 +1363,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("routes compaction through shared stream resolution and extra params", async () => {
     const resolvedStreamFn = vi.fn();
-    resolveEmbeddedAgentStreamFnMock.mockReturnValue(resolvedStreamFn);
+    resolveEmbeddedAgentStreamMock.mockReturnValue({
+      streamFn: resolvedStreamFn,
+      strategy: "session-custom",
+    });
     applyExtraParamsToAgentMock.mockReturnValue({
       effectiveExtraParams: { transport: "websocket" },
     });
@@ -1339,7 +1399,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       } as never,
     });
 
-    const streamArg = mockCallArg(resolveEmbeddedAgentStreamFnMock) as Record<string, unknown>;
+    const streamArg = mockCallArg(resolveEmbeddedAgentStreamMock) as Record<string, unknown>;
     expect(streamArg.currentStreamFn).toBeTypeOf("function");
     expect(streamArg.sessionId).toBe("session-1");
     expect(streamArg.authProfileId).toBe("openai:profile-1");
@@ -1500,24 +1560,23 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("keeps manifest-profiled plugin tools executable during compaction", async () => {
     const toolName = "profiled_plugin_tool";
     const metadataSnapshot = {
-      ...getCurrentPluginMetadataSnapshotMock(),
+      ...createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "profiled-plugin",
+            origin: "workspace",
+            rootDir: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin"),
+            source: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/index.js"),
+            manifestPath: join(
+              TEST_WORKSPACE_DIR,
+              "workspace/profiled-plugin/openclaw.plugin.json",
+            ),
+            contracts: { tools: [toolName] },
+            toolMetadata: { [toolName]: { profiles: ["coding"] } },
+          },
+        ],
+      }),
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
-      plugins: [
-        {
-          id: "profiled-plugin",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "workspace",
-          rootDir: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin"),
-          source: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/index.js"),
-          manifestPath: join(TEST_WORKSPACE_DIR, "workspace/profiled-plugin/openclaw.plugin.json"),
-          contracts: { tools: [toolName] },
-          toolMetadata: { [toolName]: { profiles: ["coding"] } },
-        } satisfies PluginManifestRecord,
-      ],
     };
     const preparedModelRuntime = {
       agentId: "main",
@@ -1612,6 +1671,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   it("uses the caller context token budget during runtime compaction", async () => {
     await compactEmbeddedAgentSessionDirect({
       sessionId: "session-1",
+      runId: "manual-compaction-operation",
       sessionKey: TEST_SESSION_KEY,
       sessionFile: TEST_SESSION_KEY,
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
@@ -1623,6 +1683,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
     expectRecordFields(mockCallArg(guardSessionManagerMock, 0, 1), {
       contextWindowTokens: 64_000,
+      runId: "manual-compaction-operation",
     });
     expectRecordFields(mockCallArg(createPreparedEmbeddedAgentSettingsManagerMock), {
       contextTokenBudget: 64_000,
@@ -1833,7 +1894,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         const [
           { createAgentSessionForEmbeddedRunner },
           { guardSessionManager },
-          { resolveEmbeddedAgentStreamFn },
+          { resolveEmbeddedAgentStream },
           { buildEmbeddedExtensionFactories },
         ] = await Promise.all([
           import("../sessions/sdk.js"),
@@ -1857,7 +1918,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
           "## Exact identifiers",
           "None.",
         ].join("\n");
-        const expectedSummaryRequest = `## Latest user request context\n${JSON.stringify("Compare the remaining options.")}`;
+        const expectedSummaryRequest = `Latest user request context: ${JSON.stringify("Keep the rollout notes.")}`;
         const sessionManager = SessionManager.inMemory(TEST_WORKSPACE_DIR);
         for (const content of [
           "Review the deployment checklist.",
@@ -1901,7 +1962,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         vi.mocked(guardSessionManager).mockReturnValue(sessionManager);
         limitHistoryTurnsMock.mockImplementation((messages) => messages);
         resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
-        vi.mocked(resolveEmbeddedAgentStreamFn).mockReturnValue(stream);
+        vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
+          streamFn: stream,
+          strategy: "session-custom",
+        });
         vi.mocked(buildEmbeddedExtensionFactories).mockImplementation(({ model }) => {
           setSafeguardRuntime(sessionManager, {
             model,
@@ -1949,7 +2013,12 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         const configBefore = structuredClone(config);
 
         const result = await compactEmbeddedAgentSessionDirect(
-          wrappedCompactionArgs({ provider: "openai", model: primary, config }),
+          wrappedCompactionArgs({
+            provider: "openai",
+            model: primary,
+            trigger: "overflow",
+            config,
+          }),
         );
 
         expect([...new Set(requestedModels)], JSON.stringify(result)).toEqual(
@@ -1972,6 +2041,9 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
             sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
           ).toMatchObject({
             summary: expect.stringContaining(expectedSummaryRequest),
+            details: {
+              latestUnresolvedUserRequest: "Keep the rollout notes.",
+            },
           });
         } else {
           expect(result).toMatchObject({ ok: false, compacted: false });
@@ -2016,38 +2088,30 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("plans direct compaction from the requested workspace metadata without ambient discovery", async () => {
-    const baseMetadataSnapshot = expectDefined(
-      getCurrentPluginMetadataSnapshotMock(),
-      "default plugin metadata snapshot",
-    );
-    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
-      params?.workspaceDir === TEST_WORKSPACE_DIR
-        ? {
-            ...baseMetadataSnapshot,
-            configFingerprint: "workspace-compaction-normalization",
-            plugins: [
-              {
-                id: "compaction-normalizer",
-                channels: [],
-                providers: ["anthropic"],
-                cliBackends: [],
-                skills: [],
-                hooks: [],
-                origin: "workspace",
-                rootDir: TEST_WORKSPACE_DIR,
-                source: `${TEST_WORKSPACE_DIR}/index.js`,
-                manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
-                modelIdNormalization: {
-                  providers: {
-                    anthropic: {
-                      aliases: { legacy: "claude-modern" },
-                    },
-                  },
+    const metadataSnapshot = {
+      ...createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "compaction-normalizer",
+            providers: ["anthropic"],
+            origin: "workspace",
+            rootDir: TEST_WORKSPACE_DIR,
+            source: `${TEST_WORKSPACE_DIR}/index.js`,
+            manifestPath: `${TEST_WORKSPACE_DIR}/openclaw.plugin.json`,
+            modelIdNormalization: {
+              providers: {
+                anthropic: {
+                  aliases: { legacy: "claude-modern" },
                 },
-              } satisfies PluginManifestRecord,
-            ],
-          }
-        : undefined,
+              },
+            },
+          },
+        ],
+      }),
+      configFingerprint: "workspace-compaction-normalization",
+    };
+    getCurrentPluginMetadataSnapshotMock.mockImplementation((params) =>
+      params?.workspaceDir === TEST_WORKSPACE_DIR ? metadataSnapshot : undefined,
     );
 
     const result = await compactEmbeddedAgentSessionDirect({
@@ -2227,7 +2291,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       resolveModelMock,
       ([provider, modelId]) => provider === "openai" && modelId === "gpt-5.4-mini",
     );
-    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
+    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamMock, 1), {
       authProfileId: "openai:default",
     });
   });
@@ -3045,13 +3109,33 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       );
 
       expect(result).toMatchObject({ ok: true, compacted: true });
-      expect(sessionAutomaticCompactionMock).toHaveBeenCalledOnce();
+      expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
+        TEST_CUSTOM_INSTRUCTIONS,
+        trigger === "overflow" ? "unresolved" : undefined,
+        undefined,
+      );
       expect(sessionManualCompactionMock).not.toHaveBeenCalled();
       expect(buildEmbeddedExtensionFactoriesMock).toHaveBeenCalledOnce();
       expect(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
       expect(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
     },
   );
+
+  it("carries unresolved request state into safeguard overflow compaction", async () => {
+    resolveEffectiveCompactionModeMock.mockReturnValue("safeguard");
+
+    const result = await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({ trigger: "overflow" }),
+    );
+
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(sessionAutomaticCompactionMock).toHaveBeenCalledWith(
+      TEST_CUSTOM_INSTRUCTIONS,
+      "unresolved",
+      "none",
+    );
+    expect(sessionManualCompactionMock).not.toHaveBeenCalled();
+  });
 
   it("skips compaction when the transcript only contains boilerplate replies and tool output", () => {
     const messages = [

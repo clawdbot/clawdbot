@@ -9,11 +9,9 @@ import {
   validateTalkClientCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
-import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   appendClientVoiceTranscript,
   closeClientVoiceSession,
@@ -32,10 +30,8 @@ import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
 } from "../../talk/provider-resolver.js";
-import {
-  authorizeGatewaySessionCreation,
-  resolveSandboxedSessionCreation,
-} from "../operator-role-policy.js";
+import { resolveSandboxedSessionCreation } from "../operator-role-policy.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
 import {
   boundTalkClientRealtimeInitialItems,
@@ -43,7 +39,9 @@ import {
   createTalkClientGatewayControlOwner,
   resolveTalkAgentConsultAuthority,
 } from "../talk-client-gateway-control.js";
+import { requirePreparedTalkSessionTarget } from "../talk-session-target.js";
 import { formatForLog } from "../ws-log.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
   forgetLegacyVoiceBinding,
   rememberLegacyVoiceBinding,
@@ -74,13 +72,16 @@ export const createTalkClient: GatewayRequestHandler = async ({
   respond,
   context,
   client,
+  sessionMutationAuthorization,
+  sessionMutationCommitGuard,
 }) => {
   if (!assertValidParams(params, validateTalkClientCreateParams, "talk.client.create", respond)) {
     return;
   }
   try {
+    sessionMutationAuthorization?.assertCurrent();
     const runtimeConfig = context.getRuntimeConfig();
-    const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider);
+    const realtimeConfig = buildTalkRealtimeConfig(runtimeConfig, params.provider, params.model);
     const mode = normalizeOptionalLowercaseString(params.mode) ?? realtimeConfig.mode ?? "realtime";
     if (mode !== "realtime") {
       rejectTalkClientRequest(
@@ -134,14 +135,18 @@ export const createTalkClient: GatewayRequestHandler = async ({
       requested: params,
       defaults: realtimeConfig,
     });
-    const requestedAgentId = resolveTalkSessionAgentId(runtimeConfig, params.sessionKey);
+    const target = requirePreparedTalkSessionTarget(
+      sessionMutationAuthorization?.talkSessionTarget,
+    );
+    const { agentId, sessionKey } = target;
+    const sessionTarget = { agentId, sessionKey: target.canonicalKey, storePath: target.storePath };
     assertSecretOwnerAvailable("capability", "talk:realtime");
     const resolution = resolveConfiguredRealtimeVoiceProvider({
       configuredProviderId: realtimeConfig.provider,
       providerConfigs: realtimeConfig.providers,
       ...(launchOptions.model ? { providerConfigOverrides: { model: launchOptions.model } } : {}),
       cfg: runtimeConfig,
-      agentId: requestedAgentId,
+      agentId,
       defaultModel: realtimeConfig.model,
       surface: "browser-session",
     });
@@ -149,7 +154,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
       provider: resolution.provider,
       providerConfig: resolution.providerConfig,
       cfg: runtimeConfig,
-      agentId: requestedAgentId,
+      agentId,
       model: launchOptions.model,
       surface: "browser-session",
     });
@@ -169,36 +174,22 @@ export const createTalkClient: GatewayRequestHandler = async ({
       );
       return;
     }
-    const realtimeContext = await resolveTalkRealtimeProviderInstructions({
+    const providerInstructions = await resolveTalkRealtimeProviderInstructions({
       config: runtimeConfig,
-      agentId: requestedAgentId,
+      agentId,
       configuredInstructions: realtimeConfig.instructions,
-      sessionKey: params.sessionKey,
-      // Legacy creates can drift to another agent's session at toolCall time, so
-      // the default agent's profile must not leak into the provider session.
-      requireSessionKeyForProfile: true,
+      sessionKey: target.canonicalKey,
       warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
     });
-    const { agentId, requestedSessionKey } = realtimeContext;
-    const sessionKey = requestedSessionKey ?? buildAgentMainSessionKey({ agentId });
-    const creationError = authorizeGatewaySessionCreation({
-      cfg: runtimeConfig,
-      client,
-      agentId,
-    });
-    if (creationError) {
-      respond(false, undefined, creationError);
-      return;
-    }
+    sessionMutationAuthorization?.assertCurrent();
     if (resolution.provider.createBrowserSession && transport !== "gateway-relay") {
-      const agentSessionId = resolveClientVoiceAgentSessionId({ agentId, sessionKey });
+      const agentSessionId = resolveClientVoiceAgentSessionId(sessionTarget);
       const initialItems = agentSessionId
         ? boundTalkClientRealtimeInitialItems(
             readSessionPreviewItemsFromTranscript(
               {
-                agentId,
+                ...sessionTarget,
                 sessionId: agentSessionId,
-                sessionKey,
               },
               REALTIME_VOICE_CONTEXT_MAX_ITEMS,
               REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS,
@@ -221,8 +212,8 @@ export const createTalkClient: GatewayRequestHandler = async ({
       }
       const instructions =
         providerCapabilities?.handlesAgentConsult === true
-          ? normalizeOptionalString(realtimeContext.instructions)
-          : buildRealtimeInstructions(realtimeContext.instructions);
+          ? normalizeOptionalString(providerInstructions)
+          : buildRealtimeInstructions(providerInstructions);
       const requestedVoiceSessionId = normalizeOptionalString(params.voiceSessionId);
       const ownsProvider =
         wantsGatewayControl || providerCapabilities?.handlesAgentConsult === true;
@@ -245,8 +236,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
       const consultRunner = createTalkClientAgentConsultRunner({
         config: runtimeConfig,
         context,
-        agentId,
-        sessionKey,
+        sessionTarget: target,
         ...(ownerConnId ? { ownerConnId } : {}),
         authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes),
         getVoiceSessionId: () => activeVoiceSessionId,
@@ -256,7 +246,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
         ? createTalkClientGatewayControlOwner({
             voiceSessionId: activeVoiceSessionId!,
             providerId: resolution.provider.id,
-            sessionKey,
+            sessionTarget: target,
             connId: ownerConnId!,
             context,
             assertConnectionOpen: () => {
@@ -272,6 +262,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
               appendClientVoiceTranscript({
                 agentId,
                 sessionKey,
+                sessionTarget,
                 voiceSessionId: activeVoiceSessionId!,
                 entryId,
                 role,
@@ -313,9 +304,15 @@ export const createTalkClient: GatewayRequestHandler = async ({
         ...(tools.length > 0 ? { tools } : {}),
         ...launchOptions,
       };
+      const assertCommitAllowed = () => {
+        sessionMutationCommitGuard?.();
+        sessionMutationAuthorization?.assertCurrent();
+        gatewayControlOwner?.assertOpen();
+      };
       let session: Awaited<ReturnType<typeof resolution.provider.createBrowserSession>> | undefined;
       let delivered = false;
       try {
+        assertCommitAllowed();
         session = await resolution.provider.createBrowserSession(browserSessionRequest);
         const createdSession = session;
         await gatewayControlOwner?.adoptProvider(() =>
@@ -325,7 +322,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
             session: createdSession,
           }),
         );
-        gatewayControlOwner?.assertOpen();
+        assertCommitAllowed();
         // Client-owned voice records are minted only for client-owned transports;
         // relay sessions are created via talk.session.create and keyed by relaySessionId.
         // Widening this guard would hand relay calls a mismatched voiceSessionId.
@@ -344,13 +341,16 @@ export const createTalkClient: GatewayRequestHandler = async ({
           // Defer persistent session creation until the provider has returned a
           // usable client transport. The write boundary rechecks the credential
           // deadline so queued storage work cannot leave a phantom chat.
-          await ensureClientVoiceAgentSessionEntry({
-            agentId,
-            sessionKey,
-            creation: resolveSandboxedSessionCreation(client, runtimeConfig),
+          const ensuredSessionId = await ensureClientVoiceAgentSessionEntry({
+            ...sessionTarget,
+            creation:
+              resolveSandboxedSessionCreation(client, runtimeConfig) ??
+              resolveOperatorSessionCreation(client),
             deadlineAt: sessionEntryDeadlineAt,
-            ...(gatewayControlOwner ? { assertCommitAllowed: gatewayControlOwner.assertOpen } : {}),
+            assertCommitAllowed,
           });
+          sessionMutationCommitGuard?.();
+          sessionMutationAuthorization?.assertTargetCurrent({ ...sessionTarget, ensuredSessionId });
           gatewayControlOwner?.assertOpen();
           // Recovering 6h-abandoned calls (and retrying their digests) is not on the
           // start path; running it inline would delay use of time-sensitive provider
@@ -429,6 +429,10 @@ export const createTalkClient: GatewayRequestHandler = async ({
       `Realtime provider "${resolution.provider.id}" does not support client-owned realtime sessions`,
     );
   } catch (err) {
+    if (err instanceof SessionMutationAuthorizationChangedError) {
+      respond(false, undefined, err.error);
+      return;
+    }
     respond(
       false,
       undefined,

@@ -1,20 +1,21 @@
 // Codex tests cover attempt startup plugin behavior.
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   AgentHarnessPreflightError,
-  type CodexBundleMcpThreadConfig,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import {
+  bundleMcpThreadConfig,
   answerInitialize,
   answerPreparedApiKeyLogin,
   captureExpectedRuntimeArtifact,
   createPairedAttemptRuntime,
+  createAttemptPaths,
+  createAttemptParams,
+  type AttemptPaths,
   HARNESS_REQUEST_TIMEOUT_MS,
   readHarnessMessages,
   readHarnessRequestMethods,
@@ -31,7 +32,6 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
 } from "./config.js";
-import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
@@ -46,10 +46,13 @@ import {
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
+  retainSharedCodexAppServerClientIfCurrent,
   type CodexAppServerPreparedAuth,
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
-import { createClientHarness, createCodexTestModel } from "./test-support.js";
+import { createClientHarness } from "./test-support.js";
+import { createCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import { retainCodexAppServerBindingSubscription } from "./thread-ownership.js";
 
 const desktopGeneration = vi.hoisted(() => ({
   current: undefined as { epoch: number; fingerprint: string } | undefined,
@@ -81,61 +84,11 @@ vi.mock("./computer-use.js", async (importOriginal) => {
   };
 });
 
-type AttemptPaths = {
-  agentDir: string;
-  cwd: string;
-  sessionFile: string;
-  workspaceDir: string;
-};
-
 const tempRoots = new Set<string>();
-
-function createAttemptPaths(): AttemptPaths {
-  const root = path.join(os.tmpdir(), `openclaw-codex-attempt-startup-${randomUUID()}`);
-  tempRoots.add(root);
-  return {
-    agentDir: path.join(root, "agent"),
-    cwd: path.join(root, "workspace"),
-    sessionFile: path.join(root, "session.jsonl"),
-    workspaceDir: path.join(root, "workspace"),
-  };
-}
-
-function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptParams {
-  return {
-    hostCapabilities: createCodexTestHostCapabilities(),
-    prompt: "hello",
-    sessionId: "session-1",
-    sessionKey: "agent:agent-1:session-1",
-    agentDir: paths.agentDir,
-    sessionFile: paths.sessionFile,
-    effectiveCwd: paths.cwd,
-    workspaceDir: paths.workspaceDir,
-    runId: "run-1",
-    provider: "codex",
-    modelId: "gpt-5.4-codex",
-    model: createCodexTestModel("codex"),
-    thinkLevel: "medium",
-    disableTools: true,
-    timeoutMs: 5_000,
-    authStorage: {} as never,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: {} as never,
-  } as EmbeddedRunAttemptParams;
-}
 
 const pluginConfig: CodexPluginConfig = {
   appServer: { command: "codex" },
 };
-
-const bundleMcpThreadConfig = {
-  configPatch: undefined,
-  diagnostics: [],
-  evaluated: false,
-  fingerprint: undefined,
-  staticServerNames: [],
-  userStaticServerNames: [],
-} satisfies CodexBundleMcpThreadConfig;
 
 function startThreadWithHarness(
   startupTimeoutMs: number,
@@ -158,7 +111,7 @@ function startThreadWithHarness(
   },
 ) {
   const harness = overrides?.harness ?? createClientHarness();
-  const paths = overrides?.paths ?? createAttemptPaths();
+  const paths = overrides?.paths ?? createAttemptPaths(tempRoots);
   const startSpy = overrides?.skipStartSpy
     ? undefined
     : vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
@@ -213,7 +166,7 @@ async function startIsolatedPairedAttempt(params: {
   runtime: NonNullable<Parameters<typeof startCodexAttemptThread>[0]["runtime"]>;
   paths?: AttemptPaths;
 }) {
-  const paths = params.paths ?? createAttemptPaths();
+  const paths = params.paths ?? createAttemptPaths(tempRoots);
   const sandbox = {
     ...createSandboxContext({}),
     backendId: "node",
@@ -327,7 +280,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("rejects an expected artifact mismatch before any native thread request", async () => {
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     await fs.mkdir(paths.workspaceDir, { recursive: true });
     const command = path.join(paths.workspaceDir, "codex-runtime");
     await fs.writeFile(command, "native-v1");
@@ -349,7 +302,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("returns a matching expected artifact with the started thread", async () => {
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     await fs.mkdir(paths.workspaceDir, { recursive: true });
     const command = path.join(paths.workspaceDir, "codex-runtime");
     await fs.writeFile(command, "native-v1");
@@ -385,7 +338,7 @@ describe("startCodexAttemptThread", () => {
       .spyOn(CodexAppServerClient, "start")
       .mockResolvedValueOnce(first.client)
       .mockResolvedValueOnce(second.client);
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     let persistedComputerUse = false;
     const { run } = startThreadWithHarness(10_000, new AbortController().signal, {
       harness: first,
@@ -465,7 +418,7 @@ describe("startCodexAttemptThread", () => {
       }
       const { run } = startThreadWithHarness(10_000, new AbortController().signal, {
         harness: first,
-        paths: createAttemptPaths(),
+        paths: createAttemptPaths(tempRoots),
         pluginConfig: {},
         skipStartSpy: true,
         startupPreparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
@@ -512,7 +465,7 @@ describe("startCodexAttemptThread", () => {
   it("retires the startup generation when context restart sees a new executable owner", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness,
       paths,
@@ -550,7 +503,7 @@ describe("startCodexAttemptThread", () => {
       .mockResolvedValueOnce(retained.client)
       .mockResolvedValueOnce(replacement.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
 
     const retainedLease = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
@@ -586,6 +539,63 @@ describe("startCodexAttemptThread", () => {
     expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
   });
 
+  it("preserves the healthy shared client and incognito history after a prewrite resume refusal", async () => {
+    const paths = createAttemptPaths(tempRoots);
+    const harness = createCodexLifecycleHarness({
+      respond: async (method, params) => {
+        if (method === "thread/start") {
+          return threadStartResult(
+            (params as { ephemeral?: boolean }).ephemeral ? "incognito" : "ordinary",
+          );
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    });
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const common = { paths, harness, skipStartSpy: true };
+    const ordinary = await startThreadWithHarness(5_000, undefined, common).run;
+    await harness.endTurn(ordinary.thread.threadId);
+    ordinary.turnRoute.release();
+    ordinary.releaseSharedClientLease();
+    const incognito = {
+      ...common,
+      buildAttemptParams: () => ({
+        ...createAttemptParams(paths),
+        sessionId: "incognito-session",
+        sessionKey: "agent:agent-1:dashboard:incognito-refusal",
+      }),
+    };
+    const previous = await startThreadWithHarness(5_000, undefined, incognito).run;
+    await retainCodexAppServerBindingSubscription(harness.client, previous.thread.threadId, {
+      configFingerprint: previous.thread.liveThreadConfigFingerprint,
+      ephemeralPolicy: previous.thread.liveThreadEphemeralPolicy,
+    });
+    previous.turnRoute.release();
+    previous.releaseSharedClientLease();
+
+    const sibling = retainSharedCodexAppServerClientIfCurrent(harness.client);
+    expect(sibling).toBeTypeOf("function");
+    const before = harness.writes.length;
+    const refused = new AgentHarnessPreflightError("session owner revoked");
+    const attemptParams = createAttemptParams(paths);
+    const assertActive = () => {
+      throw refused;
+    };
+    const hostCapabilities = { ...attemptParams.hostCapabilities, assertActive };
+    const buildAttemptParams = () => ({ ...attemptParams, hostCapabilities });
+    await expect(
+      startThreadWithHarness(5_000, undefined, { ...common, buildAttemptParams }).run,
+    ).rejects.toBe(refused);
+    sibling?.();
+    const continued = await startThreadWithHarness(5_000, undefined, incognito).run;
+    expect(continued.client).toBe(harness.client);
+    expect(continued.thread.threadId).toBe(previous.thread.threadId);
+    expect(harness.writes).toHaveLength(before);
+    expect(start).toHaveBeenCalledTimes(1);
+    continued.turnRoute.release();
+    continued.releaseSharedClientLease();
+  });
+
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
     vi.useFakeTimers();
     const { harness, run } = startThreadWithHarness(500);
@@ -612,7 +622,7 @@ describe("startCodexAttemptThread", () => {
     const retained = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(retained.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
 
     const retainedLease = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
@@ -676,7 +686,7 @@ describe("startCodexAttemptThread", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: sharedInitializePluginConfig,
     });
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     const { harness, run, startSpy } = startThreadWithHarness(3_000, new AbortController().signal, {
       pluginConfig: sharedInitializePluginConfig,
       paths,
@@ -713,7 +723,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("bounds a real stdio initialize request and cleans up the child", async () => {
-    const paths = createAttemptPaths();
+    const paths = createAttemptPaths(tempRoots);
     const root = path.dirname(paths.agentDir);
     const fixturePath = path.join(root, "stall-initialize.mjs");
     const requestLogPath = path.join(root, "requests.log");
@@ -829,8 +839,8 @@ describe("startCodexAttemptThread", () => {
     const first = createClientHarness();
     const second = createClientHarness();
     const runtime = createPairedAttemptRuntime();
-    const firstPaths = createAttemptPaths();
-    const secondPaths = createAttemptPaths();
+    const firstPaths = createAttemptPaths(tempRoots);
+    const secondPaths = createAttemptPaths(tempRoots);
     const start = vi.spyOn(CodexAppServerClient, "start").mockImplementation(async (options) => {
       const codexHome = options?.env?.CODEX_HOME;
       if (codexHome?.startsWith(`${firstPaths.agentDir}${path.sep}`)) {

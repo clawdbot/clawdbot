@@ -160,6 +160,9 @@ async function resolveExplicitTarget(params: {
       const remoteStep = await runStep(
         params.step("git remote", ["git", "-C", params.gitRoot, "remote"], params.gitRoot),
       );
+      if (remoteStep.exitCode !== 0) {
+        return null;
+      }
       const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
       let fetchedTag = false;
       for (const remote of remotes) {
@@ -225,11 +228,12 @@ async function resolveUpstreamCandidates(params: {
     const remoteStep = await runStep(
       params.step("git remote", ["git", "-C", params.gitRoot, "remote"], params.gitRoot),
     );
-    if (remoteStep.exitCode === 0) {
-      remoteBranchRefs = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n")).map(
-        (remote) => `refs/remotes/${remote}/${DEV_BRANCH}`,
-      );
+    if (remoteStep.exitCode !== 0) {
+      return { status: "error", reason: "preflight-remote-failed" };
     }
+    remoteBranchRefs = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n")).map(
+      (remote) => `refs/remotes/${remote}/${DEV_BRANCH}`,
+    );
   }
   const upstreamRefs = resolveDevUpstreamRefs(params.needsCheckoutMain, remoteBranchRefs);
   let upstreamSha: string | null = null;
@@ -507,6 +511,7 @@ export async function runGitDevPreflight(params: {
   }
 
   let tested: PreflightCandidateResult | undefined;
+  let cleanupFailed: boolean;
   try {
     for (const sha of candidates) {
       const candidate = await testPreflightCandidate({ ...params, worktreeDir, sha });
@@ -539,6 +544,7 @@ export async function runGitDevPreflight(params: {
         MAX_LOG_CHARS,
       );
     }
+    cleanupFailed = removeStep.exitCode !== 0;
     await params
       .runCommand(["git", "-C", params.gitRoot, "worktree", "prune"], {
         cwd: params.gitRoot,
@@ -557,6 +563,9 @@ export async function runGitDevPreflight(params: {
             ? tested.reason
             : "preflight-no-good-commit",
     };
+  }
+  if (cleanupFailed) {
+    return { status: "error", reason: "preflight-cleanup-failed" };
   }
   return {
     status: "ok",

@@ -95,7 +95,12 @@ describe("startGatewayTailscaleExposure", () => {
       logTailscale,
     });
 
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(
+      "serve",
+      MANAGED_BACKEND_PORT,
+      18789,
+      expect.any(Function),
+    );
     expect(mocks.getTailnetHostnameAfterServe).toHaveBeenCalledOnce();
     expect(mocks.getTailnetHostname).not.toHaveBeenCalled();
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
@@ -142,7 +147,12 @@ describe("startGatewayTailscaleExposure", () => {
 
       await cleanup?.();
 
-      expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(mode, MANAGED_BACKEND_PORT);
+      expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(
+        mode,
+        MANAGED_BACKEND_PORT,
+        18789,
+        expect.any(Function),
+      );
       expect(mocks.stopRouteClaim).toHaveBeenCalledOnce();
     },
   );
@@ -197,7 +207,12 @@ describe("startGatewayTailscaleExposure", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).toHaveBeenCalledWith(18789);
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("serve", MANAGED_BACKEND_PORT);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(
+      "serve",
+      MANAGED_BACKEND_PORT,
+      18789,
+      expect.any(Function),
+    );
   });
 
   it("prepares one tailnet-only Serve origin for the Gateway lifecycle", async () => {
@@ -269,6 +284,11 @@ describe("startGatewayTailscaleExposure", () => {
     });
 
     expect(mocks.hasTailscaleFunnelRouteForPort).not.toHaveBeenCalled();
-    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith("funnel", MANAGED_BACKEND_PORT);
+    expect(mocks.claimTailscaleRoute).toHaveBeenCalledWith(
+      "funnel",
+      MANAGED_BACKEND_PORT,
+      18789,
+      expect.any(Function),
+    );
   });
 });

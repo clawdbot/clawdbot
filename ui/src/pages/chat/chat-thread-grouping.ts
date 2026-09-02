@@ -1,27 +1,28 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  isToolCallContentType,
-  isToolResultContentType,
-} from "../../../../src/chat/tool-content.js";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { isContextCompactionActivity } from "./chat-progress.ts";
+import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
 import { userTurnRunId } from "./chat-thread-items.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,
-  streamPartBoundaryId,
-  streamPartRunId,
   transcriptRunId,
 } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsForwardedBoundary,
   chatItemStartsUserTurn,
-  safeNormalizeMessage,
+  hasForwardedSource,
 } from "./chat-turn-boundary.ts";
 import { indexTurnContinuations, persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
+
+function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
+  if (isKeyedAssistantStreamFallbackMessage(message)) {
+    return "commentary";
+  }
+  return visibleContent === "none" ? "activity" : "reply";
+}
 
 function stampReplyAttribution(
   items: Array<ChatItem | MessageGroup>,
@@ -49,10 +50,7 @@ function stampReplyAttribution(
       // A sender-less user group clears attribution: no chip is safer than
       // mislabeling the reply as addressed to the previous participant.
       latestUserSender = item.sender;
-    } else if (
-      item.role === "assistant" &&
-      (item.senderSession || assistantGroupIsForwardedBoundary(item))
-    ) {
+    } else if (item.role === "assistant" && hasForwardedSource(item)) {
       // Forwarded input starts a turn without a local human reply recipient.
       latestUserSender = undefined;
     } else if (item.role === "assistant" && latestUserSender) {
@@ -66,18 +64,21 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
   let currentGroup: MessageGroup | null = null;
   let currentUserTurnIdentity: string | null = null;
 
-  for (const item of items) {
-    if (item.kind !== "message") {
+  for (const prepared of prepareMessagesForGrouping(items)) {
+    if (prepared.kind !== "message") {
       if (currentGroup) {
         result.push(currentGroup);
         currentGroup = null;
       }
-      result.push(item);
+      result.push(prepared);
       continue;
     }
 
-    const normalized = normalizeMessage(item.message);
+    const { item, normalized } = prepared;
     const role = normalizeRoleForGrouping(normalized.role);
+    // Classify after content projection and keep the fact with its group; later
+    // presentation passes reuse it, while a rebuild sees in-place message changes.
+    const visibleContent = resolveMessageVisibleContent(item.message, normalized);
     const senderLabel =
       role === "user" || role === "assistant" ? (normalized.senderLabel ?? null) : null;
     const sender = role === "user" ? normalized.sender : undefined;
@@ -92,16 +93,11 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
     const shouldSplitBySender = role === "user" || role === "assistant";
     const startsProjectedTurn =
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
-    const splitsAssistantCommentary =
+    const splitsAssistantKind =
       role === "assistant" &&
       currentGroup?.role === "assistant" &&
-      isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
-        isKeyedAssistantStreamFallbackMessage(item.message);
-    const splitsRuntimeActivity =
-      role === "assistant" &&
-      currentGroup?.role === "assistant" &&
-      isContextCompactionActivity(currentGroup.messages[0]?.message) !==
-        isContextCompactionActivity(item.message);
+      assistantMessageKind(currentGroup.messages[0]?.message, currentGroup.visibleContent) !==
+        assistantMessageKind(item.message, visibleContent);
 
     if (
       !currentGroup ||
@@ -109,8 +105,7 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup.role !== role ||
       currentGroup.runId !== runId ||
       currentUserTurnIdentity !== userTurnIdentity ||
-      splitsAssistantCommentary ||
-      splitsRuntimeActivity ||
+      splitsAssistantKind ||
       (shouldSplitBySender &&
         ((!sender?.identity && currentGroup.senderLabel !== senderLabel) ||
           currentGroup.senderSession?.sessionKey !== normalized.senderSession?.sessionKey ||
@@ -128,11 +123,15 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
         ...(normalized.senderSession ? { senderSession: normalized.senderSession } : {}),
         ...(sender ? { sender } : {}),
         messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
+        visibleContent,
         timestamp,
         isStreaming: false,
         ...(runId ? { runId } : {}),
       };
     } else {
+      if (visibleContent === "non-text" || currentGroup.visibleContent === "none") {
+        currentGroup.visibleContent = visibleContent;
+      }
       currentGroup.messages.push({
         message: item.message,
         key: item.key,
@@ -153,7 +152,7 @@ export type StreamRunRenderItem = {
   key: string;
   runId?: string;
   boundaryId?: string;
-  parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>>;
+  parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" }>>;
 };
 export function coalesceStreamRuns(
   items: RenderChatItem[],
@@ -163,8 +162,7 @@ export function coalesceStreamRuns(
   const flush = () => {
     const [first] = run;
     if (first) {
-      const runId = streamPartRunId(first);
-      const boundaryId = streamPartBoundaryId(first);
+      const { runId, boundaryId } = first;
       result.push({
         kind: "stream-run",
         key: `stream-run:${first.key}`,
@@ -178,10 +176,7 @@ export function coalesceStreamRuns(
   for (const item of items) {
     if (item.kind === "stream" || item.kind === "reading-indicator") {
       const first = run[0];
-      if (
-        first &&
-        (streamPartRunId(first) !== item.runId || streamPartBoundaryId(first) !== item.boundaryId)
-      ) {
+      if (first && (first.runId !== item.runId || first.boundaryId !== item.boundaryId)) {
         flush();
       }
       run.push(item);
@@ -194,7 +189,7 @@ export function coalesceStreamRuns(
   return result;
 }
 
-/** Collapsed rollup of a completed turn's intermediate work (tools, commentary). */
+/** Collapsed rollup of a completed turn's activity (tools, commentary, reasoning). */
 export type WorkGroupRenderItem = {
   kind: "work-group";
   key: string;
@@ -218,30 +213,14 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   return role === "tool" || (role === "assistant" && !assistantGroupIsForwardedBoundary(item));
 }
 
-// Attachment/canvas/media-only replies carry no text but are still the turn's
-// visible outcome; they must never fold into the work rollup. Normalized
-// content passes unknown block types through (e.g. raw image blocks), so
-// anything that is not a tool block counts as visible reply content.
 function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
-  return group.messages.some(({ message }) => {
-    if (includeText && extractTextCached(message)?.trim()) {
-      return true;
-    }
-    const content = safeNormalizeMessage(message)?.content ?? [];
-    return content.some((block) => {
-      if (block.type === "text") {
-        return includeText && Boolean(block.text?.trim());
-      }
-      return !isToolCallContentType(block.type) && !isToolResultContentType(block.type);
-    });
-  });
+  return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
 
 export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
-    !group.messages.every(({ message }) => isContextCompactionActivity(message)) &&
     groupHasVisibleReplyContent(group)
   );
 }

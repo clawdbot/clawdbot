@@ -6,6 +6,13 @@ private let chatSessionActionsLogger = Logger(
     category: "OpenClawChat")
 
 extension OpenClawChatViewModel {
+    var canRequestSessionCompact: Bool {
+        !self.isCompacting &&
+            !self.isSending &&
+            !self.hasBlockingRunActivity &&
+            !self.isAborting
+    }
+
     struct SessionBranchSwitchActivity: Equatable {
         let session: SessionSnapshot
         let generation: UInt64

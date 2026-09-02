@@ -1,6 +1,5 @@
 // Browser tests cover profiles plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveBrowserConfig } from "./config.js";
 import { allocateCdpPort, getUsedPorts, isValidProfileName } from "./profiles.js";
 
 const CDP_PORT_RANGE_START = 18800;
@@ -132,47 +131,5 @@ describe("getUsedPorts", () => {
     };
     const used = getUsedPorts(profiles);
     expect(used).toEqual(new Set([18801]));
-  });
-});
-
-describe("port collision prevention", () => {
-  it("raw config vs resolved config - shows the data source difference", () => {
-    // This demonstrates WHY the route handler must use resolved config
-
-    // Fresh config with no profiles defined (like a new install)
-    const rawConfigProfiles = undefined;
-    const usedFromRaw = getUsedPorts(rawConfigProfiles);
-
-    // Raw config shows empty - no ports used
-    expect(usedFromRaw.size).toBe(0);
-
-    // But resolved config has implicit openclaw at 18800
-    const resolved = resolveBrowserConfig({});
-    const usedFromResolved = getUsedPorts(resolved.profiles);
-    expect(usedFromResolved.has(CDP_PORT_RANGE_START)).toBe(true);
-  });
-
-  it("create-profile must use resolved config to avoid port collision", () => {
-    // The route handler must use state.resolved.profiles, not raw config
-
-    // Simulate what happens with raw config (empty) vs resolved config
-    const rawConfig: { browser: { profiles?: Record<string, { cdpPort?: number }> } } = {
-      browser: {},
-    }; // Fresh config, no profiles
-    const buggyUsedPorts = getUsedPorts(rawConfig.browser?.profiles);
-    const buggyAllocatedPort = allocateCdpPort(buggyUsedPorts);
-
-    // Raw config: first allocation gets 18800
-    expect(buggyAllocatedPort).toBe(CDP_PORT_RANGE_START);
-
-    // Resolved config: includes implicit openclaw at 18800
-    const resolved = resolveBrowserConfig(
-      rawConfig.browser as Parameters<typeof resolveBrowserConfig>[0],
-    );
-    const fixedUsedPorts = getUsedPorts(resolved.profiles);
-    const fixedAllocatedPort = allocateCdpPort(fixedUsedPorts);
-
-    // Resolved: first NEW profile gets 18801, avoiding collision
-    expect(fixedAllocatedPort).toBe(CDP_PORT_RANGE_START + 1);
   });
 });

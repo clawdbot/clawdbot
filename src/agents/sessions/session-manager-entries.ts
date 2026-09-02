@@ -39,12 +39,12 @@ import type {
 } from "./session-manager-types.js";
 
 export class SessionManagerEntries extends SessionManagerPersistence {
-  protected appendEntry(
-    entry: SessionEntry,
+  protected appendEntry<T extends SessionEntry>(
+    entry: T,
     options?: AppendPersistenceOptions,
-  ): TranscriptEntryAnchor | undefined {
+  ): { entry: T; anchor?: TranscriptEntryAnchor } {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
-    const canonicalEntry = JSON.parse(JSON.stringify(entry)) as SessionEntry;
+    const canonicalEntry = JSON.parse(JSON.stringify(entry)) as T;
     if (!isIndexedSessionEntry(canonicalEntry)) {
       throw new Error(`Invalid session transcript entry: ${entry.type}`);
     }
@@ -67,84 +67,56 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         ...(activeBranchAppend ? { appendIntent: "active-branch" as const } : {}),
       }),
     );
-    if (persistenceResult && typeof persistenceResult === "object") {
-      if (persistenceResult.adoptedMessageId) {
-        this.reloadPersistedTranscript();
-        const adoptedMessageId =
-          canonicalEntry.type === "message"
-            ? this.resolveCurrentKeyedUserId(canonicalEntry.message)
-            : undefined;
-        if (adoptedMessageId !== persistenceResult.adoptedMessageId) {
-          throw new Error(
-            `Session transcript keyed user is outside the current turn: ${persistenceResult.adoptedMessageId}`,
-          );
-        }
-        this.pendingDeliberateAppend = false;
-        return persistenceResult.anchor;
+    if (persistenceResult?.adoptedMessageId) {
+      this.reloadPersistedTranscript();
+      // Context-excluded users have no payload in byId. The exact SQLite replay
+      // anchors their identity; physical ancestry still closes older turns.
+      if (this.resolveCurrentTurnEntryId() !== persistenceResult.adoptedMessageId) {
+        throw new Error(
+          `Session transcript keyed user is outside the current turn: ${persistenceResult.adoptedMessageId}`,
+        );
+      }
+      canonicalEntry.id = persistenceResult.adoptedMessageId;
+    } else if (
+      persistenceResult?.effectiveParentId !== undefined &&
+      persistenceResult.effectiveParentId !== canonicalEntry.parentId
+    ) {
+      this.reloadPersistedTranscript();
+    } else {
+      if (
+        !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
+        canonicalEntry.parentId === this.appendParentId &&
+        this.leafId !== this.appendParentId
+      ) {
+        this.logicalParentsById.set(canonicalEntry.id, this.leafId);
+      }
+      this.fileEntries.push(canonicalEntry);
+      this.byId.set(canonicalEntry.id, canonicalEntry);
+      this.appendParentId = canonicalEntry.id;
+      if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
+        this.appendMode = "side";
+      } else {
+        this.leafId = canonicalEntry.id;
+        this.appendMode = undefined;
       }
     }
-    const effectiveParentId =
-      persistenceResult && typeof persistenceResult === "object"
-        ? persistenceResult.effectiveParentId
-        : persistenceResult;
-    if (effectiveParentId !== undefined && effectiveParentId !== canonicalEntry.parentId) {
-      this.reloadPersistedTranscript();
-      this.pendingDeliberateAppend = false;
-      return persistenceResult && typeof persistenceResult === "object"
-        ? persistenceResult.anchor
-        : undefined;
-    }
-    if (
-      !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
-      canonicalEntry.parentId === this.appendParentId &&
-      this.leafId !== this.appendParentId
-    ) {
-      this.logicalParentsById.set(canonicalEntry.id, this.leafId);
-    }
-    this.fileEntries.push(canonicalEntry);
-    this.byId.set(canonicalEntry.id, canonicalEntry);
-    this.appendParentId = canonicalEntry.id;
     this.pendingDeliberateAppend = false;
-    if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
-      this.appendMode = "side";
-    } else {
-      this.leafId = canonicalEntry.id;
-      this.appendMode = undefined;
-    }
-    return persistenceResult && typeof persistenceResult === "object"
-      ? persistenceResult.anchor
-      : undefined;
+    return { entry: canonicalEntry, anchor: persistenceResult?.anchor };
   }
 
-  private resolveCurrentKeyedUserId(message: SessionMessageEntry["message"]): string | undefined {
-    if (
-      message.role !== "user" ||
-      !("idempotencyKey" in message) ||
-      typeof message.idempotencyKey !== "string" ||
-      message.idempotencyKey.length === 0
-    ) {
-      return undefined;
-    }
-    let parent = this.appendParentId ? this.byId.get(this.appendParentId) : undefined;
+  private resolveCurrentTurnEntryId(): string | null {
+    let parentId = this.appendParentId;
     let remainingAncestors = this.byId.size;
     // Compaction rewrites context without consuming the current user turn.
     // Stop at message and reset boundaries so old keyed turns stay closed.
-    while (
-      parent &&
-      remainingAncestors-- > 0 &&
-      (isSessionContextMetadataEntry(parent) || parent.type === "compaction")
-    ) {
-      parent = parent.parentId ? this.byId.get(parent.parentId) : undefined;
+    while (parentId && remainingAncestors-- > 0) {
+      const parent = this.byId.get(parentId);
+      if (!parent || (!isSessionContextMetadataEntry(parent) && parent.type !== "compaction")) {
+        break;
+      }
+      parentId = parent.parentId;
     }
-    if (
-      parent?.type === "message" &&
-      parent.message.role === "user" &&
-      "idempotencyKey" in parent.message &&
-      parent.message.idempotencyKey === message.idempotencyKey
-    ) {
-      return parent.id;
-    }
-    return undefined;
+    return parentId;
   }
 
   appendMessage(
@@ -157,23 +129,32 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
-  ): { entryId: string; anchor?: TranscriptEntryAnchor } {
+  ): { entryId: string; message: SessionMessageEntry["message"]; anchor?: TranscriptEntryAnchor } {
     if (message.role === "assistant") {
       applyAssistantDeliveryDirectives(message);
     }
-    if (options?.idempotencyLookup !== "caller-checked") {
-      const currentUserId = this.resolveCurrentKeyedUserId(message);
-      if (currentUserId) {
+    if (
+      options?.idempotencyLookup !== "caller-checked" &&
+      message.role === "user" &&
+      "idempotencyKey" in message &&
+      typeof message.idempotencyKey === "string" &&
+      message.idempotencyKey.length > 0
+    ) {
+      const currentTurnId = this.resolveCurrentTurnEntryId();
+      const current = currentTurnId ? this.byId.get(currentTurnId) : undefined;
+      if (
+        current?.type === "message" &&
+        current.message.role === "user" &&
+        "idempotencyKey" in current.message &&
+        current.message.idempotencyKey === message.idempotencyKey
+      ) {
         const anchor = this.persistenceTarget
-          ? readActiveTranscriptEntryAnchor({
-              ...this.persistenceTarget,
-              entryId: currentUserId,
-            })
+          ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
           : undefined;
         if (this.persistenceTarget && !anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${currentUserId}`);
+          throw new Error(`Session transcript anchor was not returned: ${current.id}`);
         }
-        return { entryId: currentUserId, ...(anchor ? { anchor } : {}) };
+        return { entryId: current.id, message: current.message, ...(anchor ? { anchor } : {}) };
       }
     }
     const entry: SessionMessageEntry = {
@@ -183,9 +164,10 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       timestamp: new Date().toISOString(),
       message,
     };
-    const anchor = this.appendEntry(entry, options);
+    const { entry: persisted, anchor } = this.appendEntry(entry, options);
     return {
-      entryId: this.resolveCurrentKeyedUserId(message) ?? entry.id,
+      entryId: persisted.id,
+      message: persisted.message,
       ...(anchor ? { anchor } : {}),
     };
   }
@@ -221,6 +203,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     tokensBefore: number,
     details?: unknown,
     fromHook?: boolean,
+    metadata?: CompactionEntry["__openclaw"],
   ): string {
     const entry: CompactionEntry = {
       type: "compaction",
@@ -232,6 +215,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       tokensBefore,
       details,
       fromHook,
+      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
     };
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,

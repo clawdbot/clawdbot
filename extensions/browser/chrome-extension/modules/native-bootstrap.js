@@ -90,6 +90,29 @@ function sendNativeBootstrap(chromeApi, request) {
   });
 }
 
+const RELAY_ENSURE_STATUSES = new Set(["spawned", "running", "skipped"]);
+
+/** Ask the native host to start the standalone relay daemon when nothing serves the relay port. */
+export async function requestRelayEnsure(relayPort, chromeApi = chrome) {
+  const nonce = randomRelayBase64Url(crypto, 16);
+  let response;
+  try {
+    response = await sendNativeBootstrap(chromeApi, { v: 1, op: "ensure_relay", nonce, relayPort });
+  } catch {
+    return { status: "unavailable" };
+  }
+  if (
+    hasExactKeys(response, ["v", "ok", "nonce", "relay"]) &&
+    response.v === 1 &&
+    response.ok === true &&
+    response.nonce === nonce &&
+    RELAY_ENSURE_STATUSES.has(response.relay)
+  ) {
+    return { status: response.relay };
+  }
+  return { status: "unavailable" };
+}
+
 /** Own coalescing, retry policy, opt-out, and late-response revocation. */
 export function createNativeBootstrapController({ chromeApi = chrome, getPairing, applyPairing }) {
   let inFlight = null;

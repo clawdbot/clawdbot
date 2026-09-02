@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
+import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
@@ -239,6 +240,55 @@ describe("pw-session Playwright CDP transport", () => {
         server.close(() => resolve());
       });
     }
+  });
+
+  it("keeps contextless-target cleanup and close acknowledgement on a prepared transport", async () => {
+    const commands: object[] = [];
+    const closeWire = vi.fn();
+    const wire: import("playwright-core").ConnectOverCDPTransport = {
+      send: (message) => commands.push(message),
+      close: closeWire,
+    };
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockImplementationOnce((async (value: unknown) => {
+      const transport = value as import("playwright-core").ConnectOverCDPTransport;
+      const delivered: object[] = [];
+      let closed = false;
+      Object.assign(transport, {
+        onmessage: (message: object) => delivered.push(message),
+        onclose: () => {
+          closed = true;
+        },
+      });
+      wire.onmessage?.({
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "worker-session",
+          targetInfo: { targetId: "worker", type: "worker" },
+        },
+      });
+      expect(commands).toEqual([
+        expect.objectContaining({ method: "Runtime.runIfWaitingForDebugger" }),
+      ]);
+      const resume = commands[0] as { id: number };
+      wire.onmessage?.({ id: resume.id, result: {} });
+      expect(commands[1]).toMatchObject({
+        method: "Target.detachFromTarget",
+        params: { sessionId: "worker-session" },
+      });
+      expect(delivered).toEqual([]);
+      transport.close();
+      expect(closeWire).toHaveBeenCalledOnce();
+      expect(closed).toBe(false);
+      wire.onclose?.("cleanup acknowledged");
+      await vi.waitFor(() => expect(closed).toBe(true));
+      return browser.browser;
+    }) as never);
+    await connectOverCdpTransport("http://127.0.0.1:18799", {
+      timeout: 1000,
+      headers: {},
+      preparedTransport: wire,
+    });
   });
 
   it("connects guarded Playwright CDP through the pinned WebSocket transport", async () => {

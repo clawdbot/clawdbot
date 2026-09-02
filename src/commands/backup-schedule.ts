@@ -1,4 +1,5 @@
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { listCronJobsFromGateway } from "../cli/cron-cli/list-jobs.js";
 import {
   callGatewayFromCli,
   isImplicitLocalGatewayTargetFromCli,
@@ -6,7 +7,6 @@ import {
 } from "../cli/gateway-rpc.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { CronJob } from "../cron/types.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -75,16 +75,6 @@ function buildScheduledArgv(
   ];
 }
 
-async function findScheduledBackup(options: GatewayRpcOpts): Promise<CronJob | undefined> {
-  const response = (await callGatewayFromCli("cron.list", options, {
-    includeDisabled: true,
-    query: BACKUP_CRON_JOB_NAME,
-    limit: 200,
-    offset: 0,
-  })) as { jobs?: CronJob[] };
-  return response.jobs?.find((job) => job.declarationKey === BACKUP_CRON_JOB_NAME);
-}
-
 async function assertLocalGatewayScheduleTarget(options: GatewayRpcOpts): Promise<void> {
   // V1 tradeoff: the CLI validates host-local repository paths, while cron runs
   // on the Gateway host. Reject remote targets until Gateway-owned setup exists.
@@ -99,7 +89,8 @@ export async function backupEnableCommand(
 ): Promise<{ id: string; updated: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
-  const every = options.every?.trim() || "24h";
+  // Explicit blanks must reach duration validation instead of creating a default schedule.
+  const every = options.every?.trim() ?? "24h";
   const everyMs = parseDurationMs(every, { defaultUnit: "ms" });
   if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {
     throw new Error("--every must be a positive duration such as 6h or 24h.");
@@ -152,7 +143,8 @@ export async function backupDisableCommand(
   options: GatewayRpcOpts,
 ): Promise<{ removed: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
-  const existing = await findScheduledBackup(options);
+  const { jobs } = await listCronJobsFromGateway(options, { includeDisabled: true });
+  const existing = jobs.find((job) => job.declarationKey === BACKUP_CRON_JOB_NAME);
   if (!existing) {
     runtime.log("Scheduled Git backups are already disabled.");
     return { removed: false };

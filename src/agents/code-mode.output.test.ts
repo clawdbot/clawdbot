@@ -24,6 +24,38 @@ const fakeTool = pluginToolWithExecute;
 afterEach(resetCodeModeTestState);
 describe("Code Mode output provenance", () => {
   it.each([
+    { name: "return escaped", surface: "return", character: String.fromCharCode(92) },
+    { name: "return ASCII", surface: "return", character: "x" },
+    { name: "text escaped", surface: "text", character: String.fromCharCode(92) },
+    { name: "text ASCII", surface: "text", character: "x" },
+  ])("keeps useful $name prefix", async ({ name, surface, character }) => {
+    const payload = "Regex source: " + character.repeat(70_000);
+    const h = createCodeModeHarness();
+    applyCodeModeCatalog({ ...h.ctx, tools: h.tools });
+    const response = await h.tools[0]!.execute(`prefix-${name}`, {
+      code: `const payload = "Regex source: " + String.fromCharCode(${character.charCodeAt(0)}).repeat(70000); ${surface === "return" ? "return payload;" : "text(payload); return true;"}`,
+    });
+    const content = response.content[0];
+    if (content?.type !== "text") {
+      throw new Error("Expected the ordinary Code Mode text result");
+    }
+    const result = JSON.parse(content.text) as Record<string, unknown>;
+    expect(result).toEqual(resultDetails(response));
+    expect(result.status).toBe("completed");
+    expectCodeModeSharedBudget(result, 65_536);
+    const original = surface === "return" ? payload : [{ type: "text", text: payload }];
+    const marker = (surface === "return" ? result.value : (result.output as unknown[])[0]) as {
+      prefix: string;
+      omittedBytes: number;
+    };
+    expectOriginalCodeModeMarker(marker, original);
+    if (surface === "text") {
+      expect(result.value).toBe(true);
+    }
+    expect(marker.prefix).toContain("Regex source: ");
+  });
+
+  it.each([
     {
       name: "original 1KiB",
       cap: 1024,

@@ -1,8 +1,8 @@
 // Control UI browser proof covers the cloud-workspace conflict recovery lifecycle.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionUrl,
@@ -16,7 +16,13 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let proofDir: string | undefined;
+beforeEach(() => {
+  proofDir = artifactRoot
+    ? createControlUiE2eArtifactDir("cloud-workspace-conflict", artifactRoot)
+    : undefined;
+});
 const sessionKey = "agent:main:conflict-proof";
 const workerFailureDiagnostic = [
   "Worker provider rejected profile: node enrollment setup failed with exit code 1: provider reported lease destroyed",
@@ -135,9 +141,6 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    if (proofDir) {
-      await mkdir(proofDir, { recursive: true });
     }
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
@@ -333,6 +336,7 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
         expect(await alert.textContent()).not.toContain("stale terminal worker failure");
         await capture(page, `05-${failedState}-collapsed-error.png`);
         const summary = alert.locator("summary");
+        const copy = alert.getByRole("button", { name: "Copy error", exact: true });
         const diagnostic = alert.locator("pre");
         const expected = `${failedState === "request" ? "" : "Runner failed: "}${workerFailureDiagnostic}`;
         expect(await summary.count()).toBe(1);
@@ -366,6 +370,8 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
           expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.clientWidth + 1);
           expect(bounds.scrollHeight).toBeGreaterThan(bounds.clientHeight);
           await page.keyboard.press("Tab");
+          expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
+          await page.keyboard.press("Tab");
           expect(await diagnostic.evaluate((node) => node === document.activeElement)).toBe(true);
           await page.keyboard.press("PageDown");
           await expect.poll(() => diagnostic.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
@@ -379,7 +385,6 @@ describeControlUiE2e("Control UI cloud workspace conflict recovery", () => {
               return selection?.toString();
             }),
           ).toBe(expected);
-          const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           await copy.focus();
           await page.keyboard.press("Enter");
           await expect

@@ -336,8 +336,8 @@ export function getSingleRowChildSessionCandidates(params: {
   }
   const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
   rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
-    // Exact read-only lookups rebuild a sparse record but borrow stable entry objects
-    // from the SQLite snapshot. Compare those identities so the derived index survives.
+    // Full-store snapshots can retain entry identities between short-list projections.
+    // Exact reads own fresh JSON and do not use this cache.
     entriesByKey: new Map(Object.entries(params.store)),
     childSessionCandidatesByParentKey,
   });
@@ -415,7 +415,7 @@ export function isCurrentSessionChildOwner(params: {
   );
 }
 
-/** Prepare only selected parents; a supplied candidate map retains exact-row cache ownership. */
+/** Prepare only selected parents; a supplied candidate map belongs to the full-store caller. */
 export function buildStoreChildSessionIndex(params: {
   store: Record<string, SessionEntry>;
   keys: readonly string[];

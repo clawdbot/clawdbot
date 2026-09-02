@@ -3,7 +3,7 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "../../../config/config-path-mutation.js";
-import { replaceConfigFile } from "../../../config/config.js";
+import { resolveConfigSnapshotHash, transformConfigFile } from "../../../config/config.js";
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
@@ -12,16 +12,17 @@ import {
   validateConfigObjectRaw,
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
+import { restoreDoctorConfigEnvRefs } from "./config-flow-steps.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
 
-type StartupConfigRepairPlan = {
+type AutomaticConfigRepairPlan = {
   config: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
   changes: string[];
 };
 
-function admitStartupConfigRepairSnapshot(snapshot: ConfigFileSnapshot): boolean {
+function admitAutomaticConfigRepairSnapshot(snapshot: ConfigFileSnapshot): boolean {
   return (
     !snapshot.valid &&
     snapshot.exists &&
@@ -31,11 +32,11 @@ function admitStartupConfigRepairSnapshot(snapshot: ConfigFileSnapshot): boolean
   );
 }
 
-function buildStartupConfigRepairPlan(
+function buildAutomaticConfigRepairPlan(
   snapshot: ConfigFileSnapshot,
   config: OpenClawConfig,
   changes: string[],
-): StartupConfigRepairPlan {
+): AutomaticConfigRepairPlan {
   return {
     config,
     changes,
@@ -52,11 +53,11 @@ function buildStartupConfigRepairPlan(
   };
 }
 
-/** Admits only complete, deterministic single-file legacy migrations for startup. */
-export function planStartupConfigRepair(
+/** Admits only complete, deterministic single-file legacy migrations. */
+export function planAutomaticConfigRepair(
   snapshot: ConfigFileSnapshot,
-): StartupConfigRepairPlan | null {
-  if (!admitStartupConfigRepairSnapshot(snapshot)) {
+): AutomaticConfigRepairPlan | null {
+  if (!admitAutomaticConfigRepairSnapshot(snapshot)) {
     return null;
   }
 
@@ -73,7 +74,7 @@ export function planStartupConfigRepair(
     return null;
   }
 
-  return buildStartupConfigRepairPlan(snapshot, config, changes);
+  return buildAutomaticConfigRepairPlan(snapshot, config, changes);
 }
 
 /**
@@ -85,8 +86,8 @@ export function planStartupConfigRepair(
  */
 function planStartupConfigRepairPreview(
   snapshot: ConfigFileSnapshot,
-): StartupConfigRepairPlan | null {
-  if (!admitStartupConfigRepairSnapshot(snapshot)) {
+): AutomaticConfigRepairPlan | null {
+  if (!admitAutomaticConfigRepairSnapshot(snapshot)) {
     return null;
   }
 
@@ -104,7 +105,7 @@ function planStartupConfigRepairPreview(
     return null;
   }
 
-  return buildStartupConfigRepairPlan(snapshot, config, changes);
+  return buildAutomaticConfigRepairPlan(snapshot, config, changes);
 }
 
 /**
@@ -120,7 +121,7 @@ export function resolveStartupConfigSnapshot(snapshot: ConfigFileSnapshot) {
     return snapshot;
   }
   try {
-    return planStartupConfigRepair(snapshot)?.snapshot;
+    return planAutomaticConfigRepair(snapshot)?.snapshot;
   } catch {
     return planStartupConfigRepairPreview(snapshot)?.snapshot;
   }
@@ -131,7 +132,7 @@ export function isStartupConfigRepairResult(
   before: ConfigFileSnapshot,
   after: ConfigFileSnapshot,
 ): boolean {
-  const plan = planStartupConfigRepair(before);
+  const plan = planAutomaticConfigRepair(before);
   const expected = plan
     ? stampConfigWriteMetadata(
         applyUnsetPathsForWrite(plan.config, resolveManagedUnsetPathsForWrite(undefined)),
@@ -148,16 +149,21 @@ export function isStartupConfigRepairResult(
   );
 }
 
-/** Commits a planned repair against the exact snapshot admitted under the startup lease. */
-export async function commitStartupConfigRepair(
-  plan: StartupConfigRepairPlan,
+/** Commits a planned repair against the exact snapshot admitted by its caller. */
+export async function commitAutomaticConfigRepair(
+  plan: AutomaticConfigRepairPlan,
   snapshot: ConfigFileSnapshot,
 ): Promise<void> {
-  await replaceConfigFile({
-    nextConfig: plan.config,
-    snapshot,
-    afterWrite: { mode: "none", reason: "startup migration" },
+  await transformConfigFile({
+    baseHash: resolveConfigSnapshotHash(snapshot) ?? undefined,
+    // Preflight can commit before the later Doctor health write. Preserve moved
+    // references here, under the same snapshot/hash and read-time environment.
+    transform: (_current, { snapshot: currentSnapshot }, { envSnapshotForRestore }) => ({
+      nextConfig: restoreDoctorConfigEnvRefs(plan.config, currentSnapshot, envSnapshotForRestore),
+    }),
+    afterWrite: { mode: "none", reason: "automatic migration" },
     writeOptions: {
+      expectedConfigPath: snapshot.path,
       auditOrigin: "doctor",
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,

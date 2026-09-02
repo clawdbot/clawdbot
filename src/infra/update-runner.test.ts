@@ -13,6 +13,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -83,6 +84,55 @@ describe("resolveUpdateDoctorExecutionPolicy", () => {
       }),
     ).toEqual({ fix: false });
   });
+
+  it.each([
+    {
+      name: "authorized service repair",
+      targetVersion: "2026.4.1",
+      allowGatewayServiceRepair: true,
+      expectedPolicy: null,
+    },
+    {
+      name: "an older target without service repair",
+      targetVersion: "2026.4.24",
+      allowGatewayServiceRepair: false,
+      expectedPolicy: null,
+    },
+    {
+      name: "a supported target without service repair",
+      targetVersion: "2026.4.25",
+      allowGatewayServiceRepair: false,
+      expectedPolicy: "external",
+    },
+  ])(
+    "passes the selected Doctor policy to a real child for $name",
+    async ({ targetVersion, allowGatewayServiceRepair, expectedPolicy }) => {
+      const policy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion,
+        allowGatewayServiceRepair,
+      });
+      const result = await withEnvAsync({ OPENCLAW_SERVICE_REPAIR_POLICY: "external" }, () =>
+        runCommandWithTimeout(
+          [
+            process.execPath,
+            "-e",
+            "process.stdout.write(JSON.stringify(process.env.OPENCLAW_SERVICE_REPAIR_POLICY ?? null))",
+          ],
+          {
+            timeoutMs: 5000,
+            env: buildUpdateDoctorEnv({
+              allowGatewayServiceRepair,
+              allowGatewayActivation: false,
+              serviceRepairPolicy: policy.serviceRepairPolicy,
+            }),
+          },
+        ),
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe(JSON.stringify(expectedPolicy));
+    },
+  );
 });
 
 describe("runGatewayUpdate", () => {
@@ -622,6 +672,7 @@ describe("runGatewayUpdate", () => {
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, "export {};\n", "utf-8");
     }
+    await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf8");
   }
 
   async function writeGatewayEntrypoint(pkgRoot: string) {
@@ -703,20 +754,63 @@ describe("runGatewayUpdate", () => {
     };
   }
 
-  it("skips git update when worktree is dirty", async () => {
-    await setupGitCheckout();
-    const beforeGitMutation = vi.fn<() => Promise<void>>();
-    const { runner, calls } = createRunner({
-      ...buildGitWorktreeProbeResponses({ status: " M README.md" }),
-    });
+  it.each([
+    {
+      name: "dirty",
+      code: 0,
+      stdout: " M README.md",
+      stderr: "",
+      status: "skipped",
+      reason: "dirty",
+    },
+    {
+      name: "unreadable",
+      code: 128,
+      stdout: "",
+      stderr: "fatal: unable to read index",
+      status: "error",
+      reason: "clean-check-failed",
+    },
+    {
+      name: "timed out",
+      code: null,
+      stdout: "",
+      stderr: "git status timed out",
+      status: "error",
+      reason: "clean-check-failed",
+    },
+  ])(
+    "stops git update when the worktree is $name",
+    async ({ code, stdout, stderr, status, reason }) => {
+      await setupGitCheckout();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
+      const { runner, calls } = createRunner({
+        ...buildGitWorktreeProbeResponses(),
+        [`git -C ${tempDir} status --porcelain -- :!dist/control-ui/`]: { code, stdout, stderr },
+      });
 
-    const result = await runWithRunner(runner, { beforeGitMutation });
+      const result = await runWithRunner(runner, { beforeGitMutation });
 
-    expect(result.status).toBe("skipped");
-    expect(result.reason).toBe("dirty");
-    expect(beforeGitMutation).not.toHaveBeenCalled();
-    expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
-  });
+      expect(result.status).toBe(status);
+      expect(result.reason).toBe(reason);
+      // This checkout fixture has no built runtime identity; no mutation is not activation proof.
+      expect(result.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+      });
+      expect(result.steps).toMatchObject([
+        {
+          name: "clean check",
+          exitCode: code,
+          stdoutTail: stdout || null,
+          stderrTail: stderr || null,
+        },
+      ]);
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.includes(" fetch "))).toBe(false);
+      expect(calls.filter((call) => call.includes("rebase"))).toEqual([]);
+    },
+  );
 
   it("uses the supplied update cwd when the process cwd disappeared", async () => {
     await setupGitCheckout();
@@ -762,6 +856,11 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("fetch-failed");
+    // This checkout fixture has no built runtime identity; no mutation is not activation proof.
+    expect(result.recovery).toEqual({
+      serviceRestartSafe: false,
+      reason: "runtime-verification-failed",
+    });
     expect(calls).toContain(fetchCommand);
     expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toStrictEqual([]);
   });
@@ -1145,26 +1244,92 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2`);
   });
 
-  it("aborts rebase on failure", async () => {
-    await setupGitCheckout();
-    const { runner, calls } = createRunner({
-      ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
-        stdout: "origin/main",
-      },
-      [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
-      [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: "upstream123" },
-      [`git -C ${tempDir} rev-list --max-count=10 upstream123`]: { stdout: "upstream123\n" },
-      [`git -C ${tempDir} rebase upstream123`]: { code: 1, stderr: "conflict" },
-      [`git -C ${tempDir} rebase --abort`]: { stdout: "" },
-    });
+  it.each([
+    { name: "missing local main", options: {}, reason: "preflight-remote-failed" },
+    {
+      name: "explicit tag",
+      options: { devTarget: { mode: "detached", ref: "refs/tags/v2026.5.19-beta.2" } },
+      reason: "no-target-sha",
+    },
+  ] as const)(
+    "stops before live mutation when remote enumeration fails for $name",
+    async ({ options, reason }) => {
+      await setupGitCheckout();
+      const beforeGitMutation = vi.fn<() => Promise<void>>();
+      const { runner, calls } = createRunner({
+        ...buildGitWorktreeProbeResponses({ branch: "feature" }),
+        [`git -C ${tempDir} show-ref --verify refs/heads/main`]: { code: 1 },
+        [`git -C ${tempDir} remote`]: { code: 1, stderr: "unable to enumerate remotes" },
+        [`git -C ${tempDir} rev-parse main@{upstream}`]: { stdout: "upstream123" },
+        [`git -C ${tempDir} rev-list --max-count=10 upstream123`]: { stdout: "upstream123\n" },
+        [`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`]: { stdout: "upstream123" },
+      });
 
-    const result = await runWithRunner(runner);
+      const result = await runWithRunner(runner, { ...options, beforeGitMutation });
 
-    expect(result.status).toBe("error");
-    expect(result.reason).toBe("rebase-failed");
-    expect(calls.filter((call) => call.includes("rebase --abort"))).not.toEqual([]);
-  });
+      expect(result.status).toBe("error");
+      expect(result.reason).toBe(reason);
+      // This checkout fixture has no built runtime identity; no mutation is not activation proof.
+      expect(result.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+      });
+      expect(beforeGitMutation).not.toHaveBeenCalled();
+      expect(calls.some((call) => call.includes(" worktree add "))).toBe(false);
+    },
+  );
+
+  it.each([
+    { operation: "rebase", rollbackSucceeds: true },
+    { operation: "checkout", rollbackSucceeds: true },
+    { operation: "rebase", rollbackSucceeds: false },
+    { operation: "checkout", rollbackSucceeds: false },
+  ])(
+    "verifies rollback after failed $operation: restored=$rollbackSucceeds",
+    async ({ operation, rollbackSucceeds }) => {
+      await setupGitCheckout();
+      const stableTag = "v1.0.1";
+      const { runner, calls } = createRunner({
+        ...buildStableTagResponses(stableTag),
+        ...buildGitWorktreeProbeResponses(),
+        [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+          stdout: "origin/main",
+        },
+        [`git -C ${tempDir} fetch --all --prune --tags`]: { stdout: "" },
+        [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: "upstream123" },
+        [`git -C ${tempDir} rev-list --max-count=10 upstream123`]: { stdout: "upstream123\n" },
+        [`git -C ${tempDir} rebase upstream123`]: { code: 1, stderr: "conflict" },
+        [`git -C ${tempDir} rebase --abort`]: { stdout: "" },
+        [`git -C ${tempDir} checkout --detach ${stableTag}`]: {
+          code: 1,
+          stderr: "checkout failed",
+        },
+        [`git -C ${tempDir} reset --hard abc123`]: {
+          code: rollbackSucceeds ? 0 : 1,
+          stderr: rollbackSucceeds ? "" : "source restoration failed",
+        },
+      });
+
+      const result = await runWithRunner(runner, {
+        channel: operation === "rebase" ? "dev" : "stable",
+      });
+
+      expect(result.status).toBe("error");
+      expect(result.reason).toBe(`${operation}-failed`);
+      expect(result.recovery).toEqual(
+        rollbackSucceeds
+          ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
+          : { serviceRestartSafe: false, reason: "source-rollback-failed" },
+      );
+      if (operation === "rebase") {
+        expect(calls).toContain(`git -C ${tempDir} rebase --abort`);
+      }
+      expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({ name: "git rollback verify HEAD", exitCode: 0 }),
+      );
+    },
+  );
 
   it("returns error and stops early when deps install fails", async () => {
     await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
@@ -1202,6 +1367,7 @@ describe("runGatewayUpdate", () => {
       mode: "git",
       root: tempDir,
       reason: "unsupported_git_channel",
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       steps: [],
     });
     expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
@@ -2060,7 +2226,7 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
   });
 
-  it("rolls back and reports error when the final HEAD verification probe fails", async () => {
+  it("retains candidate source when the final HEAD verification probe fails after Doctor", async () => {
     await setupGitCheckout({ packageManager: PNPM_PACKAGE_MANAGER });
     await setupUiIndex();
     const stableTag = "v1.0.1-1";
@@ -2092,9 +2258,9 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("head-verification-failed");
     expect(result.after).toBeUndefined();
-    expect(calls).toContain(`git -C ${tempDir} reset --hard`);
-    expect(calls).toContain(`git -C ${tempDir} checkout --force main`);
-    expect(calls).toContain(`git -C ${tempDir} reset --hard abc123`);
+    expect(calls).not.toContain(`git -C ${tempDir} reset --hard`);
+    expect(calls).not.toContain(`git -C ${tempDir} checkout --force main`);
+    expect(calls).not.toContain(`git -C ${tempDir} reset --hard abc123`);
   });
 
   it("uses stable tag when beta tag is older than release", async () => {
@@ -2397,7 +2563,7 @@ describe("runGatewayUpdate", () => {
     expect(cleanupStep?.stderrTail ?? "").toContain("fallback cleanup removed preflight tree");
   });
 
-  it("retains failed preflight cleanup diagnostics and still prunes worktree metadata", async () => {
+  it("stops before live mutation when preflight cleanup fails", async () => {
     await setupGitPackageManagerFixture();
     const remove = fs.rm.bind(fs);
     let preflightRoot: string | undefined;
@@ -2421,6 +2587,14 @@ describe("runGatewayUpdate", () => {
     try {
       const result = await runWithCommand(runCommand, { channel: "dev" });
       expect(result.status).toBe("error");
+      expect(result.reason).toBe("preflight-cleanup-failed");
+      // This checkout fixture has no built runtime identity; no mutation is not activation proof.
+      expect(result.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+      });
+      expect(calls).not.toContain(`git -C ${tempDir} rebase upstream123`);
+      expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "deps install" }));
       expect(result.steps).toContainEqual(
         expect.objectContaining({
           name: "preflight cleanup",
@@ -2913,7 +3087,7 @@ describe("runGatewayUpdate", () => {
     expect(installCall).not.toContain(sourceSpec);
   });
 
-  it("runs doctor after global npm updates before reporting success", async () => {
+  it("keeps service repair external during staged global npm Doctor", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     await seedGlobalPackageRoot(pkgRoot);
@@ -2924,7 +3098,7 @@ describe("runGatewayUpdate", () => {
       npmRootOutput: nodeModules,
       installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async () => {
-        await writeGlobalPackageVersion(pkgRoot);
+        await writeGlobalPackageVersion(pkgRoot, "2026.5.1");
         await writeGatewayEntrypoint(pkgRoot);
       },
     });
@@ -2952,9 +3126,10 @@ describe("runGatewayUpdate", () => {
     expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART).toBe("1");
-    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR).toBe("0");
     expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION).toBe("0");
-    expect(doctorEnv?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2.0.0");
+    expect(doctorEnv?.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
+    expect(doctorEnv?.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.5.1");
   });
 
   it("fails global npm updates when post-update doctor fails", async () => {
@@ -2967,7 +3142,7 @@ describe("runGatewayUpdate", () => {
       npmRootOutput: nodeModules,
       installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async () => {
-        await writeGlobalPackageVersion(pkgRoot);
+        await writeGlobalPackageVersion(pkgRoot, "2026.5.1");
         await writeGatewayEntrypoint(pkgRoot);
       },
     });
@@ -2990,6 +3165,10 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-failed");
+    expect(result.recovery).toEqual({
+      serviceRestartSafe: false,
+      reason: "runtime-verification-failed",
+    });
     expect(calls).toContain(doctorCommand);
     const lastStep = result.steps.at(-1);
     expect(lastStep?.name).toBe("openclaw doctor");
@@ -3089,6 +3268,7 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.map((s) => s.name)).toEqual([
       "global update",
       "global update (omit optional)",
+      "openclaw doctor",
     ]);
   });
 
@@ -3251,7 +3431,11 @@ describe("runGatewayUpdate", () => {
     const pnpmAddGlobalCalls = calls.filter((call) => call.startsWith("pnpm add -g"));
     expect(npmPrefixedGlobalInstallCalls.length).toBeGreaterThan(0);
     expect(pnpmAddGlobalCalls).toStrictEqual([]);
-    expect(result.steps.map((step) => step.name)).toEqual(["global update", "global install swap"]);
+    expect(result.steps.map((step) => step.name)).toEqual([
+      "global update",
+      "global install swap",
+      "openclaw doctor",
+    ]);
     await expect(fs.access(staleInstallChunk)).rejects.toHaveProperty("code", "ENOENT");
   });
 
@@ -3365,44 +3549,90 @@ describe("runGatewayUpdate", () => {
 
   it.each([
     {
+      failure: "build",
       bundle: "complete",
+      rollbackInstallFails: false,
       missingRollbackStartupAsset: false,
       rollbackBuildStatus: null,
       serviceRestartSafe: true,
     },
     {
+      failure: "build",
       bundle: "incomplete",
+      rollbackInstallFails: false,
       missingRollbackStartupAsset: true,
       rollbackBuildStatus: null,
       serviceRestartSafe: false,
     },
     {
+      failure: "build",
       bundle: "dirty rollback build",
+      rollbackInstallFails: false,
       missingRollbackStartupAsset: false,
       rollbackBuildStatus: " M pnpm-lock.yaml\n",
       serviceRestartSafe: false,
     },
     {
+      failure: "build",
       bundle: "untracked rollback output",
+      rollbackInstallFails: false,
       missingRollbackStartupAsset: false,
       rollbackBuildStatus: "?? generated.tmp\n",
       serviceRestartSafe: false,
     },
+    {
+      bundle: "complete after partial dependency replacement",
+      rollbackInstallFails: false,
+      failure: "install",
+      missingRollbackStartupAsset: false,
+      rollbackBuildStatus: null,
+      serviceRestartSafe: true,
+    },
+    {
+      bundle: "unrestored dependencies",
+      failure: "install",
+      rollbackInstallFails: true,
+      missingRollbackStartupAsset: false,
+      rollbackBuildStatus: null,
+      serviceRestartSafe: false,
+    },
+    ...["doctor-error", "doctor-throw", "post-doctor-ui", "post-doctor-head"].map((failure) => ({
+      failure,
+      bundle: "candidate retained",
+      rollbackInstallFails: false,
+      missingRollbackStartupAsset: false,
+      rollbackBuildStatus: null,
+      serviceRestartSafe: false,
+    })),
   ])(
-    "rolls pnpm 12 back to 11 and allows restart only with a $bundle startup bundle",
-    async ({ missingRollbackStartupAsset, rollbackBuildStatus, serviceRestartSafe }) => {
+    "Git recovery boundary: $failure with $bundle startup bundle",
+    async ({
+      failure,
+      missingRollbackStartupAsset,
+      rollbackBuildStatus,
+      serviceRestartSafe,
+      rollbackInstallFails,
+    }) => {
       await setupGitCheckout({ packageManager: "pnpm@11.22.0" });
       const beforeSha = "a".repeat(40);
       const targetSha = "b".repeat(40);
       const stableTag = "v1.0.1-1";
       let currentHead = beforeSha;
       let buildCount = 0;
+      let doctorRan = false;
+      const canary = path.join(await fixtureRootTracker.make("synthetic-state"), "canary");
+      await fs.writeFile(canary, "original-state");
       const calls: string[] = [];
       const buildEnvs: NodeJS.ProcessEnv[] = [];
       const managerVersions: string[] = [];
       const statusCommand = `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`;
       const doctorNodePath = await resolveStableNodePath(process.execPath);
       const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+      const dependencyPath = path.join(tempDir, "node_modules", "update-dependency.cjs");
+      await fs.mkdir(path.dirname(dependencyPath), { recursive: true });
+      const writeDependency = (head: string) =>
+        fs.writeFile(dependencyPath, `module.exports = ${JSON.stringify(head)};\n`, "utf8");
+      await writeDependency(beforeSha);
       const writeRuntime = async (head: string) => {
         const distRoot = path.join(tempDir, "dist");
         const startupAsset = path.join(distRoot, "control-ui", "assets", "startup.js");
@@ -3416,7 +3646,7 @@ describe("runGatewayUpdate", () => {
           fs.writeFile(path.join(distRoot, "entry.js"), "export {};\n", "utf8"),
           fs.writeFile(
             path.join(distRoot, "build-info.json"),
-            `${JSON.stringify({ commit: head })}\n`,
+            `${JSON.stringify({ commit: head, version: head === beforeSha ? "1.0.0" : "1.0.1", buildId: head === beforeSha ? "original-built-runtime" : "candidate-built-runtime" })}\n`,
             "utf8",
           ),
           fs.writeFile(path.join(distRoot, ".buildstamp"), `${JSON.stringify({ head })}\n`, "utf8"),
@@ -3439,7 +3669,11 @@ describe("runGatewayUpdate", () => {
           return toCommandResult({ stdout: tempDir });
         }
         if (key === `git -C ${tempDir} rev-parse HEAD`) {
-          return toCommandResult({ stdout: `${currentHead}\n` });
+          return toCommandResult(
+            doctorRan && failure === "post-doctor-head"
+              ? { code: 1, stderr: "HEAD verification failed" }
+              : { stdout: `${currentHead}\n` },
+          );
         }
         if (key === `git -C ${tempDir} rev-parse --abbrev-ref HEAD`) {
           return toCommandResult({ stdout: "main\n" });
@@ -3469,17 +3703,44 @@ describe("runGatewayUpdate", () => {
           managerVersions.push(version);
           return toCommandResult({ stdout: version });
         }
+        if (key === "pnpm install") {
+          if (currentHead === beforeSha && rollbackInstallFails) {
+            return toCommandResult({ code: 1, stderr: "rollback dependency install failed" });
+          }
+          await writeDependency(currentHead);
+          return toCommandResult(
+            currentHead === targetSha && failure === "install"
+              ? { code: 1, stderr: "install failed after replacing a dependency" }
+              : undefined,
+          );
+        }
         if (key === "pnpm build") {
           buildCount += 1;
           buildEnvs.push(options?.env ?? {});
           await writeRuntime(currentHead);
-          return toCommandResult();
+          return toCommandResult(
+            failure === "build" && buildCount === 1
+              ? { code: 1, stderr: "candidate build failed" }
+              : undefined,
+          );
         }
         if (key === statusCommand && rollbackBuildStatus && buildCount >= 2) {
           return toCommandResult({ stdout: rollbackBuildStatus });
         }
         if (key === doctorCommand) {
-          return toCommandResult({ code: 1, stderr: "doctor failed after build" });
+          doctorRan = true;
+          await fs.writeFile(canary, "candidate-migrated-state");
+          if (failure === "doctor-throw") {
+            throw new Error("doctor crashed after migration");
+          }
+          if (failure === "post-doctor-ui") {
+            await removeControlUiAssets();
+          }
+          return toCommandResult(
+            failure === "doctor-error"
+              ? { code: 1, stderr: "doctor failed after migration" }
+              : undefined,
+          );
         }
         return toCommandResult();
       };
@@ -3496,28 +3757,68 @@ describe("runGatewayUpdate", () => {
         },
       );
 
+      if (failure !== "build" && failure !== "install") {
+        expect(result).toMatchObject({
+          status: "error",
+          recovery: {
+            serviceRestartSafe: false,
+            reason: "state-migration-started",
+          },
+        });
+        expect(await fs.readFile(canary, "utf8")).toBe("candidate-migrated-state");
+        expect(currentHead).toBe(targetSha);
+        expect(buildCount).toBe(1);
+        expect(managerVersions).toEqual(["12.0.0"]);
+        expect(result.steps.some((step) => step.name.startsWith("git rollback"))).toBe(false);
+        expect(calls.some((call) => call.includes(" reset ") || call.includes(" clean -"))).toBe(
+          false,
+        );
+        expect(
+          JSON.parse(await fs.readFile(path.join(tempDir, "dist/build-info.json"), "utf8")),
+        ).toMatchObject({ commit: targetSha, buildId: "candidate-built-runtime" });
+        return;
+      }
+      const dependency = await runCommandWithTimeout(
+        [
+          process.execPath,
+          "-e",
+          "process.stdout.write(require('./node_modules/update-dependency.cjs'))",
+        ],
+        { cwd: tempDir, timeoutMs: 5000 },
+      );
+      expect(dependency.code).toBe(0);
+      expect(dependency.stdout).toBe(rollbackInstallFails ? targetSha : beforeSha);
+      expect(await fs.readFile(canary, "utf8")).toBe("original-state");
+      expect(calls).not.toContain(doctorCommand);
       expect(managerVersions).toEqual(["12.0.0", "11.22.0"]);
       expect(result).toMatchObject({
         status: "error",
-        reason: "doctor-failed",
+        reason: failure === "install" ? "deps-install-failed" : "build-failed",
         recovery: serviceRestartSafe
-          ? { serviceRestartSafe: true }
+          ? { serviceRestartSafe: true, version: "1.0.0", buildId: "original-built-runtime" }
           : {
               serviceRestartSafe: false,
-              reason: rollbackBuildStatus
-                ? "rollback-checkout-dirty"
-                : "runtime-verification-failed",
+              reason: rollbackInstallFails
+                ? "deps-install-failed"
+                : rollbackBuildStatus
+                  ? "rollback-checkout-dirty"
+                  : "runtime-verification-failed",
             },
       });
-      expect(buildCount).toBe(2);
-      expect(buildEnvs).toEqual([
-        expect.objectContaining({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
-        expect.objectContaining({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
-      ]);
+      expect(managerVersions).toEqual(["12.0.0", "11.22.0"]);
+      const expectedBuilds = failure === "build" ? 2 : rollbackInstallFails ? 0 : 1;
+      expect(buildCount).toBe(expectedBuilds);
+      expect(buildEnvs).toEqual(
+        Array.from({ length: expectedBuilds }, () =>
+          expect.objectContaining({ OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+        ),
+      );
       expect(currentHead).toBe(beforeSha);
-      expect(
-        JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
-      ).toMatchObject({ commit: beforeSha });
+      if (!rollbackInstallFails) {
+        expect(
+          JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
+        ).toMatchObject({ commit: beforeSha });
+      }
       expect(result.steps.at(-1)).toMatchObject({
         name: "git rollback runtime verify",
         exitCode: serviceRestartSafe ? 0 : 1,
@@ -3531,10 +3832,9 @@ describe("runGatewayUpdate", () => {
           }),
         );
       }
-      expect(calls.indexOf(doctorCommand)).toBeLessThan(
-        calls.lastIndexOf(`git -C ${tempDir} rev-parse HEAD`),
-      );
-      expect(calls.lastIndexOf("pnpm install")).toBeLessThan(calls.lastIndexOf("pnpm build"));
+      if (!rollbackInstallFails) {
+        expect(calls.lastIndexOf("pnpm install")).toBeLessThan(calls.lastIndexOf("pnpm build"));
+      }
     },
   );
 
@@ -3679,7 +3979,11 @@ describe("runGatewayUpdate", () => {
           ),
         }),
       );
-      expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
+      expect(result.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+      });
+      expect(result.steps.some((step) => step.name.startsWith("git rollback"))).toBe(false);
     },
   );
 });

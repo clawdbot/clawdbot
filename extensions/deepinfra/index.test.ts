@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import deepinfraPlugin from "./index.js";
 import { DEEPINFRA_MODEL_CATALOG } from "./provider-models.js";
 
@@ -56,6 +56,30 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
     ...init,
   });
 }
+
+function mockDiscoveryFetch(id = "profile/live-model") {
+  return vi.fn(async (url: string) => {
+    if (url === DEEPINFRA_MODELS_URL) {
+      return jsonResponse({ data: [makeAgentModelEntry(id)] });
+    }
+    expect(url).toBe("https://api.deepinfra.com/models/list");
+    return jsonResponse([
+      {
+        model_name: id,
+        pricing: {
+          type: "tokens",
+          cents_per_input_token: 0.0004,
+          cents_per_output_token: 0.0008,
+        },
+      },
+    ]);
+  });
+}
+
+afterEach(() => {
+  clearLiveCatalogCacheForTests();
+  vi.restoreAllMocks();
+});
 
 async function withLiveDiscoveryTestEnv(
   mockFetch: ReturnType<typeof vi.fn>,
@@ -130,9 +154,7 @@ describe("deepinfra augmentModelCatalog", () => {
 
   it("uses config-backed API keys to enable live model catalog augmentation", async () => {
     clearLiveCatalogCacheForTests();
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ data: [makeAgentModelEntry("config/live-model")] }));
+    const mockFetch = mockDiscoveryFetch("config/live-model");
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
 
     await withLiveDiscoveryTestEnv(mockFetch, async () => {
@@ -151,16 +173,14 @@ describe("deepinfra augmentModelCatalog", () => {
           },
         } as never)) ?? [];
 
-      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
       expect(entries.map((entry) => entry.id)).toContain("config/live-model");
     });
   });
 
   it("still runs live discovery when ctx.entries includes custom DeepInfra rows", async () => {
     clearLiveCatalogCacheForTests();
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(jsonResponse({ data: [makeAgentModelEntry("custom/live-model")] }));
+    const mockFetch = mockDiscoveryFetch("custom/live-model");
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
 
     const seededDeepInfraCount = DEEPINFRA_MODEL_CATALOG.length + 5;
@@ -191,7 +211,7 @@ describe("deepinfra augmentModelCatalog", () => {
           },
         } as never)) ?? [];
 
-      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(mockFetch).toHaveBeenCalledTimes(2);
       expect(entries[0]).toEqual({
         provider: "deepinfra",
         id: "zai-org/GLM-5.1",
@@ -236,7 +256,7 @@ describe("deepinfra capability registration", () => {
 
   it("uses profile-resolved API keys for live text catalog discovery", async () => {
     clearLiveCatalogCacheForTests();
-    const mockFetch = vi.fn().mockResolvedValue(jsonResponse({ data: [makeAgentModelEntry()] }));
+    const mockFetch = mockDiscoveryFetch();
     const captured = createCapturedPluginRegistration();
     deepinfraPlugin.register(captured.api);
     const provider = captured.providers[0];
@@ -251,8 +271,16 @@ describe("deepinfra capability registration", () => {
         throw new Error("expected single-provider DeepInfra catalog result");
       }
 
-      expect(mockFetch).toHaveBeenCalledOnce();
-      expect(mockFetch.mock.calls[0]?.[0]).toBe(DEEPINFRA_MODELS_URL);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls.map(([url]) => url)).toEqual(
+        expect.arrayContaining([DEEPINFRA_MODELS_URL, "https://api.deepinfra.com/models/list"]),
+      );
+      expect(result.provider.models[0]?.cost).toEqual({
+        input: 4,
+        output: 8,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
       expect(result?.provider.apiKey).toBe("profile-key");
       expect(result.provider.models.map((model) => model.id)).toEqual([
         "profile/live-model",

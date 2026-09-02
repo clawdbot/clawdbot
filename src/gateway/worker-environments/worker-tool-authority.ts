@@ -98,9 +98,11 @@ export function resolveWorkerToolAuthority(params: {
         (name) => name !== "computer" || turn.modelHasVision !== false,
       ),
       ...WORKER_SESSION_TOOL_NAMES.filter((name) =>
-        name === "github_publish"
-          ? params.githubPublicationAvailable === true
-          : name !== "portal" || params.portalAvailable === true,
+        name === "skill_workshop"
+          ? turn.skillLibraryAuthoring !== undefined
+          : name === "github_publish"
+            ? params.githubPublicationAvailable === true
+            : name !== "portal" || params.portalAvailable === true,
       ),
     ].map((name) => ({ name })),
     turn.toolsAllow,

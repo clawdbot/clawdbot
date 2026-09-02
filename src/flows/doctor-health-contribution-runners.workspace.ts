@@ -101,7 +101,9 @@ export async function collectWorkspaceStatusPluginVersionDrift(params: {
     const hasProbedGatewayVersion =
       typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
     if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
-      return status.pluginVersionDrift;
+      const { resolvePluginVersionDriftTargets } =
+        await import("../plugins/plugin-version-drift.js");
+      return await resolvePluginVersionDriftTargets(status.pluginVersionDrift);
     }
   } catch {
     // Best-effort diagnostic: doctor should keep running if daemon status is unavailable.

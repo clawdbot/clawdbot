@@ -279,72 +279,92 @@ describe("Claude CLI node command", () => {
     },
   );
 
-  it("converts forwarded OAuth into a child-only descriptor after approval", async () => {
-    const executable = await executableScript(`
+  it.each([
+    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "selected-node-oauth" },
+    { rawEnv: "ANTHROPIC_API_KEY", value: "selected-node-api-key" },
+    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "" },
+    { rawEnv: "ANTHROPIC_API_KEY", value: "" },
+    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: " \t " },
+    { rawEnv: "ANTHROPIC_API_KEY", value: " \t " },
+  ])(
+    "forwards only nonblank $rawEnv through a child-only descriptor ($value)",
+    async ({ rawEnv, value }) => {
+      const executable = await executableScript(`
 const fs = require("node:fs");
-const secret = fs.readFileSync(3, "utf8");
+const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR ?? process.env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR;
+const secret = descriptor ? fs.readFileSync(Number(descriptor), "utf8") : "native-login";
 process.stdout.write(JSON.stringify({
   type: "result",
   result: secret,
-  descriptor: process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR,
-  rawPresent: Object.hasOwn(process.env, "CLAUDE_CODE_OAUTH_TOKEN"),
+  descriptor: descriptor ?? null,
+  rawPresent: Object.hasOwn(process.env, "CLAUDE_CODE_OAUTH_TOKEN") || Object.hasOwn(process.env, "ANTHROPIC_API_KEY"),
   scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
 }) + "\\n");`);
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const handleSystemRun = vi.fn(
-      async (options: {
-        params: { command: string[]; env?: Record<string, string>; timeoutMs?: number };
-        runCommand: (
-          argv: string[],
-          cwd: string | undefined,
-          env: Record<string, string> | undefined,
-          timeoutMs: number | undefined,
-        ) => Promise<unknown>;
-        sendInvokeResult: (result: unknown) => Promise<void>;
-      }) => {
-        await options.runCommand(
-          options.params.command,
-          undefined,
-          {
-            ...process.env,
-            ...options.params.env,
-            CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
-          } as Record<string, string>,
-          options.params.timeoutMs,
-        );
-        await options.sendInvokeResult({ ok: true });
-      },
-    );
-    await handleInvoke(
-      frame({
-        argv: ["-p"],
-        env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-oauth" },
-        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        idleTimeoutMs: 1_000,
-        timeoutMs: 5_000,
-      }),
-      client(calls),
-      { current: async () => [] },
-      undefined,
-      { claudePath: executable, handleSystemRun: handleSystemRun as never },
-    );
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const handleSystemRun = vi.fn(
+        async (options: {
+          params: { command: string[]; env?: Record<string, string>; timeoutMs?: number };
+          runCommand: (
+            argv: string[],
+            cwd: string | undefined,
+            env: Record<string, string> | undefined,
+            timeoutMs: number | undefined,
+          ) => Promise<unknown>;
+          sendInvokeResult: (result: unknown) => Promise<void>;
+        }) => {
+          await options.runCommand(
+            options.params.command,
+            undefined,
+            {
+              ...process.env,
+              ...options.params.env,
+              CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+              CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "8",
+              CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: "9",
+            } as Record<string, string>,
+            options.params.timeoutMs,
+          );
+          await options.sendInvokeResult({ ok: true });
+        },
+      );
+      await handleInvoke(
+        frame({
+          argv: ["-p"],
+          env: { [rawEnv]: value },
+          clearEnv: [
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+            "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+          ],
+          idleTimeoutMs: 1_000,
+          timeoutMs: 5_000,
+        }),
+        client(calls),
+        { current: async () => [] },
+        undefined,
+        { claudePath: executable, handleSystemRun: handleSystemRun as never },
+      );
 
-    const progress = calls
-      .filter((call) => call.method === "node.invoke.progress")
-      .map((call) => (call.params as { chunk: string }).chunk)
-      .join("");
-    expect(progress).toContain('"result":"selected-node-oauth"');
-    expect(progress).toContain('"descriptor":"3"');
-    expect(progress).toContain('"rawPresent":false');
-    expect(progress).toContain('"scrubPresent":false');
-    expect(calls).toContainEqual({
-      method: "node.invoke.result",
-      params: expect.objectContaining({
-        ok: true,
-        payloadJSON: expect.stringContaining('"exitCode":0'),
-      }),
-    });
-  });
+      const progress = calls
+        .filter((call) => call.method === "node.invoke.progress")
+        .map((call) => (call.params as { chunk: string }).chunk)
+        .join("");
+      expect(JSON.parse(progress)).toMatchObject({
+        result: value.trim() || "native-login",
+        descriptor: value.trim() ? "3" : null,
+      });
+      expect(progress).toContain('"rawPresent":false');
+      expect(progress).toContain('"scrubPresent":false');
+      expect(calls).toContainEqual({
+        method: "node.invoke.result",
+        params: expect.objectContaining({
+          ok: true,
+          payloadJSON: expect.stringContaining('"exitCode":0'),
+        }),
+      });
+    },
+  );
 
   it("preserves node-native Claude auth when no profile credential is forwarded", async () => {
     const executable = await executableScript(`

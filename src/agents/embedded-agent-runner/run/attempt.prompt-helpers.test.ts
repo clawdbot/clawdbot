@@ -286,7 +286,7 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
     forgetPromptBuildDrainCacheForRun("run-cache-test");
 
-    const hookCtx = { runId: "run-cache-test", sessionKey: "agent:main:main" };
+    const hookCtx = { runId: "run-cache-test", sessionKey: "global", agentId: "qa" };
 
     const first = await resolvePromptBuildHookResult({
       config: {},
@@ -302,6 +302,11 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
 
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(1);
+    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledWith({
+      cfg: {},
+      sessionKey: "global",
+      agentId: "qa",
+    });
     expect(first.prependContext).toBe("first attempt context");
     expect(second.prependContext).toBe("first attempt context");
 

@@ -46,11 +46,15 @@ internal fun projectWearAgentPulse(
       "swarm",
       buildJsonObject {
         when {
-          !gatewayConnected || !swarmAvailable -> put("state", "unavailable")
+          !gatewayConnected || !swarmAvailable -> {
+            put("state", "unavailable")
+          }
+
           swarmGroups.isEmpty() -> {
             put("state", "idle")
             put("scope", "selected-session")
           }
+
           else -> {
             val phaseBuckets = MutableList(MAX_PHASE_BUCKETS) { MutablePhaseCounts() }
             var morePhases = false
@@ -102,9 +106,18 @@ internal fun projectWearAgentPulse(
       "approvals",
       buildJsonObject {
         when {
-          !gatewayConnected -> put("state", "unavailable")
-          approvalsRefreshing -> put("state", "refreshing")
-          !approvalsAvailable -> put("state", "unavailable")
+          !gatewayConnected -> {
+            put("state", "unavailable")
+          }
+
+          approvalsRefreshing -> {
+            put("state", "refreshing")
+          }
+
+          !approvalsAvailable -> {
+            put("state", "unavailable")
+          }
+
           else -> {
             put("state", "ready")
             put("pending", pendingApprovalCount.coerceAtLeast(0))

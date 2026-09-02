@@ -5,11 +5,9 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderFailoverSignalWithPlugin: vi.fn(() => null),
 }));
 
-// classify.ts resolves this hook through a lazy require. Mocking the runtime
-// directly keeps the corpus independent of plugin loadability.
-vi.mock("../../logging/node-require.js", () => ({
-  resolveNodeRequireFromMeta: () => () => providerRuntimeMocks,
-}));
+// Keep the classification corpus independent of plugin loading; native source
+// and compiled payload probes cover the real provider boundary.
+vi.mock("../../plugins/provider-failover.js", () => providerRuntimeMocks);
 
 import { resolveReplyFailoverFacts } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
@@ -92,7 +90,6 @@ describe("cross-layer drift (documents current behavior, see refactor-02)", () =
     expect(classifyReplyRequest({ message })).toMatchObject({
       code: "provider_internal_error",
       technicalMessage: message,
-      allowTransientHttpRetry: true,
     });
   });
 

@@ -20,6 +20,8 @@ import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-de
 import {
   applyRealtimeOfferCorsHeaders,
   createResponseDeliveryWaiter,
+  readOfferBearerToken,
+  rejectOversizedOffer,
   respondRealtimeOffer,
 } from "./realtime-quicksilver-offer-http.js";
 import {
@@ -96,11 +98,6 @@ type OpenAIRealtimeOfferMetrics = {
   sidebandReadyMs: number;
   totalOfferMs: number;
 };
-
-function readBearerToken(req: IncomingMessage): string | undefined {
-  const authorization = req.headers.authorization?.trim();
-  return authorization?.match(/^Bearer\s+([^\s]+)$/i)?.[1];
-}
 
 export async function resolveOpenAIChatGptSubscriptionAuth(params: {
   cfg?: OpenClawConfig;
@@ -368,7 +365,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       return true;
     }
     prunePendingOffers();
-    const token = readBearerToken(req);
+    const token = readOfferBearerToken(req);
     const offer = token ? pendingOffers.get(token) : undefined;
     if (!token || !offer || offer.expiresAt <= Date.now()) {
       respondRealtimeOffer(res, 401, "Invalid or expired realtime session token");
@@ -426,6 +423,8 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       const sdp = await readRequestBodyWithLimit(req, {
         maxBytes: OPENAI_QUICKSILVER_MAX_SDP_BYTES,
         timeoutMs: 15_000,
+        // Defer destruction so the rejection below reaches the browser before the close.
+        destroyOnLimit: false,
       });
       if (!sdp.trim()) {
         respondRealtimeOffer(res, 400, "SDP offer is required");
@@ -654,6 +653,9 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         reportTerminal(sessionError);
       }
       if (browserDisconnected) {
+        return true;
+      }
+      if (await rejectOversizedOffer(req, res, error)) {
         return true;
       }
       respondRealtimeOffer(res, 502, sessionError.message);

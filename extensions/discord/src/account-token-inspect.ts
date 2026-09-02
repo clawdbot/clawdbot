@@ -83,3 +83,41 @@ export function inspectDiscordAccountTokenState<TBase extends object, TConfig>(p
     config: params.config,
   };
 }
+
+type DiscordTokenOwnerAccount = {
+  accountId: string;
+  enabled: boolean;
+  token: string;
+  tokenSource: "env" | "config" | "none";
+};
+
+/** Runtime and inspection keep the first enabled owner, preferring config over env tokens. */
+export function resolveDiscordAccountAvailability(params: {
+  account: DiscordTokenOwnerAccount;
+  resolveAccounts: () => Iterable<DiscordTokenOwnerAccount>;
+}): { enabled: boolean; stateReason?: string } {
+  if (!params.account.enabled) {
+    return { enabled: false, stateReason: "disabled" };
+  }
+  const token = params.account.token.trim();
+  let owner: { accountId: string; priority: number } | undefined;
+  if (token) {
+    for (const account of params.resolveAccounts()) {
+      if (!account.enabled || account.token.trim() !== token) {
+        continue;
+      }
+      const priority = account.tokenSource === "config" ? 2 : account.tokenSource === "env" ? 1 : 0;
+      if (!owner || priority > owner.priority) {
+        owner = { accountId: account.accountId, priority };
+      }
+    }
+  }
+  const duplicateOwner =
+    owner && owner.accountId !== params.account.accountId ? owner.accountId : undefined;
+  return {
+    enabled: !duplicateOwner,
+    stateReason: duplicateOwner
+      ? `duplicate bot token; using account "${duplicateOwner}"`
+      : undefined,
+  };
+}

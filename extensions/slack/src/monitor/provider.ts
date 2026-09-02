@@ -309,10 +309,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const slackMode = opts.mode ?? account.config.mode ?? "socket";
   const slackWebhookPath = normalizeSlackWebhookPath(account.config.webhookPath);
-  const signingSecret = normalizeResolvedSecretInputString({
-    value: account.config.signingSecret,
-    path: `channels.slack.accounts.${account.accountId}.signingSecret`,
-  });
+  const signingSecret =
+    slackMode === "http"
+      ? normalizeResolvedSecretInputString({
+          value: account.config.signingSecret,
+          path: `channels.slack.accounts.${account.accountId}.signingSecret`,
+        })
+      : undefined;
   const botToken = resolveSlackBotToken(opts.botToken ?? account.botToken);
   const userToken = account.userToken;
   const appToken = resolveSlackAppToken(opts.appToken ?? account.appToken);
@@ -410,7 +413,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     slackMode,
     token,
     appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
-    signingSecret: slackMode === "http" ? (signingSecret ?? undefined) : undefined,
+    signingSecret: signingSecret ?? undefined,
     slackWebhookPath,
     clientOptions: clientOptions as Record<string, unknown>,
     dispatcher: slackDispatcher,

@@ -63,6 +63,16 @@ Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
 `$include` ownership protections still apply.
 
+When a legacy roster expands a single-agent installation in the root config file,
+writes retire its `default` marker and preserve the existing agent's responsibilities
+with explicit owners. An explicitly authored `ownership: "explicit"` cannot be
+combined with a legacy `default: true` marker.
+
+For root-file writes, changing `session.store` clears a copied
+`agents.defaults.sessionStore.agentId` because that owner belongs to the previous
+store. To assign the destination store's owner, set that owner path explicitly in
+the same batch.
+
 ### `config get`
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
@@ -151,6 +161,8 @@ openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
 
+For structured values that are awkward to quote in your shell, put a config-shaped JSON5 object in a file and use [`config patch --file <path> --dry-run`](/cli/config#config-patch). The file contains config keys and their values, not a bare array.
+
 `config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
 
 When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model.
@@ -167,6 +179,29 @@ openclaw config set models.providers.ollama.models '[{"id":"llama3.2","name":"Ll
 ```
 
 Use `--replace` only when the provided value should intentionally become the complete target value.
+
+### Conditional writes
+
+Use a conditional expectation when automation must update one authored path only if it has not
+changed since the caller last observed it:
+
+```bash
+openclaw config set gateway.port 19001 --strict-json --expect-current-json 18789
+openclaw config set gateway.port 19001 --strict-json --expect-current-absent
+```
+
+`--expect-current-json <json>` uses strict JSON and compares the value by JSON type and structure.
+`null` is an authored value, so it does not satisfy `--expect-current-absent`. The comparison uses
+the effective authored config after includes and environment substitution, before runtime defaults
+are applied.
+
+The two expectation flags are mutually exclusive. They apply only to a single `config set`
+operation, require a direct non-redirected config path, and cannot be combined with batch mode or
+`--dry-run`. If input or roster resolution would write a different path than the caller requested,
+such as a sibling `*Ref` path, the command exits with status 1 instead of retargeting the
+expectation. A mismatch exits with status 1, writes nothing, and does not print either the expected
+or current value. OpenClaw's config snapshot guard still rejects a later race between the
+expectation check and the final file replacement.
 
 ## `config set` modes
 

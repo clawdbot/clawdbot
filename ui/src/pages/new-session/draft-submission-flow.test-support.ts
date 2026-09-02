@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -39,6 +40,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
             ? {
                 server: { bootId: "gateway-boot-a" },
                 auth: {
+                  recoveryScope: client.recoveryScope,
                   role: "operator",
                   scopes: options.scopes ?? ["operator.read", "operator.write"],
                 },
@@ -64,6 +66,11 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       },
     },
     sessions: { state: { result: null }, createResult: vi.fn() },
+    placementStartup: {
+      get: vi.fn(() => undefined),
+      hasPendingTurn: vi.fn(() => false),
+    },
+    chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
     config: { current: { cliAgentsEnabled: true, terminalEnabled: true } },
     navigateAndWait: vi.fn(async () => undefined),

@@ -38,17 +38,14 @@ export function createResetSlashCommandSender(
     if (item) {
       publishPendingSendMessage(host, item);
     }
-    if (
-      !item ||
-      !admitQueuedMessageForSession(host, host.sessionKey, item, undefined, pending?.admission)
-    ) {
+    if (!pending || !admitQueuedMessageForSession(host, pending.admission, pending.item)) {
       if (item) {
         cancelChatDelivery(host, item, { previousDraft: options.previousDraft });
       }
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
     }
-    await deliverChatQueueItem(host, item, {
+    await deliverChatQueueItem(host, pending.item, {
       previousDraft: options.previousDraft,
       restoreDraft: options.restoreDraft,
       routingSessionKey: host.sessionKey,

@@ -135,3 +135,91 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     expect(dropdown.contains(hit)).toBe(true);
   });
 });
+
+describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
+  it("stays opaque while the Web Awesome menu animates open", async () => {
+    await useDesktopViewport();
+    const dropdown = document.createElement("wa-dropdown") as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    dropdown.className = "agent-select";
+    const trigger = document.createElement("button");
+    trigger.slot = "trigger";
+    trigger.textContent = "Agent";
+    const item = document.createElement("wa-dropdown-item");
+    item.textContent = "All agents";
+    dropdown.append(trigger, item);
+    document.body.append(dropdown);
+    await dropdown.updateComplete;
+
+    const menu = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+    expect(menu).not.toBeNull();
+    menu!.style.setProperty("--show-duration", "1s");
+    trigger.click();
+    await expect.poll(() => menu!.getAnimations().length).toBe(1);
+
+    const animation = menu!.getAnimations()[0];
+    if (!animation) {
+      throw new Error("expected the agent picker menu to be animating");
+    }
+    animation.pause();
+    animation.currentTime = 500;
+    expect(getComputedStyle(menu!).opacity).toBe("1");
+    expect(getComputedStyle(menu!).scale).not.toBe("1");
+  });
+});
+
+describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
+  it.each([
+    ["session-menu__item", "keyboard"],
+    ["session-menu__item", "pointer"],
+    ["sidebar-customize-menu__item", "keyboard"],
+    ["sidebar-customize-menu__item", "pointer"],
+  ])("keeps %s highlighted during %s submenu navigation", async (className, input) => {
+    await useDesktopViewport();
+    const { page, userEvent } = await import("vitest/browser");
+    const dropdown = document.createElement("wa-dropdown");
+    const trigger = document.createElement("button");
+    trigger.slot = "trigger";
+    trigger.textContent = "Actions";
+    const parent = document.createElement("wa-dropdown-item");
+    parent.className = className;
+    parent.append("Parent");
+    const child = document.createElement("wa-dropdown-item");
+    child.className = className;
+    child.slot = "submenu";
+    child.textContent = "Child";
+    parent.append(child);
+    const sibling = document.createElement("wa-dropdown-item");
+    sibling.className = className;
+    sibling.textContent = "Other action";
+    dropdown.append(trigger, parent, sibling);
+    document.body.append(dropdown);
+    const swatch = document.createElement("div");
+    swatch.style.backgroundColor = "var(--bg-hover)";
+    document.body.append(swatch);
+    const highlight = getComputedStyle(swatch).backgroundColor;
+
+    await page.elementLocator(trigger).click();
+    await expect.poll(() => document.activeElement).toBe(parent);
+    if (input === "keyboard") {
+      await userEvent.keyboard("{ArrowRight}");
+    } else {
+      await page.elementLocator(parent).hover();
+      await page.elementLocator(child).hover();
+    }
+    await expect.poll(() => document.activeElement).toBe(child);
+    await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => getComputedStyle(parent).backgroundColor).toBe(highlight);
+
+    await userEvent.keyboard("{ArrowLeft}");
+    await expect.poll(() => document.activeElement).toBe(parent);
+    await userEvent.keyboard("{ArrowDown}");
+    await expect.poll(() => document.activeElement).toBe(sibling);
+    await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("false");
+    // Hover highlights independently of submenu expansion and keyboard focus.
+    await page.elementLocator(sibling).hover();
+    await expect.poll(() => parent.matches(":hover")).toBe(false);
+    await expect.poll(() => getComputedStyle(parent).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+  });
+});
