@@ -1,5 +1,4 @@
 import fs, { type FileHandle } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
@@ -405,10 +404,6 @@ export async function readProjectsTreeSnapshot(
 
 export function desktopSessionsDir(homeDir: string): string {
   return path.join(homeDir, "Library", "Application Support", "Claude", "claude-code-sessions");
-}
-
-export function currentHomeDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
 }
 
 export function configuredClaudeConfigDir(
