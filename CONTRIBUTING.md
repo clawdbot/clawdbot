@@ -45,6 +45,19 @@ We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` 
 
 For coordinated change sets that genuinely need more than 20 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
 
+## Source dependencies
+
+Run `pnpm install --frozen-lockfile` from the workspace root. Source checkouts use
+pnpm's isolated linker, which keeps dependencies in `node_modules/.pnpm` and links
+them into each workspace package. On supported macOS volumes, this also lets pnpm
+reuse whole-package APFS clones instead of importing every file separately.
+
+When updating a checkout that used the hoisted layout, stop builds, tests, and
+watchers using that checkout's dependencies before running the install command.
+Do not change the linker while other jobs are using the same `node_modules`.
+Declare dependencies in the package that imports them; root tooling and tests
+must declare their own development dependencies rather than rely on hoisting.
+
 ## Before You PR
 
 - Use **Node 24.15+** for source checkouts when possible. OpenClaw also supports Node 22.22.3+ and Node 25.9+, but Node 23, Node 22 before 22.22.3, and Node 24 before 24.15 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.

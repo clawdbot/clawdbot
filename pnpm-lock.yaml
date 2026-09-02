@@ -427,6 +427,15 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.11
         version: 4.1.11(@vitest/browser@4.1.11)(vitest@4.1.11)
+      '@vitest/runner':
+        specifier: 4.1.11
+        version: 4.1.11(patch_hash=55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93)
+      baileys:
+        specifier: 7.0.0-rc14
+        version: 7.0.0-rc14(audio-decode@2.2.3)(supports-color@10.2.2)
+      discord-api-types:
+        specifier: 0.38.53
+        version: 0.38.53
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -451,6 +460,9 @@ importers:
       marked:
         specifier: 18.0.10
         version: 18.0.10
+      minipass:
+        specifier: 7.1.3
+        version: 7.1.3
       oxfmt:
         specifier: 0.60.0
         version: 0.60.0
@@ -472,6 +484,9 @@ importers:
       postcss-lit:
         specifier: 1.4.1
         version: 1.4.1(jiti@2.7.0)(postcss@8.5.26)(supports-color@10.2.2)(tsx@4.23.12)(yaml@2.9.0)
+      postcss-selector-parser:
+        specifier: 7.1.5
+        version: 7.1.5
       shiki:
         specifier: 4.4.3
         version: 4.4.3
