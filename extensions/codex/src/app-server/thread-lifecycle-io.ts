@@ -17,7 +17,7 @@ import { markStartedCodexManagedThread } from "./managed-thread-store.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
-  attestCodexPluginThreadApps,
+  attestCodexThreadToolSurface,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import {
@@ -51,14 +51,8 @@ import type {
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
-import {
-  attestCodexRestrictedToolSurfaceMcpServersDisabled,
-  buildThreadResumeParams,
-  buildThreadStartParams,
-} from "./thread-requests.js";
+import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
-
-const CODEX_APPS_MCP_SERVER_NAME = "codex_apps";
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
@@ -197,23 +191,16 @@ export async function resumeExistingCodexThread(
     }
     const provisionalAppIds =
       loadedPluginThreadConfig?.provisionalAppIds ?? pluginThreadConfig?.provisionalAppIds ?? [];
-    await attestCodexPluginThreadApps({
+    await attestCodexThreadToolSurface({
       client: params.client,
       threadId: response.thread.id,
       appIds: provisionalAppIds,
       signal: params.signal,
+      threadConfig: resumeParams.config,
+      restrictedToolSurface,
+      lifecycleTiming,
+      assertCurrent: assertHandoffCurrent,
     });
-    if (restrictedToolSurface) {
-      await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
-        attestCodexRestrictedToolSurfaceMcpServersDisabled(
-          params.client,
-          response.thread.id,
-          resumeParams.config,
-          params.signal,
-          provisionalAppIds.length > 0 ? [CODEX_APPS_MCP_SERVER_NAME] : [],
-        ),
-      );
-    }
     throwIfAborted();
     await refreshCodexThreadPolicy({
       client: params.client,
@@ -491,31 +478,11 @@ export async function startFreshCodexThread(
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
-  // A deny-by-default app becomes callable only under this exact thread's
-  // allowlist. Never persist or run the thread before Codex confirms it.
-  try {
-    if (provisionalAppIds?.length) {
-      await lifecycleTiming.measure("plugin-app-attestation", () =>
-        attestCodexPluginThreadApps({
-          client: params.client,
-          threadId: response.thread.id,
-          appIds: provisionalAppIds,
-          signal: params.signal,
-        }),
-      );
-    }
-    if (restrictedToolSurface) {
-      await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
-        attestCodexRestrictedToolSurfaceMcpServersDisabled(
-          params.client,
-          response.thread.id,
-          startParams.config,
-          params.signal,
-          provisionalAppIds?.length ? [CODEX_APPS_MCP_SERVER_NAME] : [],
-        ),
-      );
-    }
-  } catch (error) {
+  const assertCurrent = () => {
+    throwIfAborted();
+    params.params.hostCapabilities.assertActive();
+  };
+  const rejectUncommittedThread = async (cause: unknown): Promise<never> => {
     const cleanupConfirmed = await discardUnattestedCodexPluginThread({
       client: params.client,
       threadId: response.thread.id,
@@ -523,32 +490,30 @@ export async function startFreshCodexThread(
     });
     if (!cleanupConfirmed) {
       await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-      throw new CodexAppServerUnsafeSubscriptionError("Codex thread attestation cleanup failed", {
-        cause: error,
+      throw new CodexAppServerUnsafeSubscriptionError("Codex uncommitted thread cleanup failed", {
+        cause,
       });
     }
-    throw error;
+    throw cause;
+  };
+  // A deny-by-default app becomes callable only under this exact thread's
+  // allowlist. Never persist or run the thread before Codex confirms it.
+  try {
+    await attestCodexThreadToolSurface({
+      client: params.client,
+      threadId: response.thread.id,
+      appIds: provisionalAppIds ?? [],
+      signal: params.signal,
+      threadConfig: startParams.config,
+      restrictedToolSurface,
+      lifecycleTiming,
+      assertCurrent,
+    });
+    assertCurrent();
+  } catch (error) {
+    return await rejectUncommittedThread(error);
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
-  try {
-    throwIfAborted();
-  } catch (error) {
-    if (replacementPredecessor) {
-      const cleanupConfirmed = await discardUnattestedCodexPluginThread({
-        client: params.client,
-        threadId: response.thread.id,
-        ephemeral: startParams.ephemeral === true,
-      });
-      if (!cleanupConfirmed) {
-        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-        throw new CodexAppServerUnsafeSubscriptionError(
-          "Codex successor cleanup failed after an aborted binding replacement",
-          { cause: error },
-        );
-      }
-    }
-    throw error;
-  }
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
@@ -592,32 +557,18 @@ export async function startFreshCodexThread(
       contextEngine: contextEngineBinding,
       environmentSelectionFingerprint,
     };
-    const cleanupUncommittedSuccessor = async (cause?: unknown) => {
-      const cleanupConfirmed = await discardUnattestedCodexPluginThread({
-        client: params.client,
-        threadId: response.thread.id,
-        ephemeral: startParams.ephemeral === true,
-      });
-      if (!cleanupConfirmed) {
-        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-        throw new CodexAppServerUnsafeSubscriptionError(
-          "Codex successor cleanup failed after a binding replacement conflict",
-          cause === undefined ? undefined : { cause },
-        );
-      }
-    };
     const managedSourceHomeId = codexCatalogHomeId(
       resolveCodexAppServerLocalHomeDir(params.appServer.start, resolveCodexThreadAgentDir(params)),
     );
-    await lifecycleTiming.measure("thread-start-mark-managed", () =>
-      markStartedCodexManagedThread(params.bindingStore.managedThreads, {
-        sourceHomeId: managedSourceHomeId,
-        threadId: response.thread.id,
-        ...(rolloutPath ? { rolloutPath } : {}),
-      }),
-    );
     let committed: boolean;
     try {
+      await lifecycleTiming.measure("thread-start-mark-managed", () =>
+        markStartedCodexManagedThread(params.bindingStore.managedThreads, {
+          sourceHomeId: managedSourceHomeId,
+          threadId: response.thread.id,
+          ...(rolloutPath ? { rolloutPath } : {}),
+        }),
+      );
       committed = await lifecycleTiming.measure("thread-start-write-binding", () =>
         params.bindingStore.mutate(
           bindingIdentity,
@@ -628,21 +579,18 @@ export async function startFreshCodexThread(
                 binding: nextBinding,
               }
             : { kind: "set", if: { kind: "absent" }, binding: nextBinding },
+          assertCurrent,
         ),
       );
     } catch (error) {
-      if (replacementPredecessor) {
-        await cleanupUncommittedSuccessor(error);
-      }
-      throw error;
+      return await rejectUncommittedThread(error);
     }
     if (!committed) {
-      if (replacementPredecessor) {
-        await cleanupUncommittedSuccessor();
-      }
-      throw new CodexThreadBindingConflictError(
-        replacementPredecessor?.threadId ?? response.thread.id,
-        "committing a fresh thread",
+      return await rejectUncommittedThread(
+        new CodexThreadBindingConflictError(
+          replacementPredecessor?.threadId ?? response.thread.id,
+          "committing a fresh thread",
+        ),
       );
     }
     if (contextEngineBinding) {

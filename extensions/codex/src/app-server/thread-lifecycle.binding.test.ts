@@ -2056,9 +2056,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "reuses one live ephemeral thread across two incognito turns (restricted: %s)",
-    async (restricted) => {
+  it.each([
+    { restricted: false, mcpDrift: false },
+    { restricted: true, mcpDrift: false },
+    { restricted: true, mcpDrift: true },
+  ])(
+    "reattests live incognito reuse (restricted: $restricted, MCP drift: $mcpDrift)",
+    async ({ restricted, mcpDrift }) => {
       const sessionFile = path.join(tempDir, "incognito-session.jsonl");
       const workspaceDir = path.join(tempDir, "incognito-workspace");
       const params = createParams(sessionFile, workspaceDir);
@@ -2066,6 +2070,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       if (restricted) {
         params.toolsAllow = ["openclaw"];
       }
+      let secondTurn = false;
       const request = vi.fn(async (method: string, _params?: unknown) => {
         if (method === "config/read") {
           return { layers: [], config: { mcp_servers: {} } };
@@ -2074,10 +2079,25 @@ describe("Codex app-server thread lifecycle bindings", () => {
           return { requirements: null };
         }
         if (method === "mcpServerStatus/list") {
-          return { data: [], nextCursor: null };
+          return {
+            data:
+              secondTurn && mcpDrift
+                ? [
+                    {
+                      ...disabledMcpServerStatus("unexpected-server"),
+                      serverInfo: { name: "unexpected-server", version: "1.0" },
+                      tools: { unexpected_tool: { name: "unexpected_tool", inputSchema: {} } },
+                    },
+                  ]
+                : [],
+            nextCursor: null,
+          };
         }
         if (method === "thread/start") {
           return threadStartResult("thread-incognito");
+        }
+        if (method === "thread/unsubscribe") {
+          return { status: "unsubscribed" };
         }
         throw new Error(`unexpected method: ${method}`);
       });
@@ -2100,17 +2120,30 @@ describe("Codex app-server thread lifecycle bindings", () => {
       };
 
       const first = await startOrResumeThread(common);
-      if (restricted) {
-        expect(first).not.toHaveProperty("liveThreadEphemeralPolicy");
-      } else {
-        await retainCodexAppServerLiveThread(
-          client,
-          first.threadId,
-          undefined,
-          first.liveThreadConfigFingerprint,
-          null,
-          first.liveThreadEphemeralPolicy,
+      await retainCodexAppServerLiveThread(
+        client,
+        first.threadId,
+        undefined,
+        first.liveThreadConfigFingerprint,
+        null,
+        first.liveThreadEphemeralPolicy,
+      );
+      const before = await readCodexAppServerBinding(sessionFile);
+      secondTurn = true;
+      if (mcpDrift) {
+        await expect(startOrResumeThread(common)).rejects.toThrow(
+          "Codex restricted-tool-surface MCP attestation found unexpected server unexpected-server",
         );
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+        expect(
+          request.mock.calls
+            .filter(([method]) => method.startsWith("thread/"))
+            .map(([method, requestParams]) => [method, requestParams]),
+        ).toEqual([
+          ["thread/start", expect.objectContaining({ ephemeral: true })],
+          ["thread/unsubscribe", { threadId: first.threadId }],
+        ]);
+        return;
       }
       const second = await startOrResumeThread(common);
 
@@ -3009,41 +3042,62 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
-  it("does not write a binding when thread start resolves after abort", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    const appServer = createThreadLifecycleAppServerOptions();
-    const abortController = new AbortController();
-    let resolveStart: ((value: ReturnType<typeof threadStartResult>) => void) | undefined;
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/start") {
-        return await new Promise<ReturnType<typeof threadStartResult>>((resolve) => {
-          resolveStart = resolve;
+  it.each(["thread-start", "binding-commit"])(
+    "discards a fresh thread when abort arrives during %s",
+    async (phase) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      const appServer = createThreadLifecycleAppServerOptions();
+      const abortController = new AbortController();
+      if (phase === "binding-commit") {
+        const mutate = testCodexAppServerBindingStore.mutate.bind(testCodexAppServerBindingStore);
+        vi.spyOn(testCodexAppServerBindingStore, "mutate").mockImplementation(async (...args) => {
+          if (args[1].kind === "set") {
+            abortController.abort("test_abort");
+          }
+          return await mutate(...args);
         });
       }
-      throw new Error(`unexpected method: ${method}`);
-    });
+      let resolveStart: ((value: ReturnType<typeof threadStartResult>) => void) | undefined;
+      const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+        if (method === "thread/start") {
+          return await new Promise<ReturnType<typeof threadStartResult>>((resolve) => {
+            resolveStart = resolve;
+          });
+        }
+        if (method === "thread/delete") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
 
-    const run = startOrResumeThread({
-      client: { request } as never,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer,
-      signal: abortController.signal,
-    });
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("thread/start", expect.any(Object), {
+      const run = startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer,
         signal: abortController.signal,
-      }),
-    );
-    abortController.abort("test_abort");
-    resolveStart?.(threadStartResult("thread-after-abort"));
+      });
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("thread/start", expect.any(Object), {
+          signal: abortController.signal,
+        }),
+      );
+      if (phase === "thread-start") {
+        abortController.abort("test_abort");
+      }
+      resolveStart?.(threadStartResult("thread-after-abort"));
 
-    await expect(run).rejects.toThrow("test_abort");
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
-  });
+      await expect(run).rejects.toThrow("test_abort");
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/start",
+        "thread/delete",
+      ]);
+    },
+  );
 
   it("starts a fresh Codex thread when dynamic tool descriptions change", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
