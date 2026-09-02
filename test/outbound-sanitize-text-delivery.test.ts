@@ -73,4 +73,48 @@ describe("HTML sanitization through outbound delivery", () => {
       );
     },
   );
+
+  it.each(["default Telegram", "direct text/media"] as const)(
+    "keeps the unspaced angle-link label on the %s delivery boundary",
+    async (mode) => {
+      const send = vi.fn(async (_to: string, _text: string) => ({
+        messageId: "fixture-message",
+        chatId: "12345",
+      }));
+      const channel = mode === "direct text/media" ? "imessage" : "telegram";
+      const outbound =
+        channel === "telegram"
+          ? telegramOutbound
+          : createDirectTextMediaOutbound({
+              channel,
+              resolveSender: () => send,
+              resolveMaxBytes: () => undefined,
+              buildTextOptions: () => ({}),
+              buildMediaOptions: () => ({}),
+            });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: channel,
+            source: "test",
+            plugin: createOutboundTestPlugin({ id: channel, outbound }),
+          },
+        ]),
+      );
+      const params = {
+        cfg: {} satisfies OpenClawConfig,
+        channel,
+        to: "12345",
+        payloads: [{ text: "<https://example.com/a.pdf|Manual>" }],
+        deps: { telegram: send },
+      };
+      const preparedBatch = await prepareOutboundPayloadBatch(params);
+      const results = await deliverOutboundPayloadsCore({ ...params, preparedBatch });
+
+      expect(results).toHaveLength(1);
+      expect(send.mock.calls.map(([to, text]) => ({ to, text }))).toEqual([
+        { to: "12345", text: "Manual" },
+      ]);
+    },
+  );
 });

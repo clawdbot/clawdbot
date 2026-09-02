@@ -38,9 +38,7 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
   // Remove inner elements first so an empty nested tree cannot synthesize markers.
   const converted = removeMatchesUntilStable(
     text
-      // `|` ends the URL so Slack/Google Chat `<url|Label>` reaches the label
-      // projection below. If `|` is allowed here, unspaced labels are swallowed
-      // as autolinks and the raw `url|Label` leaks to plain-text channels.
+      // `|` ends the autolink URL so `<url|Label>` reaches the label projection.
       .replace(/<((?:https?:\/\/|mailto:)[^<>\s|]+)>/gi, "$1")
       // Raw channel link syntax is not an input dialect; retain only its visible label.
       .replace(LABELED_ANGLE_LINK_RE, "$1")
