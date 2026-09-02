@@ -41,7 +41,7 @@ Paired device display names use this precedence: operator label (`operatorLabel`
 
 Mint a single-use node onboarding URL for the one-paste flow. Run it on the
 Gateway host with admin credentials, then paste the printed
-`openclaw connect <url>` command on the machine to enroll.
+`npx openclaw connect <url>` command on the machine to enroll.
 
 ```bash
 openclaw devices join-code
