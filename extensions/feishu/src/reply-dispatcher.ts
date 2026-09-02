@@ -1406,7 +1406,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         streamingEnabled &&
         !finalTextExceedsStreamingLimit &&
         (info?.kind === "final" || useStaticCard);
-      const useCard = useStaticCard || useStreamingCard;
       const skipTextForDuplicateFinal =
         !hasIndependentPresentation &&
         info?.kind === "final" &&
@@ -1574,7 +1573,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           );
         }
 
-        if (useCard) {
+        const useFallbackCard =
+          useStaticCard || (useStreamingCard && !isStreamingStartBackedOff(account.accountId));
+        if (useFallbackCard) {
           const cardHeader = resolveCardHeader(agentId, identity);
           const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
           deliveredResults.push(

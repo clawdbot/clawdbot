@@ -4422,6 +4422,46 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     }
   });
 
+  it("falls back to post mode when streaming start fails for 6 tables", async () => {
+    const errorMock = vi.fn();
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-post" });
+    const origPush = streamingInstances.push.bind(streamingInstances);
+    streamingInstances.push = (...args: StreamingSessionStub[]) => {
+      const instance = args[0];
+      if (instance) {
+        instance.start = vi
+          .fn()
+          .mockRejectedValue(new Error("Create card request failed with HTTP 400"));
+      }
+      return origPush(...args);
+    };
+
+    try {
+      const result = createFeishuReplyDispatcher({
+        cfg: {} as never,
+        agentId: "agent",
+        runtime: { log: vi.fn(), error: errorMock } as never,
+        chatId: "oc_chat",
+        sendTarget: "oc_chat",
+      });
+      const options = toTypingDispatcherOptions(result);
+      const text = Array.from(
+        { length: 6 },
+        (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+      ).join("\n\n");
+
+      await options.deliver({ text }, { kind: "final" });
+
+      expect(errorMock.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+        "streaming start failed",
+      );
+      expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      streamingInstances.push = origPush;
+    }
+  });
+
   describe("table-limit routing", () => {
     function makeTableText(count: number): string {
       return Array.from(
