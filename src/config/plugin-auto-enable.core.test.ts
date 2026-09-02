@@ -620,30 +620,68 @@ describe("applyPluginAutoEnable core", () => {
     ]);
   });
 
-  it("keeps model auto-enable behavior stable when one plugin owns multiple model refs", () => {
-    const result = materializePluginAutoEnableCandidates({
-      config: {},
-      candidates: [
-        {
-          pluginId: "google",
-          kind: "provider-model-configured",
-          modelRef: "google/gemini-2.5-pro",
-        },
-        {
-          pluginId: "google",
-          kind: "provider-model-configured",
-          modelRef: "google/gemini-2.5-flash",
-        },
-      ],
-      env,
-      manifestRegistry: makeRegistry([{ id: "google", channels: [], providers: ["google"] }]),
+  it("bounds repeated model-candidate preference checks without changing plugin precedence", () => {
+    const candidates = Array.from({ length: 128 }, (_, index) => [
+      {
+        pluginId: "primary",
+        kind: "provider-model-configured" as const,
+        modelRef: `primary/model-${index}`,
+      },
+      {
+        pluginId: "secondary",
+        kind: "provider-model-configured" as const,
+        modelRef: `secondary/model-${index}`,
+      },
+      {
+        pluginId: "blocked",
+        kind: "provider-model-configured" as const,
+        modelRef: `blocked/model-${index}`,
+      },
+    ]).flat();
+    let denyChecks = 0;
+    const deny = new Proxy(["blocked"], {
+      get(target, property, receiver) {
+        if (property === "includes") {
+          return (pluginId: string) => {
+            denyChecks += 1;
+            return target.includes(pluginId);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
     });
 
-    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
-    expect(result.changes).toEqual([
-      "google/gemini-2.5-pro model configured, enabled automatically.",
-    ]);
-    expect(result.autoEnabledReasons.google).toEqual(["google/gemini-2.5-pro model configured"]);
+    const result = materializePluginAutoEnableCandidates({
+      config: { plugins: { deny } },
+      candidates,
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "primary", channels: [], providers: ["primary"] },
+        {
+          id: "secondary",
+          channels: [],
+          providers: ["secondary"],
+          channelConfigs: {
+            secondary: { schema: {}, preferOver: ["primary"] },
+          },
+        },
+        {
+          id: "blocked",
+          channels: [],
+          providers: ["blocked"],
+          channelConfigs: {
+            blocked: { schema: {}, preferOver: ["secondary"] },
+          },
+        },
+      ]),
+    });
+
+    expect(denyChecks).toBe(3);
+    expect(result.config.plugins?.entries?.primary?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.secondary?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.blocked).toBeUndefined();
+    expect(result.changes).toEqual(["secondary/model-0 model configured, enabled automatically."]);
+    expect(result.autoEnabledReasons.secondary).toEqual(["secondary/model-0 model configured"]);
   });
 
   it("does not auto-enable Codex when only the OpenAI plugin is explicitly enabled", () => {
