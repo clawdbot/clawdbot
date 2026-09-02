@@ -4,6 +4,8 @@ import {
   mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
+  selectSessionTranscriptRestorableBranchTipNodes,
+  selectSessionTranscriptRestorableMessageNodes,
   selectSessionTranscriptLeafControlledPath,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
@@ -25,6 +27,72 @@ describe("session transcript tree helpers", () => {
         parentId: "old-tail",
       }),
     ).toBe(false);
+  });
+
+  it("keeps side and opaque suffixes out of restorable branch selection", () => {
+    const entries = [
+      { type: "message", id: "root", parentId: null, message: { role: "user" } },
+      {
+        type: "message",
+        id: "active-tip",
+        parentId: "root",
+        message: { role: "assistant" },
+      },
+      {
+        type: "message",
+        id: "side-message",
+        parentId: "active-tip",
+        appendMode: "side",
+        message: { role: "assistant" },
+      },
+      { type: "opaque", id: "opaque-suffix", parentId: "active-tip" },
+    ];
+    const tree = scanSessionTranscriptTree(entries);
+
+    expect(selectSessionTranscriptRestorableBranchTipNodes(tree).map((node) => node.id)).toEqual([
+      "active-tip",
+    ]);
+    expect(selectSessionTranscriptRestorableMessageNodes(tree).map((node) => node.id)).toEqual([
+      "root",
+      "active-tip",
+    ]);
+  });
+
+  it("retires pre-reset tips while keeping every descendant branch", () => {
+    const entries = [
+      { type: "message", id: "old", parentId: null, message: { role: "user" } },
+      {
+        type: "message",
+        id: "pre-reset-tip",
+        parentId: "old",
+        message: { role: "assistant" },
+      },
+      { type: "reset", id: "reset", parentId: "old", firstKeptEntryId: "old" },
+      {
+        type: "message",
+        id: "post-reset-active",
+        parentId: "reset",
+        message: { role: "assistant" },
+      },
+      {
+        type: "message",
+        id: "post-reset-inactive",
+        parentId: "reset",
+        message: { role: "assistant" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "post-reset-inactive",
+        targetId: "post-reset-active",
+      },
+    ];
+
+    expect(
+      selectSessionTranscriptRestorableBranchTipNodes(scanSessionTranscriptTree(entries))
+        .map((node) => node.id)
+        .toSorted(),
+    ).toEqual(["post-reset-active", "post-reset-inactive"]);
   });
 
   it("treats leaf controls as navigation to their target", () => {

@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -35,21 +36,30 @@ export function readSessionTranscriptWatermark(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => {
       const db = getNodeSqliteKysely<WatermarkDatabase>(database.db);
-      const maxSeq = executeSqliteQueryTakeFirstSync(
+      return runSqliteDeferredTransactionSync(
         database.db,
-        db
-          .selectFrom("transcript_events")
-          .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
-          .where("session_id", "=", resolved.sessionId),
-      )?.max_seq;
-      const generation = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("transcript_rewrite_watermarks")
-          .select("generation")
-          .where("session_id", "=", resolved.sessionId),
-      )?.generation;
-      return { generation: generation ?? null, maxSeq: maxSeq ?? null };
+        () => {
+          const maxSeq = executeSqliteQueryTakeFirstSync(
+            database.db,
+            db
+              .selectFrom("transcript_events")
+              .select((eb) => eb.fn.max<number>("seq").as("max_seq"))
+              .where("session_id", "=", resolved.sessionId),
+          )?.max_seq;
+          const generation = executeSqliteQueryTakeFirstSync(
+            database.db,
+            db
+              .selectFrom("transcript_rewrite_watermarks")
+              .select("generation")
+              .where("session_id", "=", resolved.sessionId),
+          )?.generation;
+          return { generation: generation ?? null, maxSeq: maxSeq ?? null };
+        },
+        {
+          databaseLabel: database.path,
+          operationLabel: "sessions.transcript.watermark.read",
+        },
+      );
     },
     toDatabaseOptions(resolved),
     { throwOnMissingTable: true },

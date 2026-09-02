@@ -392,6 +392,125 @@ export function selectSessionTranscriptTreePathNodes<T>(
   return path.toReversed();
 }
 
+/**
+ * Select canonical branch tips that remain reachable under current reset semantics.
+ *
+ * Side and opaque suffixes are not conversation branches, so they neither become
+ * tips nor hide the canonical tip they extend. A reset retires branches that do
+ * not descend from that boundary.
+ */
+export function selectSessionTranscriptRestorableBranchTipNodes<T>(
+  tree: SessionTranscriptTree<T>,
+): SessionTranscriptTreeNode<T>[] {
+  const canonicalNodes = tree.nodes.filter(
+    (node) =>
+      isCanonicalSessionTranscriptEntry(node.entry) &&
+      !isSessionTranscriptSideAppendEntry(node.entry),
+  );
+  const referencedParents = new Set(
+    canonicalNodes.flatMap((node) => (node.parentId === null ? [] : [node.parentId])),
+  );
+  const latestReset = canonicalNodes.findLast(
+    (node) => isRecord(node.entry) && node.entry.type === "reset",
+  );
+  // The scanner already rejects leaf controls that target a pre-reset node, so
+  // every active branch after a reset is necessarily one of its descendants.
+  return canonicalNodes.filter((node) => {
+    if (node.id !== tree.leafId && referencedParents.has(node.id)) {
+      return false;
+    }
+    if (!latestReset) {
+      return true;
+    }
+    return selectSessionTranscriptTreePathNodes(tree, node.id).some(
+      (pathNode) => pathNode.id === latestReset.id,
+    );
+  });
+}
+
+function isSessionTranscriptMessageNode<T>(
+  node: SessionTranscriptTreeNode<T>,
+): node is SessionTranscriptTreeNode<T> & {
+  entry: TranscriptRecord & { type: "message" };
+} {
+  return (
+    isRecord(node.entry) &&
+    node.entry.type === "message" &&
+    !isSessionTranscriptSideAppendEntry(node.entry)
+  );
+}
+
+function hasReplayableResetMessageRole(node: SessionTranscriptTreeNode<unknown>): boolean {
+  if (!isSessionTranscriptMessageNode(node) || !isRecord(node.entry.message)) {
+    return false;
+  }
+  return node.entry.message.role === "user" || node.entry.message.role === "assistant";
+}
+
+/** Select the message path restored when switching to one canonical branch tip. */
+export function selectSessionTranscriptRestorableMessagePathNodes<T>(
+  tree: SessionTranscriptTree<T>,
+  leafId: string,
+): SessionTranscriptTreeNode<T>[] {
+  const path = selectSessionTranscriptTreePathNodes(tree, leafId);
+  const boundaryIndex = path.findLastIndex(
+    (node) =>
+      isRecord(node.entry) && (node.entry.type === "reset" || node.entry.type === "compaction"),
+  );
+  const boundary = boundaryIndex >= 0 ? path[boundaryIndex] : undefined;
+  const boundaryRecord = boundary && isRecord(boundary.entry) ? boundary.entry : undefined;
+  // Compaction summarizes replay context without deleting branch history. Only a
+  // reset narrows what branch switching can restore; a newer compaction shadows it.
+  if (boundaryRecord?.type !== "reset") {
+    return path.filter(isSessionTranscriptMessageNode);
+  }
+
+  const selected: SessionTranscriptTreeNode<T>[] = [];
+  const firstKeptEntryId = readNonEmptyString(boundaryRecord.firstKeptEntryId);
+  const keptStart = firstKeptEntryId
+    ? path.findIndex((node, index) => index < boundaryIndex && node.id === firstKeptEntryId)
+    : -1;
+  if (keptStart >= 0) {
+    selected.push(...path.slice(keptStart, boundaryIndex).filter(hasReplayableResetMessageRole));
+  }
+  selected.push(...path.slice(boundaryIndex + 1).filter(isSessionTranscriptMessageNode));
+  return selected;
+}
+
+/** Select every message event that can be restored by switching conversation branches. */
+export function selectSessionTranscriptRestorableMessageNodes<T>(
+  tree: SessionTranscriptTree<T>,
+): SessionTranscriptTreeNode<T>[] {
+  const selected = new Map<number, SessionTranscriptTreeNode<T>>();
+  for (const tip of selectSessionTranscriptRestorableBranchTipNodes(tree)) {
+    for (const node of selectSessionTranscriptRestorableMessagePathNodes(tree, tip.id)) {
+      selected.set(node.index, node);
+    }
+  }
+  return [...selected.values()].toSorted((left, right) => left.index - right.index);
+}
+
+/**
+ * Select messages whose durable artifacts must survive branch evolution.
+ *
+ * A reset narrows immediate replay, but a later compaction on the same branch
+ * restores its full ancestry. Retention therefore follows full canonical paths
+ * to currently reachable tips instead of treating the reset window as a GC boundary.
+ */
+export function selectSessionTranscriptRetainedMessageNodes<T>(
+  tree: SessionTranscriptTree<T>,
+): SessionTranscriptTreeNode<T>[] {
+  const selected = new Map<number, SessionTranscriptTreeNode<T>>();
+  for (const tip of selectSessionTranscriptRestorableBranchTipNodes(tree)) {
+    for (const node of selectSessionTranscriptTreePathNodes(tree, tip.id)) {
+      if (isSessionTranscriptMessageNode(node)) {
+        selected.set(node.index, node);
+      }
+    }
+  }
+  return [...selected.values()].toSorted((left, right) => left.index - right.index);
+}
+
 /** Merge normalized paths in original file order and expose their retained parent links. */
 export function mergeSessionTranscriptTreePaths<T>(
   paths: Array<SessionTranscriptTreeNode<T>[]>,

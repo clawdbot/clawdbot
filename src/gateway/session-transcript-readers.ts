@@ -4,11 +4,15 @@ import {
   isSessionTranscriptProjectionUnavailableError,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptMessageEvents,
+  readSessionTranscriptRestorableMessageSnapshot,
+  readSessionTranscriptRetentionFence,
+  readSessionTranscriptWatermark,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   waitForSessionTranscriptProjection,
   type SessionTranscriptMessageEvent,
   type SessionTranscriptReadScope,
+  type SessionTranscriptRestorableMessageSnapshot,
   type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
 import { visitSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
@@ -217,6 +221,45 @@ export async function readSessionMessagesWithSourceAsync(
     messages,
     transcriptPath: target.sessionFile,
   };
+}
+
+type RestorableBranchSessionMessagesSnapshot = Omit<
+  SessionTranscriptRestorableMessageSnapshot,
+  "events" | "retainedEvents"
+> & {
+  messages: unknown[];
+  retainedMessages: unknown[];
+};
+
+/** Reads immediately restorable messages plus the conservative artifact-retention set. */
+export function readRestorableBranchSessionMessagesSnapshot(
+  scope: SessionTranscriptReadScope,
+): RestorableBranchSessionMessagesSnapshot {
+  const target = resolveTranscriptReadTarget(scope);
+  const snapshot = readSessionTranscriptRestorableMessageSnapshot(toTranscriptReadScope(target));
+  return {
+    artifactRetentionComplete: snapshot.artifactRetentionComplete,
+    generation: snapshot.generation,
+    maxSeq: snapshot.maxSeq,
+    retentionFence: snapshot.retentionFence,
+    messages: projectSqliteHistoryEvents(snapshot.events),
+    retainedMessages: projectSqliteHistoryEvents(snapshot.retainedEvents),
+  };
+}
+
+/** Re-reads the retention fence that validates a retention snapshot at its point of use. */
+export function readSessionRetentionFence(scope: SessionTranscriptReadScope): string {
+  const target = resolveTranscriptReadTarget(scope);
+  return readSessionTranscriptRetentionFence(toTranscriptReadScope(target));
+}
+
+/** Reads the canonical transcript watermark used to validate derived transcript caches. */
+export function readSessionTranscriptRevision(scope: SessionTranscriptReadScope): string | null {
+  const target = resolveTranscriptReadTarget(scope);
+  const watermark = readSessionTranscriptWatermark(toTranscriptReadScope(target));
+  return watermark.generation
+    ? `${target.sessionId}:${watermark.generation}:${watermark.maxSeq ?? -1}`
+    : null;
 }
 
 /** Finds one display message by transcript id through the reader seam. */

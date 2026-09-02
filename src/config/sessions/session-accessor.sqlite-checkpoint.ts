@@ -5,7 +5,10 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type {
+  SessionTranscriptEventRow,
+  TranscriptEvent,
+} from "./session-accessor.sqlite-contract.js";
 import {
   collectSessionEntryLookupKeys,
   readSessionEntryRow,
@@ -236,13 +239,13 @@ function forkSqliteCheckpointTranscriptInTransaction(
   let selected:
     | {
         source: SqliteCheckpointTranscriptForkSource;
-        rows: TranscriptEvent[];
+        rows: SessionTranscriptEventRow[];
       }
     | undefined;
   for (const source of sources) {
     const rows = readSqliteTranscriptRowsForFork(database, source);
     if (rows.status === "created") {
-      selected = { source, rows: rows.events };
+      selected = { source, rows: rows.rows };
       break;
     }
     lastFailure = rows;
@@ -261,7 +264,7 @@ function forkSqliteCheckpointTranscriptInTransaction(
     sessionKey: params.targetSessionKey,
   };
   const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
-  const selectedEvents = selected?.rows ?? legacySource?.events ?? [];
+  const selectedEvents = selected?.rows.map((row) => row.event) ?? legacySource?.events ?? [];
   const totalTokens = selected?.source.totalTokens ?? legacySource?.totalTokens;
   appendTranscriptEventsInTransaction(database, targetScope, [
     createSessionTranscriptHeader({
@@ -293,7 +296,7 @@ function resolvePreparedLegacyCheckpointSource(
   return matches ? source : undefined;
 }
 
-function resolveSqliteCheckpointTranscriptForkSources(
+export function resolveSqliteCheckpointTranscriptForkSources(
   checkpoint: SessionCompactionCheckpoint,
 ): SqliteCheckpointTranscriptForkSource[] {
   const sources: SqliteCheckpointTranscriptForkSource[] = [];
@@ -323,10 +326,12 @@ function resolveSqliteCheckpointTranscriptForkSources(
   return sources;
 }
 
-function readSqliteTranscriptRowsForFork(
+export function readSqliteTranscriptRowsForFork(
   database: OpenClawAgentDatabase,
   source: { sessionId: string; leafId?: string },
-): { status: "created"; events: TranscriptEvent[] } | { status: "missing-boundary" | "failed" } {
+):
+  | { status: "created"; rows: SessionTranscriptEventRow[] }
+  | { status: "missing-boundary" | "failed" } {
   const boundarySeq = source.leafId
     ? readTranscriptIdentityByEventId(database, source.sessionId, source.leafId)?.seq
     : undefined;
@@ -350,7 +355,10 @@ function readSqliteTranscriptRowsForFork(
   try {
     return {
       status: "created",
-      events: rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent),
+      rows: rows.map((row) => ({
+        event: JSON.parse(row.event_json) as TranscriptEvent,
+        seq: row.seq,
+      })),
     };
   } catch {
     return { status: "failed" };

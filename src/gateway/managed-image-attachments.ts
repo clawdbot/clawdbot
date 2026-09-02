@@ -45,6 +45,7 @@ import {
   resolvePlaybackTranscode,
 } from "../media/playback-transcode.js";
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
@@ -65,6 +66,7 @@ import {
 import {
   attachManagedImageRecordToMessage,
   claimManagedImageRecordCleanupIfCurrent,
+  clearClaimedManagedImageRecordCleanupIfCurrent,
   deleteClaimedManagedImageRecord,
   insertManagedImageRecord,
   listManagedImageRecordEntries,
@@ -74,7 +76,13 @@ import {
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
-import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
+import {
+  readRestorableBranchSessionMessagesSnapshot,
+  readSessionMessagesWithSourceAsync,
+  readSessionRetentionFence,
+  readSessionTranscriptRevision,
+  type SessionTranscriptReadScope,
+} from "./session-transcript-readers.js";
 import {
   loadGatewaySessionEntryReadOnly,
   resolveSessionHistoryTranscriptPathAsync,
@@ -177,8 +185,19 @@ type CleanupManagedOutgoingMediaRecordsResult = {
 };
 
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
+type SessionManagedOutgoingAttachmentIndexMode = "restorable" | "retained";
+const RETAIN_ALL_SESSION_MANAGED_OUTGOING_ATTACHMENTS = Symbol("retain-all-session-attachments");
+type SessionManagedOutgoingAttachmentIndexResult =
+  | SessionManagedOutgoingAttachmentIndex
+  | typeof RETAIN_ALL_SESSION_MANAGED_OUTGOING_ATTACHMENTS
+  | null;
+type ManagedOutgoingRetentionHandle = { fence: string; revalidate: () => string };
 type SessionManagedOutgoingAttachmentIndexRead =
-  | { kind: "available"; index: SessionManagedOutgoingAttachmentIndex | null }
+  | {
+      kind: "available";
+      index: SessionManagedOutgoingAttachmentIndexResult;
+      retention?: ManagedOutgoingRetentionHandle;
+    }
   | {
       kind: "unavailable";
       reason:
@@ -194,9 +213,7 @@ type SessionStoreAvailabilityRead = ReturnType<
 >;
 
 type SessionManagedOutgoingAttachmentIndexCacheEntry = {
-  transcriptPath: string;
-  mtimeMs: number;
-  size: number;
+  transcriptRevision: string;
   index: SessionManagedOutgoingAttachmentIndex;
 };
 
@@ -276,22 +293,21 @@ async function resolveManagedImageThumbnail(
   managedImageThumbnailJobs.set(cacheKey, pending);
   return await pending;
 }
-type SessionManagedOutgoingAttachmentTranscriptStat = Omit<
-  SessionManagedOutgoingAttachmentIndexCacheEntry,
-  "index"
->;
 
 const sessionManagedOutgoingAttachmentIndexCache = new Map<
   string,
   SessionManagedOutgoingAttachmentIndexCacheEntry
 >();
+const managedOutgoingMediaCleanupQueue = new KeyedAsyncQueue();
 const MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES = 500;
 
 function buildSessionManagedOutgoingAttachmentIndexCacheKey(
   sessionKey: string,
   agentId?: string,
+  mode: SessionManagedOutgoingAttachmentIndexMode = "restorable",
 ): string {
-  return sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
+  const ownerKey = sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
+  return `${ownerKey}:${mode}`;
 }
 
 export function resolveManagedImageAttachmentLimits(
@@ -720,6 +736,22 @@ async function getVariantStats(params: { filePath: string; buffer?: Buffer; size
   };
 }
 
+/**
+ * Confirms the retention snapshot still describes the session at the point of deletion.
+ *
+ * A transcript rewrite and a checkpoint publication commit outside the cleanup queue,
+ * so a snapshot that reported the media unreferenced can be obsolete by the time the
+ * file is removed. An unreadable fence is treated as moved, because deletion is
+ * irreversible and a restore would surface a dead URL.
+ */
+function retentionFenceStillValid(retention: ManagedOutgoingRetentionHandle): boolean {
+  try {
+    return retention.revalidate() === retention.fence;
+  } catch {
+    return false;
+  }
+}
+
 async function deleteManagedImageRecordArtifacts(
   record: ManagedImageRecord,
   stateDir = resolveStateDir(),
@@ -740,7 +772,7 @@ async function deleteManagedImageRecordArtifacts(
   };
 }
 
-export async function cleanupManagedOutgoingMediaRecords(params?: {
+type CleanupManagedOutgoingMediaRecordsParams = {
   stateDir?: string;
   nowMs?: number;
   transientMaxAgeMs?: number;
@@ -748,8 +780,23 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   agentId?: string;
   forceDeleteSessionRecords?: boolean;
   hasActiveSessionRun?: (sessionKey: string, agentId: string | undefined) => boolean;
-}): Promise<CleanupManagedOutgoingMediaRecordsResult> {
+};
+
+export async function cleanupManagedOutgoingMediaRecords(
+  params?: CleanupManagedOutgoingMediaRecordsParams,
+): Promise<CleanupManagedOutgoingMediaRecordsResult> {
   const stateDir = params?.stateDir ?? resolveStateDir();
+  // The gateway state lock excludes another live process for this state directory.
+  // Serialize local sweeps too, so a persisted boolean claim is either active here or stale.
+  return await managedOutgoingMediaCleanupQueue.enqueue(path.resolve(stateDir), async () =>
+    cleanupManagedOutgoingMediaRecordsSerialized({ ...params, stateDir }),
+  );
+}
+
+async function cleanupManagedOutgoingMediaRecordsSerialized(
+  params: CleanupManagedOutgoingMediaRecordsParams & { stateDir: string },
+): Promise<CleanupManagedOutgoingMediaRecordsResult> {
+  const { stateDir } = params;
   const nowMs = params?.nowMs ?? Date.now();
   const transientMaxAgeMs = params?.transientMaxAgeMs ?? DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS;
   const sessionKeyFilter = params?.sessionKey ?? null;
@@ -767,10 +814,11 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
   let retainedCount = 0;
   const transcriptAttachmentIndexCache = new Map<
     string,
-    SessionManagedOutgoingAttachmentIndex | null
+    SessionManagedOutgoingAttachmentIndexResult
   >();
   const sessionStoreAvailabilityCache = new Map<string, SessionStoreAvailabilityRead>();
   const sessionStoreTargetsReadCache: SessionStoreTargetsReadCache = new Map();
+  const retentionHandles = new Map<string, ManagedOutgoingRetentionHandle>();
   for (const entry of entries) {
     const { record } = entry;
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
@@ -791,24 +839,37 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
       continue;
     }
 
-    let shouldDelete = entry.cleanupPending;
+    let shouldDelete = false;
+    let retention: ManagedOutgoingRetentionHandle | undefined;
     if (
-      !entry.cleanupPending &&
       forceDeleteSessionRecords &&
       (!sessionKeyFilter || record.sessionKey === sessionKeyFilter)
     ) {
       shouldDelete = true;
-    } else if (!entry.cleanupPending && record.messageId) {
-      const transcriptMatch = await recordMatchesTranscriptMessage(
+    } else if (record.messageId) {
+      const retained = await resolveManagedOutgoingTranscriptMatch(
         record,
         transcriptAttachmentIndexCache,
         sessionStoreAvailabilityCache,
         sessionStoreTargetsReadCache,
         stateDir,
+        "retained",
+        retentionHandles,
       );
       // Session-store unavailability is not proof that durable chat history no longer owns media.
-      shouldDelete = transcriptMatch === "missing";
-    } else if (!entry.cleanupPending) {
+      if (retained.match !== "missing") {
+        // Only a positive retained match retires a claim written by the active-path-only decision.
+        if (entry.cleanupPending && retained.match === "match") {
+          clearClaimedManagedImageRecordCleanupIfCurrent(record, stateDir);
+        }
+        retainedCount += 1;
+        continue;
+      }
+      retention = retained.retention;
+      shouldDelete = true;
+    } else if (entry.cleanupPending) {
+      shouldDelete = true;
+    } else {
       const createdAtMs = Date.parse(record.createdAt);
       const otherwiseDeletable =
         Number.isFinite(createdAtMs) &&
@@ -823,6 +884,11 @@ export async function cleanupManagedOutgoingMediaRecords(params?: {
           pendingPreparedAttachmentIds !== null &&
           !pendingPreparedAttachmentIds.has(record.attachmentId);
       }
+    }
+
+    if (shouldDelete && retention && !retentionFenceStillValid(retention)) {
+      retainedCount += 1;
+      continue;
     }
 
     if (shouldDelete) {
@@ -1106,19 +1172,12 @@ async function loadPendingPreparedAttachmentIds(stateDir: string): Promise<Set<s
 function getCachedSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   agentId: string | undefined,
-  stat: { transcriptPath: string; mtimeMs: number; size: number },
+  transcriptRevision: string,
+  mode: SessionManagedOutgoingAttachmentIndexMode,
 ) {
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
+  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId, mode);
   const cached = sessionManagedOutgoingAttachmentIndexCache.get(cacheKey);
-  if (!cached) {
-    return null;
-  }
-  if (
-    cached.transcriptPath !== stat.transcriptPath ||
-    cached.mtimeMs !== stat.mtimeMs ||
-    cached.size !== stat.size
-  ) {
-    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
+  if (!cached || cached.transcriptRevision !== transcriptRevision) {
     return null;
   }
   sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
@@ -1129,17 +1188,13 @@ function getCachedSessionManagedOutgoingAttachmentIndex(
 function setCachedSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   agentId: string | undefined,
-  stat: SessionManagedOutgoingAttachmentTranscriptStat,
+  transcriptRevision: string,
   index: SessionManagedOutgoingAttachmentIndex,
+  mode: SessionManagedOutgoingAttachmentIndexMode,
 ) {
   sessionManagedOutgoingAttachmentIndexCache.set(
-    buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId),
-    {
-      transcriptPath: stat.transcriptPath,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      index,
-    },
+    buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId, mode),
+    { transcriptRevision, index },
   );
   pruneMapToMaxSize(
     sessionManagedOutgoingAttachmentIndexCache,
@@ -1147,28 +1202,59 @@ function setCachedSessionManagedOutgoingAttachmentIndex(
   );
 }
 
-function sameManagedOutgoingAttachmentTranscriptStat(
-  left: SessionManagedOutgoingAttachmentTranscriptStat | null,
-  right: SessionManagedOutgoingAttachmentTranscriptStat | null,
-): boolean {
-  return (
-    left?.transcriptPath === right?.transcriptPath &&
-    left?.mtimeMs === right?.mtimeMs &&
-    left?.size === right?.size
-  );
+function buildManagedOutgoingAttachmentIndex(
+  messages: readonly unknown[],
+  sessionKey: string,
+): SessionManagedOutgoingAttachmentIndex {
+  const index: SessionManagedOutgoingAttachmentIndex = new Set();
+  for (const message of messages) {
+    const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
+    const messageId = meta?.id;
+    if (typeof messageId !== "string" || !messageId) {
+      continue;
+    }
+    for (const ref of collectManagedOutgoingAttachmentRefs(
+      readAssistantDisplayContent(message),
+      sessionKey,
+    )) {
+      index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
+    }
+  }
+  return index;
+}
+
+function readManagedOutgoingTranscriptRevision(scope: SessionTranscriptReadScope): string | null {
+  const revision = readSessionTranscriptRevision(scope);
+  return revision ? `transcript:${revision}` : null;
+}
+
+async function readManagedOutgoingArchiveRevision(transcriptPath: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(transcriptPath);
+    return `archive:${transcriptPath}:${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return null;
+  }
 }
 
 async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
-  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
+  cache?: Map<string, SessionManagedOutgoingAttachmentIndexResult>,
   agentId?: string,
   storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
   storeTargetsReadCache?: SessionStoreTargetsReadCache,
   stateDir?: string,
+  mode: SessionManagedOutgoingAttachmentIndexMode = "restorable",
+  retentionHandles?: Map<string, ManagedOutgoingRetentionHandle>,
 ): Promise<SessionManagedOutgoingAttachmentIndexRead> {
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
+  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId, mode);
   if (cache?.has(cacheKey)) {
-    return { kind: "available", index: cache.get(cacheKey) ?? null };
+    const retention = retentionHandles?.get(cacheKey);
+    return {
+      kind: "available",
+      index: cache.get(cacheKey) ?? null,
+      ...(retention ? { retention } : {}),
+    };
   }
   const cfg = getRuntimeConfig();
   const ownerAgentId =
@@ -1247,93 +1333,106 @@ async function getSessionManagedOutgoingAttachmentIndex(
     cache?.set(cacheKey, null);
     return { kind: "available", index: null };
   }
+  const scope = { agentId, sessionEntry: entry, sessionId, sessionKey, storePath };
 
-  let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
-  // This path is only a cache/reset-archive hint. Canonical active messages are
-  // read from the structured SQLite identity below even when no artifact exists.
+  const transcriptRevision = readManagedOutgoingTranscriptRevision(scope);
+  if (transcriptRevision && mode === "restorable") {
+    const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
+      sessionKey,
+      agentId,
+      transcriptRevision,
+      mode,
+    );
+    if (cachedIndex) {
+      cache?.set(cacheKey, cachedIndex);
+      return { kind: "available", index: cachedIndex };
+    }
+  }
+  const snapshot = readRestorableBranchSessionMessagesSnapshot(scope);
+  if (mode === "retained" && !snapshot.artifactRetentionComplete) {
+    cache?.set(cacheKey, RETAIN_ALL_SESSION_MANAGED_OUTGOING_ATTACHMENTS);
+    return { kind: "available", index: RETAIN_ALL_SESSION_MANAGED_OUTGOING_ATTACHMENTS };
+  }
+  if (snapshot.generation !== null || snapshot.maxSeq !== null) {
+    const index = buildManagedOutgoingAttachmentIndex(
+      mode === "retained" ? snapshot.retainedMessages : snapshot.messages,
+      sessionKey,
+    );
+    const snapshotRevision = snapshot.generation
+      ? `transcript:${sessionId}:${snapshot.generation}:${snapshot.maxSeq ?? -1}`
+      : null;
+    if (snapshotRevision && mode === "restorable") {
+      setCachedSessionManagedOutgoingAttachmentIndex(
+        sessionKey,
+        agentId,
+        snapshotRevision,
+        index,
+        mode,
+      );
+    } else {
+      sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
+    }
+    cache?.set(cacheKey, index);
+    if (mode === "retained") {
+      const retention: ManagedOutgoingRetentionHandle = {
+        fence: snapshot.retentionFence,
+        revalidate: () => readSessionRetentionFence(scope),
+      };
+      retentionHandles?.set(cacheKey, retention);
+      return { kind: "available", index, retention };
+    }
+    return { kind: "available", index };
+  }
+  if (mode === "retained") {
+    // Reset archives expose one visible path, not the full branch set needed for GC.
+    // Without a canonical SQLite snapshot, retaining every session record is the safe answer.
+    cache?.set(cacheKey, RETAIN_ALL_SESSION_MANAGED_OUTGOING_ATTACHMENTS);
+    return { kind: "available", index: RETAIN_ALL_SESSION_MANAGED_OUTGOING_ATTACHMENTS };
+  }
+
   const resolvedTranscriptPath = await resolveSessionHistoryTranscriptPathAsync(
     sessionId,
     storePath,
     undefined,
     { allowResetArchiveFallback: true },
   );
-  if (resolvedTranscriptPath) {
-    try {
-      const stat = await fs.stat(resolvedTranscriptPath);
-      transcriptStat = {
-        transcriptPath: resolvedTranscriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
-        sessionKey,
-        agentId,
-        transcriptStat,
-      );
-      if (cachedIndex) {
-        cache?.set(cacheKey, cachedIndex);
-        return { kind: "available", index: cachedIndex };
-      }
-    } catch {
-      sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
+  const archiveRevision = resolvedTranscriptPath
+    ? await readManagedOutgoingArchiveRevision(resolvedTranscriptPath)
+    : null;
+  if (archiveRevision) {
+    const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
+      sessionKey,
+      agentId,
+      archiveRevision,
+      mode,
+    );
+    if (cachedIndex) {
+      cache?.set(cacheKey, cachedIndex);
+      return { kind: "available", index: cachedIndex };
     }
   } else {
     sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
   }
 
-  const readResult = await readSessionMessagesWithSourceAsync(
-    {
+  const readResult = await readSessionMessagesWithSourceAsync(scope, {
+    mode: "full",
+    reason: "managed outgoing attachment index",
+    allowResetArchiveFallback: true,
+  });
+  const index = buildManagedOutgoingAttachmentIndex(readResult.messages, sessionKey);
+  const postReadRevision = readResult.transcriptPath
+    ? await readManagedOutgoingArchiveRevision(readResult.transcriptPath)
+    : null;
+  if (archiveRevision && postReadRevision === archiveRevision) {
+    setCachedSessionManagedOutgoingAttachmentIndex(
+      sessionKey,
       agentId,
-      sessionEntry: entry,
-      sessionId,
-      sessionKey,
-      storePath,
-    },
-    {
-      mode: "full",
-      reason: "managed outgoing attachment index",
-      allowResetArchiveFallback: true,
-    },
-  );
-  const messages = readResult.messages;
-  const preReadTranscriptStat = transcriptStat;
-  if (readResult.transcriptPath) {
-    try {
-      const stat = await fs.stat(readResult.transcriptPath);
-      const postReadTranscriptStat = {
-        transcriptPath: readResult.transcriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      transcriptStat = sameManagedOutgoingAttachmentTranscriptStat(
-        preReadTranscriptStat,
-        postReadTranscriptStat,
-      )
-        ? postReadTranscriptStat
-        : null;
-    } catch {
-      transcriptStat = null;
-    }
+      archiveRevision,
+      index,
+      mode,
+    );
   } else {
-    transcriptStat = null;
-  }
-  const index: SessionManagedOutgoingAttachmentIndex = new Set();
-  for (const message of messages) {
-    const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
-    const messageId = meta?.id;
-    if (typeof messageId !== "string" || !messageId) {
-      continue;
-    }
-    for (const ref of collectManagedOutgoingAttachmentRefs(
-      readAssistantDisplayContent(message),
-      sessionKey,
-    )) {
-      index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));
-    }
-  }
-
-  if (transcriptStat) {
-    setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, transcriptStat, index);
+    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
   }
   cache?.set(cacheKey, index);
   return { kind: "available", index };
@@ -1341,13 +1440,37 @@ async function getSessionManagedOutgoingAttachmentIndex(
 
 async function recordMatchesTranscriptMessage(
   record: ManagedImageRecord,
-  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
+  cache?: Map<string, SessionManagedOutgoingAttachmentIndexResult>,
   storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
   storeTargetsReadCache?: SessionStoreTargetsReadCache,
   stateDir?: string,
+  mode: SessionManagedOutgoingAttachmentIndexMode = "restorable",
+  retentionHandles?: Map<string, ManagedOutgoingRetentionHandle>,
 ): Promise<ManagedOutgoingTranscriptMatch> {
+  return (
+    await resolveManagedOutgoingTranscriptMatch(
+      record,
+      cache,
+      storeAvailabilityCache,
+      storeTargetsReadCache,
+      stateDir,
+      mode,
+      retentionHandles,
+    )
+  ).match;
+}
+
+async function resolveManagedOutgoingTranscriptMatch(
+  record: ManagedImageRecord,
+  cache?: Map<string, SessionManagedOutgoingAttachmentIndexResult>,
+  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
+  storeTargetsReadCache?: SessionStoreTargetsReadCache,
+  stateDir?: string,
+  mode: SessionManagedOutgoingAttachmentIndexMode = "restorable",
+  retentionHandles?: Map<string, ManagedOutgoingRetentionHandle>,
+): Promise<{ match: ManagedOutgoingTranscriptMatch; retention?: ManagedOutgoingRetentionHandle }> {
   if (!record.messageId) {
-    return "missing";
+    return { match: "missing" };
   }
   const read = await getSessionManagedOutgoingAttachmentIndex(
     record.sessionKey,
@@ -1356,25 +1479,38 @@ async function recordMatchesTranscriptMessage(
     storeAvailabilityCache,
     storeTargetsReadCache,
     stateDir,
+    mode,
+    retentionHandles,
   );
   if (read.kind === "unavailable") {
-    return "unavailable";
+    return { match: "unavailable" };
   }
-  return read.index?.has(
-    buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId),
-  )
-    ? "match"
-    : "missing";
+  const retention = read.retention ? { retention: read.retention } : {};
+  if (read.index === RETAIN_ALL_SESSION_MANAGED_OUTGOING_ATTACHMENTS) {
+    return { match: "match", ...retention };
+  }
+  return {
+    match: read.index?.has(
+      buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId),
+    )
+      ? "match"
+      : "missing",
+    ...retention,
+  };
 }
 
 async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
   record: ManagedImageRecord,
   stateDir?: string,
 ): Promise<ManagedOutgoingMediaArtifactDownload | null> {
-  if (
-    (await recordMatchesTranscriptMessage(record, undefined, undefined, undefined, stateDir)) !==
-    "match"
-  ) {
+  const artifactMatch = await recordMatchesTranscriptMessage(
+    record,
+    undefined,
+    undefined,
+    undefined,
+    stateDir,
+  ).catch(() => "unavailable" as const);
+  if (artifactMatch !== "match") {
     return null;
   }
   const kind = resolveManagedRecordKind(record);
@@ -1877,10 +2013,14 @@ export async function handleManagedOutgoingMediaHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  if (
-    (await recordMatchesTranscriptMessage(record, undefined, undefined, undefined, stateDir)) !==
-    "match"
-  ) {
+  const servedMatch = await recordMatchesTranscriptMessage(
+    record,
+    undefined,
+    undefined,
+    undefined,
+    stateDir,
+  ).catch(() => "unavailable" as const);
+  if (servedMatch !== "match") {
     sendStatus(res, 404, "not found");
     return true;
   }

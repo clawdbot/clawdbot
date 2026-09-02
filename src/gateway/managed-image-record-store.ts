@@ -243,6 +243,38 @@ export function claimManagedImageRecordCleanupIfCurrent(
   }, stateDatabaseOptions(stateDir));
 }
 
+/** Release an exact durable claim when authoritative history still retains the record. */
+export function clearClaimedManagedImageRecordCleanupIfCurrent(
+  planned: ManagedImageRecord,
+  stateDir?: string,
+): boolean {
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<ManagedImageRecordDatabase>(db);
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      stateDb
+        .selectFrom("managed_outgoing_image_records")
+        .selectAll()
+        .where("attachment_id", "=", planned.attachmentId),
+    );
+    if (
+      !row ||
+      row.cleanup_pending !== 1 ||
+      !managedImageRecordsEqual(managedImageRecordFromRow(row), planned)
+    ) {
+      return false;
+    }
+    executeSqliteQuerySync(
+      db,
+      stateDb
+        .updateTable("managed_outgoing_image_records")
+        .set({ cleanup_pending: 0 })
+        .where("attachment_id", "=", planned.attachmentId),
+    );
+    return true;
+  }, stateDatabaseOptions(stateDir));
+}
+
 /** Delete a durably claimed row only after its attachment file is gone. */
 export function deleteClaimedManagedImageRecord(
   planned: ManagedImageRecord,
