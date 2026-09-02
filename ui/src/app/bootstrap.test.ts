@@ -259,15 +259,7 @@ describe("bootstrapApplication", () => {
       },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
-    const canonicalLocation = await resolveInitialApplicationLocation({
-      location: { pathname: "/", search: "", hash: "" },
-      basePath: "",
-      sessionKey: "agent:main:main",
-      gateway,
-      agentsList: () => null,
-      signal: new AbortController().signal,
-    });
-    expect(canonicalLocation).toEqual({ pathname: "/chat/main", search: "", hash: "" });
+    const canonicalLocation = { pathname: "/chat/main", search: "", hash: "" };
 
     const redirectReady = startModelSetupFirstRunRedirectAfterLocation({
       context,

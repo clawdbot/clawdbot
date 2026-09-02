@@ -118,7 +118,7 @@ async function normalizeReleasedSessionQueryLocation(params: {
   };
 }
 
-function normalizeInitialApplicationLocation(
+export function normalizeInitialApplicationLocation(
   location: RouteLocation,
   basePath: string,
   sessionKey: string,
@@ -182,6 +182,9 @@ export async function resolveInitialApplicationLocation(params: {
   if (normalizeAgentId(agentId) !== normalizeAgentId(defaultAgentId) && !agentsList) {
     agentsList = (await params.ensureAgentsList?.()) ?? null;
     params.signal.throwIfAborted();
+    if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
+      return resolveInitialApplicationLocation(params);
+    }
   }
   if (agentsList && !resolvePersistedAgentId(agentId, agentsList)) {
     agentId = resolvePersistedAgentId(params.selectedAgentId, agentsList) ?? defaultAgentId;
@@ -219,7 +222,9 @@ export async function resolveInitialApplicationLocation(params: {
     }
     params.signal.throwIfAborted();
     if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
-      resolved = null;
+      // The response belongs to the captured Gateway generation. Re-entering
+      // prevents a reconnect from installing state the replacement never confirmed.
+      return resolveInitialApplicationLocation(params);
     }
     if (resolved && !resolved.ok) {
       sessionKey = buildAgentMainSessionKey({ agentId, mainKey });

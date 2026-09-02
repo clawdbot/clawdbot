@@ -47,7 +47,11 @@ suite.define(() => {
 
         await page.goto(suite.server.baseUrl);
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
-        await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+        const activeComposer = page.locator(
+          'openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea',
+        );
+        await activeComposer.waitFor({ state: "visible" });
+        expect(await activeComposer.count()).toBe(1);
         expect(await page.locator(".session-route-not-found").count()).toBe(0);
         expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
           sessionKey: mainKey,

@@ -2,6 +2,7 @@ import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { expect, it, vi } from "vitest";
+import type { AgentsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
@@ -170,6 +171,114 @@ it("replaces a confirmed-missing remembered session with the agent main route", 
   );
 });
 
+it("validates a remembered session again after the Gateway client changes", async () => {
+  let finishFirstRequest:
+    | ((result: { ok: true; key: string; agentId: string }) => void)
+    | undefined;
+  const firstRequest = vi.fn(
+    (): Promise<{ ok: boolean; key?: string; agentId?: string }> =>
+      new Promise((resolve) => {
+        finishFirstRequest = resolve;
+      }),
+  );
+  const replacementRequest = vi.fn(
+    async (): Promise<{ ok: boolean; key?: string; agentId?: string }> => ({ ok: false }),
+  );
+  const firstHello = {
+    snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } },
+  };
+  const replacementHello = {
+    snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } },
+  };
+  const gatewayState = {
+    snapshot: {
+      phase: "connected",
+      client: { request: firstRequest },
+      hello: firstHello,
+    },
+    subscribe: vi.fn(() => () => undefined),
+  };
+  const gateway = gatewayState as unknown as ApplicationContext<RouteId>["gateway"];
+  const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
+
+  const pending = resolveInitialApplicationLocation({
+    location: { pathname: "/", search: "", hash: "" },
+    basePath: "",
+    sessionKey: rememberedKey,
+    gateway,
+    agentsList: () => ({
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "research" }],
+    }),
+    signal: new AbortController().signal,
+  });
+  await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce());
+  gatewayState.snapshot = {
+    ...gatewayState.snapshot,
+    client: { request: replacementRequest },
+    hello: replacementHello,
+  };
+  finishFirstRequest?.({ ok: true, key: rememberedKey, agentId: "research" });
+
+  await expect(pending).resolves.toEqual({ pathname: "/chat/research", search: "", hash: "" });
+  expect(replacementRequest).toHaveBeenCalledExactlyOnceWith(
+    "sessions.resolve",
+    { key: rememberedKey, agentId: "research", allowMissing: true },
+    { signal: expect.any(AbortSignal) },
+  );
+});
+
+it("loads the agent roster again after the Gateway client changes", async () => {
+  let finishFirstList: ((result: AgentsListResult) => void) | undefined;
+  const currentList: AgentsListResult = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: [{ id: "main" }],
+  };
+  const oldList = { ...currentList, agents: [{ id: "main" }, { id: "research" }] };
+  const ensureAgentsList = vi
+    .fn<() => Promise<AgentsListResult>>()
+    .mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirstList = resolve;
+        }),
+    )
+    .mockResolvedValue(currentList);
+  const gatewayState = {
+    snapshot: {
+      phase: "connected",
+      client: {},
+      hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
+    },
+    subscribe: vi.fn(() => () => undefined),
+  };
+  const gateway = gatewayState as unknown as ApplicationContext<RouteId>["gateway"];
+
+  const pending = resolveInitialApplicationLocation({
+    location: { pathname: "/", search: "", hash: "" },
+    basePath: "",
+    sessionKey: "agent:research:main",
+    gateway,
+    agentsList: () => null,
+    ensureAgentsList,
+    signal: new AbortController().signal,
+  });
+  await vi.waitFor(() => expect(ensureAgentsList).toHaveBeenCalledOnce());
+  gatewayState.snapshot = {
+    ...gatewayState.snapshot,
+    client: {},
+    hello: { snapshot: { sessionDefaults: { defaultAgentId: "main", mainKey: "main" } } },
+  };
+  finishFirstList?.(oldList);
+
+  await expect(pending).resolves.toEqual({ pathname: "/chat/main", search: "", hash: "" });
+  expect(ensureAgentsList).toHaveBeenCalledTimes(2);
+});
+
 it("starts routing an agent-scoped remembered session while the Gateway is offline", async () => {
   const previousSettings = loadSettings();
   const previousUrl = window.location.href;
@@ -179,8 +288,7 @@ it("starts routing an agent-scoped remembered session while the Gateway is offli
     lastActiveSessionKey: "agent:research:thread:12345678-0000-4000-8000-000000000001",
   });
   window.history.replaceState({}, "", "/");
-  const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
-  vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => undefined);
+  const runtime = bootstrapApplication();
   const routerStart = vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
 
   try {
