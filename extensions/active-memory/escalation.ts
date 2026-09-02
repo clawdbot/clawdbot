@@ -43,6 +43,14 @@ const LOCALIZED_RECALL_INTENT_PATTERNS = [
     retrospective:
       /(?:지난\s*(?:번|주|달)|저번|예전|어제).{0,24}(?:논의했|(?:이야기|얘기|대화)했|말했|언급했|결정했)/u,
   },
+  {
+    intent:
+      /\b(?:vo[cç][eê]\s+)?(?:se\s+)?(?:lembra|recorda)(?:-se)?\s+(?:(?:o\s+que|qual|quais|como|quando|onde|por\s+que|porqu[eê]|quem)|d(?:e|o|a|os|as)\s+(?:que|qual|quais|como|quando|onde|quem))\b|\b(?:o\s+que|qual|quais|como|quando|onde|por\s+que|porqu[eê])\b.{0,48}\b(?:a\s+gente|n[oó]s|vo[cç][eê]s?)?\s*(?:discutiu|discutiram|discutimos|conversou|conversaram|conversamos|decidiu|decidiram|decidimos|falou|falaram|falamos|investigou|investigaram|investigamos)\b|\bsem\s+olhar\s+(?:a|na)\s+conversa\s+atual\b/iu,
+    future:
+      /(?<![\p{L}\p{N}_])(?:amanh[aã]|depois\s+de\s+amanh[aã]|(?:na|no)\s+pr[oó]xim[ao]|pr[oó]xim[ao]\s+(?:semana|m[eê]s|ano|vez)|mais\s+tarde|daqui\s+a|no\s+futuro)(?![\p{L}\p{N}_])/iu,
+    retrospective:
+      /(?<![\p{L}\p{N}_])(?:ontem|anteontem|(?:na|no)\s+semana\s+passad[ao]|(?:na|no)\s+m[eê]s\s+passad[ao]|(?:na|no)\s+ano\s+passad[ao]|(?:da|na)\s+[uú]ltima\s+vez|antes|anteriormente|outro\s+dia)(?![\p{L}\p{N}_])|\b(?:vo[cç][eê]\s+)?(?:se\s+)?(?:lembra|recorda)(?:-se)?\s+(?:(?:o\s+que|qual|quais|como|quando|onde|por\s+que|porqu[eê]|quem)|d(?:e|o|a|os|as)\s+(?:que|qual|quais|como|quando|onde|quem))\b|\bsem\s+olhar\s+(?:a|na)\s+conversa\s+atual\b/iu,
+  },
 ];
 
 export function hasRecallIntent(message: string): boolean {
