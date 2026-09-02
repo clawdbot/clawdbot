@@ -94,18 +94,21 @@ flow:
             expr: "emptyTask.terminalOutcome === 'succeeded' && emptyTask.deliveryStatus === 'not_applicable'"
             message:
               expr: "`empty completion did not close at its lifecycle owner: ${JSON.stringify(emptyTask)}`"
+        - set: emptyOutboundHistory
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId)"
         - set: emptyOutbound
           value:
-            expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversationId)"
+            expr: "emptyOutboundHistory.filter((message) => !message.deleted)"
         - set: emptyRequests
           value:
             expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`) : []"
         - set: emptyTerminalOutbound
           value:
-            expr: "emptyOutbound.filter((message) => String(message.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
+            expr: "emptyOutboundHistory.filter((message) => String(message.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
         - set: requesterVisibleParentMessages
           value:
-            expr: "emptyOutbound.filter((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
+            expr: "emptyOutboundHistory.filter((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED')"
         - assert:
             expr: "requesterVisibleParentMessages.length > 0"
             message:
@@ -119,7 +122,7 @@ flow:
             message:
               expr: "`empty completion did not stop at the lifecycle owner: ${JSON.stringify(emptyRequests)}`"
         - assert:
-            expr: "emptyOutbound.every((message) => !String(message.text ?? '').includes(config.metadataSentinel) && !String(message.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT') && String(message.text ?? '').trim() !== 'NO_REPLY')"
+            expr: "emptyOutboundHistory.every((message) => !String(message.text ?? '').includes(config.metadataSentinel) && !String(message.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT') && String(message.text ?? '').trim() !== 'NO_REPLY')"
             message:
               expr: "`empty completion leaked silence or internal metadata; outbound=${recentOutboundSummary(state)}`"
         - set: postCompletionRequestCursor
@@ -152,7 +155,7 @@ flow:
             - 250
         - set: postRestartOutbound
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === conversationId).map((message) => ({ id: message.id, text: String(message.text ?? '') }))"
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === conversationId).map((message) => ({ id: message.id, text: String(message.text ?? '') }))"
         - set: postRestartRequests
           value:
             expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${postCompletionRequestCursor}`) : []"
@@ -164,4 +167,4 @@ flow:
             expr: "postRestartRequests.length === 0 && postRestartOutbound.every((message) => String(message.text ?? '').trim() !== 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED' && !String(message.text ?? '').includes(config.metadataSentinel) && String(message.text ?? '').trim() !== 'NO_REPLY')"
             message:
               expr: "`Gateway restart retried or exposed empty completion: requests=${JSON.stringify(postRestartRequests)} outbound=${JSON.stringify(postRestartOutbound)}`"
-      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterVisibleParentMessages.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutbound.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"
+      detailsExpr: "JSON.stringify({ taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, taskTerminalOutcome: emptyTask.terminalOutcome, inputDisposition: 'empty-after-side-effect', requesterAcknowledgementCount: requesterVisibleParentMessages.length, expectedTerminalSendCount: 0, actualTerminalSendCount: emptyTerminalOutbound.length, auxiliaryChannelEvents: emptyOutboundHistory.map((message) => String(message.text ?? '')), postRestartProviderRequestCount: postRestartRequests.length, providerMode: env.providerMode, pass: true }, null, 2)"
