@@ -3088,11 +3088,6 @@ button.chat-pr__diff {
 .chat-pr__checks-menu-header svg {
   width: 14px;
   height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .chat-pr__checks-row {
@@ -3748,8 +3743,8 @@ button.chat-pr__diff {
   display: none;
 }
 
-/* Reserve notice height beside interactive PR cards instead of covering them. */
-.chat-prs ~ .agent-chat__composer-shell .agent-chat__composer-overlay {
+/* Reserve notice height beside publication controls instead of covering them. */
+.chat-prs:has(.chat-pr__create) ~ .agent-chat__composer-shell .agent-chat__composer-overlay {
   position: static;
 }
 
