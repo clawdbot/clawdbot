@@ -110,6 +110,14 @@ describe("fallback-state", () => {
     expect(resolved.reasonSummary).toContain("Claude Max usage limit reached");
   });
 
+  it("strips repeated warning prefixes from transient fallback details", () => {
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [{ ...baseAttempt, error: "⚠️ ⚠️ 429 Too Many Requests: retry later" }],
+    });
+
+    expect(resolved.reasonSummary).toBe("HTTP 429: Too Many Requests: retry later");
+  });
+
   it.each([
     // 真实 AWS Bedrock fixture，provenance 可追溯:
     //   src/agents/failover-error.test.ts:54（引用 AWS troubleshooting 文档）

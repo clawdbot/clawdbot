@@ -41,7 +41,7 @@ function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): str
   if (!TRANSIENT_ERROR_DETAIL_HINT_RE.test(rawError)) {
     return undefined;
   }
-  const formatted = stripErrorIconPrefix(formatRawAssistantErrorForUi(rawError))
+  const formatted = stripErrorIconPrefix(formatRawAssistantErrorForUi(stripErrorIconPrefix(rawError)))
     .replace(/\s+/g, " ")
     .trim();
   if (!formatted || /unknown error/i.test(formatted)) {

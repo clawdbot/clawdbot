@@ -163,6 +163,25 @@ describe("follow-up delivery channel boundary", () => {
     });
   });
 
+  it("strips repeated warning prefixes at the channel delivery boundary", () => {
+    const decision = resolveFollowupDeliveryDecision({
+      turn: createTurn({ messageProvider: "discord", originatingChannel: "discord" }),
+      execution: {
+        runId: "run-1",
+        outcome: {
+          kind: "rejected",
+          payload: { text: "⚠️ ⚠️ Provider billing failed.", isError: true },
+          postCompactionModelFailure: true,
+        },
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "⚠️ Context compaction succeeded, but the later model request still failed. Provider billing failed." }],
+    });
+  });
+
   it.each([
     { mode: "first", duplicate: "media" },
     { mode: "batched", duplicate: "media" },
