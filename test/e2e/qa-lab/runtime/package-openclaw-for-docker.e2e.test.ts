@@ -1539,34 +1539,69 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
-  it("uses pnpm pack when requested", async () => {
-    const sourceDir = createPackageSourceFixture("openclaw-package-source-");
-    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-pack-"));
-    const calls: string[] = [];
-    const packedPath = path.join(outputDir, "openclaw-2026.5.28.tgz");
+  it("packs the bundled AI runtime with isolated workspace configuration", async () => {
+    const sourceDir = createPackageSourceFixture("openclaw-pnpm-bundled-source-");
+    const outputDir = tempDirs.make("openclaw-pnpm-bundled-output-");
+    const { packageManager, version } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      packageManager: string;
+      version: string;
+    };
+    const packageJson = JSON.stringify({
+      name: "openclaw",
+      version,
+      packageManager,
+      files: ["dist"],
+      dependencies: { "@openclaw/ai": "workspace:*" },
+      scripts: { prepack: 'node -e "process.exit(91)"' },
+    });
+    const workspace = "packages:\n  - packages/*\nnodeLinker: isolated\n";
+    const aiDir = path.join(sourceDir, "packages/ai");
+    const installedAi = path.join(sourceDir, "node_modules/@openclaw/ai");
+    fs.mkdirSync(path.join(sourceDir, "dist"));
+    fs.mkdirSync(path.join(aiDir, "dist"), { recursive: true });
+    fs.mkdirSync(path.dirname(installedAi), { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "package.json"), packageJson);
+    fs.writeFileSync(path.join(sourceDir, "pnpm-workspace.yaml"), workspace);
+    fs.writeFileSync(path.join(sourceDir, "dist/entry.js"), "export const worker = true;\n");
+    fs.writeFileSync(
+      path.join(aiDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/ai", version, files: ["dist"] }),
+    );
+    fs.writeFileSync(path.join(aiDir, "dist/index.js"), "export const runtime = true;\n");
+    fs.writeFileSync(path.join(aiDir, "source-only-marker"), "workspace source\n");
+    fs.symlinkSync(aiDir, installedAi, "junction");
 
-    try {
-      const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
-        ...skipDocsMapLifecycle,
-        ...skipTarballModeNormalization,
-        pnpmPack: true,
-        prepareBundledAiRuntime: skipBundledAiRuntime,
-        prepareChangelog: async () => {},
-        restoreChangelog: async () => {},
-        runCaptureImpl: async (command: string, args: string[], cwd: string) => {
-          calls.push(`${command}:${args.join(" ")}:${cwd}`);
-          fs.writeFileSync(packedPath, "package");
-          return `${packedPath}\n`;
-        },
-      });
-
-      expect(tarball).toBe(packedPath);
-      expect(calls).toEqual([
-        `pnpm:pack --silent --config.ignore-scripts=true --pack-destination ${outputDir}:${sourceDir}`,
-      ]);
-    } finally {
-      fs.rmSync(outputDir, { force: true, recursive: true });
-    }
+    const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+      ...skipDocsMapLifecycle,
+      pnpmPack: true,
+      prepareChangelog: async () => {},
+      restoreChangelog: async () => {},
+    });
+    const extracted = tempDirs.make("openclaw-pnpm-bundled-extracted-");
+    await tar.x({ file: tarball, cwd: extracted });
+    const packedRoot = path.join(extracted, "package");
+    expect(fs.readFileSync(path.join(packedRoot, "dist/entry.js"), "utf8")).toBe(
+      "export const worker = true;\n",
+    );
+    expect(
+      fs.readFileSync(path.join(packedRoot, "node_modules/@openclaw/ai/dist/index.js"), "utf8"),
+    ).toBe("export const runtime = true;\n");
+    expect(
+      JSON.parse(fs.readFileSync(path.join(packedRoot, "package.json"), "utf8")),
+    ).toMatchObject({
+      dependencies: { "@openclaw/ai": version },
+      bundleDependencies: ["@openclaw/ai"],
+    });
+    expect(
+      fs.existsSync(path.join(packedRoot, "node_modules/@openclaw/ai/source-only-marker")),
+    ).toBe(false);
+    expect(fs.readFileSync(path.join(sourceDir, "package.json"), "utf8")).toBe(packageJson);
+    expect(fs.readFileSync(path.join(sourceDir, "pnpm-workspace.yaml"), "utf8")).toBe(workspace);
+    expect(fs.lstatSync(installedAi).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(path.join(installedAi, "source-only-marker"), "utf8")).toBe(
+      "workspace source\n",
+    );
+    expect(fs.readdirSync(outputDir)).toEqual([path.basename(tarball)]);
   });
 
   it("normalizes npm 12 pack metadata for renamed package artifacts", async () => {
