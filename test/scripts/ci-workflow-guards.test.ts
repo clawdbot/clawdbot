@@ -44,6 +44,7 @@ import {
   uiE2eRuntimeBudgetTestFile,
   uiE2eSerialTestFiles,
 } from "../vitest/vitest.ui-e2e.config.ts";
+import { runCiGitStep } from "./ci-git-owner.test-support.js";
 import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
 
 const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
@@ -9242,6 +9243,87 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ]);
     }
   });
+
+  it.skipIf(process.platform === "win32").each(
+    (["bundled-protocol", "guards", "npm-lock"] as const).flatMap((task) =>
+      (["pull_request", "push", "workflow_dispatch"] as const).map((eventName) => ({
+        task,
+        eventName,
+      })),
+    ),
+  )(
+    "uses prefetched CI base without later network access ($task, $eventName)",
+    async ({ task, eventName }) => {
+      const base = "c".repeat(40);
+      const baseRef = "refs/remotes/origin/ci-ratchet-base";
+      const jobName = task === "bundled-protocol" ? "checks-fast-core" : "check-shard";
+      const job = readCiWorkflow().jobs[jobName];
+      const needsBase =
+        task === "bundled-protocol" ||
+        (task === "guards" ? eventName === "pull_request" : eventName !== "workflow_dispatch");
+      const checkoutBase = evaluateWorkflowExpression(job.env?.CHECKOUT_BASE_SHA ?? "${{ '' }}", {
+        eventName,
+        repository: "fixture/checkout",
+        runAttempt: 1,
+        matrix: { task },
+        preflightOutputs: { diff_base_revision: base },
+      });
+      const report = await runCiGitStep({
+        job: jobName,
+        step:
+          task === "bundled-protocol"
+            ? "Run ${{ matrix.task }} (${{ matrix.runtime }})"
+            : "Run check shard",
+        checkoutBeforeStep: true,
+        // The authenticated checkout and trusted harness fetch succeed. Network
+        // access is unavailable afterward, even though the base is already local.
+        fetchResults: [0, 0, 128],
+        baseAvailableAfter: 0,
+        revisions: { [`${baseRef}^{commit}`]: base },
+        env: {
+          TASK: task,
+          GITHUB_EVENT_NAME: eventName,
+          CHECKOUT_KIND: "linux-node",
+          CHECKOUT_BASE_SHA: String(checkoutBase),
+          CHECKOUT_TOKEN: "fixture-checkout-token",
+          PR_BASE_SHA: eventName === "pull_request" ? base : "",
+        },
+      });
+      expect(report.code, report.output).toBe(0);
+      expect(report.fetches).toHaveLength(2);
+      const sourceFetch = report.fetches.find(({ cwd }) => cwd === report.workspace);
+      expect(sourceFetch?.args.includes(`+${base}:refs/remotes/origin/ci-ratchet-base`)).toBe(
+        needsBase,
+      );
+      const consumers = report.commands.filter(({ tool }) => tool === "node" || tool === "pnpm");
+      if (task === "bundled-protocol") {
+        expect(consumers.map(({ args }) => args)).toEqual([["test:bundled"], ["protocol:check"]]);
+      } else if (task === "guards") {
+        const tempReport = consumers.find(
+          ({ args }) => args[0] === "scripts/report-test-temp-creations.mjs",
+        );
+        expect(tempReport?.args).toEqual(
+          needsBase
+            ? [
+                "scripts/report-test-temp-creations.mjs",
+                "--base",
+                baseRef,
+                "--head",
+                "HEAD",
+                "--no-merge-base",
+              ]
+            : undefined,
+        );
+      } else {
+        expect(consumers.filter(({ tool }) => tool === "pnpm").map(({ args }) => args)).toEqual([
+          needsBase
+            ? ["deps:npm-lock:check:changed", "--base", baseRef, "--head", "HEAD"]
+            : ["deps:npm-lock:check"],
+        ]);
+      }
+    },
+    55_000,
+  );
 
   it("runs all baseline ratchets against the exact tested tree", () => {
     const workflow = readCiWorkflow();
