@@ -1,15 +1,22 @@
 /** Session-scoped MCP runtime catalog loader and transport lifecycle. */
-import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
-  ErrorCode,
-  ListToolsResultSchema,
-  McpError,
-  type CallToolResult,
-  type ClientCapabilities,
-  type ServerCapabilities,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+  Client,
+  StreamableHTTPClientTransport,
+  ProtocolErrorCode,
+  SdkErrorCode,
+  SdkError,
+  SdkHttpError,
+} from "@modelcontextprotocol/client";
+import type {
+  ClientOptions,
+  Transport,
+  CallToolResult,
+  ClientCapabilities,
+  ServerCapabilities,
+  Tool,
+  VersionNegotiationOptions,
+} from "@modelcontextprotocol/client";
+import { ListToolsResultSchema } from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
@@ -41,13 +48,16 @@ import type {
 import {
   connectMcpClient,
   disposeMcpClient,
-  isStatefulMcpHttpSessionExpired,
   McpClientConnectTimeoutError,
 } from "./mcp-client-lifecycle.js";
 import {
   normalizeMcpCodexToolAnnotations,
   resolveMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
+import {
+  buildMcpVersionNegotiationForTransport,
+  isMcpEraNegotiationFailure,
+} from "./mcp-connect.js";
 import {
   applyMcpConnectionOverride,
   type McpServerConnectionResolved,
@@ -73,6 +83,12 @@ type BundleMcpSession = {
   connectPromise?: Promise<void>;
   detachStderr?: () => void;
   toolMetadata?: McpToolCatalogMetadata;
+  /**
+   * Rebuilds this session pinned to the legacy 2025 handshake after the
+   * 2026-07-28 era probe failed (e.g. a legacy stdio server exited on the
+   * probe). Only present on freshly created sessions.
+   */
+  rebuildForLegacyEra?: () => BundleMcpSession | null;
 };
 
 type ListedTool = Tool;
@@ -89,7 +105,7 @@ const BUNDLE_MCP_MAX_LIST_ITEMS = 16_384;
 const BUNDLE_MCP_MAX_LIST_BYTES = 10 * 1024 * 1024;
 let bundleMcpCatalogListTimeoutMs: number | undefined;
 const BUNDLE_MCP_TEST_STATE_KEY = Symbol.for("openclaw.bundleMcpTestState");
-type BundleMcpTestState = { disposeTimeoutMs?: number };
+type BundleMcpTestState = { disposeTimeoutMs?: number; eraProbeTimeoutMs?: number };
 
 function getBundleMcpTestState(): BundleMcpTestState {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
@@ -124,32 +140,24 @@ async function listAllTools(
     maxBytes: BUNDLE_MCP_MAX_LIST_BYTES,
     signal,
     loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-      const requestController = new AbortController();
-      const onAbort = () => requestController.abort(requestSignal.reason);
-      requestSignal.addEventListener("abort", onAbort, { once: true });
-      if (requestSignal.aborted) {
-        onAbort();
-      }
-      try {
-        const page = await client.request(
-          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          ListToolsResultSchema,
-          {
-            timeout: requestTimeoutMs,
-            maxTotalTimeout: requestTimeoutMs,
-            signal: requestController.signal,
-          },
-        );
-        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-      } finally {
-        requestSignal.removeEventListener("abort", onAbort);
-      }
+      // Use the low-level request instead of the listTools verb: v2's verb
+      // returns empty without calling the server when the tools capability is
+      // not advertised, while some servers serve tools but omit the capability.
+      const page = await client.request(
+        { method: "tools/list", params: cursor === undefined ? {} : { cursor } },
+        {
+          timeout: requestTimeoutMs,
+          maxTotalTimeout: requestTimeoutMs,
+          signal: requestSignal,
+        },
+      );
+      return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
     },
   });
 }
 
 function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
+  if (isRecord(error) && error.code === ProtocolErrorCode.MethodNotFound) {
     return true;
   }
   const message = String(error);
@@ -200,6 +208,13 @@ function disposeBundleMcpSession(session: BundleMcpSession): Promise<void> {
     session,
     getBundleMcpTestState().disposeTimeoutMs ?? BUNDLE_MCP_DISPOSE_TIMEOUT_MS,
   );
+}
+
+function setBundleMcpEraProbeTimeoutMsForTest(timeoutMs?: number): void {
+  getBundleMcpTestState().eraProbeTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : undefined;
 }
 
 function buildMcpClientCapabilities(mcpAppsEnabled: boolean): ClientCapabilities {
@@ -363,6 +378,98 @@ export function createSessionMcpRuntime(params: {
     }
     return session;
   };
+  const applyEraProbeTimeoutOverride = (
+    negotiation: VersionNegotiationOptions,
+  ): VersionNegotiationOptions => {
+    const overrideMs = getBundleMcpTestState().eraProbeTimeoutMs;
+    if (overrideMs === undefined || negotiation.mode !== "auto") {
+      return negotiation;
+    }
+    return { ...negotiation, probe: { ...negotiation.probe, timeoutMs: overrideMs } };
+  };
+  const buildSessionClient = (
+    sessionServerName: string,
+    versionNegotiation: VersionNegotiationOptions,
+  ): Client =>
+    new Client(
+      {
+        name: "openclaw-bundle-mcp",
+        version: "0.0.0",
+      },
+      {
+        ...buildMcpClientOptions(mcpAppsEnabled),
+        jsonSchemaValidator: createMcpJsonSchemaValidator(),
+        versionNegotiation: applyEraProbeTimeoutOverride(versionNegotiation),
+        listChanged: {
+          tools: {
+            autoRefresh: false,
+            debounceMs: 0,
+            onChanged: (error) => {
+              if (error) {
+                logWarn(
+                  `bundle-mcp: failed to refresh changed tool list for server "${sessionServerName}": ${redactMcpDiagnosticError(error)}`,
+                );
+              }
+              invalidateCatalog();
+            },
+          },
+        },
+      },
+    );
+  const attachClientCloseHandler = (targetSession: BundleMcpSession): void => {
+    // The SDK exposes lifecycle hooks as callback properties. A close is
+    // terminal for this client/transport pair.
+    // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
+    targetSession.client.onclose = () => {
+      const wasConnected = targetSession.connected;
+      targetSession.connected = false;
+      targetSession.disconnectReason = "mcp transport closed";
+      // Only established current sessions invalidate the catalog. Startup closes
+      // already belong to catalog loading, and retirement must not start a rebuild.
+      if (
+        wasConnected &&
+        !disposed &&
+        !targetSession.retiring &&
+        sessions.get(targetSession.serverName) === targetSession
+      ) {
+        scheduleCatalogServerRetry(targetSession.serverName, "mcp transport closed");
+        logWarn(`bundle-mcp: server "${targetSession.serverName}" closed; next request reconnects`);
+      }
+    };
+  };
+  const createBundleMcpSession = (
+    sessionServerName: string,
+    resolvedTransport: NonNullable<ReturnType<typeof resolveMcpTransport>>,
+    versionNegotiation: VersionNegotiationOptions,
+  ): BundleMcpSession => {
+    const sessionClient = buildSessionClient(sessionServerName, versionNegotiation);
+    const createdSession: BundleMcpSession = {
+      serverName: sessionServerName,
+      client: sessionClient,
+      transport: resolvedTransport.transport,
+      transportType: resolvedTransport.transportType,
+      requestTimeoutMs: resolvedTransport.requestTimeoutMs,
+      supportsParallelToolCalls: resolvedTransport.supportsParallelToolCalls,
+      connected: false,
+      retiring: false,
+      detachStderr: resolvedTransport.detachStderr,
+    };
+    attachClientCloseHandler(createdSession);
+    return createdSession;
+  };
+  const rebuildSessionForLegacyEra = (
+    failedSession: BundleMcpSession,
+    failedTransportSource: unknown,
+  ): BundleMcpSession | null => {
+    const retryResolved = resolveMcpTransport(failedSession.serverName, failedTransportSource, {
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    });
+    if (!retryResolved) {
+      return null;
+    }
+    return createBundleMcpSession(failedSession.serverName, retryResolved, { mode: "legacy" });
+  };
   const ensureSessionConnected = async (
     session: BundleMcpSession,
     connectionTimeoutMs: number,
@@ -421,7 +528,7 @@ export function createSessionMcpRuntime(params: {
     } else {
       requestSignal?.addEventListener("abort", onParentAbort, { once: true });
     }
-    const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
+    const timeoutError = new SdkError(SdkErrorCode.RequestTimeout, "Request timed out", {
       timeout: session.requestTimeoutMs,
     });
     const timeout = setTimeout(() => {
@@ -475,7 +582,12 @@ export function createSessionMcpRuntime(params: {
     } catch (error) {
       // A stateful server uses HTTP 404 to invalidate an expired MCP session.
       // Reinitialize a fresh client, but never replay a possibly mutating call.
-      const sessionExpired = isStatefulMcpHttpSessionExpired(session, error);
+      const sessionExpired =
+        session.transportType === "streamable-http" &&
+        session.transport instanceof StreamableHTTPClientTransport &&
+        session.transport.sessionId !== undefined &&
+        error instanceof SdkHttpError &&
+        error.status === 404;
       let recycleReason: "expired HTTP session" | "repeated request timeouts" | undefined;
       if (sessionExpired && !requestSignal?.aborted) {
         recycleReason = "expired HTTP session";
@@ -587,6 +699,7 @@ export function createSessionMcpRuntime(params: {
         const preparedEntries: Array<{
           serverName: string;
           rawServer: (typeof loaded.mcpServers)[string];
+          transportSource: unknown;
           resolved: NonNullable<ReturnType<typeof resolveMcpTransport>>;
           safeServerName: string;
           launchDescription: string;
@@ -628,6 +741,7 @@ export function createSessionMcpRuntime(params: {
           preparedEntries.push({
             serverName,
             rawServer,
+            transportSource,
             resolved,
             safeServerName,
             launchDescription,
@@ -645,7 +759,14 @@ export function createSessionMcpRuntime(params: {
         };
 
         const tasks = preparedEntries.map(
-          ({ serverName, rawServer, resolved, safeServerName, launchDescription }) =>
+          ({
+            serverName,
+            rawServer,
+            transportSource,
+            resolved,
+            safeServerName,
+            launchDescription,
+          }) =>
             async (): Promise<ServerResult> => {
               failIfDisposed();
 
@@ -668,67 +789,42 @@ export function createSessionMcpRuntime(params: {
               const reusedSession = Boolean(session);
               const schemaValidator = createMcpJsonSchemaValidator();
               if (!session) {
-                const client = new Client(
-                  {
-                    name: "openclaw-bundle-mcp",
-                    version: "0.0.0",
-                  },
-                  {
-                    ...buildMcpClientOptions(mcpAppsEnabled),
-                    jsonSchemaValidator: schemaValidator,
-                    listChanged: {
-                      tools: {
-                        autoRefresh: false,
-                        debounceMs: 0,
-                        onChanged: (error) => {
-                          if (error) {
-                            logWarn(
-                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactMcpDiagnosticError(error)}`,
-                            );
-                          }
-                          invalidateCatalog();
-                        },
-                      },
-                    },
-                  },
-                );
-                const createdSession: BundleMcpSession = {
+                const createdSession = createBundleMcpSession(
                   serverName,
-                  client,
-                  transport: resolved.transport,
-                  transportType: resolved.transportType,
-                  requestTimeoutMs: resolved.requestTimeoutMs,
-                  supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-                  connected: false,
-                  retiring: false,
-                  detachStderr: resolved.detachStderr,
-                };
-                // The SDK exposes lifecycle hooks as callback properties. A close is
-                // terminal for this client/transport pair.
-                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
-                client.onclose = () => {
-                  const wasConnected = createdSession.connected;
-                  createdSession.connected = false;
-                  createdSession.disconnectReason = "mcp transport closed";
-                  // Only established current sessions invalidate the catalog. Startup closes
-                  // already belong to catalog loading, and retirement must not start a rebuild.
-                  if (
-                    wasConnected &&
-                    !disposed &&
-                    !createdSession.retiring &&
-                    sessions.get(serverName) === createdSession
-                  ) {
-                    scheduleCatalogServerRetry(serverName, "mcp transport closed");
-                    logWarn(`bundle-mcp: server "${serverName}" closed; next request reconnects`);
-                  }
-                };
+                  resolved,
+                  buildMcpVersionNegotiationForTransport(resolved.transportType),
+                );
+                createdSession.rebuildForLegacyEra = () =>
+                  rebuildSessionForLegacyEra(createdSession, transportSource);
                 session = createdSession;
                 sessions.set(serverName, session);
               }
 
               try {
                 failIfDisposed();
-                await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+                try {
+                  await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+                } catch (error) {
+                  if (!isMcpEraNegotiationFailure(error) || !session.rebuildForLegacyEra) {
+                    throw error;
+                  }
+                  // A legacy server exited on the 2026-07-28 server/discover probe
+                  // instead of answering it, so the SDK could not fall back on its
+                  // own. Rebuild the session pinned to the 2025 handshake and retry
+                  // once.
+                  const rebuilt = session.rebuildForLegacyEra();
+                  if (!rebuilt) {
+                    throw error;
+                  }
+                  await disposeBundleMcpSession(session);
+                  logWarn(
+                    `bundle-mcp: server "${serverName}" ended the 2026-07-28 probe; retrying with the legacy 2025 handshake`,
+                  );
+                  session = rebuilt;
+                  sessions.set(serverName, session);
+                  failIfDisposed();
+                  await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+                }
                 failIfDisposed();
                 const capabilities = summarizeServerCapabilities(
                   session.client.getServerCapabilities(),
@@ -759,8 +855,10 @@ export function createSessionMcpRuntime(params: {
                 const deniedToolNames = new Set(
                   denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
                 );
+                // v2 Tool and the legacy SDK Tool differ only in JSON schema property types;
+                // normalizeMcpToolCatalog reads structural fields that are compatible.
                 const normalizedTools = normalizeMcpToolCatalog(
-                  listedTools,
+                  listedTools as unknown as Parameters<typeof normalizeMcpToolCatalog>[0],
                   schemaValidator,
                   (toolName) => {
                     if (!isMcpToolAllowed(toolFilter, toolName)) {
@@ -770,7 +868,7 @@ export function createSessionMcpRuntime(params: {
                   },
                 );
                 session.toolMetadata = normalizedTools.metadata;
-                const exposedTools = normalizedTools.tools;
+                const exposedTools = normalizedTools.tools as unknown as Tool[];
                 const serverEntry: McpServerCatalog = {
                   serverName,
                   safeServerName,
@@ -1021,17 +1119,23 @@ export function createSessionMcpRuntime(params: {
       lastUsedAt = Date.now();
     },
     async callTool(serverName, toolName, input) {
-      const session = await getActiveSession(serverName);
-      const validateResult = session.toolMetadata?.validatorForCall(toolName);
-      const result = (await runGuardedMcpRequest(serverName, session, (signal) =>
-        session.client.callTool(
-          { name: toolName, arguments: isRecord(input) ? input : {} },
-          undefined,
-          { timeout: session.requestTimeoutMs, signal },
-        ),
-      )) as CallToolResult;
-      validateResult?.(result);
-      return result;
+      failIfDisposed();
+      await getCatalog();
+      const session = requireConnectedSession(serverName);
+      return await runGuardedServerRequest(
+        serverName,
+        session,
+        async () =>
+          (await runMcpRequest(session, async (signal) =>
+            session.client.callTool(
+              {
+                name: toolName,
+                arguments: isRecord(input) ? input : {},
+              },
+              { timeout: session.requestTimeoutMs, signal },
+            ),
+          )) as CallToolResult,
+      );
     },
     async listTools(serverName, requestParams) {
       const session = await getActiveSession(serverName);
@@ -1110,6 +1214,7 @@ export const testing = {
     await disposeAllSessionMcpRuntimes();
     setBundleMcpCatalogListTimeoutMsForTest();
     setBundleMcpDisposeTimeoutMsForTest();
+    setBundleMcpEraProbeTimeoutMsForTest();
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     resolverTesting.setMcpServerConnectionResolversForTest();
     resolverTesting.setMcpConnectionResolverTimeoutMsForTest();
@@ -1131,6 +1236,7 @@ export const testing = {
   },
   setBundleMcpCatalogListTimeoutMsForTest,
   setBundleMcpDisposeTimeoutMsForTest,
+  setBundleMcpEraProbeTimeoutMsForTest,
   mergeMcpToolCatalogs,
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

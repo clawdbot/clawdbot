@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";

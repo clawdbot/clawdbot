@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { SdkErrorCode, SdkError } from "@modelcontextprotocol/client";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,7 +42,7 @@ type ToolCall = {
 };
 type ToolCallMock = {
   mock: {
-    calls: Array<[ToolCall, unknown?, { signal?: AbortSignal; timeout?: number }?]>;
+    calls: Array<[ToolCall, { signal?: AbortSignal; timeout?: number }?]>;
   };
 };
 
@@ -52,10 +52,10 @@ function waitForChromeMcpState<T>(assertion: () => T | Promise<T>): Promise<T> {
 
 function createSdkTimeoutCallTool() {
   return vi.fn(
-    async (_call: ToolCall, _resultSchema?: unknown, options?: { timeout?: number }) =>
+    async (_call: ToolCall, options?: { timeout?: number }) =>
       await new Promise<never>((_resolve, reject) => {
         setTimeout(
-          () => reject(new McpError(ErrorCode.RequestTimeout, "Request timed out")),
+          () => reject(new SdkError(SdkErrorCode.RequestTimeout, "Request timed out")),
           options?.timeout,
         );
       }),
@@ -1761,7 +1761,7 @@ describe("chrome MCP page parsing", () => {
       "navigate_page",
       "list_pages",
     ]);
-    expect(calls[3]?.[2]?.timeout).toBe(25_000);
+    expect(calls[3]?.[1]?.timeout).toBe(25_000);
   });
 
   it("opens about:blank directly without an extra navigate", async () => {
@@ -2788,25 +2788,23 @@ describe("chrome MCP page parsing", () => {
     const factory: ChromeMcpSessionFactory = async () => {
       factoryCalls += 1;
       const session = createFakeSession();
-      const callTool = vi.fn(
-        async ({ name }: ToolCall, _resultSchema?: unknown, options?: { timeout?: number }) => {
-          if (name === "click") {
-            forwardedTimeout = options?.timeout;
-            return await new Promise((_, reject) => {
-              setTimeout(
-                () => reject(new McpError(ErrorCode.RequestTimeout, "Request timed out")),
-                options?.timeout,
-              );
-            });
-          }
-          if (name === "list_pages") {
-            return {
-              content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
-            };
-          }
-          throw new Error(`unexpected tool ${name}`);
-        },
-      );
+      const callTool = vi.fn(async ({ name }: ToolCall, options?: { timeout?: number }) => {
+        if (name === "click") {
+          forwardedTimeout = options?.timeout;
+          return await new Promise((_, reject) => {
+            setTimeout(
+              () => reject(new SdkError(SdkErrorCode.RequestTimeout, "Request timed out")),
+              options?.timeout,
+            );
+          });
+        }
+        if (name === "list_pages") {
+          return {
+            content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+          };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
       session.client.callTool = callTool as typeof session.client.callTool;
       return session;
     };
@@ -2839,7 +2837,7 @@ describe("chrome MCP page parsing", () => {
       const session = createFakeSession();
       if (factoryCalls === 1) {
         session.client.callTool = vi.fn(
-          async (_call: ToolCall, _resultSchema?: unknown, options?: { signal?: AbortSignal }) =>
+          async (_call: ToolCall, options?: { signal?: AbortSignal }) =>
             await new Promise((_resolve, reject) => {
               const signal = options?.signal;
               forwardedSignal = signal;
@@ -3035,7 +3033,7 @@ describe("chrome MCP page parsing", () => {
     const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
     const navigateCall = callToolMock.mock.calls.find(([call]) => call.name === "navigate_page");
     expect(navigateCall?.[0].arguments?.timeout).toBe(20_000);
-    expect(navigateCall?.[2]?.timeout).toBe(25_000);
+    expect(navigateCall?.[1]?.timeout).toBe(25_000);
   });
 
   it.each([
@@ -3058,7 +3056,7 @@ describe("chrome MCP page parsing", () => {
       const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
       const navigateCall = callToolMock.mock.calls.find(([call]) => call.name === "navigate_page");
       expect(navigateCall?.[0].arguments?.timeout).toBe(expectedTimeoutMs);
-      expect(navigateCall?.[2]?.timeout).toBe(expectedTimeoutMs + 5_000);
+      expect(navigateCall?.[1]?.timeout).toBe(expectedTimeoutMs + 5_000);
     },
   );
 
@@ -3075,14 +3073,12 @@ describe("chrome MCP page parsing", () => {
       const session = createFakeSession();
       if (factoryCalls === 1) {
         const timeoutCall = createSdkTimeoutCallTool();
-        session.client.callTool = vi.fn(
-          async (call: ToolCall, resultSchema?: unknown, options?: { timeout?: number }) => {
-            if (call.name === "list_pages") {
-              return fakeListPagesResult();
-            }
-            return await timeoutCall(call, resultSchema, options);
-          },
-        ) as typeof session.client.callTool;
+        session.client.callTool = vi.fn(async (call: ToolCall, options?: { timeout?: number }) => {
+          if (call.name === "list_pages") {
+            return fakeListPagesResult();
+          }
+          return await timeoutCall(call, options);
+        }) as typeof session.client.callTool;
       }
       return session;
     };
@@ -3116,14 +3112,12 @@ describe("chrome MCP page parsing", () => {
     vi.useFakeTimers();
     const session = createFakeSession();
     const timeoutCall = createSdkTimeoutCallTool();
-    session.client.callTool = vi.fn(
-      async (call: ToolCall, resultSchema?: unknown, options?: { timeout?: number }) => {
-        if (call.name === "list_pages") {
-          return fakeListPagesResult();
-        }
-        return await timeoutCall(call, resultSchema, options);
-      },
-    ) as typeof session.client.callTool;
+    session.client.callTool = vi.fn(async (call: ToolCall, options?: { timeout?: number }) => {
+      if (call.name === "list_pages") {
+        return fakeListPagesResult();
+      }
+      return await timeoutCall(call, options);
+    }) as typeof session.client.callTool;
     setChromeMcpSessionFactoryForTest(async () => session);
 
     const snapshotPromise = takeChromeMcpSnapshot({

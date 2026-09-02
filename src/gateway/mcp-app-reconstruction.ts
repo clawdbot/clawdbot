@@ -1,4 +1,5 @@
-import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ContentBlockSchema } from "@modelcontextprotocol/core";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";

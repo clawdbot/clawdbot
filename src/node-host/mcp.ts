@@ -1,14 +1,14 @@
 /** Process-lifetime MCP clients owned by the headless node host. */
 import { isDeepStrictEqual } from "node:util";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import {
-  ErrorCode,
-  ListToolsResultSchema,
-  type CallToolResult,
-  type ListToolsResult,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+import { Client, SdkErrorCode } from "@modelcontextprotocol/client";
+import type {
+  Transport,
+  CallToolResult,
+  ListToolsResult,
+  Tool,
+  VersionNegotiationOptions,
+} from "@modelcontextprotocol/client";
+import { ListToolsResultSchema } from "@modelcontextprotocol/core";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -19,6 +19,7 @@ import {
   disposeMcpClient,
   isStatefulMcpHttpSessionExpired,
 } from "../agents/mcp-client-lifecycle.js";
+import { buildMcpVersionNegotiationForTransport } from "../agents/mcp-connect.js";
 import { redactMcpDiagnosticError } from "../agents/mcp-error.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
@@ -66,7 +67,6 @@ type NodeHostMcpClient = {
   ): Promise<ListToolsResult>;
   callTool(
     params: { name: string; arguments?: Record<string, unknown> },
-    resultSchema?: undefined,
     options?: { timeout?: number; signal?: AbortSignal },
   ): Promise<CallToolResult>;
   close(): Promise<void>;
@@ -129,7 +129,10 @@ export type NodeHostMcpManager = {
 };
 
 type NodeHostMcpManagerDeps = {
-  createClient?: (serverName: string, options: { onToolsChanged: () => void }) => NodeHostMcpClient;
+  createClient?: (
+    serverName: string,
+    versionNegotiation?: VersionNegotiationOptions,
+  ) => NodeHostMcpClient;
   resolveTransport?: (serverName: string, config: McpServerConfig) => NodeHostMcpTransport | null;
   onDescriptorsChanged?: () => void;
   warn?: (message: string) => void;
@@ -253,10 +256,17 @@ async function listAllTools(
       return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
     },
   });
-  const normalized = normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-    shouldInclude(toolName) ? "include" : "exclude",
+  // v2 Tool and the legacy SDK Tool differ only in JSON schema property types;
+  // normalizeMcpToolCatalog reads structural fields that are compatible.
+  const normalized = normalizeMcpToolCatalog(
+    tools as unknown as Parameters<typeof normalizeMcpToolCatalog>[0],
+    createMcpJsonSchemaValidator(),
+    (toolName) => (shouldInclude(toolName) ? "include" : "exclude"),
   );
-  return { tools: normalized.tools, metadata: normalized.metadata };
+  return {
+    tools: normalized.tools as unknown as Tool[],
+    metadata: normalized.metadata,
+  };
 }
 
 function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
@@ -272,18 +282,12 @@ export async function startNodeHostMcpManager(
   const warn = deps.warn ?? defaultWarn;
   const createClient =
     deps.createClient ??
-    ((_serverName, options) =>
+    ((_serverName: string, versionNegotiation?: VersionNegotiationOptions) =>
       new Client(
         { name: "openclaw-node-host", version: VERSION },
         {
           jsonSchemaValidator: createMcpJsonSchemaValidator(),
-          listChanged: {
-            tools: {
-              autoRefresh: false,
-              debounceMs: 0,
-              onChanged: () => options.onToolsChanged(),
-            },
-          },
+          ...(versionNegotiation ? { versionNegotiation } : {}),
         },
       ) as NodeHostMcpClient);
   const resolveTransport = deps.resolveTransport ?? resolveMcpTransport;
@@ -393,10 +397,10 @@ export async function startNodeHostMcpManager(
           states.delete(state.serverName);
           throw new Error("invalid or unsupported transport");
         }
-        let onToolsChanged = () => {};
-        const client = createClient(state.serverName, {
-          onToolsChanged: () => onToolsChanged(),
-        });
+        const client = createClient(
+          state.serverName,
+          buildMcpVersionNegotiationForTransport(resolved.transportType),
+        );
         const createdSession: NodeHostMcpSession = {
           ...resolved,
           client,
@@ -407,15 +411,10 @@ export async function startNodeHostMcpManager(
           ),
           abortController: new AbortController(),
         };
-        onToolsChanged = () => {
-          if (state.current === createdSession) {
-            requestRefresh(state, createdSession);
-          }
-        };
         session = createdSession;
         state.current = createdSession;
         // MCP Client exposes callback properties rather than an EventTarget surface.
-        // oxlint-disable-next-line unicorn/prefer-add-event-listener
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
         client.onclose = () => {
           if (createdSession.connected && invalidateCurrent(state, createdSession)) {
             enqueueWork(state, async () => {
@@ -433,8 +432,8 @@ export async function startNodeHostMcpManager(
         if (closed || signal.aborted || state.current !== session) {
           return;
         }
-        session.connected = true;
-        const listSignal = AbortSignal.any([signal, session.abortController.signal]);
+        createdSession.connected = true;
+        const listSignal = AbortSignal.any([signal, createdSession.abortController.signal]);
         await enqueueCatalogWork(state, async () => {
           const next = await listAllTools(
             client,
@@ -482,53 +481,6 @@ export async function startNodeHostMcpManager(
         scheduleRetry(state);
       }
     }
-  }
-
-  const refresh = async (state: NodeHostMcpServerState, session: NodeHostMcpSession) => {
-    if (closed || state.current !== session || !session.connected) {
-      return;
-    }
-    try {
-      const next = await listAllTools(
-        session.client,
-        session.requestTimeoutMs,
-        (toolName) => isMcpToolAllowed(state.config.toolFilter, toolName),
-        AbortSignal.any([lifecycleSignal, session.abortController.signal]),
-      );
-      if (closed || state.current !== session) {
-        return;
-      }
-      session.toolMetadata = next.metadata;
-      state.listedTools = next.tools;
-      rebuildDescriptors();
-    } catch (error) {
-      if (closed || lifecycleSignal.aborted || state.current !== session) {
-        return;
-      }
-      warn(
-        `node host MCP server "${state.serverName}" tool refresh failed: ${formatMcpError(error)}`,
-      );
-      invalidateCurrent(state, session);
-      await disposeNodeHostMcpSession(session);
-      scheduleRetry(state);
-    }
-  };
-
-  function requestRefresh(state: NodeHostMcpServerState, session: NodeHostMcpSession): void {
-    if (
-      closed ||
-      lifecycleSignal.aborted ||
-      state.current !== session ||
-      !session.connected ||
-      state.refreshQueued
-    ) {
-      return;
-    }
-    state.refreshQueued = true;
-    void enqueueCatalogWork(state, async () => {
-      state.refreshQueued = false;
-      await refresh(state, session);
-    }).catch(() => {});
   }
 
   const tasks = Array.from(states.values(), (state) => async () => {
@@ -580,13 +532,12 @@ export async function startNodeHostMcpManager(
       try {
         const result = await session.client.callTool(
           { name: params.tool, arguments: params.arguments ?? {} },
-          undefined,
           {
             timeout: Math.min(requestedTimeoutMs, session.toolCallTimeoutMs),
             ...(params.signal ? { signal: params.signal } : {}),
           },
         );
-        validateResult?.(result);
+        validateResult?.(result as Parameters<NonNullable<typeof validateResult>>[0]);
         return result;
       } catch (error) {
         const sessionExpired = isStatefulMcpHttpSessionExpired(session, error);
@@ -607,7 +558,7 @@ export async function startNodeHostMcpManager(
           error &&
           typeof error === "object" &&
           "code" in error &&
-          error.code === ErrorCode.RequestTimeout
+          error.code === SdkErrorCode.RequestTimeout
         ) {
           throw new NodeHostMcpError("MCP_TOOL_TIMEOUT", formatMcpError(error), { cause: error });
         }

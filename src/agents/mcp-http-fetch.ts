@@ -4,7 +4,7 @@
  * and same-origin header handling around the MCP SDK fetch contract.
  */
 import fs from "node:fs";
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/server";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import {

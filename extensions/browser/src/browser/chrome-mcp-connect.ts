@@ -1,6 +1,6 @@
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 // Connects Chrome MCP transports and bounds handshake/readiness waits.
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { toErrorObject } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -59,6 +59,9 @@ async function createRealSession(
       name: "openclaw-browser",
       version: "0.0.0",
     },
+    // Keep the default legacy (2025) connect: chrome-devtools-mcp is a known
+    // legacy server, and the 2026-07-28 auto probe would spawn a second
+    // sibling process racing the real instance for the Chrome debugging port.
     {},
   );
   let getStderr = () => "";

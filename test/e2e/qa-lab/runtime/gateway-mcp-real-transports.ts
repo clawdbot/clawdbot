@@ -6,8 +6,8 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
@@ -335,7 +335,6 @@ async function runMcpPluginToolsClientProof(params: {
         name: FIXTURE_TOOL_NAME,
         arguments: { query: "ORBIT-9 codename", maxResults: 3 },
       },
-      undefined,
       { timeout: MCP_PLUGIN_TOOLS_REQUEST_TIMEOUT_MS },
     ),
   );

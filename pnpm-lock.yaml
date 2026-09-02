@@ -192,9 +192,15 @@ importers:
       '@mistralai/mistralai':
         specifier: 2.6.4
         version: 2.6.4(@opentelemetry/api@1.9.1)(@opentelemetry/resources@2.10.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.10.0(@opentelemetry/api@1.9.1))
-      '@modelcontextprotocol/sdk':
-        specifier: 1.30.0
-        version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
+      '@modelcontextprotocol/client':
+        specifier: 2.0.0
+        version: 2.0.0
+      '@modelcontextprotocol/core':
+        specifier: 2.0.0
+        version: 2.0.0
+      '@modelcontextprotocol/server':
+        specifier: 2.0.0
+        version: 2.0.0
       '@mozilla/readability':
         specifier: 0.6.0
         version: 0.6.0
@@ -376,6 +382,9 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
+      '@modelcontextprotocol/node':
+        specifier: 2.0.0
+        version: 2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.3)
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -669,9 +678,9 @@ importers:
 
   extensions/browser:
     dependencies:
-      '@modelcontextprotocol/sdk':
-        specifier: 1.30.0
-        version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
+      '@modelcontextprotocol/client':
+        specifier: 2.0.0
+        version: 2.0.0
       express:
         specifier: 5.2.1
         version: 5.2.1(supports-color@10.2.2)
@@ -1771,12 +1780,18 @@ importers:
       '@copilotkit/aimock':
         specifier: 1.39.0
         version: 1.39.0(vitest@4.1.11)
-      '@modelcontextprotocol/sdk':
-        specifier: 1.30.0
-        version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
+      '@modelcontextprotocol/client':
+        specifier: 2.0.0
+        version: 2.0.0
       '@openclaw/crabline':
         specifier: 0.1.17
         version: 0.1.17
+      p-limit:
+        specifier: 7.3.1
+        version: 7.3.1
+      p-map:
+        specifier: 7.0.6
+        version: 7.0.6
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
@@ -3971,6 +3986,14 @@ packages:
       '@opentelemetry/sdk-trace-base':
         optional: true
 
+  '@modelcontextprotocol/client@2.0.0':
+    resolution: {integrity: sha512-8f1OghQ2rjzIOfqgUCP+8GiUWqRs89njoWLNqAe8kWmDePv3s1fZXseej+QXemssEuuOvLLmLO/kqM3IQHtISw==}
+    engines: {node: '>=20'}
+
+  '@modelcontextprotocol/core@2.0.0':
+    resolution: {integrity: sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA==}
+    engines: {node: '>=20'}
+
   '@modelcontextprotocol/ext-apps@1.7.5':
     resolution: {integrity: sha512-TjPH2S2y5UEGKhmI6+XGFuqfqOV4ppe1x6DA3txnUaEWkgtA4G5vo14jGKFZmegdkZ1H4QMLyujLvoU1BEdnAg==}
     engines: {node: '>=20'}
@@ -3985,6 +4008,16 @@ packages:
       react-dom:
         optional: true
 
+  '@modelcontextprotocol/node@2.0.0':
+    resolution: {integrity: sha512-Y4hAC2XdGDUdDOCbLDOCA4+aL3NUldjsOWlDL/YwpAxrPhRm1xHd7lZ+mLacvZ9t3PaH28wgNoaLQGrIk1P2pg==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.0.0
+      hono: ^4.11.4
+    peerDependenciesMeta:
+      hono:
+        optional: true
+
   '@modelcontextprotocol/sdk@1.30.0':
     resolution: {integrity: sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==}
     engines: {node: '>=18'}
@@ -3994,6 +4027,10 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@modelcontextprotocol/server@2.0.0':
+    resolution: {integrity: sha512-YhHWdHfpFMQfd0prsEnxKeS3Qz3ytIGmsS0sth4KDjnacIT7hxk6hXHkJ9KysxlkvTM+WZAtQbbcUhdoP4Hvtw==}
+    engines: {node: '>=20'}
 
   '@mozilla/readability@0.6.0':
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
@@ -11281,11 +11318,32 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@modelcontextprotocol/client@2.0.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.0.0
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      jose: 6.2.10
+      pkce-challenge: 5.0.1
+      zod: 4.4.3
+
+  '@modelcontextprotocol/core@2.0.0':
+    dependencies:
+      zod: 4.4.3
+
   '@modelcontextprotocol/ext-apps@1.7.5(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.30.0(supports-color@10.2.2)(zod@4.4.3)
       '@standard-schema/spec': 1.1.0
       zod: 4.4.3
+
+  '@modelcontextprotocol/node@2.0.0(@modelcontextprotocol/server@2.0.0)(hono@4.13.3)':
+    dependencies:
+      '@hono/node-server': 2.1.1(hono@4.13.3)
+      '@modelcontextprotocol/server': 2.0.0
+    optionalDependencies:
+      hono: 4.13.3
 
   '@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3)':
     dependencies:
@@ -11308,6 +11366,11 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
+
+  '@modelcontextprotocol/server@2.0.0':
+    dependencies:
+      '@modelcontextprotocol/core': 2.0.0
+      zod: 4.4.3
 
   '@mozilla/readability@0.6.0': {}
 

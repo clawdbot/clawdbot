@@ -4,8 +4,8 @@
 import crypto from "node:crypto";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { z } from "zod";
 const protocolModulePath = "../../../../dist/gateway/protocol/index.js" as string;
 const errorsModulePath = "../../../../dist/infra/errors.js" as string;

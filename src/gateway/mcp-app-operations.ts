@@ -1,16 +1,18 @@
 import {
-  type CallToolRequest,
   CallToolRequestSchema,
-  type ListResourcesRequest,
   ListResourcesRequestSchema,
-  type ListResourceTemplatesRequest,
   ListResourceTemplatesRequestSchema,
-  type ListToolsRequest,
   ListToolsRequestSchema,
-  type ReadResourceRequest,
   ReadResourceRequestSchema,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/core";
+import type {
+  CallToolRequest,
+  ListResourcesRequest,
+  ListResourceTemplatesRequest,
+  ListToolsRequest,
+  ReadResourceRequest,
+  Tool,
+} from "@modelcontextprotocol/server";
 import {
   completeDeferredSessionMcpRuntimeRetirement,
   peekSessionMcpRuntime,

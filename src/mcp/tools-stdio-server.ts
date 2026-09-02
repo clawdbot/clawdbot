@@ -1,7 +1,7 @@
+import { Server } from "@modelcontextprotocol/server";
+import type { CallToolResult, ListToolsResult } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 // MCP stdio server exposes OpenClaw tools over the MCP stdio transport.
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -15,9 +15,15 @@ export function createToolsMcpServer(params: { name: string; tools: AnyAgentTool
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    return await handlers.callTool(request.params, extra.signal);
+  // v2 result types carry the spec wire shape (_meta/index signature); the
+  // handler factories produce plain JSON-RPC payloads, so assert at the seam.
+  server.setRequestHandler("tools/list", async () => {
+    // SAFETY: handler factory returns spec-compatible JSON-RPC payload.
+    return (await handlers.listTools()) as ListToolsResult;
+  });
+  server.setRequestHandler("tools/call", async (request, ctx) => {
+    // SAFETY: handler factory returns spec-compatible JSON-RPC payload.
+    return (await handlers.callTool(request.params, ctx.mcpReq.signal)) as CallToolResult;
   });
 
   return server;

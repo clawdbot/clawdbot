@@ -7,7 +7,7 @@
  * Or: bun src/mcp/plugin-tools-serve.ts
  */
 import { pathToFileURL } from "node:url";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { Server } from "@modelcontextprotocol/server";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import {
   collectExplicitAllowlist,

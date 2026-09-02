@@ -4,9 +4,9 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import type { CallToolResult } from "@modelcontextprotocol/server";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import {
   cleanupTempDirs,
@@ -640,6 +640,13 @@ function makeRequesterParams(
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  // HTTP fake servers answer the 2026-07-28 probe with a non-modern signal
+  // and fall back to the 2025 handshake; keep the probe budget generous enough
+  // for the wrapped fetch cold start while stdio servers stay legacy-pinned.
+  testing.setBundleMcpEraProbeTimeoutMsForTest(2_500);
+});
 
 afterEach(async () => {
   cleanupTempDirs(tempDirs);

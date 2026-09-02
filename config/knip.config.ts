@@ -448,6 +448,9 @@ const config = {
     "ui/src/pages/chat/composer-persistence.ts": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
+    // The focused mcp-connect test pins the era-negotiation probe budget through this
+    // exported constant; production consumes it in-module via the negotiation helpers.
+    "src/agents/mcp-connect.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.

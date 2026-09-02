@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { Client } from "@modelcontextprotocol/client";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { testing } from "./gateway-mcp-real-transports.js";
@@ -120,7 +120,6 @@ describe("gateway MCP real transport producer", () => {
         name: "memory_search",
         arguments: { query: "ORBIT-9 codename", maxResults: 3 },
       },
-      undefined,
       { timeout: 180_000 },
     );
   });

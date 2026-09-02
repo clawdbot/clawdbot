@@ -1,7 +1,6 @@
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { CallToolResultSchema } from "@modelcontextprotocol/core";
 // Plugin MCP serve tests cover serving plugin tools over MCP.
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   consumeAdjustedParamsForToolCall,
