@@ -25,7 +25,6 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
@@ -217,8 +216,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const agents = createAgentCapability(gateway);
   const startupLifecycle = createStartupLifecycle();
-  const deferInitialLocationUntilGateway =
-    firstRunDefaultLanding && !parseAgentSessionKey(settings.sessionKey);
+  const deferInitialLocationUntilGateway = firstRunDefaultLanding;
   let resolveInitialFirstRunDecision: (() => void) | null = null;
   const initialFirstRunDecision = deferInitialLocationUntilGateway
     ? new Promise<void>((resolve) => {

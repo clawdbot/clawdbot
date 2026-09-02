@@ -170,6 +170,31 @@ it("replaces a confirmed-missing remembered session with the agent main route", 
   );
 });
 
+it("starts routing an agent-scoped remembered session while the Gateway is offline", async () => {
+  const previousSettings = loadSettings();
+  const previousUrl = window.location.href;
+  saveSettings({
+    ...previousSettings,
+    sessionKey: "agent:research:thread:12345678-0000-4000-8000-000000000001",
+    lastActiveSessionKey: "agent:research:thread:12345678-0000-4000-8000-000000000001",
+  });
+  window.history.replaceState({}, "", "/");
+  const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+  vi.spyOn(runtime.context.gateway, "start").mockImplementation(() => undefined);
+  const routerStart = vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
+
+  try {
+    const start = runtime.start();
+    await vi.waitFor(() => expect(routerStart).toHaveBeenCalledOnce());
+    runtime.stop();
+    await start;
+  } finally {
+    runtime.stop();
+    saveSettings(previousSettings);
+    window.history.replaceState({}, "", previousUrl);
+  }
+});
+
 it.each([
   { name: "saved target agent", selectedAgentId: "research" },
   { name: "unsaved target agent", selectedAgentId: undefined },
