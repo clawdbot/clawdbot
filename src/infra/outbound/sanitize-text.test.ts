@@ -247,6 +247,15 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it("preserves URL-like angle constructs with spaced labels", () => {
+    expect(sanitizeForPlainText("<https://example.com/a.pdf|User Manual>")).toBe(
+      "<https://example.com/a.pdf|User Manual>",
+    );
+    expect(sanitizeForPlainText("See <http://example.com/a.pdf|User Manual> now")).toBe(
+      "See <http://example.com/a.pdf|User Manual> now",
+    );
+  });
+
   it("preserves angle-addr email addresses", () => {
     expect(sanitizeForPlainText("Contact us at Support <support@example.com> or reply here")).toBe(
       "Contact us at Support <support@example.com> or reply here",
