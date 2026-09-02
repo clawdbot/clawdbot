@@ -2692,6 +2692,11 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   color: var(--muted);
 }
 
+.session-menu__icon .viewer-avatar {
+  width: 14px;
+  height: 14px;
+}
+
 .session-menu__icon svg,
 .session-menu__check svg {
   width: 14px;

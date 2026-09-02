@@ -166,6 +166,27 @@ suite.define(() => {
           ':scope > wa-dropdown-item[slot="submenu"] > .session-menu__text',
         );
         await expectBrowser(ownerItems).toHaveText(["Me", "OpenClaw", "Bob", "Carol"]);
+        const avatarSizes = await assignTo
+          .locator(':scope > wa-dropdown-item[slot="submenu"] .viewer-avatar')
+          .evaluateAll((avatars) =>
+            avatars.map((avatar) => {
+              const bounds = avatar.getBoundingClientRect();
+              const style = getComputedStyle(avatar);
+              return {
+                height: bounds.height,
+                width: bounds.width,
+                cssHeight: style.height,
+                cssWidth: style.width,
+              };
+            }),
+          );
+        expect(avatarSizes.length).toBeGreaterThan(0);
+        expect(
+          avatarSizes.every(
+            ({ width, height, cssWidth, cssHeight }) =>
+              Math.abs(width - height) < 0.01 && cssWidth === "14px" && cssHeight === "14px",
+          ),
+        ).toBe(true);
         await captureProof(page, "assignment-submenu");
 
         await assignTo.getByRole("menuitemradio", { name: "Carol", exact: true }).click();
