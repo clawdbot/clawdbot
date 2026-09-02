@@ -398,19 +398,15 @@ function shouldDropStaleInternalOrphanedUserPrompt(params: {
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt.
  *
- * By default the leaf is detached (`removeLeaf: true`) after merge so an
- * ordinary next prompt does not become a second durable user row under a
- * preserved orphan. Preserve the leaf (`removeLeaf: false`) only for restart
- * recovery, when `preserveTrailingUserLeaf` is set from
- * `suppressNextUserMessagePersistence`. Empty or stale internal leaves are
- * always detached.
+ * External user leaves are eligible to remain canonical (`removeLeaf: false`).
+ * Session repair preserves them only for producer-tagged main-session restart
+ * recovery; ordinary repair replaces them with the merged prompt. Empty or stale
+ * internal leaves are always detached.
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown; provenance?: unknown };
-  /** Restart-recovery only: keep the interrupted external user leaf durable. */
-  preserveTrailingUserLeaf?: boolean;
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
@@ -424,17 +420,15 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
-  const removeLeaf = params.preserveTrailingUserLeaf !== true;
   if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
-    // Text is already in the active prompt; detach unless restart recovery
-    // asked to keep the interrupted leaf for later turns.
-    return { prompt: params.prompt, merged: false, removeLeaf };
+    // Text is already in the active prompt; keep the leaf for later turns.
+    return { prompt: params.prompt, merged: false, removeLeaf: false };
   }
 
   return {
     prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
     merged: true,
-    removeLeaf,
+    removeLeaf: false,
   };
 }
 

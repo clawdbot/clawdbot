@@ -10,6 +10,7 @@ import {
 } from "../../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { isMainSessionRestartRecoveryInputProvenance } from "../../../sessions/input-provenance.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import {
@@ -360,6 +361,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
 type SessionBoundaryAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
+  | "inputProvenance"
   | "onUserMessagePersistenceInvalidated"
   | "operation"
   | "prompt"
@@ -401,8 +403,8 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     : resolveOrphanRepairPlan({
         sessionManager,
         prompt: attempt.prompt,
+        preserveLeaf: isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
         trigger: attempt.trigger,
-        suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
   // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.

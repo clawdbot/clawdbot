@@ -9,8 +9,6 @@ type OrphanedTrailingUserPromptMergeParams = {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown; provenance?: unknown };
-  /** Restart-recovery only: keep the interrupted external user leaf durable. */
-  preserveTrailingUserLeaf?: boolean;
 };
 
 /** Result of merging or dropping a trailing user leaf before provider submission. */
@@ -18,9 +16,9 @@ type OrphanedTrailingUserPromptMergeResult = {
   prompt: string;
   merged: boolean;
   /**
-   * When false, the active session leaf is preserved. Restart recovery only
-   * (`preserveTrailingUserLeaf`); ordinary orphans should detach so the next
-   * prompt is not a second durable user row under a preserved leaf.
+   * When false, the active session leaf is preserved. Use this only when the
+   * caller intentionally accepts that the next appended prompt may follow an
+   * existing user leaf; most providers reject consecutive user turns.
    */
   removeLeaf: boolean;
 };
