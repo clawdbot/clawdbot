@@ -10,6 +10,7 @@ import {
   type PlaybackMediaFixtureFormat,
 } from "../../../../test/fixtures/media-playback.js";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
+import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -2378,8 +2379,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  // Concurrent siblings clear Vitest's ambient test when they finish. Bind polls
-  // to this test so an awaited hover cannot lose its assertion context.
+  // Bind polling to this concurrent test instead of Vitest's ambient current test.
   it("keeps managed image actions anchored around tiny rendered images", async (context) => {
     const page = await openBrowserPage(1280, 900);
     try {
@@ -2431,9 +2431,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       for (const [index, expectedWidth] of [160, 84].entries()) {
         const frame = frames.nth(index);
         await frame.hover();
-        await context.expect
-          .poll(() => frame.evaluate((element) => getComputedStyle(element, "::after").opacity))
-          .toBe("1");
+        await frame.evaluate(finishElementAnimations);
+        expect(
+          await frame.evaluate((element) => getComputedStyle(element, "::after").opacity),
+        ).toBe("1");
         const geometry = await frame.evaluate((element) => {
           const actions = element.querySelector<HTMLElement>(".chat-image-actions")!;
           const frameRect = element.getBoundingClientRect();
