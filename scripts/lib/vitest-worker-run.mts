@@ -153,7 +153,8 @@ export function createVitestWorkerRun() {
               `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : "borrower"} join failed`,
             );
           } else {
-            fs.rmSync(directory, { recursive: true, force: true });
+            // Large generations must not block signal delivery during final cleanup.
+            await fs.promises.rm(directory, { recursive: true, force: true });
           }
         }
       })());

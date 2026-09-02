@@ -28,6 +28,8 @@ const shutdownCases = [
   { route: "direct", phase: "admission" },
   { route: "direct", phase: "compilation" },
   { route: "serial", phase: "compilation" },
+  { route: "direct", phase: "deletion" },
+  { route: "serial", phase: "deletion" },
 ] as const;
 
 it
@@ -113,7 +115,7 @@ const publish=(name,value)=>{
 };
 const spawn=cp.spawn;
 const phase=${JSON.stringify(phase)};
-let borrowerClosed=false, held=false;
+let borrowerClosed=false, held=false, generation;
 cp.spawn=(bin,args,options)=>{
   if(args[0]===${JSON.stringify(path.join(repoRoot, "scripts/lib/vitest-worker-compiler.mts"))}) {
     const child=spawn(bin,[${JSON.stringify(compiler)},args[1]],options);
@@ -124,23 +126,43 @@ cp.spawn=(bin,args,options)=>{
   if(bootstrap<0) return spawn(bin,args,options);
   const child=spawn(bin,[${JSON.stringify(borrower)}],options);
   child.once('close',()=>{borrowerClosed=true;publish('borrower-closed',{pid:child.pid});});
-  publish('owner.json',{owner:process.pid,borrower:child.pid,generation:args[bootstrap+1]});
+  generation=args[bootstrap+1];
+  publish('owner.json',{owner:process.pid,borrower:child.pid,generation});
   return child;
 };
+const waitForRelease=()=>new Promise(resolve=>{
+  const check=()=>{
+    if(fs.existsSync(${JSON.stringify(released)})) {watcher.close();resolve();}
+  };
+  const watcher=fs.watch(root,check);
+  check();
+});
 const readFile=fsp.readFile;
 fsp.readFile=async(filename,...args)=>{
-  if(filename===input && !held && (phase==='admission' || borrowerClosed)) {
+  if(filename===input && !held && (phase==='admission' || (phase==='disposal' && borrowerClosed))) {
     held=true;
     publish('verification-ready',{owner:process.pid});
-    await new Promise(resolve=>{
-      const check=()=>{
-        if(fs.existsSync(${JSON.stringify(released)})) {watcher.close();resolve();}
-      };
-      const watcher=fs.watch(root,check);
-      check();
-    });
+    await waitForRelease();
   }
   return readFile(filename,...args);
+};
+// The same delayed deletion blocks synchronous callers but lets async callers
+// process signals. Neither path may finish until the external fixture releases it.
+const rm=fsp.rm, rmSync=fs.rmSync;
+fsp.rm=async(filename,...args)=>{
+  if(phase==='deletion' && filename===generation) {
+    publish('verification-ready',{owner:process.pid});
+    await waitForRelease();
+  }
+  return rm(filename,...args);
+};
+fs.rmSync=(filename,...args)=>{
+  if(phase==='deletion' && filename===generation) {
+    publish('verification-ready',{owner:process.pid});
+    const wait=new Int32Array(new SharedArrayBuffer(4));
+    while(!fs.existsSync(${JSON.stringify(released)})) Atomics.wait(wait,0,0,10);
+  }
+  return rmSync(filename,...args);
 };
 // Observe delivery without adding a signal listener: a missing wrapper handler
 // must still take Node's default termination path, not be rescued by this fixture.
@@ -164,7 +186,7 @@ syncBuiltinESMExports();
               "test/scripts/vitest-worker-shutdown.test.ts",
             ];
       // Keep the wrappers, IPC and process owners real; only expensive child
-      // executables and one verification read are controlled by the fixture.
+      // executables and one verification read or deletion are controlled by the fixture.
       const command = workerArtifacts.fixtureLifetime.track(
         runNodeScript(
           args,
@@ -238,7 +260,9 @@ syncBuiltinESMExports();
         const result = await command;
         expect(result.error, result.stderr).toBeUndefined();
         expect(result.status, result.stderr).toBe(expectedExitCode);
-        expect(result.stdout.includes("fixture borrower completed")).toBe(phase === "disposal");
+        expect(result.stdout.includes("fixture borrower completed")).toBe(
+          phase === "disposal" || phase === "deletion",
+        );
         const trailer = `[test] FAILED (exit ${expectedExitCode})`;
         expect(result.stderr.match(/^\[.*\] FAILED \(exit \d+\)$/gmu)).toEqual([trailer]);
         expect(result.stderr.trim().split("\n").at(-1)).toBe(trailer);

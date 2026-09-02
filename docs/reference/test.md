@@ -236,8 +236,9 @@ Vitest and watch runs retain source execution: compilation, verification, and ar
 deletion require the repository runner's ownership.
 A lost owner or failed build fails the run.
 Disposal cancels pending compilation and joins it, every borrower, and outstanding
-preparation requests before removing the directory. Borrower completion does not
-wait for compilation, so an early child exit can reach that cancellation path. An uncertain compiler or borrower join retains the
+preparation requests before asynchronously removing the directory. Signal handlers
+remain active through removal, even when large generations take time to delete.
+Borrower completion does not wait for compilation, so an early child exit can reach that cancellation path. An uncertain compiler or borrower join retains the
 generation and fails the run. Abnormal termination can also leave an unused
 directory; later runs never adopt it.
 
