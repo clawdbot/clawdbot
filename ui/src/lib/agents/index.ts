@@ -377,7 +377,9 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connected = snapshot.phase === "connected";
-    lifecycle.transition(snapshot);
+    if (!lifecycle.transition(snapshot)) {
+      return;
+    }
     state.client = snapshot.client;
     state.connected = connected;
     if (clientChanged || !connected) {

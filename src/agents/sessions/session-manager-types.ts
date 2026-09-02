@@ -43,6 +43,7 @@ export interface ModelChangeEntry extends SessionEntryBase {
 
 export interface CompactionEntry<T = unknown> extends SessionEntryBase {
   type: "compaction";
+  __openclaw?: { runId?: string; itemId?: string };
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;

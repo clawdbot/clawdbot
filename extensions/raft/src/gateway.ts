@@ -14,6 +14,7 @@ import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   readJsonBodyWithLimit,
+  sendHttpRequestRejection,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { RAFT_CHANNEL_ID, type ResolvedRaftAccount } from "./accounts.js";
@@ -82,6 +83,7 @@ class WakeRequestError extends Error {
   constructor(
     readonly statusCode: number,
     message: string,
+    /** Body-limit rejections own the connection, so their answer goes through the transport. */
     readonly closeAfterResponse = false,
   ) {
     super(message);
@@ -337,23 +339,26 @@ export async function startRaftGatewayAccount(
         runtimeSession,
         ...(dispatched ? {} : { duplicate: true }),
       });
-    })().catch((error: unknown) => {
+    })().catch(async (error: unknown) => {
       const statusCode = error instanceof WakeRequestError ? error.statusCode : 500;
       const message = error instanceof WakeRequestError ? error.message : "Internal server error.";
       ctx.log?.warn?.(`Raft wake request rejected: ${message}`);
-      if (!response.headersSent) {
-        if (error instanceof WakeRequestError && error.closeAfterResponse) {
-          response.setHeader("Connection", "close");
-          response.once("close", () => {
-            if (!request.destroyed) {
-              request.destroy();
-            }
-          });
-        }
-        sendJson(response, statusCode, { error: message });
-      } else {
+      if (response.headersSent) {
         response.destroy();
+        return;
       }
+      if (error instanceof WakeRequestError && error.closeAfterResponse) {
+        response.setHeader("cache-control", "no-store");
+        await sendHttpRequestRejection(
+          request,
+          response,
+          statusCode,
+          JSON.stringify({ error: message }),
+          "application/json; charset=utf-8",
+        );
+        return;
+      }
+      sendJson(response, statusCode, { error: message });
     });
   });
   server.on("connection", (socket) => {

@@ -4,8 +4,10 @@
 // transcript mutation actions.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { renderMessageMarkdown, resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import { resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import { renderMessageMarkdown } from "./chat-message-text.ts";
 
 const cappedMeta = { id: "msg-1", truncated: true, reason: "display-cap" };
 
@@ -144,5 +146,60 @@ describe("user message disclosure", () => {
     for (const line of markdown.split("\n").filter(Boolean)) {
       expect(container.textContent).toContain(line);
     }
+  });
+});
+
+describe("streaming message Markdown", () => {
+  it("retains completed fence controls while the following paragraph streams", () => {
+    const container = document.createElement("div");
+    const prefix = "```ts\nconst answer = 42;\n```\n\n";
+    const renderTail = (tail: string) =>
+      render(
+        renderMessageMarkdown(
+          prefix + tail,
+          "retained-fence",
+          { role: "assistant", isStreaming: true },
+          { codeBlockInteraction: "interactive" },
+        ),
+        container,
+      );
+    container.addEventListener("click", handleMarkdownCodeBlockClick);
+    renderTail("The answer");
+    const code = container.querySelector("code");
+    const wrapper = container.querySelector(".code-block-wrapper");
+    expect(code).not.toBeNull();
+    container.querySelector<HTMLButtonElement>(".code-block-wrap")?.click();
+    expect(wrapper?.classList.contains("is-wrapped")).toBe(true);
+
+    renderTail("The answer is ready.");
+
+    expect(container.querySelector("code")).toBe(code);
+    expect(container.querySelector(".code-block-wrapper")?.classList.contains("is-wrapped")).toBe(
+      true,
+    );
+    expect(container.querySelector(".chat-text > p")?.textContent).toBe("The answer is ready.");
+    container.removeEventListener("click", handleMarkdownCodeBlockClick);
+  });
+
+  it.each([
+    { markdown: "Intro\n\nTail", owner: ".chat-text > p:last-child" },
+    { markdown: "Intro\n\n", owner: ".chat-text > p" },
+    { markdown: "Intro\n\n```ts\nconst answer = 42;\n```", owner: ".chat-text" },
+  ])("keeps the duplicate count on the terminal owner for $markdown", ({ markdown, owner }) => {
+    const container = document.createElement("div");
+    render(
+      renderMessageMarkdown(
+        markdown,
+        "streaming-duplicate",
+        { role: "assistant", isStreaming: true },
+        {},
+        { count: 3, label: "Three identical messages" },
+      ),
+      container,
+    );
+
+    expect(container.querySelectorAll(".chat-duplicate-count")).toHaveLength(1);
+    expect(container.querySelector(`${owner} > .chat-duplicate-count`)?.textContent).toBe("×3");
+    expect(container.querySelector("code .chat-duplicate-count")).toBeNull();
   });
 });

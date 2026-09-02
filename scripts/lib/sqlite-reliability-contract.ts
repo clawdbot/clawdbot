@@ -43,6 +43,11 @@ export type ReliabilityStateProof = {
   sha256: string;
 };
 
+export function formatReliabilityStderr(stderr: string): string {
+  const text = stderr.trim();
+  return text ? ` stderr=${JSON.stringify(text)}` : "";
+}
+
 export function assertSameCompactionPayload(
   actual: CompactionPayloadProof,
   expected: CompactionPayloadProof,

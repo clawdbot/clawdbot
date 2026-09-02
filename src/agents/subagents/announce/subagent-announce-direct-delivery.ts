@@ -57,7 +57,6 @@ import {
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
-  abortSubagentAnnounceAgent,
   dispatchSubagentAnnounceAgent,
   getSubagentAnnounceRuntimeConfig,
   isSubagentRequesterSessionAbandoned,
@@ -74,78 +73,28 @@ import {
 import { runWithAnnounceSplitDeadlines } from "./subagent-announce-split-deadline.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
-class AnnounceCancellationUnconfirmedError extends Error {
-  readonly sentBeforeError = true;
-
-  constructor(runId: string, cause: unknown) {
-    super(
-      `announce run ${runId} failed without confirmed cancellation; refusing duplicate delivery`,
-      {
-        cause,
-      },
-    );
-    this.name = "AnnounceCancellationUnconfirmedError";
-  }
-}
-
 async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
-  timeoutMs?: number;
   signal?: AbortSignal;
-  runId: string;
-  sessionKey: string;
+  timeoutMs?: number;
   onWorkLaneAdmitted: () => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
-  let accepted = false;
-  let abortConfirmed: boolean | undefined;
-  const abortRun = async () => {
-    if (abortConfirmed !== undefined) {
-      return abortConfirmed;
-    }
-    try {
-      abortConfirmed = await abortSubagentAnnounceAgent({
-        runId: params.runId,
-        sessionKey: params.sessionKey,
-        resolveGatewayContext: params.resolveGatewayContext,
-      });
-    } catch {
-      abortConfirmed = false;
-    }
-    return abortConfirmed;
-  };
-  try {
-    return await dispatchSubagentAnnounceAgent(params.agentParams, {
-      expectFinal: params.expectFinal,
-      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
-        params.agentParams.inputProvenance,
-      ),
-      onAccepted: () => {
-        accepted = true;
-      },
-      onWorkLaneAdmitted: params.onWorkLaneAdmitted,
-      onSignalAbort: async () => {
-        await abortRun();
-      },
-      operatorRoleActor: { kind: "system" },
-      delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-      resolveGatewayContext: params.resolveGatewayContext,
-    });
-  } catch (error) {
-    // A post-accept failure cannot be retried under the same delivery identity
-    // until the prior run is known dead. Signal aborts already invoke abortRun;
-    // other post-accept failures reconcile here before retry classification.
-    const wasAborted = params.signal?.aborted === true;
-    const confirmed = wasAborted || accepted ? await abortRun() : undefined;
-    if ((wasAborted || accepted) && confirmed !== true) {
-      throw new AnnounceCancellationUnconfirmedError(params.runId, error);
-    }
-    throw error;
-  }
+  return await dispatchSubagentAnnounceAgent(params.agentParams, {
+    cancelOnDeadline: true,
+    expectFinal: params.expectFinal,
+    forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
+      params.agentParams.inputProvenance,
+    ),
+    onWorkLaneAdmitted: params.onWorkLaneAdmitted,
+    operatorRoleActor: { kind: "system" },
+    delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
+    resolveGatewayContext: params.resolveGatewayContext,
+  });
 }
 
 export async function sendSubagentAnnounceDirectly(params: {
@@ -237,6 +186,11 @@ export async function sendSubagentAnnounceDirectly(params: {
       isSubagentCompletion &&
       (trustedCompletionEvent?.result.trim() === "(no output)" ||
         hasFailedSubagentNoOutputCompletion(params.internalEvents));
+    const hasSuccessfulTrustedSubagentNoOutputCompletion =
+      hasRequiredSubagentNoOutputCompletion && trustedCompletionEvent?.status === "ok";
+    const textCompletionDirectDeliveryKind = hasFailedTrustedSubagentCompletion
+      ? "failed_notice"
+      : "completed_result";
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
@@ -464,8 +418,6 @@ export async function sendSubagentAnnounceDirectly(params: {
                 expectFinal: true,
                 timeoutMs: dispatchTimeoutMs,
                 signal,
-                runId: params.directIdempotencyKey,
-                sessionKey: canonicalRequesterSessionKey,
                 onWorkLaneAdmitted,
                 resolveGatewayContext: params.resolveGatewayContext,
               }),
@@ -569,11 +521,11 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
-      const textDelivery = await tryTextCompletionDirectDelivery();
+      const textDelivery = await tryTextCompletionDirectDelivery(textCompletionDirectDeliveryKind);
       if (textDelivery) {
         return textDelivery;
       }
-      if (hasRequiredSubagentNoOutputCompletion && !hasCompletionSideEffect) {
+      if (hasSuccessfulTrustedSubagentNoOutputCompletion && !hasCompletionSideEffect) {
         return {
           delivered: false,
           path: "direct",
@@ -583,7 +535,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       }
     }
     if (
-      hasRequiredSubagentNoOutputCompletion &&
+      hasSuccessfulTrustedSubagentNoOutputCompletion &&
       !hasVisibleRequiredCompletionReply &&
       hasCompletionSideEffect
     ) {
@@ -603,7 +555,7 @@ export async function sendSubagentAnnounceDirectly(params: {
         subagentDirectMessageCompletionRequiresMessageTool ||
         hasRequiredSubagentNoOutputCompletion)
     ) {
-      if (hasRequiredSubagentNoOutputCompletion) {
+      if (hasSuccessfulTrustedSubagentNoOutputCompletion) {
         return {
           delivered: false,
           path: "direct",
@@ -612,7 +564,9 @@ export async function sendSubagentAnnounceDirectly(params: {
         };
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
-        const textDelivery = await tryTextCompletionDirectDelivery();
+        const textDelivery = await tryTextCompletionDirectDelivery(
+          textCompletionDirectDeliveryKind,
+        );
         if (textDelivery) {
           return textDelivery;
         }

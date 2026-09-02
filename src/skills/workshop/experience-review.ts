@@ -374,8 +374,9 @@ export async function runSkillExperienceReview(
   // inherited-context lane enqueue is refused as GatewayDrainingError on a
   // healthy gateway. Re-enter admission as independent root work; real
   // restart drain still refuses it.
-  await runWithGatewayIndependentRootWorkAdmission(() =>
-    runSkillExperienceReviewInner(candidate, deps),
+  await runWithGatewayIndependentRootWorkAdmission(
+    () => runSkillExperienceReviewInner(candidate, deps),
+    "skills:experience-review",
   );
 }
 

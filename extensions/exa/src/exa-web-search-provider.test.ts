@@ -1,8 +1,7 @@
-// Exa tests cover exa web search provider plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
+import { testing } from "./exa-web-search-provider.runtime.js";
 
 function cancelTrackedResponse(
   text: string,

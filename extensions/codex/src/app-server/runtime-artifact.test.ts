@@ -58,6 +58,45 @@ async function captureBinding(params: {
   return { binding, client };
 }
 
+async function createNpmLauncherFixture(root: string) {
+  const packageRoot = path.join(root, "node_modules", "@openai", "codex");
+  const launcher = path.join(packageRoot, "bin", "codex.js");
+  const platform = process.platform === "darwin" ? "darwin" : "linux";
+  const arch = process.arch === "arm64" ? "arm64" : "x64";
+  const triple = `${arch === "arm64" ? "aarch64" : "x86_64"}-${platform === "darwin" ? "apple-darwin" : "unknown-linux-musl"}`;
+  const nativePackage = path.join(
+    packageRoot,
+    "node_modules",
+    "@openai",
+    `codex-${platform}-${arch}`,
+  );
+  const native = path.join(nativePackage, "vendor", triple, "bin", "codex");
+  const binDir = path.join(root, "bin");
+  await Promise.all([
+    fs.mkdir(path.dirname(launcher), { recursive: true }),
+    fs.mkdir(path.dirname(native), { recursive: true }),
+    fs.mkdir(binDir),
+  ]);
+  await Promise.all([
+    fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@openai/codex", bin: { codex: "bin/codex.js" } }),
+    ),
+    fs.writeFile(
+      path.join(nativePackage, "package.json"),
+      JSON.stringify({ name: `@openai/codex-${platform}-${arch}` }),
+    ),
+    fs.writeFile(launcher, "#!/usr/bin/env node\n"),
+    fs.writeFile(native, "native-v1"),
+    fs.writeFile(path.join(binDir, "node"), "node-v1"),
+  ]);
+  await fs.chmod(launcher, 0o755);
+  await fs.chmod(path.join(binDir, "node"), 0o755);
+  const command = path.join(binDir, "codex");
+  await fs.symlink(launcher, command);
+  return { command, native, binDir };
+}
+
 describe("Codex app-server runtime artifact", () => {
   it("binds a native executable and its adjacent code-mode host", async () => {
     await withTempDir("openclaw-codex-runtime-artifact-", async (root) => {
@@ -75,6 +114,31 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
+  it.runIf(process.platform === "darwin" || process.platform === "linux").each([
+    ["config", "absolute"],
+    ["env", "path"],
+    ["config", "relative"],
+  ] as const)(
+    "binds the official npm launcher selected by %s via %s",
+    async (source, selection) => {
+      await withTempDir("openclaw-codex-npm-artifact-", async (root) => {
+        const { command, native, binDir } = await createNpmLauncherFixture(root);
+        const options = startOptions(
+          selection === "path" ? "codex" : selection === "relative" ? "bin/codex" : command,
+          {
+            commandSource: source,
+            cwd: root,
+            env: { PATH: binDir },
+          },
+        );
+        const { binding } = await captureBinding({ options });
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+        await fs.writeFile(native, "native-v2");
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      });
+    },
+  );
+
   it("attests the sanitized environment when the host injects a runtime loader path", async () => {
     await withTempDir("openclaw-codex-runtime-sanitized-env-", async (root) => {
       const command = path.join(root, "codex");
@@ -88,6 +152,23 @@ describe("Codex app-server runtime artifact", () => {
       });
     });
   });
+
+  it
+    .runIf(process.platform !== "win32")
+    .each(["custom.js", "node_modules/.bin/custom", "node_modules/@openai/codex/bin/custom.js"])(
+    "rejects an unrecognized configured script at %s",
+    async (relativePath) => {
+      await withTempDir("openclaw-codex-custom-artifact-", async (root) => {
+        await createNpmLauncherFixture(root);
+        const command = path.join(root, relativePath);
+        await fs.mkdir(path.dirname(command), { recursive: true });
+        await fs.writeFile(command, "#!/usr/bin/env node\n");
+        await expect(captureBinding({ options: startOptions(command) })).rejects.toThrow(
+          "cannot attest a custom script launcher",
+        );
+      });
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "resolves relative launch paths and shebang targets from the spawn cwd",
@@ -403,6 +484,30 @@ describe("Codex app-server runtime artifact", () => {
         fingerprint,
       }),
     ).resolves.toBe(false);
+  });
+
+  it("binds the native executable behind a Windows forwarder independently of path sort order", async () => {
+    await withTempDir("openclaw-codex-runtime-exe-shim-", async (root) => {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      const nativeDir = path.join(root, "z-runtime");
+      const command = path.join(root, "a-launch.cmd");
+      const host = path.join(nativeDir, "codex-code-mode-host.exe");
+      await fs.mkdir(nativeDir);
+      await Promise.all([
+        fs.writeFile(command, '@ECHO off\r\n"%~dp0\\z-runtime\\codex.exe" %*\r\n'),
+        fs.writeFile(path.join(nativeDir, "codex.exe"), "native-v1"),
+        fs.writeFile(host, "host-v1"),
+      ]);
+      try {
+        Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+        const { binding } = await captureBinding({ options: startOptions(command) });
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(true);
+        await fs.writeFile(host, "host-v2");
+        await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+      } finally {
+        Object.defineProperty(process, "platform", platform);
+      }
+    });
   });
 
   it("rejects packages beyond the bounded directory depth", async () => {

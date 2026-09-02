@@ -1,11 +1,9 @@
-import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
@@ -15,101 +13,49 @@ import {
   isCodexAppServerOverloadError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
-import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
 import { markStartedCodexManagedThread } from "./managed-thread-store.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
-  attestCodexPluginThreadApps,
+  attestCodexThreadToolSurface,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
-  type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
-  CodexThreadDirectInputError,
 } from "./protocol-validators.js";
-import type { CodexThread, JsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   fingerprintCodexThreadConfig,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 import {
-  CodexAdoptedThreadActiveError,
-  CodexRestrictedToolSurfaceAttestationError,
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
-import { buildStartedCodexThreadBinding } from "./thread-lifecycle-result.js";
+import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
+import {
+  buildStartedCodexThreadBinding,
+  resolveCodexThreadRolloutPath,
+} from "./thread-lifecycle-result.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
-  CodexThreadRequestContext,
+  CodexResumeThreadContext,
+  CodexStartThreadContext,
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
-import {
-  attestCodexRestrictedToolSurfaceMcpServersDisabled,
-  buildThreadResumeParams,
-  buildThreadStartParams,
-} from "./thread-requests.js";
+import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
+import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
-
-type ResumeThreadContext = CodexThreadRequestContext & {
-  binding: CodexAppServerThreadBinding;
-  clearCurrentBinding: (operation: string) => Promise<void>;
-  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
-  buildLoadedPluginThreadConfig?: (
-    binding: CodexAppServerThreadBinding,
-  ) => Promise<CodexPluginThreadConfig | undefined>;
-  prebuiltFinalConfigPatch?: {
-    configPatch?: JsonObject;
-    nativeHookRelayGeneration?: string;
-  };
-  assertResumeConfiguration?: () => void;
-  assertResumeOwnership?: () => void;
-};
-
-type StartThreadContext = CodexThreadRequestContext & {
-  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
-  preserveExistingBinding: boolean;
-  rotatedContextEngineBinding: boolean;
-  replacementPredecessor?: CodexAppServerThreadBinding;
-};
-
-export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParams): string {
-  const agentId = resolveSessionAgentIdsStrict({
-    config: params.params.config,
-    sessionKey: params.params.sessionKey,
-    agentId: params.agentId ?? params.params.agentId,
-  }).sessionAgentId;
-  return (
-    params.agentDir ??
-    params.params.agentDir ??
-    resolveAgentDir(params.params.config ?? {}, agentId)
-  );
-}
-
-function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
-  const rolloutPath = thread.path?.trim();
-  if (
-    !rolloutPath ||
-    !path.isAbsolute(rolloutPath) ||
-    path.extname(rolloutPath) !== ".jsonl" ||
-    !path.basename(rolloutPath).includes(thread.id)
-  ) {
-    return undefined;
-  }
-  return rolloutPath;
-}
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
-  context: ResumeThreadContext,
+  context: CodexResumeThreadContext,
 ): Promise<CodexAppServerThreadLifecycleBinding | undefined> {
   const {
     binding: resumeBinding,
@@ -128,7 +74,6 @@ export async function resumeExistingCodexThread(
     contextEngineBinding,
     environmentSelectionFingerprint,
     hostSystemAgentActive,
-    ringZeroActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
@@ -139,7 +84,14 @@ export async function resumeExistingCodexThread(
   } = context;
   let resumeReservation: { release: () => void } | undefined;
   let resumeResponseAccepted = false;
-  let checkingLoadedPluginThreadConfig = false;
+  let ordinaryAppConfigChanged = false;
+  let policyOutcome: CodexThreadPolicyHandoffError["outcome"] = "not-written";
+  const assertHandoffCurrent = () => {
+    params.params.hostCapabilities.assertActive();
+    throwIfAborted();
+    context.assertResumeOwnership();
+    context.assertResumeConfiguration();
+  };
   const abandonClient =
     params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client));
   try {
@@ -217,58 +169,47 @@ export async function resumeExistingCodexThread(
         request: resumeParams,
         signal: params.signal,
         assertCurrent: context.assertResumeOwnership,
-        isPrewriteOwnershipError: (error) => error instanceof CodexAdoptedThreadActiveError,
       }),
     );
     resumeResponseAccepted = true;
     assertCodexThreadAcceptsDirectInput(response.thread);
-    context.assertResumeConfiguration?.();
+    context.assertResumeConfiguration();
     // Current-policy denial must release this subscription and stop, not retry
     // as a fresh thread. A confirmed config change still follows normal rotation.
-    checkingLoadedPluginThreadConfig = true;
     const loadedPluginThreadConfig = await context.buildLoadedPluginThreadConfig?.(resumeBinding);
     if (
       loadedPluginThreadConfig &&
       loadedPluginThreadConfig.fingerprint !==
         (pluginThreadConfig?.fingerprint ?? resumeBinding.pluginAppsFingerprint)
     ) {
-      checkingLoadedPluginThreadConfig = false;
+      ordinaryAppConfigChanged =
+        resumeBinding.connectionScope !== "supervision" &&
+        !resumeBinding.pendingResumeConfiguration;
       throw new Error("Codex thread app policy changed; a fresh thread configuration is required");
     }
-    await attestCodexPluginThreadApps({
+    const provisionalAppIds =
+      loadedPluginThreadConfig?.provisionalAppIds ?? pluginThreadConfig?.provisionalAppIds ?? [];
+    await attestCodexThreadToolSurface({
       client: params.client,
       threadId: response.thread.id,
-      appIds:
-        loadedPluginThreadConfig?.provisionalAppIds ?? pluginThreadConfig?.provisionalAppIds ?? [],
+      appIds: provisionalAppIds,
       signal: params.signal,
+      threadConfig: resumeParams.config,
+      restrictedToolSurface,
+      lifecycleTiming,
+      assertCurrent: assertHandoffCurrent,
     });
-    checkingLoadedPluginThreadConfig = false;
-    if (
-      ringZeroActive ||
-      isMessageOnlyCodexSourceReply(params.params) ||
-      params.params.pluginHarnessToolPolicyRestricted === true
-    ) {
-      try {
-        await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
-          attestCodexRestrictedToolSurfaceMcpServersDisabled(
-            params.client,
-            response.thread.id,
-            resumeParams.config,
-            params.signal,
-          ),
-        );
-      } catch (error) {
-        context.assertResumeOwnership?.();
-        await abandonClient();
-        throw new CodexRestrictedToolSurfaceAttestationError(error);
-      }
-    }
     throwIfAborted();
-    const boundAuthProfileId = authProfileId;
-    const nextMcpServersFingerprint =
-      params.mcpServersFingerprintEvaluated === true
-        ? params.mcpServersFingerprint
-        : resumeBinding.mcpServersFingerprint;
+    await refreshCodexThreadPolicy({
+      client: params.client,
+      threadId: resumeBinding.threadId,
+      developerInstructions: resumeParams.developerInstructions,
+      timeoutMs: params.appServer.requestTimeoutMs,
+      signal: params.signal,
+      assertCurrent: assertHandoffCurrent,
+    });
+    policyOutcome = "acknowledged";
+    assertHandoffCurrent();
     const resumePatch = {
       // Resume moves native subscription ownership to this physical client.
       // Keeping its previous client id disables warm reuse after every restart.
@@ -276,11 +217,11 @@ export async function resumeExistingCodexThread(
       pendingResumeConfiguration: undefined,
       cwd: params.cwd,
       rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
-      authProfileId: boundAuthProfileId,
+      authProfileId,
       model: response.model ?? resumeParams.model ?? params.params.modelId,
       preserveNativeModel: resumeBinding.preserveNativeModel === true ? true : undefined,
       modelProvider: normalizeBindingModelProvider(
-        boundAuthProfileId,
+        authProfileId,
         response.modelProvider ?? requestModelProvider ?? startModelProvider,
       ),
       dynamicToolsFingerprint,
@@ -288,7 +229,10 @@ export async function resumeExistingCodexThread(
       webSearchThreadConfigFingerprint,
       nativeSkillIsolationFingerprint,
       userMcpServersFingerprint,
-      mcpServersFingerprint: nextMcpServersFingerprint,
+      mcpServersFingerprint:
+        params.mcpServersFingerprintEvaluated === true
+          ? params.mcpServersFingerprint
+          : resumeBinding.mcpServersFingerprint,
       configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
@@ -313,7 +257,7 @@ export async function resumeExistingCodexThread(
       params.bindingStore.mutate(
         bindingIdentity,
         { kind: "patch", threadId: resumeBinding.threadId, patch: resumePatch },
-        context.assertResumeConfiguration,
+        assertHandoffCurrent,
       ),
     );
     if (!committed) {
@@ -322,6 +266,7 @@ export async function resumeExistingCodexThread(
         "committing a resumed thread",
       );
     }
+    assertHandoffCurrent();
     if (contextEngineBinding) {
       embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
         sessionId: params.params.sessionId,
@@ -380,39 +325,55 @@ export async function resumeExistingCodexThread(
     ) {
       throw error;
     }
-    if (error instanceof CodexRestrictedToolSurfaceAttestationError) {
-      if (!resumeBinding.pendingResumeConfiguration) {
-        await clearCurrentBinding("retiring a failed restricted-tool-surface attestation");
-      }
-      throw error;
-    }
     if (resumeResponseAccepted) {
+      const handoffError =
+        error instanceof CodexThreadPolicyHandoffError ||
+        error instanceof CodexAppServerUnsafeSubscriptionError
+          ? error
+          : new CodexThreadPolicyHandoffError(policyOutcome, error);
+      // Resumed threads own native history. Release only this subscription;
+      // deleting a rejected thread would also erase its history and descendants.
       const subscriptionReleased = await unsubscribeCodexThreadBestEffort(params.client, {
         threadId: resumeBinding.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         assertCurrent: context.assertResumeOwnership,
       }).catch(() => false);
-      if (!subscriptionReleased) {
+      if (
+        !subscriptionReleased ||
+        (handoffError instanceof CodexThreadPolicyHandoffError &&
+          handoffError.outcome === "unknown")
+      ) {
         // Revoked cleanup authority cannot block retiring the exact client;
         // detachment leaves sibling leases alive while preventing that client from being reacquired.
-        try {
-          await abandonClient();
-        } catch (abandonError) {
-          throw new CodexAppServerUnsafeSubscriptionError(
-            "Codex thread/resume client could not be retired",
-            { cause: abandonError },
-          );
+        if (resumeBinding.connectionScope === "supervision") {
+          await retireUnsafeCodexTurnClientBestEffort(params.client, "session policy handoff");
+        } else {
+          try {
+            await abandonClient();
+          } catch (cause) {
+            // A secondary cleanup failure must not erase the native policy-write outcome.
+            throw new CodexThreadPolicyHandoffError(
+              handoffError instanceof CodexThreadPolicyHandoffError
+                ? handoffError.outcome
+                : policyOutcome,
+              new AggregateError(
+                [handoffError, cause],
+                "Codex thread/resume client could not be retired",
+              ),
+            );
+          }
         }
-        throw new CodexAppServerUnsafeSubscriptionError(
-          "Codex thread/resume subscription cleanup failed",
-          { cause: error },
-        );
       }
+      // Only a confirmed ordinary app-config change may rotate after resume.
+      // Supervised policy writes and failed admission never replay accepted history.
+      if (!ordinaryAppConfigChanged || !subscriptionReleased) {
+        throw handoffError;
+      }
+      assertHandoffCurrent();
     }
     if (
-      checkingLoadedPluginThreadConfig ||
       resumeBinding.pendingResumeConfiguration ||
-      error instanceof CodexThreadDirectInputError ||
+      resumeBinding.connectionScope === "supervision" ||
       params.signal?.aborted
     ) {
       throw error;
@@ -428,7 +389,7 @@ export async function resumeExistingCodexThread(
 
 export async function startFreshCodexThread(
   params: CodexStartOrResumeThreadParams,
-  context: StartThreadContext,
+  context: CodexStartThreadContext,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const clientId = resolveCodexAppServerClientInstanceId(params.client);
   const {
@@ -447,7 +408,6 @@ export async function startFreshCodexThread(
     contextEngineBinding,
     environmentSelectionFingerprint,
     hostSystemAgentActive,
-    ringZeroActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
     nativeSkillIsolation,
@@ -516,73 +476,42 @@ export async function startFreshCodexThread(
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
   const provisionalAppIds = pluginThreadConfig?.provisionalAppIds;
+  const assertCurrent = () => {
+    throwIfAborted();
+    params.params.hostCapabilities.assertActive();
+  };
+  const rejectUncommittedThread = async (cause: unknown): Promise<never> => {
+    const cleanupConfirmed = await discardUnattestedCodexPluginThread({
+      client: params.client,
+      threadId: response.thread.id,
+      ephemeral: startParams.ephemeral === true,
+    });
+    if (!cleanupConfirmed) {
+      await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
+      throw new CodexAppServerUnsafeSubscriptionError("Codex uncommitted thread cleanup failed", {
+        cause,
+      });
+    }
+    throw cause;
+  };
   // A deny-by-default app becomes callable only under this exact thread's
   // allowlist. Never persist or run the thread before Codex confirms it.
-  if (provisionalAppIds?.length) {
-    try {
-      await lifecycleTiming.measure("plugin-app-attestation", () =>
-        attestCodexPluginThreadApps({
-          client: params.client,
-          threadId: response.thread.id,
-          appIds: provisionalAppIds,
-          signal: params.signal,
-        }),
-      );
-    } catch (error) {
-      const cleanupConfirmed = await discardUnattestedCodexPluginThread({
-        client: params.client,
-        threadId: response.thread.id,
-        ephemeral: startParams.ephemeral === true,
-      });
-      if (!cleanupConfirmed) {
-        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-        throw new CodexAppServerUnsafeSubscriptionError(
-          "Codex plugin app attestation cleanup failed",
-          { cause: error },
-        );
-      }
-      throw error;
-    }
+  try {
+    await attestCodexThreadToolSurface({
+      client: params.client,
+      threadId: response.thread.id,
+      appIds: provisionalAppIds ?? [],
+      signal: params.signal,
+      threadConfig: startParams.config,
+      restrictedToolSurface,
+      lifecycleTiming,
+      assertCurrent,
+    });
+    assertCurrent();
+  } catch (error) {
+    return await rejectUncommittedThread(error);
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
-  if (
-    ringZeroActive ||
-    isMessageOnlyCodexSourceReply(params.params) ||
-    params.params.pluginHarnessToolPolicyRestricted === true
-  ) {
-    try {
-      await lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
-        attestCodexRestrictedToolSurfaceMcpServersDisabled(
-          params.client,
-          response.thread.id,
-          startParams.config,
-          params.signal,
-        ),
-      );
-    } catch (error) {
-      await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-      throw error;
-    }
-  }
-  try {
-    throwIfAborted();
-  } catch (error) {
-    if (replacementPredecessor) {
-      const cleanupConfirmed = await discardUnattestedCodexPluginThread({
-        client: params.client,
-        threadId: response.thread.id,
-        ephemeral: startParams.ephemeral === true,
-      });
-      if (!cleanupConfirmed) {
-        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-        throw new CodexAppServerUnsafeSubscriptionError(
-          "Codex successor cleanup failed after an aborted binding replacement",
-          { cause: error },
-        );
-      }
-    }
-    throw error;
-  }
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
@@ -626,32 +555,18 @@ export async function startFreshCodexThread(
       contextEngine: contextEngineBinding,
       environmentSelectionFingerprint,
     };
-    const cleanupUncommittedSuccessor = async (cause?: unknown) => {
-      const cleanupConfirmed = await discardUnattestedCodexPluginThread({
-        client: params.client,
-        threadId: response.thread.id,
-        ephemeral: startParams.ephemeral === true,
-      });
-      if (!cleanupConfirmed) {
-        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
-        throw new CodexAppServerUnsafeSubscriptionError(
-          "Codex successor cleanup failed after a binding replacement conflict",
-          cause === undefined ? undefined : { cause },
-        );
-      }
-    };
     const managedSourceHomeId = codexCatalogHomeId(
       resolveCodexAppServerLocalHomeDir(params.appServer.start, resolveCodexThreadAgentDir(params)),
     );
-    await lifecycleTiming.measure("thread-start-mark-managed", () =>
-      markStartedCodexManagedThread(params.bindingStore.managedThreads, {
-        sourceHomeId: managedSourceHomeId,
-        threadId: response.thread.id,
-        ...(rolloutPath ? { rolloutPath } : {}),
-      }),
-    );
     let committed: boolean;
     try {
+      await lifecycleTiming.measure("thread-start-mark-managed", () =>
+        markStartedCodexManagedThread(params.bindingStore.managedThreads, {
+          sourceHomeId: managedSourceHomeId,
+          threadId: response.thread.id,
+          ...(rolloutPath ? { rolloutPath } : {}),
+        }),
+      );
       committed = await lifecycleTiming.measure("thread-start-write-binding", () =>
         params.bindingStore.mutate(
           bindingIdentity,
@@ -662,21 +577,18 @@ export async function startFreshCodexThread(
                 binding: nextBinding,
               }
             : { kind: "set", if: { kind: "absent" }, binding: nextBinding },
+          assertCurrent,
         ),
       );
     } catch (error) {
-      if (replacementPredecessor) {
-        await cleanupUncommittedSuccessor(error);
-      }
-      throw error;
+      return await rejectUncommittedThread(error);
     }
     if (!committed) {
-      if (replacementPredecessor) {
-        await cleanupUncommittedSuccessor();
-      }
-      throw new CodexThreadBindingConflictError(
-        replacementPredecessor?.threadId ?? response.thread.id,
-        "committing a fresh thread",
+      return await rejectUncommittedThread(
+        new CodexThreadBindingConflictError(
+          replacementPredecessor?.threadId ?? response.thread.id,
+          "committing a fresh thread",
+        ),
       );
     }
     if (contextEngineBinding) {

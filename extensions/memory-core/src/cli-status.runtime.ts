@@ -1,11 +1,13 @@
 import {
-  resolveMemoryIndexIdentityReason,
+  formatMemoryIndexRebuildGuidance,
+  resolveMemoryIndexIdentityDiagnostic,
   type MemoryEmbeddingProbeResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatAuditCounts,
@@ -65,13 +67,13 @@ function formatMemoryIndexIdentityWarning(
   reason: string;
   fix: string;
 } | null {
-  const reason = resolveMemoryIndexIdentityReason(status);
-  if (!reason) {
+  const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
+  if (!diagnostic) {
     return null;
   }
   return {
-    reason,
-    fix: `Run: openclaw memory status --index --agent ${agentId}`,
+    reason: `${diagnostic.reason} (owner: ${diagnostic.owner}, code: ${diagnostic.code})`,
+    fix: `Run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
   };
 }
 function formatDreamingSummary(cfg: OpenClawConfig): string {
@@ -162,7 +164,7 @@ export async function runMemoryStatus(
     agent: opts.agent,
     allAgents: true,
     diagnosticsToStderr: Boolean(opts.json),
-    purpose: opts.index ? "cli" : "status",
+    purpose: opts.index || opts.fix ? "cli" : "status",
     inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
@@ -373,7 +375,16 @@ export async function runMemoryStatus(
           total === null
             ? `${entry.files}/? files · ${entry.chunks} chunks`
             : `${entry.files}/${total} files · ${entry.chunks} chunks`;
-        lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
+        const payload =
+          entry.chunkBytes === undefined
+            ? ""
+            : ` · ${formatByteSize(entry.chunkBytes, {
+                style: "iec",
+                maxUnit: "tera",
+                separator: " ",
+                fractionDigits: 1,
+              })} text + embeddings`;
+        lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts + payload)}`);
       }
     }
     if (status.fallback) {

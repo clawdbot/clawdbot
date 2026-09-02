@@ -1046,12 +1046,6 @@ describe("subagent announce formatting", () => {
       expectedAgentCalls: 1,
       expectedMessage: "(no output)",
     },
-    {
-      name: "empty",
-      terminalReply: { disposition: "empty" } as const,
-      expectedAgentCalls: 1,
-      expectedMessage: "(no output)",
-    },
   ])(
     "replays restored durable $name output without transcript inference",
     async ({ name, terminalReply, expectedAgentCalls, expectedMessage }) => {

@@ -437,8 +437,6 @@ export function renderAppearanceSection(
         </div>
       </section>
 
-      ${renderTypography(props, themeOptions.find((option) => option.id === props.theme)!.label)}
-
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.accent")}</h2>
@@ -513,6 +511,8 @@ export function renderAppearanceSection(
           <span class="settings-accent-status__scope">${accentProvenance}</span>
         </p>
       </section>
+
+      ${renderTypography(props, themeOptions.find((option) => option.id === props.theme)!.label)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
         <div class="settings-section__header">

@@ -215,6 +215,18 @@ vi.mock("./reply-media-paths.runtime.js", async (importOriginal) => {
 
 const { runReplyAgent } = await import("./agent-runner.js");
 
+function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupRun>[0]) {
+  const followupRun = createMockFollowupRun(overrides);
+  followupRun.run.thinkingCatalog = [
+    {
+      provider: followupRun.run.provider,
+      id: followupRun.run.model,
+      input: ["text", "image"],
+    },
+  ];
+  return followupRun;
+}
+
 function makeRunReplyAgentParams(
   overrides: Partial<Parameters<typeof runReplyAgent>[0]> & {
     provider?: string;
@@ -227,10 +239,11 @@ function makeRunReplyAgentParams(
   const runWorkspaceDir = overrides.workspaceDir ?? testWorkspaceDir;
   const followupRun =
     overrides.followupRun ??
-    createMockFollowupRun({
+    createMediaFollowupRun({
       prompt,
       run: {
         agentId: "main",
+        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
         messageProvider: provider,
         workspaceDir: runWorkspaceDir,
       },
@@ -397,9 +410,10 @@ describe("runReplyAgent media path normalization", () => {
       const result = await runReplyAgent(
         makeRunReplyAgentParams({
           sessionKey,
-          followupRun: createMockFollowupRun({
+          followupRun: createMediaFollowupRun({
             run: {
               agentId: "qa",
+              thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
               sessionKey,
               workspaceDir: testWorkspaceDir,
               config,
@@ -434,7 +448,7 @@ describe("runReplyAgent media path normalization", () => {
       target: "embedded_run",
       gatewayHealth: "live",
     }));
-    const followupRun = createMockFollowupRun({ prompt: "generate chart" });
+    const followupRun = createMediaFollowupRun({ prompt: "generate chart" });
     followupRun.run.taskSuggestionDeliveryMode = "gateway";
 
     await runReplyAgent(
@@ -477,7 +491,7 @@ describe("runReplyAgent media path normalization", () => {
       { type: "image" as const, data: "first", mimeType: "image/jpeg" },
       { type: "image" as const, data: "second", mimeType: "image/png" },
     ];
-    const followupRun = createMockFollowupRun({ prompt: "compare these" });
+    const followupRun = createMediaFollowupRun({ prompt: "compare these" });
     followupRun.images = images;
     followupRun.media = [
       { path: "/tmp/first.jpg", contentType: "image/jpeg" },
@@ -523,7 +537,7 @@ describe("runReplyAgent media path normalization", () => {
       gatewayHealth: "live",
     }));
     const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
-    const followupRun = createMockFollowupRun({ prompt: "inspect this" });
+    const followupRun = createMediaFollowupRun({ prompt: "inspect this" });
     followupRun.images = images;
 
     await runReplyAgent(
@@ -549,7 +563,7 @@ describe("runReplyAgent media path normalization", () => {
 
   it("latches audio only after the active reply operation accepts the steer", async () => {
     const followupRun = {
-      ...createMockFollowupRun({ prompt: "summarize the audio" }),
+      ...createMediaFollowupRun({ prompt: "summarize the audio" }),
       currentInboundAudio: true,
     } as unknown as FollowupRun;
     const operation = createRegisteredReplyOperation({
@@ -696,11 +710,14 @@ describe("runReplyAgent media path normalization", () => {
       commandBody: prompt,
       followupRun:
         overrides.followupRun ??
-        createMockFollowupRun({
+        createMediaFollowupRun({
           prompt,
           run: {
             provider: "ollama",
             model: "gemma4:latest",
+            thinkingCatalog: [
+              { provider: "ollama", id: "gemma4:latest", input: ["text", "image"] },
+            ],
             workspaceDir: testWorkspaceDir,
             config: {},
           },
@@ -754,13 +771,14 @@ describe("runReplyAgent media path normalization", () => {
         },
       });
 
-      const followupRun = createMockFollowupRun({
+      const followupRun = createMediaFollowupRun({
         prompt: "generate",
         run: {
           agentId: "qa",
           sessionKey: "global",
           provider: "anthropic",
           model: "claude",
+          thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
           workspaceDir: testWorkspaceDir,
           config: { agents: { ownership: "explicit", entries: { qa: {}, beta: {} } } },
         },
@@ -841,6 +859,7 @@ describe("runReplyAgent media path normalization", () => {
           imageOrder?: string[];
         }
       | undefined;
+    expect(call).toMatchObject({ modelHasVision: true });
     expect(call?.images).toEqual([
       {
         type: "image",

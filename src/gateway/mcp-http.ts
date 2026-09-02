@@ -25,7 +25,6 @@ import {
 } from "../sessions/agent-harness-session-key.js";
 import {
   registerMcpLoopbackClientGrantRevocationListener,
-  resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
@@ -252,32 +251,21 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           });
         });
         markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
-        const { boundGrantToken, boundCaptureKey } = auth;
-        const activeBoundGrant =
-          boundGrantToken && boundCaptureKey
-            ? resolveMcpLoopbackClientGrant({
-                token: boundGrantToken,
-                runtimeOwnerToken: ownerToken,
-                captureKey: boundCaptureKey,
-              })
-            : undefined;
-        if (boundGrantToken && !activeBoundGrant) {
+        const { boundGrantToken, boundClientGrant } = auth;
+        if (boundClientGrant && !boundClientGrant.isCurrent()) {
           res.writeHead(401, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "unauthorized" }));
           return;
         }
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
-        const authorizeToolCall =
-          boundGrantToken && boundCaptureKey
-            ? () =>
-                Boolean(
-                  resolveMcpLoopbackClientGrant({
-                    token: boundGrantToken,
-                    runtimeOwnerToken: ownerToken,
-                    captureKey: boundCaptureKey,
-                  }),
-                )
+        const authorizeToolCall = boundClientGrant?.isCurrent;
+        const skillWorkshop =
+          requestContext.skillWorkshop || boundClientGrant?.skillLibraryAuthoring
+            ? {
+                ...requestContext.skillWorkshop,
+                libraryAuthoring: boundClientGrant?.skillLibraryAuthoring,
+              }
             : undefined;
         const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
           ? resolveSessionEntryAccessTarget({ cfg, sessionKey: requestContext.sessionKey }).entry
@@ -307,8 +295,9 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           return;
         }
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
-        const scopedTools = toolCache.resolve({
+        const scopedTools = await toolCache.resolve({
           cfg,
+          signal: requestAbort.signal,
           sessionKey: requestContext.sessionKey,
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
           runtimePolicyAgentId: requestContext.runtimePolicyAgentId,
@@ -319,11 +308,11 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           cwd: requestContext.cwd,
           modelProvider: requestContext.modelProvider,
           modelId: requestContext.modelId,
-          ...(activeBoundGrant?.toolAuth
+          ...(boundClientGrant?.toolAuth
             ? {
-                authProfileStore: activeBoundGrant.toolAuth.store,
-                ...(activeBoundGrant.toolAuth.agentDir
-                  ? { authProfileStoreAgentDir: activeBoundGrant.toolAuth.agentDir }
+                authProfileStore: boundClientGrant.toolAuth.store,
+                ...(boundClientGrant.toolAuth.agentDir
+                  ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
                   : {}),
               }
             : {}),
@@ -344,6 +333,8 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           taskSuggestionDeliveryMode: requestContext.taskSuggestionDeliveryMode,
           requireExplicitMessageTarget: requestContext.requireExplicitMessageTarget,
           toolsAllow: requestContext.toolsAllow,
+          delegationCapability: requestContext.delegationCapability,
+          ...(skillWorkshop ? { skillWorkshop } : {}),
           scheduledToolPolicy: requestContext.scheduledToolPolicy,
           senderIsOwner: requestContext.senderIsOwner,
           nodeExecAllowed: requestContext.nodeExecAllowed,
@@ -361,6 +352,14 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           groupSpace: requestContext.groupSpace,
           spawnedBy: requestContext.spawnedBy,
         });
+
+        // Discovery may outlive the requesting connection or grant.
+        requestAbort.signal.throwIfAborted();
+        if (boundClientGrant && !boundClientGrant.isCurrent()) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "unauthorized" }));
+          return;
+        }
 
         logMcpLoopbackTraffic("request", {
           batchSize: messages.length,
@@ -424,9 +423,10 @@ async function startMcpLoopbackServer(port = 0): Promise<{
                     }
                   : undefined,
               });
-            const callerIdentity = activeBoundGrant?.admittedRunContext
+            const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
-                  admittedRunContext: activeBoundGrant.admittedRunContext,
+                  admittedRunContext: boundClientGrant.admittedRunContext,
+                  receiptAuthority: boundClientGrant.isCurrent,
                   agentId: scopedTools.agentId,
                   sessionKey: requestContext.sessionKey,
                   turnSourceChannel: requestContext.messageProvider,

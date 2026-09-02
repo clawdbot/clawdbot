@@ -361,7 +361,9 @@ describe.each(fixtures)("$name response hook", ({ createStream, installResponse,
 });
 
 describe("native ChatGPT SSE non-success response hooks", () => {
-  it("runs the hook for every retry response before the successful SSE stream", async () => {
+  it("runs the hook for the failing response and surfaces the error without retrying", async () => {
+    // The embedded runner owns transient retries; the transport must expose
+    // the first non-success response to the hook and then fail the stream.
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -374,13 +376,12 @@ describe("native ChatGPT SSE non-success response hooks", () => {
     const result = await streamOpenAICodexResponses(chatGptModel, context, {
       apiKey: chatGptToken,
       transport: "sse",
-      maxRetries: 1,
       onResponse,
     }).result();
 
-    expect(result.stopReason).toBe("stop");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503, 202]);
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503]);
   });
 
   it("cancels a terminal non-success body when its hook rejects", async () => {
@@ -408,7 +409,6 @@ describe("native ChatGPT SSE non-success response hooks", () => {
       streamOpenAICodexResponses(chatGptModel, context, {
         apiKey: chatGptToken,
         transport: "sse",
-        maxRetries: 0,
         onResponse: async () => {
           throw new Error("non-success response hook failed");
         },
@@ -438,7 +438,6 @@ describe("native ChatGPT SSE non-success response hooks", () => {
       streamOpenAICodexResponses(chatGptModel, context, {
         apiKey: chatGptToken,
         transport: "sse",
-        maxRetries: 0,
         firstEventTimeoutMs: 20,
         onFirstEventTimeout,
         onResponse: () => new Promise<void>(() => {}),

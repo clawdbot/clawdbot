@@ -8,10 +8,11 @@ import { CodexAppServerClient } from "./client.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
-  createParams as createSharedParams,
+  createNativeRunParams as createParams,
   mockClientRuntimeMethods,
   multiplexCodexTestClientHandlers,
   runCodexAppServerAttempt,
+  seedRunSessionOwnerForTest,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -31,6 +32,7 @@ import {
 import {
   adaptCodexTestClientFactory,
   createClientHarness,
+  waitForHarnessRequest,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -45,52 +47,6 @@ function multiplexedClientFactory(
     multiplexCodexTestClientHandlers(client);
     return client;
   });
-}
-
-function createParams(
-  sessionFile: string,
-  workspaceDir: string,
-  sessionKey = "agent:main:session-1",
-): EmbeddedRunAttemptParams {
-  const params = createSharedParams(sessionFile, workspaceDir, { sessionKey });
-  params.disableTools = true;
-  params.config = undefined;
-  delete params.contextTokenBudget;
-  delete params.contextWindowInfo;
-  delete params.observeToolTerminal;
-  return params;
-}
-
-async function waitForHarnessRequest(
-  harness: ReturnType<typeof createClientHarness>,
-  method: string,
-  startIndex = 0,
-): Promise<{ id: number | string; params?: unknown }> {
-  let request: { id?: number | string; method?: string; params?: unknown } | undefined;
-  await vi.waitFor(
-    () => {
-      request = harness.writes
-        .slice(startIndex)
-        .map(
-          (write) =>
-            JSON.parse(write) as { id?: number | string; method?: string; params?: unknown },
-        )
-        .find((message) => message.method === method);
-      expect(
-        request?.id,
-        `expected ${method} after write ${startIndex}; observed ${JSON.stringify(
-          harness.writes
-            .slice(startIndex)
-            .map((write) => (JSON.parse(write) as { method: string }).method),
-        )}`,
-      ).toBeDefined();
-    },
-    { interval: 1, timeout: 5_000 },
-  );
-  if (request?.id === undefined) {
-    throw new Error(`Codex harness did not write ${method}`);
-  }
-  return { id: request.id, params: request.params };
 }
 
 setupRunAttemptTestHooks();
@@ -188,6 +144,9 @@ describe("Codex app-server main thread cleanup", () => {
       a: path.join(tempDir, "session-a.jsonl"),
       b: path.join(tempDir, "session-b.jsonl"),
     };
+    for (const label of ["a", "b"]) {
+      await seedRunSessionOwnerForTest(`session-${label}`, `agent:main:session-${label}`);
+    }
     const harness = createClientHarness();
     const clientStarted = createDeferred<void>();
     vi.spyOn(CodexAppServerClient, "start").mockImplementation(async () => {
@@ -301,13 +260,15 @@ describe("Codex app-server main thread cleanup", () => {
       path.join(tempDir, "concurrent-second-workspace"),
       "agent:main:telegram:topic:second",
     );
-    firstParams.timeoutMs = 100;
-    secondParams.timeoutMs = 100;
+    firstParams.sessionId = "session-first";
+    secondParams.sessionId = "session-second";
+    await seedRunSessionOwnerForTest(firstParams.sessionId, firstParams.sessionKey!);
+    await seedRunSessionOwnerForTest(secondParams.sessionId, secondParams.sessionKey!);
+    firstParams.timeoutMs = 60_000;
+    secondParams.timeoutMs = 60_000;
 
     const firstRun = runCodexAppServerAttempt(firstParams, {
       bindingStore: testCodexAppServerBindingStore,
-      turnCompletionIdleTimeoutMs: 1_000,
-      turnTerminalIdleTimeoutMs: 1_000,
     });
     const initialize = await waitForHarnessRequest(physical, "initialize");
     physical.send({
@@ -336,8 +297,6 @@ describe("Codex app-server main thread cleanup", () => {
     const secondRequestStart = physical.writes.length;
     const secondRun = runCodexAppServerAttempt(secondParams, {
       bindingStore: testCodexAppServerBindingStore,
-      turnCompletionIdleTimeoutMs: 1_000,
-      turnTerminalIdleTimeoutMs: 1_000,
     });
     const secondThreadStart = await waitForHarnessRequest(
       physical,
@@ -442,10 +401,103 @@ describe("Codex app-server main thread cleanup", () => {
     expect(JSON.stringify(secondResult.messagesSnapshot)).not.toContain("cmd-silent");
   });
 
+  it("keeps native continuation active after a child result until the parent completes", async () => {
+    const physical = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(physical.client);
+    const params = createParams(
+      path.join(tempDir, "child-result.jsonl"),
+      path.join(tempDir, "child-result-workspace"),
+    );
+    params.disableTools = false;
+    params.provider = "openai";
+    params.timeoutMs = 60 * 60_000;
+    const progress = vi.fn();
+    params.onRunProgress = progress;
+    const run = runCodexAppServerAttempt(params, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    try {
+      const initialize = await waitForHarnessRequest(physical, "initialize");
+      physical.send({
+        id: initialize.id,
+        result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      });
+      const thread = await waitForHarnessRequest(physical, "thread/start");
+      physical.send({ id: thread.id, result: threadStartResult() });
+      const turn = await waitForHarnessRequest(physical, "turn/start");
+      physical.send({ id: turn.id, result: turnStartResult() });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      vi.useFakeTimers();
+      for (const item of [
+        {
+          type: "custom_tool_call_output",
+          id: "tool-output",
+          call_id: "tool-call",
+          output: [{ type: "input_text", text: "Tool completed." }],
+        },
+        {
+          type: "agent_message",
+          id: "child-result",
+          author: "/root/evidence",
+          recipient: "/root",
+          content: [
+            {
+              type: "input_text",
+              text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/evidence\nPayload:\nEvidence collected.",
+            },
+          ],
+        },
+      ]) {
+        physical.send({
+          method: "rawResponseItem/completed",
+          params: { threadId: "thread-1", turnId: "turn-1", item },
+        });
+      }
+      await vi.waitFor(() => {
+        expect(
+          progress.mock.calls.filter(
+            ([event]) => event.reason === "notification:rawResponseItem/completed",
+          ),
+        ).toHaveLength(2);
+      });
+      await vi.advanceTimersByTimeAsync(60_001);
+      expect(physical.writes.map((write) => JSON.parse(write).method)).not.toContain(
+        "turn/interrupt",
+      );
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(physical.writes.map((write) => JSON.parse(write).method)).not.toContain(
+        "turn/interrupt",
+      );
+      physical.send({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed" },
+        },
+      });
+      vi.useRealTimers();
+      expect(readAttemptTerminal(await run)).toMatchObject({
+        aborted: false,
+        timedOut: false,
+        promptError: null,
+      });
+    } finally {
+      vi.useRealTimers();
+      physical.client.close();
+      await run.catch(() => undefined);
+    }
+  });
+
   it("keeps an incognito thread subscribed for live in-process reuse", async () => {
     const sessionFile = path.join(tempDir, "incognito-session.jsonl");
     const workspaceDir = path.join(tempDir, "incognito-workspace");
     const sessionKey = "agent:main:dashboard:incognito-live-thread";
+    // Dashboard incognito sessions keep an authoritative row in process-held SQLite.
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
@@ -502,6 +554,7 @@ describe("Codex app-server main thread cleanup", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionKey = "agent:main:dashboard:incognito-failed-turn";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
     const requests: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       requests.push({ method, params });
@@ -658,6 +711,7 @@ describe("Codex app-server main thread cleanup", () => {
       const sessionFile = path.join(tempDir, "cancelled-session.jsonl");
       const workspaceDir = path.join(tempDir, "cancelled-workspace");
       const sessionKey = "agent:main:dashboard:incognito-cancelled-turn";
+      await seedRunSessionOwnerForTest("session-1", sessionKey);
       const harness = createClientHarness();
       const abort = new AbortController();
       const close = vi.spyOn(harness.client, "close");
@@ -805,6 +859,7 @@ describe("Codex app-server main thread cleanup", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionKey = "agent:main:dashboard:incognito-failed-unsubscribe";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
     const contaminated = createClientHarness();
     const replacement = createClientHarness();
     const startClient = vi

@@ -184,7 +184,7 @@ export async function startCodexAttemptTurn(
       trajectoryRecorder?.recordEvent("session.ended", {
         status: "error",
         threadId: resourceState.thread.threadId,
-        timedOut: state.timedOut,
+        timedOut: state.timeout !== undefined,
         aborted: runAbortController.signal.aborted,
         promptError: message,
       });
@@ -214,8 +214,7 @@ export async function startCodexAttemptTurn(
       });
       const failureKind = classifyCodexModelCallFailureKind({
         error: turnStartError,
-        timedOut: state.timedOut,
-        turnCompletionIdleTimedOut: state.turnCompletionIdleTimedOut,
+        timedOut: state.timeout !== undefined,
         runAborted: runAbortController.signal.aborted,
         abortReason: runAbortController.signal.reason,
         clientClosedAbort: state.clientClosedAbort,
@@ -242,7 +241,7 @@ export async function startCodexAttemptTurn(
             threadId: resourceState.thread.threadId,
           })
         : true;
-      if (!state.timedOut && bindingReleased && !resourceState.startupClientUnsafe) {
+      if (bindingReleased && !resourceState.startupClientUnsafe) {
         const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
           threadId: resourceState.thread.threadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,

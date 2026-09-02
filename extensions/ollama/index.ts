@@ -87,10 +87,6 @@ const loadOllamaMemoryEmbeddingProviderAdapter = createLazyRuntimeModule(
   async () =>
     (await import("./src/memory-embedding-adapter.js")).ollamaMemoryEmbeddingProviderAdapter,
 );
-const loadOllamaMediaUnderstandingProvider = createLazyRuntimeModule(
-  async () =>
-    (await import("./src/media-understanding-provider.js")).ollamaMediaUnderstandingProvider,
-);
 
 const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: OLLAMA_PROVIDER_ID,
@@ -101,23 +97,11 @@ const lazyOllamaMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter =
     await (await loadOllamaMemoryEmbeddingProviderAdapter()).create(options),
 };
 
-const lazyOllamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
+const ollamaMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: OLLAMA_PROVIDER_ID,
   capabilities: ["image"],
-  describeImage: async (request) => {
-    const provider = await loadOllamaMediaUnderstandingProvider();
-    if (!provider.describeImage) {
-      throw new Error("Ollama media understanding provider missing describeImage");
-    }
-    return await provider.describeImage(request);
-  },
-  describeImages: async (request) => {
-    const provider = await loadOllamaMediaUnderstandingProvider();
-    if (!provider.describeImages) {
-      throw new Error("Ollama media understanding provider missing describeImages");
-    }
-    return await provider.describeImages(request);
-  },
+  describeImage: undefined,
+  describeImages: undefined,
 };
 
 async function checkWsl2CrashLoopRiskLazily(api: OpenClawPluginApi): Promise<void> {
@@ -770,7 +754,7 @@ export default definePluginEntry({
       void checkWsl2CrashLoopRiskLazily(api);
     }
     api.registerEmbeddingProvider(lazyOllamaMemoryEmbeddingProviderAdapter);
-    api.registerMediaUnderstandingProvider(lazyOllamaMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
     if (startupPluginConfig.nodeInference?.enabled !== false) {
       for (const command of createLazyOllamaNodeHostCommands()) {
         api.registerNodeHostCommand(command);

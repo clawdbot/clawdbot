@@ -1,6 +1,10 @@
 import { CHAT_INPUT_RUN_ID_MAX_CHARS } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import {
+  findChatSubmissionMessage,
+  readChatInputReceipt,
+} from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
@@ -44,7 +48,6 @@ import {
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
-  chatMessagesContainQueuedSend,
   chatSendHoldReason,
   OFFLINE_QUEUE_STORAGE_ERROR,
   retireDeliveredQueuedUserTurn,
@@ -219,25 +222,20 @@ async function readCurrentStoredChatHistory(
   }
   syncVisibleChatQueueProjection(host);
   const historySessionId = history.sessionInfo?.sessionId ?? history.sessionId;
-  const inputRunId =
-    !item.sessionId || item.sessionId === historySessionId ? item.sendRunId : undefined;
-  const acceptedPendingInput =
-    inputRunId && history.pendingInputs?.items.some((input) => input.runId === inputRunId);
-  const consumedInput =
-    inputRunId && history.inputConsumptions?.some((input) => input.runId === inputRunId);
+  const inputReceipt = readChatInputReceipt(history, item);
   // Gateway chat run IDs equal client idempotency keys; terminal-event retirement
   // uses the same delivery proof, even before the transcript marker is persisted.
   if (
-    acceptedPendingInput ||
-    consumedInput ||
-    chatMessagesContainQueuedSend(history.messages, item) ||
+    inputReceipt ||
+    findChatSubmissionMessage(history.messages, item.sendRunId) ||
     sessionRunProvesQueuedDelivery(history.sessionInfo, item)
   ) {
     // Pending custody already owns the display bytes; other delivery proof must
     // finish the outbox owner's attachment handoff before releasing local bytes.
-    const retired = acceptedPendingInput
-      ? removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null
-      : (await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)) === "retired";
+    const retired =
+      inputReceipt === "pending"
+        ? removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null
+        : (await retireDeliveredQueuedUserTurn(host, item.sendRunId, outbox)) === "retired";
     if (
       !retired ||
       host.client !== client ||
@@ -247,11 +245,15 @@ async function readCurrentStoredChatHistory(
       return "blocked";
     }
     if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId)) {
-      if (acceptedPendingInput && historySessionId && host.currentSessionId === historySessionId) {
+      if (
+        inputReceipt === "pending" &&
+        historySessionId &&
+        host.currentSessionId === historySessionId
+      ) {
         applyChatPendingInputs(host, history.pendingInputs);
       }
       void loadChatHistory(host, {
-        supersedeInFlight: Boolean(acceptedPendingInput || consumedInput),
+        supersedeInFlight: Boolean(inputReceipt),
       });
     }
     return "continue";

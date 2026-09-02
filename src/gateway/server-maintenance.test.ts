@@ -420,7 +420,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await Promise.resolve();
 
     expect(gc).toHaveBeenCalledWith({
-      limits: { maxCount: 30 },
+      limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
       shouldRemoveOwner: expect.any(Function),
     });

@@ -174,23 +174,28 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
-  it("replaces raw provider detail with classified provider facts", () => {
-    const raw = "HTTP 500: opaque-provider-canary";
-    const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
-      provider: "openai",
-      providerOwner: {
-        id: "openai",
-        classifyFailoverReason: () => "server_error",
-      },
-      model: "gpt-5.6-luna",
-    });
+  it.each([{ prepared: false }, { prepared: true }])(
+    "replaces raw provider detail with classified facts (prepared: $prepared)",
+    ({ prepared }) => {
+      const raw = "HTTP 500: opaque-provider-canary";
+      const userFacing = formatUserFacingAssistantErrorText(makeAssistantError(raw), {
+        provider: "openai",
+        providerOwner: prepared
+          ? {
+              id: "openai",
+              classifyFailoverReason: () => "server_error",
+            }
+          : undefined,
+        model: "gpt-5.6-luna",
+      });
 
-    expect(userFacing).toBe(
-      "⚠️ openai/gpt-5.6-luna request failed (request timed out, HTTP 500). " +
-        "This is usually temporary — try again shortly.",
-    );
-    expect(userFacing).not.toContain("opaque-provider-canary");
-  });
+      expect(userFacing).toBe(
+        "⚠️ openai/gpt-5.6-luna request failed (provider internal error, HTTP 500). " +
+          "This is usually temporary — try again shortly.",
+      );
+      expect(userFacing).not.toContain("opaque-provider-canary");
+    },
+  );
 
   it("keeps the generic last resort when no classified facts are available", () => {
     const raw = "opaque-private-provider-detail";
@@ -263,6 +268,19 @@ describe("formatAssistantErrorText", () => {
         ),
       ).toBe("server_error");
     });
+  });
+  it("renders opaque upstream_error facts as a temporary provider error", () => {
+    const msg = makeAssistantMessageFixture({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      errorMessage: "opaque provider response",
+      errorType: "upstream_error",
+    });
+
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "⚠️ openai/gpt-5.6-luna request failed (provider internal error). " +
+        "This is usually temporary — try again shortly.",
+    );
   });
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must

@@ -7,30 +7,29 @@ import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
-import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
-import { runDaemonInstall, runDaemonRestart } from "../daemon-cli.js";
+import { runDaemonRestart } from "../daemon-cli.js";
 import {
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
 import { runRestartScript } from "./restart-helper.js";
-import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config.js";
+import type { UpdateCommandOptions } from "./shared.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
-  resolveServiceRefreshEnv,
-  resolveUpdatedInstallCommandEnv,
-} from "./update-command-service-env.js";
+  DEFINITION_DENIAL,
+  runUpdatedInstallGatewayCommand,
+} from "./update-command-service-command.js";
+import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   resolveUpdatedGatewayRestartPort,
@@ -50,7 +49,6 @@ import {
 } from "./update-command-service-recovery.js";
 
 export {
-  createAggregateErrorWithCause,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -64,8 +62,6 @@ export {
 } from "./update-command-service-maintenance.js";
 
 const CLI_NAME = resolveCliName();
-const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
-const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
 const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
 const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
 
@@ -75,20 +71,16 @@ export function shouldPrepareUpdatedInstallRestart(params: {
   serviceLoaded: boolean;
   serviceStoppedForUpdate?: boolean;
   serviceMatchesUpdateRoot?: boolean;
+  requiresInstallRootRefresh?: boolean;
 }): boolean {
   const useInstalledState =
+    params.requiresInstallRootRefresh === true ||
     isPackageManagerUpdateMode(params.updateMode) ||
     (params.updateMode === "git" && params.serviceStoppedForUpdate);
   return useInstalledState
     ? params.serviceInstalled
     : params.serviceLoaded &&
         (params.updateMode !== "git" || params.serviceMatchesUpdateRoot === true);
-}
-
-function formatCommandFailure(stdout: string, stderr: string): string {
-  // Keep the stable denial even when JSON stdout accompanies unrelated stderr warnings.
-  const detail = `${stderr}\n${stdout}`.match(DEFINITION_DENIAL)?.[0] ?? (stderr || stdout).trim();
-  return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
 
 export function resolvePostUpdateServiceStateReadEnv(params: {
@@ -100,57 +92,6 @@ export function resolvePostUpdateServiceStateReadEnv(params: {
   const usesServiceEnv =
     params.updateMode === "git" || isPackageManagerUpdateMode(params.updateMode);
   return usesServiceEnv ? (params.preManagedServiceEnv ?? fallbackEnv) : fallbackEnv;
-}
-
-// Use the candidate's version guards for both refresh and activation. The parsed
-// preservation option makes older targets reject before repair, without a retry.
-async function runUpdatedInstallGatewayCommand(
-  params: Parameters<typeof maybeRestartService>[0] & { invocationEnv: NodeJS.ProcessEnv },
-  action: "install" | "restart",
-  preserveDefinition = false,
-): Promise<boolean> {
-  const installing = action === "install";
-  const entrypoint = await resolveGatewayInstallEntrypoint(params.result.root);
-  if (!entrypoint) {
-    if (installing && !isPackageManagerUpdateMode(params.result.mode)) {
-      await runDaemonInstall({ force: true, json: params.opts.json || undefined });
-      return true;
-    }
-    throw new Error(
-      `updated install entrypoint not found under ${params.result.root ?? "unknown"}`,
-    );
-  }
-  const args = ["gateway", action];
-  if (installing) {
-    args.push("--force");
-  } else if (preserveDefinition) {
-    args.push("--preserve-definition");
-  }
-  if (params.opts.json) {
-    args.push("--json");
-  }
-  const res = await runCommandWithTimeout(
-    [params.nodeRunner ?? resolveNodeRunner(), entrypoint, ...args],
-    {
-      cwd: params.result.root,
-      env: resolveUpdatedInstallCommandEnv({
-        processEnv: installing
-          ? (params.serviceInstallEnv ?? params.invocationEnv)
-          : params.invocationEnv,
-        serviceEnv: installing ? undefined : params.serviceEnv,
-        invocationCwd: params.invocationCwd,
-      }),
-      // Restart owns migration-aware readiness; only refresh has the fixed watchdog.
-      timeoutMs: installing ? SERVICE_REFRESH_TIMEOUT_MS : params.timeoutMs,
-    },
-  );
-  if (res.code === 0) {
-    return true;
-  }
-  const operation = installing ? "refresh" : "restart";
-  throw new Error(
-    `updated install ${operation} failed (${entrypoint}): ${formatCommandFailure(res.stdout, res.stderr)}`,
-  );
 }
 
 export async function tryInstallShellCompletion(opts: {
@@ -251,6 +192,8 @@ export async function maybeRestartService(params: {
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);
+  const requiresInstallRootRefresh =
+    verdict?.kind === "owned" && verdict.requiresInstallRootRefresh;
   const isPackageUpdate = isPackageManagerUpdateMode(activation.result.mode);
   const requiresVerifiedRestart = () =>
     preserveDefinition || isPackageUpdate || activation.requireRunningServiceAfterRestart;
@@ -370,6 +313,15 @@ export async function maybeRestartService(params: {
   };
 
   if (activation.shouldRestart) {
+    if (
+      requiresInstallRootRefresh &&
+      (!activation.refreshServiceEnv || activation.serviceInstallEnv === null)
+    ) {
+      defaultRuntime.error(
+        "The updated installation requires a writable gateway service definition.",
+      );
+      return false;
+    }
     if (!activation.opts.json) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Restarting service..."));
@@ -394,12 +346,14 @@ export async function maybeRestartService(params: {
       if (activation.refreshServiceEnv && activation.serviceInstallEnv !== null) {
         try {
           await runUpdatedInstallGatewayCommand(activation, "install");
-          if (isPackageUpdate && expectedGatewayVersion) {
+          if (expectedGatewayVersion && (isPackageUpdate || expectedGatewayBuildId)) {
             const health = await waitForGatewayHealthyRestart({
               service: resolveGatewayService(),
               port: activation.gatewayPort,
               expectedVersion: expectedGatewayVersion,
+              ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
               env: activation.serviceEnv,
+              requireRunningService: true,
               attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
               delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
             });
@@ -453,16 +407,31 @@ export async function maybeRestartService(params: {
             updatedInstallRestartNeedsServiceRootProof = !canVerifyUpdatedGatewayByVersion;
           }
         }
+        if (
+          requiresInstallRootRefresh &&
+          (await gatewayServiceCommandUsesRoot({
+            root: activation.result.root,
+            env: activation.serviceEnv,
+          })) !== true
+        ) {
+          defaultRuntime.error(
+            "Gateway service did not point at the updated install after refresh.",
+          );
+          return false;
+        }
       }
-      // Service refresh can bootstrap a RunAtLoad LaunchAgent directly. When
-      // that already produced the expected gateway version, a second kickstart
-      // would only race the healthy supervisor-owned process.
+      // Refresh can start the service directly. Once its version and source
+      // build are healthy, another restart only interrupts the new process.
       if (!refreshedGatewayAlreadyHealthy && restartScriptPath) {
-        await createUpdateConfigSnapshot();
+        if (!preserveDefinition) {
+          await createUpdateConfigSnapshot();
+        }
         await runRestartScript(restartScriptPath);
         restartInitiated = true;
       } else if (!refreshedGatewayAlreadyHealthy && canRestartUpdatedInstall()) {
-        await createUpdateConfigSnapshot();
+        if (!preserveDefinition) {
+          await createUpdateConfigSnapshot();
+        }
         restarted = await runUpdatedInstallGatewayCommand(
           activation,
           "restart",
@@ -487,7 +456,9 @@ export async function maybeRestartService(params: {
         shouldUseLegacyProcessRestartAfterUpdate({ updateMode: activation.result.mode }) &&
         !activation.skipLegacyServiceRestart
       ) {
-        await createUpdateConfigSnapshot();
+        if (!preserveDefinition) {
+          await createUpdateConfigSnapshot();
+        }
         restarted = await runDaemonRestart();
       } else if (!refreshedGatewayAlreadyHealthy && !activation.opts.json) {
         defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));

@@ -55,6 +55,9 @@ recovery.
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
 
+Resize the Settings window to fit your display. Long settings panes scroll
+independently of the sidebar, keeping permission and capability controls reachable.
+
 ## Updates
 
 The dashboard update card names what the app will update:
@@ -90,7 +93,7 @@ unknown values stay on stable app builds.
 
 ## Open dashboard links
 
-In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width while keeping the dashboard navigation visible. Drag the divider to choose another width; the app remembers it. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
+In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width. Drag the divider in either direction to choose another width; the app remembers it. Widening the browser lets the dashboard switch to compact navigation, with a 400-point minimum for the dashboard and a 320-point minimum for the browser. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 

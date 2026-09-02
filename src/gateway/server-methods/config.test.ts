@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -735,9 +736,10 @@ describe("config.patch ID-keyed arrays", () => {
 
 describe("config.patch model input normalization", () => {
   it("uses write-snapshot policies before merging manifest-backed model IDs", async () => {
-    modelNormalizationPluginMetadata = {
+    modelNormalizationPluginMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
         {
+          id: "myproxy-normalizer",
           modelIdNormalization: {
             providers: {
               myproxy: { aliases: { latest: "modern-model" }, prefixWhenBare: "vendor" },
@@ -745,7 +747,7 @@ describe("config.patch model input normalization", () => {
           },
         },
       ],
-    } as unknown as PluginMetadataSnapshot;
+    });
     storedConfig = {
       models: {
         providers: {

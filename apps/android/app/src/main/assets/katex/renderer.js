@@ -28,12 +28,12 @@ window.renderMath = async (job) => {
     const finalBounds = container.getBoundingClientRect();
     const height = Math.ceil(Math.max(finalBounds.height, container.scrollHeight));
     window.ChatMathBridge.postMessage(
-      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AndroidX WebMessageListener bridge: single-argument postMessage; origin admitted at ChatMathRenderer.kt:526.
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AndroidX WebMessageListener bridge: single-argument postMessage; origin admitted by ChatRichBlockRenderer.
       JSON.stringify({ id: job.id, widthCssPx: width, heightCssPx: height, success: true }),
     );
   } catch {
     window.ChatMathBridge.postMessage(
-      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AndroidX WebMessageListener bridge: single-argument postMessage; origin admitted at ChatMathRenderer.kt:526.
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- AndroidX WebMessageListener bridge: single-argument postMessage; origin admitted by ChatRichBlockRenderer.
       JSON.stringify({ id: job.id, widthCssPx: 0, heightCssPx: 0, success: false }),
     );
   }

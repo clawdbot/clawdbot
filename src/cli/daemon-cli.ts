@@ -14,3 +14,5 @@ export type {
   DaemonStatusOptions,
   GatewayRpcOpts,
 } from "./daemon-cli/types.js";
+
+export { waitForGatewayUpdateRecovery } from "./daemon-cli/lifecycle-context.js";

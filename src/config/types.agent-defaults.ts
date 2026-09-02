@@ -158,8 +158,10 @@ export type AgentDefaultsConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Explicit model override policy. Empty or omitted allow permits any model. */
   modelPolicy?: AgentModelPolicyConfig;
-  /** Agent working directory (preferred). Used as the default cwd for agent runs. */
+  /** Agent bootstrap and memory directory; also the working directory when cwd is unset. */
   workspace?: string;
+  /** Working directory for agent reply runs, separate from workspace bootstrap and memory files. */
+  cwd?: string;
   /** Optional default allowlist of skills for agents that do not set agents.entries.*.skills. */
   skills?: string[];
   /** Silent-reply policy by conversation type. */

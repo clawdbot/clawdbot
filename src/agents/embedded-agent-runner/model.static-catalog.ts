@@ -202,42 +202,6 @@ function resolveBundledStaticCatalogState(
   return state;
 }
 
-/** Returns whether a bundled static catalog asks runtime discovery to augment its rows. */
-export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  workspaceDir?: string;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const catalogParams = {
-    cfg: params.cfg,
-    env: params.env ?? process.env,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    workspaceDir: params.workspaceDir,
-  };
-  const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot(catalogParams);
-  const plugins = resolveBundledStaticCatalogState(catalogParams, metadataSnapshot).plugins;
-  return plugins.some((plugin) => {
-    const catalog = plugin.modelCatalog;
-    if (catalog?.runtimeAugment !== true) {
-      return false;
-    }
-    return (
-      Object.keys(catalog.providers ?? {}).some(
-        (candidate) => normalizeProviderId(candidate) === provider,
-      ) ||
-      Object.keys(catalog.aliases ?? {}).some(
-        (candidate) => normalizeProviderId(candidate) === provider,
-      )
-    );
-  });
-}
-
 type BundledStaticCatalogLookup = {
   provider: string;
   modelId: string;
@@ -280,7 +244,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
     workspaceDir: params?.workspaceDir,
   };
   const matchesStaticModelId = params?.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot })
     : staticModelIdMatches;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
@@ -549,7 +513,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
 ) => Promise<ProviderRuntimeModel | undefined> {
   const env = params.env ?? process.env;
   const matchesStaticModelId = params.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot })
     : staticModelIdMatches;
   const pluginCatalogs = new Map<string, Promise<Map<string, ProviderRuntimeModel[]>>>();
   const providerPluginIds = new Map<string, string[]>();

@@ -53,6 +53,14 @@ See [Database schemas](/reference/database-schemas) for downgrade precautions.
 
 ## Graceful restarts drain first
 
+Startup migration warnings do not prevent the Gateway from starting. It logs the
+warnings once and starts degraded; `openclaw status` and `openclaw doctor` show the
+running Gateway's warning report. Read-only operators receive the repair hint;
+warning details are restricted to administrators and startup logs.
+Run `openclaw doctor --fix` against the same
+state/config, then restart the Gateway. Unfinished migrations remain pending for
+a later startup. Errors that leave required state unsafe to read still stop startup.
+
 A requested restart (`openclaw gateway restart`, a config change that requires
 a restart, or a gateway update) does not kill in-flight work immediately. The
 gateway stops accepting new work, then waits for active agent turns and
@@ -84,6 +92,76 @@ short suspension lease before the host sleeps and resuming it after wake. Remote
 gateways are not suspended when the app host sleeps. A deliberate suspension
 through `gateway.suspend.*` keeps recovery deferred until the controller resumes
 the gateway.
+
+## Recovery after a failed update
+
+After a failed interactive update or repair, OpenClaw finishes cleanup and any
+service recovery, then opens [`openclaw triage`](/cli/triage). Triage immediately
+starts the first directly launchable coding agent in this order: Claude Code,
+Codex, OpenCode, then Pi. It passes the captured failure before fresh Doctor
+checks or archive collection and asks the agent to diagnose, repair, and verify
+the installation. The agent receives the captured installation paths and keeps
+its normal authentication, sandbox, and approval settings.
+
+For a failed Control UI or unattended update, use the installation-specific
+command printed on the Gateway host, or run triage there with the same OpenClaw
+profile and state/config paths. Use `--agent` to select a particular coding agent:
+
+```bash
+openclaw triage
+openclaw triage --agent codex
+```
+
+JSON, `--yes`, and non-interactive update invocations collect diagnostics without
+starting a coding agent. `openclaw triage --non-interactive` also prepares
+diagnostics without launching an agent; `--update-result <path>` includes an
+updater's saved failure artifact. Printed handoff commands preserve installation
+selectors and use PowerShell on Windows or POSIX shells on macOS, Linux, and WSL.
+
+Git updates may restore and verify the original source and runtime before Doctor
+starts. Once candidate Doctor starts, subsequent failures retain that candidate
+and explicitly refuse recovery: code rollback cannot reverse state migrations.
+Package-manager and lifecycle commands can change state even while npm stages
+the candidate. After those commands start, restoring the original package and
+launchers does not authorize restarting them against possibly changed state.
+Only a fully verified candidate, including the required nonblocking Doctor
+result, can authorize activation. Failures before hooks can run, such as staging
+directory preparation errors, can still recover a verified original runtime.
+
+An update failure does not by itself authorize a Gateway restart. The updater
+must explicitly verify that the installation is safe to activate. A blocking
+Doctor result leaves the Gateway stopped, including when a detached managed
+update helper is still running. Re-enabling Windows task autostart cannot
+bypass that decision.
+
+A cancellation before package mutation can restore the original service under
+its existing handoff ownership. Recovery succeeds only after the Gateway passes
+the normal restart health checks and reports the verified installation version
+and, for Git recovery, the exact restored build ID. A matching package version
+alone cannot distinguish two Git builds. A service
+manager accepting a start request, or reporting a live PID, is insufficient.
+Once the detached helper launches the updater, a missing, malformed, oversized,
+or interrupted direct result leaves activation to the operator. This is stricter
+than older helpers that restarted after an unclassified failure. Installing a new
+target does not change an already-running historical helper; these checks apply
+to the helper version that started the update.
+
+A skipped update, such as a Git checkout with no upstream, can still require
+restoring the service parked by its detached helper. The helper uses the child's
+verified recovery decision and preserves the skip reason. A zero exit is retained
+only if recovery succeeds or the child already verified it; failed foreground
+recovery is terminal and is not retried.
+
+A failed update still exits nonzero when service recovery or the repair agent
+succeeds. Error and skip notifications are attempted before recovery; the helper
+does not recreate them after the recovering Gateway consumes them. Check the
+final CLI result and the handoff log for the recovery outcome.
+
+Repair the failed Doctor or installation check before restarting. Triage can
+inspect `openclaw gateway status --deep` and the update diagnostics. Avoid blindly installing
+older code after a newer release has migrated configuration or databases; see
+[Updating and recovery](/install/updating). Restart sentinels report the outcome;
+copying one does not grant permission to restart a service.
 
 ## How interrupted work is detected
 

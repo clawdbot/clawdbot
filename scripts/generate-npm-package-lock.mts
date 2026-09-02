@@ -100,6 +100,11 @@ function normalizeOverrides(overrides: unknown): OverrideMap {
   }
   const normalized: OverrideMap = {};
   for (const [key, value] of Object.entries(overrides)) {
+    // pnpm's removal marker is not an npm version. Final lock membership checks
+    // still reject dependencies resurrected by the npm runtime graph.
+    if (value === "-") {
+      continue;
+    }
     const scopedSeparator = key.indexOf(">");
     if (scopedSeparator > 0) {
       const parentSelector = key.slice(0, scopedSeparator).trim();

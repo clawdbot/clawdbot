@@ -88,6 +88,10 @@ type RuntimeCreateSessionEntryResult = {
   sessionId: string;
   entry: RuntimeSessionEntry;
 };
+type RuntimeCreateSessionEntryContext = RuntimeCreateSessionEntryResult & {
+  /** Host creation authority; runtimes that cannot supply it must leave it absent. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
+};
 type RuntimeCreateSessionEntryFinalPatch = {
   pluginExtensions: RuntimeSessionPluginExtensions;
 };
@@ -141,13 +145,13 @@ type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
         /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
         recoverMatchingInitialEntry: true;
         afterCreate: (
-          created: RuntimeCreateSessionEntryResult,
+          created: RuntimeCreateSessionEntryContext,
         ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
       }
     | {
         recoverMatchingInitialEntry?: never;
         afterCreate?: (
-          created: RuntimeCreateSessionEntryResult,
+          created: RuntimeCreateSessionEntryContext,
         ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
       }
   );
@@ -439,6 +443,7 @@ export type PluginRuntimeCore = {
     listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {
+    resolveAudioInputBudget: MediaUnderstandingRuntime["resolveAudioInputBudget"];
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];

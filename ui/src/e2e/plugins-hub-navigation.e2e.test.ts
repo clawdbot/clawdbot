@@ -75,6 +75,8 @@ const methodResponses = {
 };
 
 type HubGeometry = {
+  contentLeft: number;
+  contentWidth: number;
   height: number;
   left: number;
   title: string;
@@ -104,7 +106,18 @@ async function hubGeometry(page: Page): Promise<HubGeometry> {
   return tabs.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     const title = document.querySelector<HTMLElement>(".content-header .page-title");
+    const workshop = document.querySelector<HTMLElement>(".content--skill-workshop");
+    const contentColumn =
+      workshop && workshop.getClientRects().length > 0
+        ? workshop
+        : document.querySelector<HTMLElement>(".settings-page--wide");
+    if (!contentColumn) {
+      throw new Error("Plugins hub content column did not render");
+    }
+    const contentRect = contentColumn.getBoundingClientRect();
     return {
+      contentLeft: contentRect.left,
+      contentWidth: contentRect.width,
       height: rect.height,
       left: rect.left,
       title: title?.textContent?.trim() ?? "",
@@ -122,6 +135,8 @@ function expectStableGeometry(actual: HubGeometry, expected: HubGeometry) {
   expect(Math.abs(actual.top - expected.top)).toBeLessThanOrEqual(1);
   expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(1);
   expect(Math.abs(actual.height - expected.height)).toBeLessThanOrEqual(1);
+  expect(Math.abs(actual.contentLeft - expected.contentLeft)).toBeLessThanOrEqual(1);
+  expect(Math.abs(actual.contentWidth - expected.contentWidth)).toBeLessThanOrEqual(1);
 }
 
 async function skillsToolbarGeometry(page: Page): Promise<ControlGeometry[]> {
@@ -193,7 +208,9 @@ async function selectHubTab(
 
 suite.define(() => {
   it.each([
-    { label: "desktop", viewport: { height: 960, width: 1440 } },
+    { label: "desktop", viewport: { height: 1053, width: 2048 } },
+    { label: "laptop", viewport: { height: 768, width: 1366 } },
+    { label: "tablet", viewport: { height: 1024, width: 768 } },
     { label: "narrow", viewport: { height: 852, width: 393 } },
   ])(
     "keeps the hub shell fixed through every $label tab transition",
@@ -275,6 +292,7 @@ suite.define(() => {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
+        await captureScreenshot(page, `${label}-04-workshop-today.png`);
         expectStableGeometry(await hubGeometry(page), installed);
         const workshopShellBottom = await page
           .locator(".plugins-hub-header")
@@ -283,7 +301,6 @@ suite.define(() => {
           .locator(".sw-header-controls")
           .evaluate((element) => element.getBoundingClientRect().top);
         expect(workshopControlsTop).toBeGreaterThanOrEqual(workshopShellBottom);
-        await captureScreenshot(page, `${label}-04-workshop-today.png`);
 
         await page.locator("#skill-workshop-mode-tab-board").click();
         await expect

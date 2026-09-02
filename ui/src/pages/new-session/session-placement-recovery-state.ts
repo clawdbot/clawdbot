@@ -23,22 +23,6 @@ export function resolveSubmissionOutcomeReason(params: {
     : "placement-interrupted";
 }
 
-export function resolveScope(
-  snapshot: {
-    client: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
-    connected: boolean;
-  },
-  current: string,
-  firstBind: boolean,
-): { next: string; changed: boolean } {
-  // Retain the verified scope until replacement auth arrives; a different scope invalidates it.
-  const next =
-    snapshot.connected && snapshot.client?.recoveryScopeReady
-      ? (snapshot.client.recoveryScope ?? "")
-      : current;
-  return { next, changed: !firstBind && snapshot.connected && current !== next };
-}
-
 export class PendingSessionPlacementRecoveryState {
   sessionKey = "";
   messageId = "";

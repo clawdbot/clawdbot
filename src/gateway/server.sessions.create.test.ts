@@ -7,7 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -39,6 +41,10 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { withTimeout } from "../infra/fs-safe.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  createColdPluginFixture,
+  isColdPluginRuntimeLoaded,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionRelease,
@@ -1897,9 +1903,12 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
     .spyOn(acpManagerModule, "getAcpSessionManager")
     .mockReturnValue({ resolveSession: () => null } as never);
   const { defaultRuntime } = await import("../runtime.js");
+  const actualConfig = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  const prepareInitialRun = createDeferredCore();
   const preparedRuntime = vi.fn<(params: { cwd?: string; workspaceDir?: string }) => void>();
   const mockPreparedRuntime = () =>
     mockGetReplyFromConfigOnce(async (ctx, opts) => {
+      await prepareInitialRun.promise;
       const sessionKey = requireNonEmptyString(ctx.SessionKey, "prepared session key");
       const loaded = loadSessionEntry({ agentId: "roboclaw", sessionKey, storePath });
       const workspaceDir =
@@ -1963,7 +1972,12 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       }),
     ).resolves.toContainEqual(expect.objectContaining({ cwd: requestedCwd, type: "session" }));
     const createRunId = requireNonEmptyString(created.payload?.runId, "roboclaw create run id");
-    const createWait = await rpcReq(ws, "agent.wait", { runId: createRunId, timeoutMs: 10_000 });
+    const pendingCreateWait = rpcReq(ws, "agent.wait", { runId: createRunId, timeoutMs: 10_000 });
+    // Real-IO readers can run after the RPC fixture refresh, before the admitted turn
+    // prepares. They must see the same roster as creation, not pin the disk-only config.
+    actualConfig.getRuntimeConfig();
+    prepareInitialRun.resolve();
+    const createWait = await pendingCreateWait;
     expect(createWait, JSON.stringify(createWait)).toMatchObject({
       ok: true,
       payload: { status: "ok" },
@@ -1997,6 +2011,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
       payload: { status: "ok" },
     });
   } finally {
+    prepareInitialRun.resolve();
     ws.close();
     getAcpSessionManager.mockRestore();
     await managedWorktrees.remove({
@@ -3213,7 +3228,9 @@ test.each([
         await expect(fs.readFile(dirtyFile, "utf8")).resolves.toBe("preserve my work\n");
         expect(warnSpy).toHaveBeenCalledOnce();
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(worktree.branch));
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(worktree.path));
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining(truncateUtf16Safe(sanitizeForLog(worktree.path), 256)),
+        );
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retained-dirty"));
       } else if (outcome === "failed") {
         expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
@@ -3562,115 +3579,53 @@ test("sessions.create persists declared spawn lineage for spawn-owned creations"
   expect(created.payload?.entry?.spawnDepth).toBe(2);
 });
 
-test("sessions.create atomically persists trusted visible-spawn tool policy", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const parentSessionKey = "agent:main:main";
-  await writeSessionStore({
-    entries: {
-      [parentSessionKey]: sessionStoreEntry("sess-visible-spawn-parent"),
-    },
-  });
-
-  const created = await directSessionReq<{
-    key?: string;
-    entry?: {
-      label?: string;
-      spawnedBy?: string;
-      completionOwnerSessionKey?: string;
-      parentSessionKey?: string;
-      spawnDepth?: number;
-      inheritedToolPolicyVersion?: number;
-      inheritedToolAllow?: string[];
-      inheritedToolDeny?: string[];
-    };
-  }>(
-    "sessions.create",
-    {
-      agentId: "main",
-      label: "Restricted visible child",
-      parentSessionKey,
-      spawnDepth: 1,
-    },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          syntheticClient: true,
-          sessionCreation: {
-            via: "spawn",
-            actor: { type: "agent", id: "main" },
-            requesterSessionKey: parentSessionKey,
-            completionOwnerSessionKey: "agent:main:discord:direct:alice",
-            inheritedToolPolicy: {
-              version: 1,
-              allow: ["read", "sessions_spawn"],
-              deny: ["exec"],
-            },
-          },
+test.each([false, true])(
+  "sessions.create atomically persists trusted visible-spawn tool policy with required parent=%s",
+  async (required) => {
+    const { storePath } = await createSessionStoreDir();
+    const parentSessionKey = "agent:main:main";
+    const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
+    await writeSessionStore({
+      entries: {
+        [parentSessionKey]: {
+          ...sessionStoreEntry("sess-visible-spawn-parent"),
+          createdVia: "operator",
+          createdActor: actor,
+          ...(required ? { sandbox: "required" } : {}),
         },
-      } as never,
-    },
-  );
+      },
+    });
 
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry).toMatchObject({
-    label: "Restricted visible child",
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:alice",
-    parentSessionKey,
-    spawnDepth: 1,
-    inheritedToolPolicyVersion: 1,
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
-  });
-  const key = requireNonEmptyString(created.payload?.key, "visible child key");
-  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:alice",
-    inheritedToolPolicyVersion: 1,
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
-  });
-});
-
-test("sessions.create accepts a signed agent-runtime visible-spawn policy", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const parentSessionKey = "agent:main:main";
-  await writeSessionStore({
-    entries: {
-      [parentSessionKey]: sessionStoreEntry("sess-runtime-spawn-parent"),
-    },
-  });
-
-  const created = await directSessionReq<{
-    key?: string;
-    entry?: {
-      createdVia?: string;
-      createdActor?: unknown;
-      spawnedBy?: string;
-      completionOwnerSessionKey?: string;
-      inheritedToolAllow?: string[];
-      inheritedToolDeny?: string[];
-    };
-  }>(
-    "sessions.create",
-    {
-      agentId: "main",
-      label: "Runtime visible child",
-      parentSessionKey,
-      spawnDepth: 1,
-    },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: parentSessionKey,
-            sessionSpawnContext: {
-              completionOwnerSessionKey: "agent:main:discord:direct:bob",
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: {
+        label?: string;
+        spawnedBy?: string;
+        completionOwnerSessionKey?: string;
+        parentSessionKey?: string;
+        spawnDepth?: number;
+        inheritedToolPolicyVersion?: number;
+        inheritedToolAllow?: string[];
+        inheritedToolDeny?: string[];
+      };
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        label: "Restricted visible child",
+        parentSessionKey,
+        spawnDepth: 1,
+      },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true,
+            sessionCreation: {
+              via: "spawn",
+              actor: { type: "agent", id: "main" },
+              requesterSessionKey: parentSessionKey,
+              completionOwnerSessionKey: "agent:main:discord:direct:alice",
               inheritedToolPolicy: {
                 version: 1,
                 allow: ["read", "sessions_spawn"],
@@ -3678,27 +3633,155 @@ test("sessions.create accepts a signed agent-runtime visible-spawn policy", asyn
               },
             },
           },
-        },
-      } as never,
-    },
-  );
+        } as never,
+      },
+    );
 
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry).toMatchObject({
-    createdVia: "spawn",
-    createdActor: { type: "agent", id: "main" },
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:bob",
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry).toMatchObject({
+      label: "Restricted visible child",
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      parentSessionKey,
+      spawnDepth: 1,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+    });
+    const key = requireNonEmptyString(created.payload?.key, "visible child key");
+    const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(child).toMatchObject({
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+      createdActor: required ? actor : { type: "agent", id: "main" },
+    });
+    expect(child?.sandbox).toBe(required ? "required" : undefined);
+  },
+);
+
+test.each([false, true])(
+  "sessions.create accepts a signed agent-runtime visible-spawn policy with required parent=%s",
+  async (required) => {
+    const { storePath } = await createSessionStoreDir();
+    const parentSessionKey = "agent:main:main";
+    const actor = { type: "human", source: "profile", id: "runtime-spawn-creator" } as const;
+    await writeSessionStore({
+      entries: {
+        [parentSessionKey]: {
+          ...sessionStoreEntry("sess-runtime-spawn-parent"),
+          createdVia: "operator",
+          createdActor: actor,
+          ...(required ? { sandbox: "required" } : {}),
+        },
+      },
+    });
+
+    const created = await directSessionReq<{
+      key?: string;
+      entry?: {
+        createdVia?: string;
+        createdActor?: unknown;
+        spawnedBy?: string;
+        completionOwnerSessionKey?: string;
+        inheritedToolAllow?: string[];
+        inheritedToolDeny?: string[];
+      };
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        label: "Runtime visible child",
+        parentSessionKey,
+        spawnDepth: 1,
+      },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            agentRuntimeIdentity: {
+              kind: "agentRuntime",
+              agentId: "main",
+              sessionKey: parentSessionKey,
+              sessionSpawnContext: {
+                completionOwnerSessionKey: "agent:main:discord:direct:bob",
+                inheritedToolPolicy: {
+                  version: 1,
+                  allow: ["read", "sessions_spawn"],
+                  deny: ["exec"],
+                },
+              },
+            },
+          },
+        } as never,
+      },
+    );
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry).toMatchObject({
+      createdVia: "spawn",
+      createdActor: required ? actor : { type: "agent", id: "main" },
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+    });
+    const key = requireNonEmptyString(created.payload?.key, "runtime visible child key");
+    const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(child).toMatchObject({
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey: "agent:main:discord:direct:bob",
+      inheritedToolPolicyVersion: 1,
+      createdActor: required ? actor : { type: "agent", id: "main" },
+    });
+    expect(child?.sandbox).toBe(required ? "required" : undefined);
+  },
+);
+
+test("sessions.create rejects a replaced required spawn parent before child creation", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const parentSessionKey = "agent:main:main";
+  const childSessionKey = "agent:main:dashboard:replaced-parent-child";
+  const parent = {
+    ...sessionStoreEntry("required-spawn-parent"),
+    lifecycleRevision: "original-parent",
+    createdActor: { type: "human", source: "profile", id: "original-creator" } as const,
+    sandbox: "required" as const,
+  };
+  await writeSessionStore({ entries: { [parentSessionKey]: parent } });
+  const { createGatewaySession } = await import("./session-create-service.js");
+  let replaced = false;
+
+  const created = await createGatewaySession({
+    cfg: getRuntimeConfig(),
+    agentId: "main",
+    key: childSessionKey,
+    parentSessionKey,
+    spawnDepth: 1,
+    commandSource: "test",
+    creation: { via: "spawn", actor: { type: "agent", id: "main" } },
+    commitGuard: () => {
+      if (!replaced) {
+        replaced = true;
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: parentSessionKey, storePath },
+          { ...parent, lifecycleRevision: "replacement-parent" },
+        );
+      }
+    },
   });
-  const key = requireNonEmptyString(created.payload?.key, "runtime visible child key");
-  expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:bob",
-    inheritedToolPolicyVersion: 1,
+
+  expect(created).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("changed before") },
   });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath }),
+  ).toBeUndefined();
 });
 
 test("sessions.create commits no session after delegated authority closes", async () => {
@@ -4030,82 +4113,126 @@ test("sessions.create does not parent the main session to itself", async () => {
   expect(created.payload?.entry?.parentSessionKey).toBeUndefined();
 });
 
-test("sessions.create resolves a catalog target server-side and pins its runtime", async () => {
-  const { storePath } = await createSessionStoreDir();
-  testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-8" } };
-  agentDiscoveryMock.enabled = true;
-  agentDiscoveryMock.models = [
-    { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
-  ];
-  const resolveCreateSession = vi.fn(() => ({
-    model: "anthropic/claude-opus-4-8",
-    agentRuntime: "claude-cli",
-  }));
-  const registry = createEmptyPluginRegistry();
-  registry.sessionCatalogs.push({
-    pluginId: "anthropic",
-    source: "test",
-    provider: {
-      id: "claude",
-      label: "Claude Code",
-      resolveCreateSession,
-      list: vi.fn(async () => []),
-      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    },
-  });
-  setActivePluginRegistry(registry);
-
-  try {
-    const created = await directSessionReq<{
-      entry?: {
-        providerOverride?: string;
-        modelOverride?: string;
-        agentRuntimeOverride?: string;
-        modelSelectionLocked?: boolean;
-        pluginOwnerId?: string;
-      };
-      key?: string;
-    }>("sessions.create", { agentId: "main", catalogId: "claude" });
-
-    expect(created.ok).toBe(true);
-    expect(created.payload?.entry).toMatchObject({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-8",
-      agentRuntimeOverride: "claude-cli",
-      modelSelectionLocked: true,
-      pluginOwnerId: "anthropic",
-    });
-    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "main" });
-
-    const patched = await directSessionReq("sessions.patch", {
-      key: created.payload?.key,
-      agentId: "main",
+test.each(["cli", "enabled", "disabled"] as const)(
+  "sessions.create resolves a catalog target server-side with a %s harness",
+  async (harness) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    testState.agentConfig = {
+      model: { primary: "anthropic/claude-opus-4-8" },
+      models: { "anthropic/claude-opus-4-8": { agentRuntime: { id: "missing-harness" } } },
+    };
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = [
+      { id: "claude-opus-4-8", name: "Claude Opus 4.8", provider: "anthropic" },
+    ];
+    const agentRuntime = harness === "cli" ? "claude-cli" : "fixture-harness";
+    let fixture: ReturnType<typeof createColdPluginFixture> | undefined;
+    if (harness !== "cli") {
+      const rootDir = await fs.mkdtemp(path.join(dir, "catalog-harness-"));
+      fixture = createColdPluginFixture({
+        rootDir,
+        pluginId: "fixture-harness",
+        manifest: { activation: { onAgentHarnesses: ["fixture-harness"] } },
+      });
+      const { writeConfigFile } = await getGatewayConfigModule();
+      await writeConfigFile({
+        plugins: {
+          load: { paths: [rootDir] },
+          entries: { "fixture-harness": { enabled: harness === "enabled" } },
+        },
+      });
+    }
+    const resolveCreateSession = vi.fn(() => ({
       model: "anthropic/claude-opus-4-8",
+      agentRuntime,
+    }));
+    const registry = createEmptyPluginRegistry();
+    if (harness === "cli") {
+      registry.cliBackends.push({
+        pluginId: "anthropic",
+        source: "test",
+        backend: {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          config: { command: "claude" },
+          bundleMcp: false,
+        },
+      });
+    }
+    registry.sessionCatalogs.push({
+      pluginId: "anthropic",
+      source: "test",
+      provider: {
+        id: "claude",
+        label: "Claude Code",
+        resolveCreateSession,
+        list: vi.fn(async () => []),
+        read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+      },
     });
-    expect(patched.ok).toBe(false);
-    expect(patched.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "Model selection is locked for this session.",
-    });
+    setActivePluginRegistry(registry);
 
-    const deleted = await directSessionReq("sessions.delete", {
-      key: created.payload?.key,
-      agentId: "main",
-      deleteTranscript: false,
-    });
-    expect(deleted.ok).toBe(true);
-    expect(
-      loadSessionEntry({
+    try {
+      const created = await directSessionReq<{
+        entry?: {
+          providerOverride?: string;
+          modelOverride?: string;
+          agentRuntimeOverride?: string;
+          modelSelectionLocked?: boolean;
+          pluginOwnerId?: string;
+        };
+        key?: string;
+      }>("sessions.create", { agentId: "main", catalogId: "claude" });
+
+      if (fixture) {
+        expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+      }
+      if (harness === "disabled") {
+        expect(created.ok).toBe(false);
+        expect(created.error?.message).toContain('requires agent harness "fixture-harness"');
+        expect(created.payload).toBeUndefined();
+        return;
+      }
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.entry).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-8",
+        agentRuntimeOverride: agentRuntime,
+        modelSelectionLocked: true,
+        pluginOwnerId: "anthropic",
+      });
+      expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "main" });
+
+      const patched = await directSessionReq("sessions.patch", {
+        key: created.payload?.key,
         agentId: "main",
-        sessionKey: created.payload?.key ?? "",
-        storePath,
-      }),
-    ).toBeUndefined();
-  } finally {
-    testState.agentConfig = undefined;
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  }
-});
+        model: "anthropic/claude-opus-4-8",
+      });
+      expect(patched.ok).toBe(false);
+      expect(patched.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: "Model selection is locked for this session.",
+      });
+
+      const deleted = await directSessionReq("sessions.delete", {
+        key: created.payload?.key,
+        agentId: "main",
+        deleteTranscript: false,
+      });
+      expect(deleted.ok).toBe(true);
+      expect(
+        loadSessionEntry({
+          agentId: "main",
+          sessionKey: created.payload?.key ?? "",
+          storePath,
+        }),
+      ).toBeUndefined();
+    } finally {
+      testState.agentConfig = undefined;
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+  },
+);
 
 test("sessions.create rejects a caller-supplied key for a catalog target", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -4214,6 +4341,16 @@ test("sessions.create bypasses main-session reset for a catalog target", async (
     },
   });
   const registry = createEmptyPluginRegistry();
+  registry.cliBackends.push({
+    pluginId: "anthropic",
+    source: "test",
+    backend: {
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      config: { command: "claude" },
+      bundleMcp: false,
+    },
+  });
   registry.sessionCatalogs.push({
     pluginId: "anthropic",
     source: "test",

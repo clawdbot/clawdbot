@@ -1,4 +1,5 @@
 // Doctor cron storage repair mechanics for legacy stores, run logs, payloads, and Codex refs.
+import type { DatabaseSync } from "node:sqlite";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -7,16 +8,18 @@ import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-confi
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
+  assertCronJobsStoreUnchanged,
+  CronJobsStoreChangedError,
   loadCronJobsStoreWithConfigJobs,
   loadCronJobsStoreWithConfigJobsReadOnly,
   loadCronQuarantinedJobs,
   resolveCronJobsStorePath,
-  saveCronJobsStore,
   saveCronJobsStoreWithMetadata,
   saveCronQuarantinedJobs,
   type CronQuarantinedJob,
   type QuarantinedCronConfigJob,
 } from "../../../cron/store.js";
+import { saveCronJobsStoreWithTransactionHooks } from "../../../cron/store/transaction-hooks.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
@@ -77,6 +80,7 @@ export type LegacyCronRepairState = {
   persistedQuarantine: CronQuarantinedJob[];
   projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
   rawJobs: Array<Record<string, unknown>>;
+  jobsFingerprint: string | undefined;
 };
 
 export type LegacyCronRepairResult = {
@@ -196,6 +200,7 @@ export async function loadLegacyCronRepairState(params: {
     persistedQuarantine,
     projectedOwnersByJobId,
     rawJobs,
+    jobsFingerprint: loaded.jobsFingerprint,
   };
 }
 
@@ -308,33 +313,48 @@ export async function applyLegacyCronStoreRepair(params: {
           jobs: state.rawJobs as unknown as CronJob[],
         } as const;
         const migrationSource = state.legacyMigrationSource;
+        const assertSnapshotCurrent = (db: DatabaseSync) => {
+          if (state.jobsFingerprint !== undefined) {
+            assertCronJobsStoreUnchanged(db, state.storePath, state.jobsFingerprint);
+          }
+        };
         if (migrationSource && !state.legacyMigrationAlreadyImported) {
           await assertLegacyCronMigrationSourceCurrent(migrationSource);
           await saveCronJobsStoreWithMetadata(
             state.storePath,
             store,
-            (db) => acquireLegacyCronMigrationReceipt(db, migrationSource),
-            quarantine,
-            deleteQuarantineEntries,
+            (db) => {
+              assertSnapshotCurrent(db);
+              return acquireLegacyCronMigrationReceipt(db, migrationSource);
+            },
+            {
+              ...(quarantine ? { quarantine } : {}),
+              ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
+              preserveRuntimeState: true,
+            },
           );
         } else {
-          await saveCronJobsStore(state.storePath, store, {
-            ...(quarantine ? { quarantine } : {}),
-            ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
-          });
+          await saveCronJobsStoreWithTransactionHooks(
+            state.storePath,
+            store,
+            {
+              ...(quarantine ? { quarantine } : {}),
+              ...(deleteQuarantineEntries.length > 0 ? { deleteQuarantineEntries } : {}),
+              preserveRuntimeState: true,
+            },
+            { beforeWrite: assertSnapshotCurrent },
+          );
         }
       } else if (quarantine) {
         saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }
     } catch (err) {
       rethrowSqliteSchemaVersionError(err);
-      return {
-        changes,
-        warnings: [
-          ...warnings,
-          `Failed writing migrated cron store at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`,
-        ],
-      };
+      const failure =
+        err instanceof CronJobsStoreChangedError
+          ? `Cron store at ${shortenHomePath(state.storePath)} changed while doctor was waiting, so no rows were rewritten; re-run ${formatCliCommand("openclaw doctor --fix")} to repair from a fresh snapshot.`
+          : `Failed writing migrated cron store at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`;
+      return { changes, warnings: [...warnings, failure] };
     }
   }
 

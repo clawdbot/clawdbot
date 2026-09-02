@@ -61,7 +61,7 @@ export type RuntimeConfigCapability = {
    */
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: RuntimeConfigExternalMutationOptions,
+    options?: RuntimeConfigExternalMutationOptions<T>,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: RuntimeConfigState) => void) => () => void;

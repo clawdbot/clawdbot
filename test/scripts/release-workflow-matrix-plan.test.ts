@@ -73,6 +73,7 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
   "emit_candidate_evidence",
   "release_soak",
   "package_artifact_name",
+  "prepared_npm_bundle_json",
   "package_artifact_id",
   "package_artifact_digest",
   "package_artifact_run_id",
@@ -96,23 +97,29 @@ const WORKFLOW_CALL_ONLY_INPUTS = new Set([
   "shared_image_archive_sha256",
 ]);
 
+const PACKAGE_UPDATE_CHUNKS = [
+  "package-update-openai",
+  "package-update-onboarding",
+  "package-update-migrations",
+  "package-update-self-upgrade",
+];
+
 const PROFILE_EXPECTATIONS = [
   {
     profile: "minimum",
-    dockerE2eChunks: ["package-update-openai", "package-update-core"],
+    dockerE2eChunks: PACKAGE_UPDATE_CHUNKS,
     liveModelProviders: ["openai"],
   },
   {
     profile: "beta",
-    dockerE2eChunks: ["package-update-openai", "package-update-core"],
+    dockerE2eChunks: PACKAGE_UPDATE_CHUNKS,
     liveModelProviders: ["openai"],
   },
   {
     profile: "stable",
     dockerE2eChunks: [
       "core",
-      "package-update-openai",
-      "package-update-core",
+      ...PACKAGE_UPDATE_CHUNKS,
       "plugins-runtime-plugins",
       "plugins-runtime-services",
       "plugins-runtime-install-a",
@@ -130,8 +137,7 @@ const PROFILE_EXPECTATIONS = [
     profile: "full",
     dockerE2eChunks: [
       "core",
-      "package-update-openai",
-      "package-update-core",
+      ...PACKAGE_UPDATE_CHUNKS,
       "plugins-runtime-plugins",
       "plugins-runtime-services",
       "plugins-runtime-install-a",
@@ -345,12 +351,12 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       const owners = manifests.filter(({ manifest }) => manifest.providers?.includes(provider));
       expect(
         owners.some(({ id }) => builtIds.has(id)),
-        `compiled owner for ${provider}`,
+        `compiled owner for ${String(provider)}`,
       ).toBe(true);
     }
   });
 
-  it("declares every job input for both workflow entry points", () => {
+  it("declares shared inputs for both entry points and keeps producer evidence internal", () => {
     const definition = workflow();
     const referencedInputs = new Set<string>();
     for (const match of JSON.stringify(definition.jobs).matchAll(/\binputs\.([a-zA-Z0-9_]+)/gu)) {
@@ -367,6 +373,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         [...referencedInputs].filter((input) => !WORKFLOW_CALL_ONLY_INPUTS.has(input)),
       ),
     );
+    expect(Object.keys(definition.on.workflow_dispatch.inputs).length).toBeLessThanOrEqual(25);
     for (const input of WORKFLOW_CALL_ONLY_INPUTS) {
       expect(definition.on.workflow_call.inputs).toHaveProperty(input);
       expect(definition.on.workflow_dispatch.inputs).not.toHaveProperty(input);
@@ -437,7 +444,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       releaseProfile: "stable",
     });
 
-    expect(plan.dockerE2e.count).toBe(13);
+    expect(plan.dockerE2e.count).toBe(15);
     expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual([
       "anthropic",
       "google",
