@@ -78,13 +78,13 @@ build timestamp shared by every debug variant in that invocation. Release
 tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
-Android release archives use the pinned version in `apps/android/version.json`. Update it with:
+Prepare and finalize Android release metadata through the shared mobile cutter:
 
 ```bash
-pnpm android:version
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 pnpm android:version:check
-pnpm android:version:pin -- --from-gateway
-pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
 ```
 
 Release-owner signing sync:

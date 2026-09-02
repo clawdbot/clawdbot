@@ -900,11 +900,4 @@ export function listEffectiveGroupRouteBindings(cfg: OpenClawConfig) {
     );
   });
 }
-
-/** @internal Resolves fallback precedence for an unknown direct peer. */
-export function resolveUnknownDirectMessageRoute(
-  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope" | "groupScope">,
-): ResolvedAgentRoute {
-  return resolveAgentRoute({ ...input, peer: { kind: "direct", id: "" } });
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

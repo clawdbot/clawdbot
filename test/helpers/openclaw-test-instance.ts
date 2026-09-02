@@ -657,7 +657,9 @@ export async function createOpenClawTestInstance(
         if (cleaned) {
           return;
         }
-        await stopGatewayChild();
+        // Terminal cleanup has no graceful-shutdown contract. Force the Windows
+        // tree so inherited pipes cannot outlive the completed test instance.
+        await stopGatewayChild({ forceWindowsTree: true });
         await state.cleanup();
         cleaned = true;
       }),
