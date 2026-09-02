@@ -244,116 +244,163 @@ describe("external plugin local dist build", () => {
     },
   );
 
-  it("retains source dependencies across metadata profiles and the shared host SDK", async () => {
-    const repoRoot = tempDirs.make("openclaw-external-plugin-owners-");
-    const plugins = [
-      ["first", "1.0.0"],
-      ["second", "2.0.0"],
-    ] as const;
-    fs.writeFileSync(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "1.0.0",
-        type: "module",
-        exports: { "./plugin-sdk/probe": "./probe.js" },
-      }),
-    );
-    fs.writeFileSync(path.join(repoRoot, "probe.js"), "export const shared = {};\n");
-    for (const [pluginId, version] of plugins) {
-      const packageDir = path.join(repoRoot, "extensions", pluginId);
-      const dependencyDir = path.join(packageDir, "node_modules", "private-dep");
-      fs.mkdirSync(dependencyDir, { recursive: true });
+  it.each(["esm", "cjs"])(
+    "retains %s source dependencies across metadata profiles and the shared host SDK",
+    async (runtimeFormat) => {
+      const repoRoot = fs.realpathSync(tempDirs.make("openclaw-external-plugin-owners-"));
+      const dependency = "@fixture/private-dep";
+      const plugins = [
+        ["first", "1.0.0"],
+        ["second", "2.0.0"],
+      ] as const;
       fs.writeFileSync(
-        path.join(packageDir, "package.json"),
+        path.join(repoRoot, "package.json"),
         JSON.stringify({
-          name: `@openclaw/${pluginId}`,
+          name: "openclaw",
           version: "1.0.0",
           type: "module",
-          dependencies: { "private-dep": version },
-          peerDependencies: { openclaw: "1.0.0" },
-          openclaw: {
-            extensions: ["./index.ts"],
-            build: { bundledDist: false },
-            release: { publishToNpm: true },
-          },
+          exports: { "./plugin-sdk/probe": "./dist/plugin-sdk/probe.js" },
         }),
       );
+      fs.mkdirSync(path.join(repoRoot, "dist", "plugin-sdk"), { recursive: true });
       fs.writeFileSync(
-        path.join(dependencyDir, "package.json"),
-        JSON.stringify({ name: "private-dep", version, type: "module", main: "index.js" }),
+        path.join(repoRoot, "dist", "plugin-sdk", "probe.js"),
+        "export const shared = {};\n",
       );
-      fs.writeFileSync(
-        path.join(dependencyDir, "index.js"),
-        `export default ${JSON.stringify(version)};\n`,
-      );
-      fs.writeFileSync(path.join(dependencyDir, "SKILL.md"), `# Private dependency ${version}\n`);
-      fs.symlinkSync(
-        repoRoot,
-        path.join(packageDir, "node_modules", "openclaw"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "index.ts"),
-        'export { default as version } from "private-dep";\nexport { shared } from "openclaw/plugin-sdk/probe";\n',
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({ id: pluginId, skills: ["./node_modules/private-dep"] }),
-      );
-    }
-    await buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" });
-    // Old output links belong to the previous profile, even when the new plan is unified.
-    for (const [profile, env, isolated] of [
-      ["isolated", {}, true],
-      ["Docker unified", { [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "first,second" }, false],
-      ["isolated again", {}, true],
-      ["isolated repeated", {}, true],
-    ] as const) {
-      copyBundledPluginMetadata({ repoRoot, env });
+      const sourceHostLinks = new Map<string, string>();
       for (const [pluginId, version] of plugins) {
-        const sourceModules = path.join(repoRoot, "extensions", pluginId, "node_modules");
-        const outputRoot = path.join(repoRoot, "dist", "extensions", pluginId);
-        expect(
-          fs.readFileSync(path.join(sourceModules, "private-dep", "SKILL.md"), "utf8"),
-          profile,
-        ).toBe(`# Private dependency ${version}\n`);
-        expect(
-          fs
-            .lstatSync(path.join(outputRoot, "node_modules"), { throwIfNoEntry: false })
-            ?.isSymbolicLink() ?? false,
-          profile,
-        ).toBe(isolated);
-        const manifest = JSON.parse(
-          fs.readFileSync(path.join(outputRoot, "openclaw.plugin.json"), "utf8"),
+        const packageDir = path.join(repoRoot, "extensions", pluginId);
+        const modulesDir = path.join(packageDir, "node_modules");
+        const dependencyLink = path.join(modulesDir, dependency);
+        const dependencyDir = path.join(repoRoot, "installed", version, "node_modules", dependency);
+        fs.mkdirSync(dependencyDir, { recursive: true });
+        fs.mkdirSync(path.dirname(dependencyLink), { recursive: true });
+        fs.mkdirSync(path.join(modulesDir, ".bin"));
+        fs.writeFileSync(
+          path.join(modulesDir, ".bin", "probe.cjs"),
+          `console.log(require("../${dependency}").version);\n`,
         );
-        expect(manifest.skills, profile).toEqual(["./bundled-skills/private-dep"]);
-        expect(
-          fs.readFileSync(path.join(outputRoot, manifest.skills[0], "SKILL.md"), "utf8"),
-          profile,
-        ).toBe(`# Private dependency ${version}\n`);
+        fs.symlinkSync(
+          path.relative(path.dirname(dependencyLink), dependencyDir),
+          dependencyLink,
+          "dir",
+        );
+        fs.writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({
+            name: `@openclaw/${pluginId}`,
+            version: "1.0.0",
+            type: "module",
+            dependencies: { [dependency]: version },
+            peerDependencies: { openclaw: "1.0.0" },
+            openclaw: {
+              extensions: ["./index.ts"],
+              build: { bundledDist: false, runtimeFormat },
+              release: { publishToNpm: true },
+            },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(dependencyDir, "package.json"),
+          JSON.stringify({ name: dependency, version, main: "index.cjs" }),
+        );
+        fs.writeFileSync(
+          path.join(dependencyDir, "index.cjs"),
+          `exports.version = ${JSON.stringify(version)};\n`,
+        );
+        fs.writeFileSync(path.join(dependencyDir, "SKILL.md"), `# Private dependency ${version}\n`);
+        fs.symlinkSync(
+          path.relative(modulesDir, repoRoot),
+          path.join(packageDir, "node_modules", "openclaw"),
+          "dir",
+        );
+        sourceHostLinks.set(pluginId, fs.readlinkSync(path.join(modulesDir, "openclaw")));
+        fs.writeFileSync(
+          path.join(packageDir, "index.ts"),
+          `export { version } from "${dependency}";\nexport { shared } from "openclaw/plugin-sdk/probe";\n`,
+        );
+        fs.writeFileSync(
+          path.join(packageDir, "openclaw.plugin.json"),
+          JSON.stringify({ id: pluginId, skills: [`./node_modules/${dependency}`] }),
+        );
       }
-    }
-    const entryUrl = (pluginId: string) =>
-      pathToFileURL(path.join(repoRoot, "dist", "extensions", pluginId, "index.js")).href;
-    const stagedDir = path.join(repoRoot, "staged", "first");
-    fs.cpSync(path.join(repoRoot, "dist", "extensions", "first"), stagedDir, { recursive: true });
-    const output = execFileSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `
-      const first = await import(${JSON.stringify(entryUrl("first"))});
-      const second = await import(${JSON.stringify(entryUrl("second"))});
-      const staged = await import(${JSON.stringify(pathToFileURL(path.join(stagedDir, "index.js")).href)});
-      console.log(JSON.stringify({ versions: [first.version, second.version, staged.version], shared: first.shared === second.shared && first.shared === staged.shared }));
+      await buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" });
+      // Start with the previous build's directory link, then exercise both profile transitions.
+      for (const [pluginId] of plugins) {
+        fs.symlinkSync(
+          path.join(repoRoot, "extensions", pluginId, "node_modules"),
+          path.join(repoRoot, "dist", "extensions", pluginId, "node_modules"),
+          "junction",
+        );
+      }
+      // Old output links belong to the previous profile, even when the new plan is unified.
+      for (const [profile, env, isolated] of [
+        [
+          "legacy Docker unified",
+          { [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "first,second" },
+          false,
+        ],
+        ["isolated", {}, true],
+        ["Docker unified", { [DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV]: "first,second" }, false],
+        ["isolated again", {}, true],
+        ["isolated repeated", {}, true],
+      ] as const) {
+        copyBundledPluginMetadata({ repoRoot, env });
+        for (const [pluginId, version] of plugins) {
+          const sourceModules = path.join(repoRoot, "extensions", pluginId, "node_modules");
+          const outputRoot = path.join(repoRoot, "dist", "extensions", pluginId);
+          expect(
+            fs.readFileSync(path.join(sourceModules, dependency, "SKILL.md"), "utf8"),
+            profile,
+          ).toBe(`# Private dependency ${version}\n`);
+          expect(fs.existsSync(path.join(outputRoot, "node_modules", "openclaw")), profile).toBe(
+            isolated,
+          );
+          expect(fs.readlinkSync(path.join(sourceModules, "openclaw")), profile).toBe(
+            sourceHostLinks.get(pluginId),
+          );
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(outputRoot, "openclaw.plugin.json"), "utf8"),
+          );
+          expect(manifest.skills, profile).toEqual([`./bundled-skills/${dependency}`]);
+          expect(
+            fs.readFileSync(path.join(outputRoot, manifest.skills[0], "SKILL.md"), "utf8"),
+            profile,
+          ).toBe(`# Private dependency ${version}\n`);
+        }
+      }
+      const extension = runtimeFormat === "cjs" ? ".cjs" : ".js";
+      const entryUrl = (pluginId: string) =>
+        pathToFileURL(path.join(repoRoot, "dist", "extensions", pluginId, `index${extension}`))
+          .href;
+      const stagedDir = path.join(repoRoot, "staged", "first");
+      fs.cpSync(path.join(repoRoot, "dist", "extensions", "first"), stagedDir, { recursive: true });
+      expect(
+        execFileSync(process.execPath, [path.join(stagedDir, "node_modules/.bin/probe.cjs")], {
+          encoding: "utf8",
+        }).trim(),
+      ).toBe("1.0.0");
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+      import { createRequire } from "node:module";
+      import { fileURLToPath } from "node:url";
+      const load = ${runtimeFormat === "cjs" ? "(url) => createRequire(import.meta.url)(fileURLToPath(url))" : "(url) => import(url)"};
+      const first = await load(${JSON.stringify(entryUrl("first"))});
+      const second = await load(${JSON.stringify(entryUrl("second"))});
+      const staged = await load(${JSON.stringify(pathToFileURL(path.join(stagedDir, `index${extension}`)).href)});
+      const host = await import(${JSON.stringify(pathToFileURL(path.join(repoRoot, "dist/plugin-sdk/probe.js")).href)});
+      console.log(JSON.stringify({ versions: [first.version, second.version, staged.version], shared: first.shared === host.shared && first.shared === second.shared && first.shared === staged.shared }));
     `,
-      ],
-      { encoding: "utf8" },
-    );
-    expect(JSON.parse(output)).toEqual({ versions: ["1.0.0", "2.0.0", "1.0.0"], shared: true });
-  });
+        ],
+        { encoding: "utf8" },
+      );
+      expect(JSON.parse(output)).toEqual({ versions: ["1.0.0", "2.0.0", "1.0.0"], shared: true });
+    },
+  );
 
   it("selects every externalized first-party plugin behind a package exclusion", () => {
     const packageDirs = listExternalPluginLocalDistPackageDirs();

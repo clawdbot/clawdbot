@@ -191,6 +191,29 @@ function copyDeclaredPluginSkillPaths(params: SkillPathParams): string[] {
   return copiedSkills;
 }
 
+function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string) {
+  const sourceModules = path.join(pluginDir, "node_modules");
+  if (!fs.existsSync(sourceModules)) {
+    return;
+  }
+  const packages = fs.readdirSync(sourceModules).flatMap((name) => {
+    if (name.startsWith(".") && name !== ".bin") {
+      return [];
+    }
+    return name.startsWith("@")
+      ? fs.readdirSync(path.join(sourceModules, name)).map((child) => path.join(name, child))
+      : [name];
+  });
+  // An outer node_modules junction misresolves pnpm's relative links on Windows.
+  // Link canonical package roots individually; keep scopes real and payloads source-owned.
+  // Preserve .bin for managed launchers that resolve the plugin's private CLI shim.
+  for (const name of packages) {
+    const target = path.join(distNodeModules, name);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.symlinkSync(fs.realpathSync(path.join(sourceModules, name)), target, "junction");
+  }
+}
+
 /**
  * Copies bundled plugin metadata and package extension files.
  */
@@ -233,11 +256,9 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       continue;
     }
     const distNodeModules = path.join(distPluginDir, "node_modules");
-    // Cleanup must not traverse an old source-dependency link, even when
-    // switching from an isolated build to a unified profile.
-    if (fs.lstatSync(distNodeModules, { throwIfNoEntry: false })?.isSymbolicLink()) {
-      fs.unlinkSync(distNodeModules);
-    }
+    // Remove only dist-owned entries, including an old directory link itself,
+    // before skill cleanup or an isolated/unified profile transition.
+    fs.rmSync(distNodeModules, { recursive: true, force: true });
 
     sourcePluginDirs.add(dirent.name);
 
@@ -286,19 +307,8 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     }
 
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-    const sourceNodeModules = path.resolve(pluginDir, "node_modules");
-    if (
-      buildEntry.isolated &&
-      fs.existsSync(sourceNodeModules) &&
-      !fs.existsSync(distNodeModules)
-    ) {
-      // Published source builds move as a complete checkout; POSIX links must
-      // keep each plugin's dependency owner without retaining the build path.
-      const target =
-        process.platform === "win32"
-          ? sourceNodeModules
-          : path.relative(distPluginDir, sourceNodeModules);
-      fs.symlinkSync(target, distNodeModules, process.platform === "win32" ? "junction" : "dir");
+    if (buildEntry.isolated) {
+      linkSourcePluginDependencies(pluginDir, distNodeModules);
     }
   }
 

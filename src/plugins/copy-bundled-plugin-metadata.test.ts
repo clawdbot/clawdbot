@@ -269,7 +269,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "bundled-skills"))).toBe(
       false,
     );
-    expect(fs.existsSync(staleNodeModulesDir)).toBe(true);
+    expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
   });
 
   it("retries transient skill copy races from concurrent runtime postbuilds", () => {
