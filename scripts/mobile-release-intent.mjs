@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export const MOBILE_RELEASE_INTENT_KIND = "openclaw-mobile-release-ref-intent";
+const MOBILE_RELEASE_INTENT_KIND = "openclaw-mobile-release-ref-intent";
 export const MOBILE_RELEASE_INTENT_MAX_BYTES = 4 * 1024;
 
 const VERSION_RE = /^20[0-9]{2}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*$/u;
@@ -236,7 +236,7 @@ export function mobileReleaseRefForIntent(value) {
   return `refs/openclaw/mobile-releases/android/${intent.versionName}-${intent.phoneVersionCode}`;
 }
 
-export function canonicalMobileReleaseIntentBytes(value) {
+function canonicalMobileReleaseIntentBytes(value) {
   return `${JSON.stringify(validateMobileReleaseIntent(value))}\n`;
 }
 
