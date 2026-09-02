@@ -112,12 +112,8 @@ function renderSidebarOwnerFilter(params: {
     : t("sessionsView.specificOwnerAvailable", { count: String(owners.length) });
   const details = selectedOwner
     ? html`${renderSessionOwnerAvatar(selectedOwner)}
-        <span class="session-menu__shortcut sidebar-session-owner-selection__name"
-          >${selectedName}</span
-        >`
-    : html`<span class="session-menu__shortcut sidebar-session-owner-count"
-        >${owners.length}</span
-      >`;
+        <span class="sidebar-session-owner-selection__name">${selectedName}</span>`
+    : html`<span class="sidebar-session-owner-count">${owners.length}</span>`;
   return html`
     <div class="session-menu__separator" role="separator"></div>
     <div class="sidebar-session-sort-menu__title">${t("sessionsView.owners")}</div>
@@ -134,10 +130,12 @@ function renderSidebarOwnerFilter(params: {
     ${owners.length > 0
       ? params.compact
         ? renderCompactSessionMenuNavigationItem({
-            view: "specific-owner",
+            value: "compact:open-specific-owner",
             label: t("sessionsView.specificOwner"),
             icon: icons.users,
-            details: html`<span class="sidebar-session-owner-selection">${details}</span>`,
+            details: html`<span class="session-menu__shortcut sidebar-session-owner-selection"
+              >${details}</span
+            >`,
             accessibleLabel,
           })
         : html`<wa-dropdown-item
@@ -165,6 +163,13 @@ function renderCompactSidebarOwnerFilter(params: {
   return renderCompactSessionMenuFrame(
     html`${renderSidebarOwnerOptions({ ...params, submenu: false })}`,
   );
+}
+
+function sidebarFilterMenuViewForValue(value: string | undefined): SidebarFilterMenuView | null {
+  if (value === "compact:open-specific-owner") {
+    return "specific-owner";
+  }
+  return value === "compact:back" ? "root" : null;
 }
 
 export function renderSidebarSessionGroupMenu(params: {
@@ -286,10 +291,9 @@ export function renderSidebarCatalogViewMenu(params: {
         @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
           event.preventDefault();
           const value = event.detail.item.value;
-          if (value === "compact:open-specific-owner") {
-            params.onViewChange("specific-owner");
-          } else if (value === "compact:back") {
-            params.onViewChange("root");
+          const view = sidebarFilterMenuViewForValue(value);
+          if (view) {
+            params.onViewChange(view);
           } else if (value?.startsWith("grouping:")) {
             params.onGroupingChange(value.slice("grouping:".length) as CatalogProjectGrouping);
           } else if (value?.startsWith("owner:")) {
@@ -372,10 +376,9 @@ export function renderSidebarSessionSortMenu(params: {
         @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
           event.preventDefault();
           const value = event.detail.item.value;
-          if (value === "compact:open-specific-owner") {
-            params.onViewChange("specific-owner");
-          } else if (value === "compact:back") {
-            params.onViewChange("root");
+          const view = sidebarFilterMenuViewForValue(value);
+          if (view) {
+            params.onViewChange(view);
           } else if (value?.startsWith("grouping:")) {
             params.onGroupingChange(value.slice("grouping:".length) as SidebarSessionsGrouping);
           } else if (value?.startsWith("sort:")) {

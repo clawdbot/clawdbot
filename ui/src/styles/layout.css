@@ -2576,8 +2576,29 @@ wa-dropdown.session-menu--compact::part(menu) {
 
 .session-menu__compact-details {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 96px;
+  overflow: hidden;
+}
+
+wa-dropdown-item.session-menu__item--compact-details::part(label) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+wa-dropdown-item.session-menu__item--compact-details {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+html[dir="rtl"] .session-menu__chevron,
+html[dir="rtl"] .session-menu__back > .session-menu__icon {
+  transform: scaleX(-1);
 }
 
 /* Popover hosts live in the top layer so menus escape in-page stacking
@@ -2614,6 +2635,8 @@ wa-dropdown.sidebar-session-sort-menu {
 }
 
 wa-dropdown.sidebar-session-sort-menu::part(menu) {
+  box-sizing: border-box;
+  width: min(220px, calc(100dvw - 16px));
   min-width: 176px;
   max-width: 220px;
   padding: var(--menu-padding);
@@ -2700,6 +2723,7 @@ wa-dropdown-item.sidebar-session-owner-submenu::part(submenu-icon) {
   gap: 4px;
   min-width: 0;
   width: auto;
+  max-width: 96px;
   margin-inline-end: -2px;
   font-family: inherit;
 }
@@ -2710,6 +2734,8 @@ wa-dropdown-item.sidebar-session-owner-submenu::part(submenu-icon) {
 }
 
 .sidebar-session-owner-selection__name {
+  display: block;
+  flex: 1 1 auto;
   max-width: 72px;
   overflow: hidden;
   color: var(--muted);

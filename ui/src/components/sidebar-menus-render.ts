@@ -473,8 +473,8 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
     compact: isMobileNavLayout(),
-    view: position.view,
-    onViewChange: (view) => controller.setSessionSortMenuView(view),
+    view: controller.filterMenuView,
+    onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -531,8 +531,8 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
     compact: isMobileNavLayout(),
-    view: position.view,
-    onViewChange: (view) => controller.setCatalogViewMenuView(view),
+    view: controller.filterMenuView,
+    onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });

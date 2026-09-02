@@ -68,25 +68,40 @@ function labelDropdownMenu(dropdown: HTMLElement) {
   }
 }
 
-function labelDropdownSubmenus(dropdown: HTMLElement) {
-  for (const item of dropdown.querySelectorAll<HTMLElement>("wa-dropdown-item")) {
-    const submenu = item.shadowRoot?.querySelector<HTMLElement>('[part="submenu"]');
-    if (!submenu) {
-      continue;
-    }
-    const labelSlot = item.shadowRoot?.querySelector<HTMLSlotElement>("slot:not([name])");
-    const slottedLabel = labelSlot
-      ?.assignedNodes({ flatten: true })
-      .map((node) => node.textContent)
-      .join(" ")
-      .replace(/\s+/gu, " ")
-      .trim();
-    const label = item.getAttribute("aria-label") ?? slottedLabel;
-    if (label) {
-      submenu.setAttribute("aria-label", label);
-      submenu.removeAttribute("aria-labelledby");
-    }
+function labelDropdownSubmenu(item: HTMLElement) {
+  const submenu = item.shadowRoot?.querySelector<HTMLElement>('[part="submenu"]');
+  if (!submenu) {
+    return;
   }
+  const labelSlot = item.shadowRoot?.querySelector<HTMLSlotElement>("slot:not([name])");
+  const slottedLabel = labelSlot
+    ?.assignedNodes({ flatten: true })
+    .map((node) => node.textContent)
+    .join(" ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  const label = item.getAttribute("aria-label") ?? slottedLabel;
+  if (label) {
+    submenu.setAttribute("aria-label", label);
+    submenu.removeAttribute("aria-labelledby");
+  }
+}
+
+function labelDropdownSubmenus(dropdown: HTMLElement) {
+  dropdown.querySelectorAll<HTMLElement>("wa-dropdown-item").forEach(labelDropdownSubmenu);
+}
+
+function labelOpeningSubmenu(event: CustomEvent<{ item?: unknown }>) {
+  const item = event.detail?.item;
+  if (!(item instanceof HTMLElement) || item.localName !== "wa-dropdown-item") {
+    return;
+  }
+  const updateComplete = "updateComplete" in item ? item.updateComplete : undefined;
+  void Promise.resolve(updateComplete).then(() => {
+    if (item.isConnected) {
+      labelDropdownSubmenu(item);
+    }
+  });
 }
 
 const dropdownLabelObservers = new WeakMap<HTMLElement, MutationObserver>();
@@ -151,6 +166,15 @@ function stopDropdownLabelSync(event: Event) {
 
 if (typeof document !== "undefined") {
   document.addEventListener("wa-show", startDropdownLabelSync);
+  document.addEventListener(
+    "submenu-opening",
+    (event) => {
+      if (event instanceof CustomEvent) {
+        labelOpeningSubmenu(event);
+      }
+    },
+    true,
+  );
   document.addEventListener("wa-hide", disableClosingDropdownMenu);
   document.addEventListener("wa-after-hide", stopDropdownLabelSync);
 }

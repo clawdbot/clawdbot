@@ -208,13 +208,60 @@ suite.define(() => {
 
       if (name === "compact") {
         expect(await specificOwner.getAttribute("aria-haspopup")).toBeNull();
+        await specificOwner.evaluate((element) => {
+          const menuPart = element
+            .closest("wa-dropdown")
+            ?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+          if (menuPart) {
+            menuPart.scrollTop = menuPart.scrollHeight;
+          }
+        });
         await specificOwner.click();
-        await menu.getByRole("menuitem", { name: "Back", exact: true }).waitFor();
+        const back = menu.getByRole("menuitem", { name: "Back", exact: true });
+        await back.waitFor();
         expect(await menu.locator('[slot="submenu"]').count()).toBe(0);
-        await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+        await expect
+          .poll(() =>
+            menu.evaluate(
+              (dropdown) =>
+                dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]')?.scrollTop,
+            ),
+          )
+          .toBe(0);
+        await expect.poll(() => menu.locator('[value="owner:profile-0"]').isVisible()).toBe(true);
+        await back.click();
         await menu.getByRole("menuitem", { name: /Specific owner/ }).click();
         await menu.locator('[value^="owner:"]').last().click();
         await expect.poll(() => menu.count()).toBe(0);
+        await page.getByRole("button", { name: "Filter & sort" }).click();
+        const selected = page.getByRole("menuitem", { name: /Specific owner:/ });
+        const selectedGeometry = await selected.evaluate((element) => {
+          const dropdown = element.closest("wa-dropdown");
+          const menuPart = dropdown?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+          const label = element
+            .querySelector<HTMLElement>(".session-menu__text")
+            ?.getBoundingClientRect();
+          const chevron = element
+            .querySelector<HTMLElement>(".session-menu__chevron")
+            ?.getBoundingClientRect();
+          const selectedName = element.querySelector<HTMLElement>(
+            ".sidebar-session-owner-selection__name",
+          );
+          const menuBounds = menuPart?.getBoundingClientRect();
+          return {
+            menuWidth: menuBounds?.width ?? 0,
+            labelLeft: label?.left ?? 0,
+            chevronRight: chevron?.right ?? 0,
+            menuRight: menuBounds?.right ?? 0,
+            nameOverflows: Boolean(
+              selectedName && selectedName.scrollWidth > selectedName.clientWidth,
+            ),
+          };
+        });
+        expect(selectedGeometry.menuWidth).toBeLessThanOrEqual(220);
+        expect(selectedGeometry.labelLeft).toBeGreaterThan(0);
+        expect(selectedGeometry.chevronRight).toBeLessThanOrEqual(selectedGeometry.menuRight);
+        expect(selectedGeometry.nameOverflows).toBe(true);
         return;
       }
 
@@ -243,6 +290,48 @@ suite.define(() => {
       expect(submenuMetrics.width).toBeLessThanOrEqual(220);
       expect(submenuMetrics.overflowY).toBe("auto");
       expect(submenuMetrics.labelOverflows).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("mirrors compact owner navigation arrows in RTL", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 650, width: 390 } });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionKey: "agent:main:rtl-owners",
+      methodResponses: {
+        "sessions.list": {
+          ...sessionsListResponse([sessionRow("agent:main:rtl-owners", "RTL owners", Date.now())]),
+          owners: largeOwnerList(3),
+        },
+      },
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rtl-owners"));
+      await page.locator("html").evaluate((element) => {
+        element.setAttribute("dir", "rtl");
+      });
+      await page.getByRole("button", { name: "Expand sidebar" }).click();
+      await page.getByRole("button", { name: "Filter & sort" }).click();
+      const specificOwner = page.getByRole("menuitem", { name: /Specific owner/ });
+      await expect
+        .poll(() =>
+          specificOwner
+            .locator(".session-menu__chevron")
+            .evaluate((element) => getComputedStyle(element).transform),
+        )
+        .toContain("-1");
+      await specificOwner.click();
+      await expect
+        .poll(() =>
+          page
+            .getByRole("menuitem", { name: "Back", exact: true })
+            .locator(":scope > .session-menu__icon")
+            .evaluate((element) => getComputedStyle(element).transform),
+        )
+        .toContain("-1");
     } finally {
       await context.close();
     }

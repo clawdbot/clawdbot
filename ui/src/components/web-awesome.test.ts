@@ -46,8 +46,20 @@ async function createSubmenuDropdown(itemLabel = "Specific owner") {
   item.append(owner);
   dropdown.append(trigger, item);
   document.body.append(dropdown);
-  await Promise.all([dropdown.updateComplete, item.updateComplete]);
   dropdown.dispatchEvent(new CustomEvent("wa-show", { bubbles: true, composed: true }));
+  await Promise.all([dropdown.updateComplete, item.updateComplete]);
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  await item.updateComplete;
+  item.dispatchEvent(
+    new CustomEvent("submenu-opening", {
+      bubbles: true,
+      composed: true,
+      detail: { item },
+    }),
+  );
+  await Promise.resolve();
   return { dropdown, item };
 }
 
