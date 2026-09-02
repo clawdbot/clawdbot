@@ -86,6 +86,78 @@ function createSlackTopLevelActionSchema(): Record<string, TSchema> {
   };
 }
 
+function createSlackCanvasActionSchema(): Record<string, TSchema> {
+  return {
+    op: Type.Optional(
+      Type.String({
+        description:
+          'Slack canvas operation. "create" creates a channel-attached canvas (optional title and documentContent). "edit" applies changes to a canvas (requires canvasId and a non-empty changes array). "delete" deletes a canvas (requires canvasId). "sections" (default) lists canvas sections filtered by sectionTypes or containsText (requires canvasId plus at least one of sectionTypes/containsText — Slack rejects an empty filter).',
+      }),
+    ),
+    canvasId: Type.Optional(
+      Type.String({
+        pattern: "^[F][A-Z0-9]{8,}$",
+        description:
+          'Slack canvas id, F-prefixed (for example F0BU46ESS8J). Required for op="edit", op="delete", and op="sections".',
+      }),
+    ),
+    title: Type.Optional(
+      Type.String({
+        description: 'Slack canvas title. Optional for op="create".',
+      }),
+    ),
+    documentContent: Type.Optional(
+      Type.Object(
+        {
+          type: Type.Literal("markdown"),
+          markdown: Type.String({
+            description: "Canvas markdown content. Slack caps each change at 1 MiB.",
+          }),
+        },
+        {
+          description:
+            'Canvas content for op="create" and change documentContent/titleContent. { type: "markdown", markdown: string }.',
+        },
+      ),
+    ),
+    changes: Type.Optional(
+      Type.Array(
+        Type.Object({
+          operation: Type.String({
+            description:
+              'Canvas edit operation: "insert_at_start", "insert_at_end", "insert_after", "insert_before", "replace", "delete", or "rename". insert_after/insert_before/delete require sectionId; rename requires titleContent; the rest require documentContent.',
+          }),
+          sectionId: Type.Optional(
+            Type.String({
+              description:
+                'Target section id for insert_after, insert_before, delete, and optional for replace. Read from a prior op="sections" result.',
+            }),
+          ),
+          documentContent: Type.Optional(
+            Type.Object({ type: Type.Literal("markdown"), markdown: Type.String() }),
+          ),
+          titleContent: Type.Optional(
+            Type.Object({ type: Type.Literal("markdown"), markdown: Type.String() }),
+          ),
+        }),
+        { minItems: 1, description: 'Canvas changes for op="edit". At least one required.' },
+      ),
+    ),
+    sectionTypes: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          'Section type filters for op="sections": any_header, h1, h2, h3, list, table, blockquote, callout, chart, horizontal_line, citation, flexbox, canvas_unfurl, file_unfurl, message_unfurl, sfdc_record_mention, sfdc_record_unfurl, user_mention, user_unfurl. At least one of sectionTypes or containsText is required (Slack rejects an empty criteria).',
+      }),
+    ),
+    containsText: Type.Optional(
+      Type.String({
+        description:
+          'Text filter for op="sections". At least one of sectionTypes or containsText is required (Slack rejects an empty criteria).',
+      }),
+    ),
+  };
+}
+
 export function describeSlackMessageTool({
   cfg,
   accountId,
@@ -156,6 +228,12 @@ export function describeSlackMessageTool({
     schema.push({
       properties: createSlackMessageIdActionSchema(),
       actions: messageIdActions,
+    });
+  }
+  if (actions.includes("canvas")) {
+    schema.push({
+      properties: createSlackCanvasActionSchema(),
+      actions: ["canvas"],
     });
   }
   return {

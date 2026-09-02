@@ -24,6 +24,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "pin",
   "unpin",
   "list-pins",
+  "canvas",
   "permissions",
   "thread-create",
   "thread-list",

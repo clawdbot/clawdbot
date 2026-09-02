@@ -313,6 +313,64 @@ export async function handleSlackMessageAction(params: {
     );
   }
 
+  if (action === "canvas") {
+    // `op` is optional in the tool schema; "sections" is the documented default,
+    // so a missing op resolves to a read-only section lookup rather than throwing.
+    const op = readStringParam(actionParams, "op") ?? "sections";
+    const channelId = resolveChannelId();
+    const base = { action: "", channelId, accountId };
+    if (op === "create") {
+      return await invoke(
+        {
+          ...base,
+          action: "createCanvas",
+          title: readStringParam(actionParams, "title"),
+          documentContent: actionParams.documentContent ?? actionParams.document_content,
+        },
+        cfg,
+        ctx.toolContext,
+      );
+    }
+    if (op === "edit") {
+      return await invoke(
+        {
+          ...base,
+          action: "editCanvas",
+          canvasId: readStringParam(actionParams, "canvasId", { required: true }),
+          changes: actionParams.changes,
+        },
+        cfg,
+        ctx.toolContext,
+      );
+    }
+    if (op === "delete") {
+      return await invoke(
+        {
+          ...base,
+          action: "deleteCanvas",
+          canvasId: readStringParam(actionParams, "canvasId", { required: true }),
+        },
+        cfg,
+        ctx.toolContext,
+      );
+    }
+    if (op === "sections") {
+      return await invoke(
+        {
+          ...base,
+          action: "lookupCanvasSections",
+          canvasId: readStringParam(actionParams, "canvasId", { required: true }),
+          sectionTypes: actionParams.sectionTypes ?? actionParams.section_types,
+          containsText: readStringParam(actionParams, "containsText"),
+          limit: actionParams.limit,
+        },
+        cfg,
+        ctx.toolContext,
+      );
+    }
+    throw new Error(`Unknown Slack canvas op: ${op}`);
+  }
+
   if (action === "member-info") {
     const requesterAccountId = ctx.requesterAccountId
       ? normalizeAccountId(ctx.requesterAccountId)

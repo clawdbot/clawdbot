@@ -839,7 +839,6 @@ User identity lets OpenClaw read and post as the human who authorizes the Slack 
 Set up the companion app as follows:
 
 1. Under **OAuth & Permissions -> User Token Scopes**, add these user-scoped permissions:
-
    - history: `channels:history`, `groups:history`, `im:history`, `mpim:history`
    - conversation lookup: `channels:read`, `groups:read`, `im:read`, `mpim:read`
    - people: `users:read`
@@ -847,14 +846,12 @@ Set up the companion app as follows:
    - opening DMs: `im:write`, `mpim:write`
 
 2. Under **Event Subscriptions -> Subscribe to events on behalf of users**, add these user events. Do not add them only to the bot-events list:
-
    - `message.channels`
    - `message.groups`
    - `message.im`
    - `message.mpim`
 
 3. Choose one event transport:
-
    - **Socket Mode:** enable Socket Mode and create an app-level token with `connections:write`. Configure it as `appToken`.
    - **HTTP Request URL:** point Event Subscriptions at the public OpenClaw Slack endpoint and copy **Basic Information -> App Credentials -> Signing Secret**. Configure it as `signingSecret`.
 
@@ -1225,6 +1222,8 @@ Existing apps that already use `features.assistant_view` can keep that feature s
   <Accordion title="Optional authorship scopes (write operations)">
     Add the `chat:write.customize` bot scope if you want outgoing messages to use the active agent identity (custom username and icon) instead of the default Slack app identity.
 
+    To use the `canvas` action, add the `canvases:read` and `canvases:write` bot scopes and reinstall the app — these scopes are opt-in (not in the default manifest) because the action is disabled by default.
+
     If you use an emoji icon, Slack expects `:emoji_name:` syntax.
 
   </Accordion>
@@ -1236,8 +1235,11 @@ Existing apps that already use `features.assistant_view` can keep that feature s
     - `users:read`
     - `reactions:read`
     - `pins:read`
+    - `canvases:read`
     - `emoji:read`
     - `search:read` (if you depend on Slack search reads)
+
+    For `postAs: "user"`, writes also go through `userToken`, so add `canvases:write` (and `chat:write.customize` for custom authorship) when you enable the `canvas` action under user identity. Reinstall the app after adding the scope.
 
   </Accordion>
 </AccordionGroup>
@@ -1275,15 +1277,18 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default |
-| ---------- | ------- |
-| messages   | enabled |
-| reactions  | enabled |
-| pins       | enabled |
-| memberInfo | enabled |
-| emojiList  | enabled |
+| Group      | Default           |
+| ---------- | ----------------- |
+| messages   | enabled           |
+| reactions  | enabled           |
+| pins       | enabled           |
+| memberInfo | enabled           |
+| emojiList  | enabled           |
+| canvas     | disabled (opt-in) |
 
-Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+The `canvas` group gates Slack Canvas create, edit, delete, and section-lookup actions. It is **disabled by default** and the `canvases:read`/`canvases:write` scopes are **opt-in** (not in the default manifest): existing installs gained a valid token before those scopes existed, so advertising the action before the app is reinstalled with the scopes would surface a model-callable action that cannot succeed. Add the two canvas scopes to your manifest, reinstall the app, and set `channels.slack.actions.canvas: true` to opt in.
+
+Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `canvas`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Use `emoji-list` to discover workspace custom emoji and aliases:
 
@@ -1304,6 +1309,70 @@ Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
 ```
 
 Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
+
+### Canvas actions
+
+Slack Canvas actions use `action: "canvas"` with an `op` parameter:
+
+- `op: "create"` — create a channel-attached canvas. Pass `documentContent: { type: "markdown", markdown: "..." }` for the initial content and an optional `title`.
+- `op: "edit"` — apply changes to an existing canvas. Requires `canvasId` and a non-empty `changes` array. Each change has an `operation` (`insert_at_start`, `insert_at_end`, `insert_after`, `insert_before`, `replace`, `delete`, or `rename`); `insert_after`/`insert_before`/`delete` need a `sectionId`, `rename` needs `titleContent`, and the rest need `documentContent`.
+- `op: "delete"` — delete a canvas by `canvasId`.
+- `op: "sections"` (default) — list canvas sections filtered by `sectionTypes` (e.g. `["h1", "h2", "any_header"]`) or `containsText`. At least one of `sectionTypes` or `containsText` is required; Slack rejects an empty filter.
+
+Create a canvas attached to a channel:
+
+```json
+{
+  "action": "canvas",
+  "channel": "slack",
+  "to": "C0BU42S8JAM",
+  "op": "create",
+  "title": "Sprint notes",
+  "documentContent": { "type": "markdown", "markdown": "# Sprint notes\n- ship canvas actions" }
+}
+```
+
+The response returns the new `canvas_id` (F-prefixed). List its sections, edit a section, then delete:
+
+```json
+{
+  "action": "canvas",
+  "channel": "slack",
+  "to": "C0BU42S8JAM",
+  "op": "sections",
+  "canvasId": "F0BU46ESS8J",
+  "sectionTypes": ["h1"]
+}
+```
+
+```json
+{
+  "action": "canvas",
+  "channel": "slack",
+  "to": "C0BU42S8JAM",
+  "op": "edit",
+  "canvasId": "F0BU46ESS8J",
+  "changes": [
+    {
+      "operation": "insert_after",
+      "sectionId": "S0BU46Eabc",
+      "documentContent": { "type": "markdown", "markdown": "new section" }
+    }
+  ]
+}
+```
+
+```json
+{
+  "action": "canvas",
+  "channel": "slack",
+  "to": "C0BU42S8JAM",
+  "op": "delete",
+  "canvasId": "F0BU46ESS8J"
+}
+```
+
+Canvas actions require the `canvases:write` scope (create/edit/delete) and `canvases:read` (sections). The `canvasId` must match Slack's F-prefixed id format, and the target channel must already be authorized for reads, so the agent cannot touch canvases attached to channels it is not allowed to read.
 
 ## Access control and routing
 
@@ -1586,8 +1655,6 @@ In `progress` mode, Slack's native agent card is the default: the whole turn is 
 Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back to the Block Kit session card, which posts a separate message showing a plain status summary, narration, and authored milestones, and finalizes to success or error. It does not add tool rows, generated emoji, or tool/file/time counters.
 
 Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. The final response is posted as a new message, then the temporary preview is deleted after Slack confirms delivery. Older previews displaced by human replies are cleaned up with it; durable messages and videos stay in the conversation. Set `style: "card"` explicitly to retain a card while hiding tool progress.
-
-For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
 
 ```json5
 {
