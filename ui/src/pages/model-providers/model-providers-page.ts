@@ -46,6 +46,7 @@ import {
   DEFAULT_MODELS_REPLACE_PATHS,
 } from "./mutations.ts";
 import { isMissingMethodError, mergeProbeResults } from "./probe-results.ts";
+import { ModelProviderSetupController } from "./provider-setup.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
@@ -68,9 +69,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private keyEditorProvider: string | null = null;
   @state() private keyDraft = "";
   @state() private pendingLogoutProvider: string | null = null;
-  @state() private addProviderOpen = false;
-  @state() private addProviderId = "";
-  @state() private addProviderKey = "";
   @state() private defaultsDraft: DefaultsDraft | null = null;
   @state() private selectedAgentId = "";
   /** Client the current data was loaded from; a new client means stale data. */
@@ -81,6 +79,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
   private probeEpochs = new Map<string, number>();
+  private readonly providerSetup = new ModelProviderSetupController(this, {
+    getContext: () => this.context,
+    getAgentId: () => this.selectedAgentId,
+    canMutate: () => this.canMutate(),
+    refreshProviders: () => this.refresh({ force: false }),
+  });
   private readonly refreshTask = new Task(this, {
     autoRun: false,
     task: (
@@ -237,9 +241,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.probeResults = {};
     this.closeKeyEditor();
     this.pendingLogoutProvider = null;
-    this.addProviderOpen = false;
-    this.addProviderId = "";
-    this.addProviderKey = "";
+    this.providerSetup.reset();
   }
 
   private isCurrentClient(client: GatewayBrowserClient, epoch: number): boolean {
@@ -541,36 +543,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     }
   }
 
-  private async addProvider() {
-    const provider = this.addProviderId;
-    const apiKey = this.addProviderKey.trim();
-    if (!provider || !apiKey) {
-      return;
-    }
-    const result = await this.patchConfig({
-      key: "add",
-      raw: buildProviderApiKeyPatch(provider, apiKey),
-      note: t("modelProviders.notes.addProvider", { provider }),
-      success: t("modelProviders.add.saved", { provider }),
-    });
-    if (result.ok && this.agentEpoch === result.agentEpoch) {
-      if (this.addProviderId === provider && this.addProviderKey.trim() === apiKey) {
-        // A failed refresh leaves a new provider without a card. Keep its
-        // success + warning visible in the open form instead of losing both.
-        this.addProviderOpen = Boolean(result.warning);
-        if (!result.warning) {
-          this.addProviderId = "";
-        }
-        this.addProviderKey = "";
-      }
-      this.setMessage(provider, {
-        kind: "success",
-        text: t("modelProviders.add.saved", { provider }),
-        ...(result.warning ? { warning: result.warning } : {}),
-      });
-    }
-  }
-
   private async saveDefaults(defaults = this.defaultsDraft) {
     if (!defaults) {
       return;
@@ -654,24 +626,26 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       fastMode: defaults.fastMode,
       fastModeOverridden: defaults.fastModeOverridden,
       configBusy: this.configBusy(),
-      quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
+      providerSetupAvailable: this.providerSetup.available,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
-        data.authStatus?.providerCapabilities,
+        this.providerSetup.inventory,
         configuredProviderIds,
       ),
       canMutate: this.canMutate(),
       mutationBlockedReason: this.mutationBlockedReason(),
       providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
       probeAvailable: !this.probeUnsupported && advertised !== false,
-      busy: this.busy,
-      messages: this.messages,
+      busy: { ...this.busy, add: this.providerSetup.busy },
+      messages: this.providerSetup.message
+        ? { ...this.messages, add: this.providerSetup.message }
+        : this.messages,
       probeResults: this.probeResults,
       keyEditorProvider: this.keyEditorProvider,
       keyDraft: this.keyDraft,
       pendingLogoutProvider: this.pendingLogoutProvider,
-      addProviderOpen: this.addProviderOpen,
-      addProviderId: this.addProviderId,
-      addProviderKey: this.addProviderKey,
+      addProviderOpen: this.providerSetup.open,
+      addProviderLoading: this.providerSetup.loading,
+      addProviderId: this.providerSetup.selectedChoice,
       onRefresh: () =>
         void (rosterError ? this.context.agents.refreshList() : this.refresh({ force: true })),
       onOpenKeyEditor: (provider) => this.openKeyEditor(provider),
@@ -684,13 +658,15 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onCancelLogout: () => (this.pendingLogoutProvider = null),
       onLogout: (cardId, providers) => void this.logout(cardId, providers),
       onAddProviderToggle: () => {
-        this.addProviderOpen = !this.addProviderOpen;
-        this.addProviderKey = "";
-        this.setMessage("add", null);
+        if (this.providerSetup.open) {
+          this.providerSetup.reset();
+        } else {
+          void this.providerSetup.load();
+        }
       },
-      onAddProviderIdChange: (provider) => (this.addProviderId = provider),
-      onAddProviderKeyChange: (value) => (this.addProviderKey = value),
-      onAddProvider: () => void this.addProvider(),
+      onAddProviderReload: () => void this.providerSetup.load(),
+      onAddProviderIdChange: (choice) => this.providerSetup.select(choice),
+      onAddProvider: () => void this.providerSetup.start(),
       onPrimaryChange: (model) => {
         const current = this.defaultsDraft ?? configuredDefaults;
         stageDefaults({
@@ -731,7 +707,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
           </button>
         `,
       })}
-      ${renderSettingsWorkspace(body)}
+      ${renderSettingsWorkspace(body)} ${this.providerSetup.renderWizard()}
     `;
   }
 }

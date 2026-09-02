@@ -1,30 +1,15 @@
 // Covers provider install catalog entries from plugin metadata.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type LoadOpenClawProviderIndex =
-  typeof import("../model-catalog/index.js").loadOpenClawProviderIndex;
 type LoadPluginRegistrySnapshot = typeof import("./plugin-registry.js").loadPluginRegistrySnapshot;
 type ResolveManifestProviderAuthChoices =
   typeof import("./provider-auth-choices.js").resolveManifestProviderAuthChoices;
-type ListOfficialExternalProviderCatalogEntries =
-  typeof import("./official-external-plugin-catalog.js").listOfficialExternalProviderCatalogEntries;
+type ListOfficialExternalPluginCatalogEntries =
+  typeof import("./official-external-plugin-catalog.js").listOfficialExternalPluginCatalogEntries;
 type PluginInstallSourceInfo = import("./install-source-info.js").PluginInstallSourceInfo;
 type InstalledPluginInstallRecordInfo =
   import("./installed-plugin-index.js").InstalledPluginInstallRecordInfo;
 type InstalledPluginIndexRecord = import("./installed-plugin-index.js").InstalledPluginIndexRecord;
-
-const loadOpenClawProviderIndex = vi.hoisted(() =>
-  vi.fn<LoadOpenClawProviderIndex>(() => ({ version: 1, providers: {} })),
-);
-vi.mock("../model-catalog/index.js", async () => {
-  const actual = await vi.importActual<typeof import("../model-catalog/index.js")>(
-    "../model-catalog/index.js",
-  );
-  return {
-    ...actual,
-    loadOpenClawProviderIndex,
-  };
-});
 
 const loadPluginRegistrySnapshot = vi.hoisted(() =>
   vi.fn<LoadPluginRegistrySnapshot>(() => ({
@@ -50,8 +35,14 @@ vi.mock("./provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoices,
 }));
 
-const listOfficialExternalProviderCatalogEntries = vi.hoisted(() =>
-  vi.fn<ListOfficialExternalProviderCatalogEntries>(() => []),
+const loadHostedCatalog = vi.hoisted(() => vi.fn());
+const remoteProvider = vi.hoisted(() => vi.fn(() => undefined));
+vi.mock("../model-catalog/remote-overlay.js", () => ({
+  getRemoteModelCatalogProviderOverlay: remoteProvider,
+}));
+
+const listOfficialExternalPluginCatalogEntries = vi.hoisted(() =>
+  vi.fn<ListOfficialExternalPluginCatalogEntries>(() => []),
 );
 vi.mock("./official-external-plugin-catalog.js", async () => {
   const actual = await vi.importActual<typeof import("./official-external-plugin-catalog.js")>(
@@ -59,11 +50,14 @@ vi.mock("./official-external-plugin-catalog.js", async () => {
   );
   return {
     ...actual,
-    listOfficialExternalProviderCatalogEntries,
+    listOfficialExternalPluginCatalogEntries,
+    loadConfiguredHostedOfficialExternalPluginCatalogEntries: loadHostedCatalog,
   };
 });
 
+import { resetPluginCache } from "./plugin-cache.js";
 import {
+  loadProviderSetupAuthChoices,
   resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntries,
   resolveProviderInstallCatalogEntry,
@@ -134,7 +128,8 @@ function mockVllmAuthChoice() {
 describe("provider install catalog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadOpenClawProviderIndex.mockReturnValue({ version: 1, providers: {} });
+    remoteProvider.mockReturnValue(undefined);
+    resetPluginCache();
     loadPluginRegistrySnapshot.mockReturnValue({
       version: 1,
       hostContractVersion: "test",
@@ -147,7 +142,7 @@ describe("provider install catalog", () => {
       diagnostics: [],
     });
     resolveManifestProviderAuthChoices.mockReturnValue([]);
-    listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
+    listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
   });
 
   it("merges manifest auth-choice metadata with registry install metadata", () => {
@@ -491,70 +486,8 @@ describe("provider install catalog", () => {
     ).toStrictEqual([]);
   });
 
-  it("surfaces provider-index install metadata when the provider plugin is not installed", () => {
-    loadOpenClawProviderIndex.mockReturnValue({
-      version: 1,
-      providers: {
-        moonshot: {
-          id: "moonshot",
-          name: "Moonshot AI",
-          plugin: {
-            id: "moonshot",
-            package: "@openclaw/plugin-moonshot",
-            install: {
-              npmSpec: "@openclaw/plugin-moonshot@1.2.3",
-              defaultChoice: "npm",
-              expectedIntegrity: "sha512-moonshot",
-            },
-          },
-          authChoices: [
-            {
-              method: "api-key",
-              choiceId: "moonshot-api-key",
-              choiceLabel: "Moonshot API key",
-              groupId: "moonshot",
-              groupLabel: "Moonshot AI",
-              onboardingScopes: ["text-inference"],
-            },
-          ],
-        },
-      },
-    });
-
-    expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toEqual({
-      pluginId: "moonshot",
-      providerId: "moonshot",
-      methodId: "api-key",
-      choiceId: "moonshot-api-key",
-      choiceLabel: "Moonshot API key",
-      groupId: "moonshot",
-      groupLabel: "Moonshot AI",
-      onboardingScopes: ["text-inference"],
-      label: "Moonshot AI",
-      origin: "bundled",
-      install: {
-        npmSpec: "@openclaw/plugin-moonshot@1.2.3",
-        defaultChoice: "npm",
-        expectedIntegrity: "sha512-moonshot",
-      },
-      installSource: {
-        defaultChoice: "npm",
-        npm: {
-          spec: "@openclaw/plugin-moonshot@1.2.3",
-          packageName: "@openclaw/plugin-moonshot",
-          selector: "1.2.3",
-          selectorKind: "exact-version",
-          exactVersion: true,
-          expectedIntegrity: "sha512-moonshot",
-          pinState: "exact-with-integrity",
-        },
-        warnings: [],
-      },
-    });
-  });
-
   it("surfaces official external provider install metadata when the provider plugin is not installed", () => {
-    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+    listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
         name: "@openclaw/codex",
         source: "official",
@@ -617,7 +550,7 @@ describe("provider install catalog", () => {
   });
 
   it("preserves official external provider aliases for configured-plugin repair", () => {
-    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+    listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
         name: "@openclaw/gmi-provider",
         source: "official",
@@ -653,8 +586,77 @@ describe("provider install catalog", () => {
     });
   });
 
+  it("projects manual setup hints without enabling catalog-authored discovery", () => {
+    listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        name: "@vendor/dynamic-provider",
+        source: "official",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "dynamic-provider", label: "Dynamic Provider" },
+          providers: [
+            {
+              id: "dynamic",
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "dynamic-connect",
+                  choiceLabel: "Dynamic Provider API key",
+                  appGuidedSecret: true,
+                  appGuidedDiscovery: true,
+                  icon: "https://provider.example/icon.svg",
+                  website: "https://provider.example/",
+                },
+              ],
+            },
+          ],
+          install: { npmSpec: "@vendor/dynamic-provider@1.0.0", defaultChoice: "npm" },
+        },
+      } as unknown as ReturnType<ListOfficialExternalPluginCatalogEntries>[number],
+    ]);
+
+    const choice = resolveProviderInstallCatalogEntry("dynamic-connect");
+
+    expect(choice).toMatchObject({
+      appGuidedSecret: true,
+      icon: "https://provider.example/icon.svg",
+      website: "https://provider.example/",
+    });
+    expect(choice?.appGuidedDiscovery).toBeUndefined();
+  });
+
+  it.each([null, 3, { id: 3 }, { id: "broken", authChoices: [null, { method: 3 }] }])(
+    "ignores malformed provider metadata without losing a valid sibling: %j",
+    (malformed) => {
+      listOfficialExternalPluginCatalogEntries.mockReturnValue([
+        {
+          name: "@vendor/dynamic-provider",
+          source: "official",
+          kind: "provider",
+          openclaw: {
+            plugin: { id: "dynamic-provider", label: "Dynamic Provider" },
+            providers: [
+              malformed,
+              {
+                id: "dynamic",
+                authChoices: [
+                  { method: "api-key", choiceId: "dynamic-connect", choiceLabel: "Connect" },
+                ],
+              },
+            ],
+            install: { npmSpec: "@vendor/dynamic-provider@1.0.0", defaultChoice: "npm" },
+          },
+        } as unknown as ReturnType<ListOfficialExternalPluginCatalogEntries>[number],
+      ]);
+
+      expect(resolveProviderInstallCatalogEntries().map((entry) => entry.choiceId)).toEqual([
+        "dynamic-connect",
+      ]);
+    },
+  );
+
   it("resolves deprecated official external auth choices before their plugin is installed", () => {
-    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+    listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
         name: "@openclaw/qwen-provider",
         source: "official",
@@ -689,256 +691,117 @@ describe("provider install catalog", () => {
     });
   });
 
-  it("surfaces provider-index ClawHub install metadata as the preferred source", () => {
-    loadOpenClawProviderIndex.mockReturnValue({
-      version: 1,
-      providers: {
-        moonshot: {
-          id: "moonshot",
-          name: "Moonshot AI",
-          plugin: {
-            id: "moonshot",
-            package: "@openclaw/plugin-moonshot",
-            install: {
-              clawhubSpec: "clawhub:openclaw/moonshot@2026.5.2",
-              npmSpec: "@openclaw/plugin-moonshot@2026.5.2",
-              defaultChoice: "clawhub",
-              expectedIntegrity: "sha512-moonshot",
+  it("shares a prepared hosted snapshot and offers exact installs without runtime model authority", async () => {
+    const methodId = "project key@v1";
+    const choiceId = "_connect/dynamic:key@v1";
+    const entry = {
+      type: "plugin",
+      id: "@vendor/dynamic-provider",
+      title: "Dynamic Provider",
+      state: "available",
+      publisher: { id: "vendor", trust: "official" },
+      install: {
+        candidates: [
+          {
+            sourceRef: "public-clawhub",
+            package: "@vendor/dynamic-provider",
+            version: "1.2.3",
+            integrity: `sha256:${"a".repeat(64)}`,
+          },
+        ],
+      },
+      openclaw: {
+        plugin: { id: "dynamic-provider", label: "Dynamic Provider" },
+        providers: [
+          {
+            id: "dynamic",
+            authChoices: [
+              {
+                method: methodId,
+                choiceId,
+                choiceLabel: "Dynamic Provider",
+                appGuidedSecret: true,
+              },
+            ],
+          },
+        ],
+        modelCatalog: {
+          providers: {
+            dynamic: {
+              defaultModel: "@vendor/latest",
+              models: [{ id: "@vendor/latest", name: "Latest model" }],
+              baseUrl: "https://ignored.example",
+              apiKey: "fixture-only",
             },
           },
-          authChoices: [
-            {
-              method: "api-key",
-              choiceId: "moonshot-api-key",
-              choiceLabel: "Moonshot API key",
-              groupId: "moonshot",
-              groupLabel: "Moonshot AI",
-            },
-          ],
         },
       },
-    });
+    };
+    loadHostedCatalog.mockResolvedValue({ source: "hosted", entries: [entry] });
 
-    expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toEqual({
-      pluginId: "moonshot",
-      providerId: "moonshot",
-      methodId: "api-key",
-      choiceId: "moonshot-api-key",
-      choiceLabel: "Moonshot API key",
-      groupId: "moonshot",
-      groupLabel: "Moonshot AI",
-      label: "Moonshot AI",
-      origin: "bundled",
+    expect(resolveProviderInstallCatalogEntry(choiceId)).toBeUndefined();
+    await loadProviderSetupAuthChoices();
+    await loadProviderSetupAuthChoices();
+    const choice = resolveProviderInstallCatalogEntry(choiceId);
+    expect(choice).toMatchObject({
+      pluginId: "dynamic-provider",
+      providerId: "dynamic",
+      methodId,
+      appGuidedSecret: true,
+      choiceHint: "Models: Latest model",
       install: {
-        clawhubSpec: "clawhub:openclaw/moonshot@2026.5.2",
-        npmSpec: "@openclaw/plugin-moonshot@2026.5.2",
-        defaultChoice: "clawhub",
-        expectedIntegrity: "sha512-moonshot",
-      },
-      installSource: {
-        defaultChoice: "clawhub",
-        clawhub: {
-          spec: "clawhub:openclaw/moonshot@2026.5.2",
-          packageName: "openclaw/moonshot",
-          version: "2026.5.2",
-          exactVersion: true,
-        },
-        npm: {
-          spec: "@openclaw/plugin-moonshot@2026.5.2",
-          packageName: "@openclaw/plugin-moonshot",
-          selector: "2026.5.2",
-          selectorKind: "exact-version",
-          exactVersion: true,
-          expectedIntegrity: "sha512-moonshot",
-          pinState: "exact-with-integrity",
-        },
-        warnings: [],
+        clawhubSpec: "clawhub:@vendor/dynamic-provider@1.2.3",
+        expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
       },
     });
+    expect(choice).not.toHaveProperty("modelCatalog");
+    expect(choice).not.toHaveProperty("apiKey");
+    expect(loadHostedCatalog).toHaveBeenCalledOnce();
+
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "dynamic-provider",
+        providerId: "dynamic",
+        methodId: "local",
+        choiceId: "local-connect",
+        choiceLabel: "Installed override",
+      },
+    ]);
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        plugins: [{ ...vllmPluginWithPackageInstall(), pluginId: "dynamic-provider" }],
+      }),
+    );
+    expect(
+      (await loadProviderSetupAuthChoices()).map((setupChoice) => setupChoice.choiceId),
+    ).toEqual(["local-connect"]);
+    expect(resolveProviderInstallCatalogEntry(choiceId)).toBeUndefined();
   });
 
-  it("keeps provider-index entries hidden when the plugin is already installed", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
+  it("does not offer an unavailable hosted provider even when its preview has auth metadata", async () => {
+    loadHostedCatalog.mockResolvedValue({
+      source: "hosted",
+      entries: [
         {
-          pluginId: "moonshot",
-          origin: "bundled",
-          manifestPath: "/repo/extensions/moonshot/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/repo/extensions/moonshot",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
+          type: "plugin",
+          id: "@vendor/withdrawn",
+          title: "Withdrawn",
+          state: "unavailable",
+          publisher: { id: "vendor", trust: "official" },
+          openclaw: {
+            plugin: { id: "withdrawn" },
+            providers: [
+              {
+                id: "withdrawn",
+                authChoices: [
+                  { method: "key", choiceId: "withdrawn-key", choiceLabel: "Withdrawn" },
+                ],
+              },
+            ],
           },
-          compat: [],
         },
       ],
-      diagnostics: [],
     });
-    loadOpenClawProviderIndex.mockReturnValue({
-      version: 1,
-      providers: {
-        moonshot: {
-          id: "moonshot",
-          name: "Moonshot AI",
-          plugin: {
-            id: "moonshot",
-            package: "@openclaw/plugin-moonshot",
-            install: {
-              npmSpec: "@openclaw/plugin-moonshot@1.2.3",
-              expectedIntegrity: "sha512-moonshot",
-            },
-          },
-          authChoices: [
-            {
-              method: "api-key",
-              choiceId: "moonshot-api-key",
-              choiceLabel: "Moonshot API key",
-            },
-          ],
-        },
-      },
-    });
-
-    expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toBeUndefined();
-  });
-
-  it("keeps missing provider-index entries visible when only some provider plugins are installed", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [
-        {
-          pluginId: "moonshot",
-          origin: "bundled",
-          manifestPath: "/repo/extensions/moonshot/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/repo/extensions/moonshot",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-        },
-      ],
-      diagnostics: [],
-    });
-    loadOpenClawProviderIndex.mockReturnValue({
-      version: 1,
-      providers: {
-        groq: {
-          id: "groq",
-          name: "Groq",
-          plugin: {
-            id: "groq",
-            package: "@openclaw/plugin-groq",
-            install: {
-              npmSpec: "@openclaw/plugin-groq@1.0.0",
-              defaultChoice: "npm",
-            },
-          },
-          authChoices: [
-            {
-              method: "api-key",
-              choiceId: "groq-api-key",
-              choiceLabel: "Groq API key",
-            },
-          ],
-        },
-        moonshot: {
-          id: "moonshot",
-          name: "Moonshot AI",
-          plugin: {
-            id: "moonshot",
-            package: "@openclaw/plugin-moonshot",
-            install: {
-              clawhubSpec: "clawhub:openclaw/moonshot@2026.5.2",
-              npmSpec: "@openclaw/plugin-moonshot@2026.5.2",
-              defaultChoice: "clawhub",
-            },
-          },
-          authChoices: [
-            {
-              method: "api-key",
-              choiceId: "moonshot-api-key",
-              choiceLabel: "Moonshot API key",
-            },
-          ],
-        },
-        vllm: {
-          id: "vllm",
-          name: "vLLM",
-          plugin: {
-            id: "vllm",
-            package: "@openclaw/plugin-vllm",
-            install: {
-              clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
-              npmSpec: "@openclaw/plugin-vllm@2026.5.2",
-              defaultChoice: "clawhub",
-            },
-          },
-          authChoices: [
-            {
-              method: "server",
-              choiceId: "vllm-server",
-              choiceLabel: "vLLM server",
-            },
-          ],
-        },
-      },
-    });
-
-    const entries = resolveProviderInstallCatalogEntries();
-
-    expect(entries.map((entry) => entry.choiceId)).toEqual(["groq-api-key", "vllm-server"]);
-    expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toBeUndefined();
-    expect(resolveProviderInstallCatalogEntry("vllm-server")).toEqual({
-      pluginId: "vllm",
-      providerId: "vllm",
-      methodId: "server",
-      choiceId: "vllm-server",
-      choiceLabel: "vLLM server",
-      label: "vLLM",
-      origin: "bundled",
-      install: {
-        clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
-        npmSpec: "@openclaw/plugin-vllm@2026.5.2",
-        defaultChoice: "clawhub",
-      },
-      installSource: {
-        defaultChoice: "clawhub",
-        clawhub: {
-          spec: "clawhub:openclaw/vllm@2026.5.2",
-          packageName: "openclaw/vllm",
-          version: "2026.5.2",
-          exactVersion: true,
-        },
-        npm: {
-          spec: "@openclaw/plugin-vllm@2026.5.2",
-          packageName: "@openclaw/plugin-vllm",
-          selector: "2026.5.2",
-          selectorKind: "exact-version",
-          exactVersion: true,
-          pinState: "exact-without-integrity",
-        },
-        warnings: ["npm-spec-missing-integrity"],
-      },
-    });
+    expect(await loadProviderSetupAuthChoices()).toEqual([]);
   });
 });

@@ -200,7 +200,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       respond(true, result, undefined);
     });
   },
-  /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
+  /** Start provider-owned authentication over the shared wizard transport. */
   "openclaw.setup.auth.start": async ({ params, respond, context }) => {
     if (
       !assertValidParams(

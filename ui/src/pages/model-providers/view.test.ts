@@ -43,8 +43,10 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     fastMode: false,
     fastModeOverridden: true,
     configBusy: false,
-    quickAddSupported: true,
-    unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
+    providerSetupAvailable: true,
+    unconfiguredProviders: [
+      { id: "anthropic", displayName: "Anthropic", providerName: "Anthropic" },
+    ],
     canMutate: true,
     mutationBlockedReason: null,
     providerUsageStalled: false,
@@ -56,8 +58,8 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     keyDraft: "",
     pendingLogoutProvider: null,
     addProviderOpen: false,
+    addProviderLoading: false,
     addProviderId: "",
-    addProviderKey: "",
     onRefresh: () => undefined,
     onOpenKeyEditor: () => undefined,
     onCloseKeyEditor: () => undefined,
@@ -69,8 +71,8 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     onCancelLogout: () => undefined,
     onLogout: () => undefined,
     onAddProviderToggle: () => undefined,
+    onAddProviderReload: () => undefined,
     onAddProviderIdChange: () => undefined,
-    onAddProviderKeyChange: () => undefined,
     onAddProvider: () => undefined,
     onPrimaryChange: () => undefined,
     onFallbackChange: () => undefined,
@@ -134,11 +136,11 @@ describe("renderModelProviders", () => {
     await i18n.setLocale("en");
   });
 
-  it("hides quick API-key setup when provider capabilities are unavailable", () => {
+  it("hides provider setup when the Gateway does not offer it", () => {
     const container = mount(
       props({
         configuredModels: [],
-        quickAddSupported: false,
+        providerSetupAvailable: false,
         unconfiguredProviders: [],
       }),
     );
@@ -402,7 +404,6 @@ describe("renderModelProviders", () => {
         keyDraft: "replacement",
         addProviderOpen: true,
         addProviderId: "anthropic",
-        addProviderKey: "new-provider-key",
       }),
     );
 
@@ -434,7 +435,7 @@ describe("renderModelProviders", () => {
           "select, input, button",
         ) ?? []),
       ].map((control) => control.disabled),
-    ).toEqual([true, true, true]);
+    ).toEqual([true, true]);
   });
 
   it("locks an already-open provider form after mutation access is revoked", () => {
@@ -444,7 +445,6 @@ describe("renderModelProviders", () => {
       props({
         addProviderOpen: true,
         addProviderId: "anthropic",
-        addProviderKey: "new-provider-key",
         canMutate: false,
         mutationBlockedReason: "Operator admin access required",
         messages: {
@@ -464,7 +464,7 @@ describe("renderModelProviders", () => {
       ) ?? []),
     ];
 
-    expect(controls.map((control) => control.disabled)).toEqual([true, true, true]);
+    expect(controls.map((control) => control.disabled)).toEqual([true, true]);
     const defaults = container.querySelector(".model-providers__defaults");
     expect(
       [...(defaults?.querySelectorAll("wa-select, wa-radio-group") ?? [])].every((control) =>
@@ -481,12 +481,11 @@ describe("renderModelProviders", () => {
     expect(onAddProviderToggle).toHaveBeenCalledOnce();
   });
 
-  it("freezes provider and credential fields while adding a provider", () => {
+  it("freezes provider selection while its setup wizard is running", () => {
     const container = mount(
       props({
         addProviderOpen: true,
         addProviderId: "anthropic",
-        addProviderKey: "new-provider-key",
         busy: { add: true },
       }),
     );
@@ -496,7 +495,7 @@ describe("renderModelProviders", () => {
       [
         ...(addForm?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("select, input") ?? []),
       ].map((control) => control.disabled),
-    ).toEqual([true, true]);
+    ).toEqual([true]);
   });
 
   it("keeps committed credential success visible beside its refresh warning", () => {

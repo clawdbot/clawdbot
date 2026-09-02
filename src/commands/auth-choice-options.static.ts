@@ -46,8 +46,10 @@ export const GENERIC_PROVIDER_AUTH_CHOICES: ReadonlyArray<AuthChoice> = [
   "apiKey",
 ];
 
-/** Format static auth-choice values for Commander help/validation text. */
-export function formatStaticAuthChoiceChoicesForCli(params?: { includeSkip?: boolean }): string {
+/** List static auth-choice values without interpreting opaque identifiers. */
+export function listStaticAuthChoiceChoicesForCli(params?: {
+  includeSkip?: boolean;
+}): AuthChoice[] {
   const includeSkip = params?.includeSkip ?? true;
   const values = [
     ...CORE_AUTH_CHOICE_OPTIONS.map((opt) => opt.value),
@@ -58,5 +60,5 @@ export function formatStaticAuthChoiceChoicesForCli(params?: { includeSkip?: boo
     values.push("skip");
   }
 
-  return values.join("|");
+  return values;
 }

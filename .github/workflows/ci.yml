@@ -2480,8 +2480,8 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
-      - name: Build Control UI bundle for real-Gateway tests
-        run: pnpm ui:build
+      - name: Build runtime and Control UI for real-Gateway tests
+        run: pnpm build:ci-artifacts
 
       - name: Test Control UI suites with a real Gateway
         env:
@@ -2496,6 +2496,7 @@ jobs:
           ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts
           ui/src/e2e/logs-lifecycle.e2e.test.ts
           ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
+          ui/src/e2e/model-provider-setup.real-gateway.e2e.test.ts
           ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
 

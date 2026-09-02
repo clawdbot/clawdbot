@@ -20,7 +20,6 @@ vi.mock("../flows/provider-flow.js", () => ({
 const DEPRECATED_ALIAS = "claude-cli";
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
-  resolveProviderOnboardAuthFlags: () => [],
   resolveManifestProviderAuthChoices: () => [
     {
       pluginId: "demo",
@@ -38,6 +37,7 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 }));
 
 vi.mock("../plugins/provider-install-catalog.js", () => ({
+  resolveProviderOnboardAuthFlags: () => [],
   resolveDeprecatedProviderInstallCatalogEntry: () => undefined,
 }));
 

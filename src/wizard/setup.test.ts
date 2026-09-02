@@ -38,7 +38,7 @@ type ResolvePluginSetupProvider =
 type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type ResolveProviderOnboardAuthFlags =
-  typeof import("../plugins/provider-auth-choices.js").resolveProviderOnboardAuthFlags;
+  typeof import("../plugins/provider-install-catalog.js").resolveProviderOnboardAuthFlags;
 type PromptDefaultModel = typeof import("../commands/model-picker.js").promptDefaultModel;
 type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoice;
 type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuthChoice;
@@ -365,6 +365,10 @@ vi.mock("../commands/auth-choice.js", () => ({
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices: () => [],
+}));
+
+vi.mock("../plugins/provider-install-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-install-catalog.js")>()),
   resolveProviderOnboardAuthFlags,
 }));
 

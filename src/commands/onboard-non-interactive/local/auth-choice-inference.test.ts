@@ -13,7 +13,7 @@ const resolveProviderOnboardAuthFlags = vi.hoisted(() =>
   >(() => []),
 );
 
-vi.mock("../../../plugins/provider-auth-choices.js", () => ({
+vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderOnboardAuthFlags,
 }));
 

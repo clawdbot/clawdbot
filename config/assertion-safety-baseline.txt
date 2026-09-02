@@ -2389,7 +2389,7 @@ src/cli/program/register.audit.ts	12
 src/cli/program/register.backup.ts	14
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	12
-src/cli/program/register.onboard.ts	27
+src/cli/program/register.onboard.ts	26
 src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
 src/cli/program/route-specs.ts	1
@@ -2552,7 +2552,7 @@ src/commands/onboard-agent.ts	1
 src/commands/onboard-config.ts	3
 src/commands/onboard-helpers.ts	2
 src/commands/onboard-non-interactive/local.ts	3
-src/commands/onboard-non-interactive/local/auth-choice-inference.ts	2
+src/commands/onboard-non-interactive/local/auth-choice-inference.ts	1
 src/commands/onboard-non-interactive/local/auth-choice.plugin-providers.ts	1
 src/commands/onboard-non-interactive/local/auth-choice.ts	3
 src/commands/onboarding-plugin-install.ts	1
@@ -3467,7 +3467,7 @@ src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-runtime-load.ts	2
 src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	4
-src/plugins/management-service.ts	5
+src/plugins/management-service.ts	4
 src/plugins/manifest-capability-normalizers.ts	3
 src/plugins/manifest-install-owner.ts	1
 src/plugins/manifest-registry.ts	2
@@ -3714,7 +3714,6 @@ src/system-agent/operations-parse.ts	1
 src/system-agent/probes.ts	1
 src/system-agent/rescue-message.ts	2
 src/system-agent/setup-apply.ts	1
-src/system-agent/setup-inference-activate-persist.ts	1
 src/system-agent/setup-inference-detection.ts	3
 src/system-agent/setup-inference-persist.ts	3
 src/system-agent/setup-inference-plan-helpers.ts	1
@@ -4075,9 +4074,9 @@ ui/src/pages/labs/labs-registry.ts	6
 ui/src/pages/logs/log-lines.ts	1
 ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	3
-ui/src/pages/model-providers/view.ts	3
+ui/src/pages/model-providers/view.ts	2
 ui/src/pages/model-setup/provider-picker.ts	3
-ui/src/pages/model-setup/view.ts	2
+ui/src/pages/model-setup/view.ts	1
 ui/src/pages/new-session/composer.ts	1
 ui/src/pages/new-session/detail-chip.ts	2
 ui/src/pages/new-session/discovery.ts	3

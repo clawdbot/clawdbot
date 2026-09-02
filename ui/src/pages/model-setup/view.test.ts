@@ -64,7 +64,7 @@ describe("renderModelSetup", () => {
     expect(text(container.querySelector(".model-setup-provider-select__trigger")!)).toContain(
       "OpenAI",
     );
-    expect(container.querySelector('input[type="password"]')).not.toBeNull();
+    expect(container.querySelector('.model-setup__manual input[type="password"]')).toBeNull();
     expect(container.querySelector("details")?.open).toBe(false);
     expect(
       container.querySelector('[data-candidate-kind="codex-cli"] [data-provider-icon="codex"]'),
@@ -169,13 +169,15 @@ describe("renderModelSetup", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("moves focus to the credential field after Tab dismisses the picker", () => {
+  it("moves focus to the connect action after Tab dismisses the picker", () => {
     const container = mount(props());
     const picker = container.querySelector<HTMLElement & { open: boolean }>(
       ".model-setup-provider-select",
     )!;
     const option = picker.querySelector<HTMLElement>("[data-manual-provider]")!;
-    const accessValue = container.querySelector<HTMLElement>('input[type="password"]')!;
+    const connect = container.querySelector<HTMLElement>(
+      ".model-setup__manual button.btn.primary",
+    )!;
     picker.open = true;
     option.focus();
 
@@ -189,7 +191,7 @@ describe("renderModelSetup", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(picker.open).toBe(false);
-    expect(document.activeElement).toBe(accessValue);
+    expect(document.activeElement).toBe(connect);
   });
 
   it("returns focus to the provider trigger after Shift+Tab dismisses the picker", () => {
@@ -216,7 +218,7 @@ describe("renderModelSetup", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("keeps the credential when the selected provider is chosen again", () => {
+  it("keeps the choice when the selected provider is chosen again", () => {
     const onManualProviderChange = vi.fn();
     const container = mount(props({ onManualProviderChange }));
     const picker = container.querySelector<HTMLElement & { open: boolean }>(

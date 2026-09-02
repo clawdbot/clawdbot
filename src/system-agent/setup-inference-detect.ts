@@ -7,10 +7,8 @@ import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.j
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
-import {
-  type ProviderAuthChoiceMetadata,
-  resolveManifestProviderAuthChoices,
-} from "../plugins/provider-auth-choices.js";
+import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import { loadProviderSetupAuthChoices } from "../plugins/provider-install-catalog.js";
 import { listRecommendedToolInstalls } from "../plugins/recommended-tool-installs.js";
 import {
   listSetupInferenceAuthOptions,
@@ -69,14 +67,14 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
   const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
   const workspace = resolveSetupInferenceWorkspace(snapshot);
   const authChoices = (
-    deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
-  )({
-    config: cfg,
-    workspaceDir: workspace,
-    metadataSnapshot: pluginMetadataSnapshot,
-    includeUntrustedWorkspacePlugins: false,
-    includeWorkspacePlugins: false,
-  }).filter(
+    await (deps.loadProviderSetupAuthChoices ?? loadProviderSetupAuthChoices)({
+      config: cfg,
+      workspaceDir: workspace,
+      metadataSnapshot: pluginMetadataSnapshot,
+      includeUntrustedWorkspacePlugins: false,
+      includeWorkspacePlugins: false,
+    })
+  ).filter(
     (choice) => (deps.enablePluginInConfig ?? enablePluginInConfig)(cfg, choice.pluginId).enabled,
   );
   const manual = {
@@ -90,7 +88,7 @@ async function prepareSetupInferenceOptions(deps: DetectSetupInferenceDeps, agen
   return { cfg, targetAgentId, authChoices, manual };
 }
 
-/** Manual setup options use only config and manifests, never machine or credential probes. */
+/** Manual options load catalog metadata without machine, credential, or provider-runtime probes. */
 export async function listManualSetupInferenceOptions(
   deps: DetectSetupInferenceDeps = {},
   agentId?: string,

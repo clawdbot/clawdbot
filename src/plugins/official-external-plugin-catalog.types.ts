@@ -13,7 +13,7 @@ import type {
 
 type ManifestKey = typeof MANIFEST_KEY;
 
-export type OfficialExternalProviderAuthChoice = {
+type OfficialExternalProviderAuthChoice = {
   method?: string;
   choiceId?: string;
   deprecatedChoiceIds?: readonly string[];
@@ -29,6 +29,12 @@ export type OfficialExternalProviderAuthChoice = {
   cliOption?: string;
   cliDescription?: string;
   onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
+  appGuidedSecret?: boolean;
+  appGuidedAuth?: "oauth" | "device-code";
+  appGuidedActionLabel?: string;
+  onboardingFeatured?: boolean;
+  icon?: string;
+  website?: string;
 };
 
 type OfficialExternalProviderCatalogProvider = {
@@ -98,6 +104,8 @@ export type OfficialExternalPluginCatalogManifest = {
     schemaAllOf?: readonly Record<string, unknown>[];
   };
   providers?: readonly OfficialExternalProviderCatalogProvider[];
+  /** Display-only previews; never a source for runtime provider configuration. */
+  modelCatalog?: unknown;
   /**
    * Mirrors the plugin manifest's providerEndpoints so endpoint classification
    * keeps working when the plugin is not installed (dist excludes it).

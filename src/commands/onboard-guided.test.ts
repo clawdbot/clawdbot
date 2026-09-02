@@ -773,7 +773,7 @@ describe("runGuidedOnboarding", () => {
     expectSettledProgress();
   });
 
-  it("accepts and verifies a manual provider key without displaying it", async () => {
+  it("delegates a manual secret prompt to provider activation without displaying it", async () => {
     const enteredValue = "synthetic-value";
     promptAuthChoiceGrouped.mockResolvedValueOnce("apiKey");
     const text = vi.fn().mockResolvedValueOnce(enteredValue);
@@ -789,9 +789,11 @@ describe("runGuidedOnboarding", () => {
     });
     const expectSettledProgress = trackWizardProgress(prompter);
     const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+      expect(text).not.toHaveBeenCalled();
+      await params.prompter?.text({ message: "Provider key", sensitive: true });
       params.prompter!.progress("Testing your AI connection…").stop();
       return {
-        ok: true as const,
+        ok: true,
         modelRef: "openai/gpt-5.5",
         latencyMs: 500,
         lines: ["Default model: openai/gpt-5.5"],
@@ -811,12 +813,12 @@ describe("runGuidedOnboarding", () => {
     );
     expect(activate).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "api-key",
+        kind: "provider-auth",
         authChoice: "apiKey",
-        apiKey: enteredValue,
         prompter,
       }),
     );
+    expect(activate.mock.calls[0]?.[0]).not.toHaveProperty("apiKey");
     expect(text).toHaveBeenLastCalledWith(expect.objectContaining({ sensitive: true }));
     expect(detect.mock.invocationCallOrder[0]).toBeLessThan(text.mock.invocationCallOrder[0]!);
     expect(JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls)).not.toContain(
@@ -970,18 +972,22 @@ describe("runGuidedOnboarding", () => {
       confirm: vi.fn(async () => false),
     });
     const runSystemAgentChat = vi.fn(async () => {});
-    const activate = vi
-      .fn<NonNullable<GuidedOnboardingDeps["activate"]>>()
-      .mockImplementationOnce(async () => {
-        expect(runSystemAgentChat).not.toHaveBeenCalled();
-        return { ok: false, status: "auth", error: "bad key" };
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 500,
-        lines: ["Default model: openai/gpt-5.5"],
-      });
+    const suppliedKeys: string[] = [];
+    const activate = vi.fn<NonNullable<GuidedOnboardingDeps["activate"]>>(async (params) => {
+      expect(runSystemAgentChat).not.toHaveBeenCalled();
+      const secret = await params.prompter?.text({ message: "Provider key", sensitive: true });
+      if (secret !== undefined) {
+        suppliedKeys.push(secret);
+      }
+      return secret === "good-key"
+        ? {
+            ok: true,
+            modelRef: "openai/gpt-5.5",
+            latencyMs: 500,
+            lines: ["Default model: openai/gpt-5.5"],
+          }
+        : { ok: false, status: "auth", error: "bad key" };
+    });
     const deps = setupDeps({
       prompter,
       detect: vi.fn(async () =>
@@ -997,7 +1003,8 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, runtime, deps);
 
-    expect(activate.mock.calls.map(([call]) => call.apiKey)).toEqual(["bad-key", "good-key"]);
+    expect(suppliedKeys).toEqual(["bad-key", "good-key"]);
+    expect(activate.mock.calls.every(([call]) => call.apiKey === undefined)).toBe(true);
     expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
     expect(runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.launchHatchTui).toHaveBeenCalledOnce();

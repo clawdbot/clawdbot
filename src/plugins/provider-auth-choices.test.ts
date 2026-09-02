@@ -1,5 +1,6 @@
 // Covers provider auth choice rendering and fallback behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveProviderOnboardAuthFlags } from "./provider-install-catalog.js";
 
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
@@ -9,7 +10,7 @@ const pluginRegistryMocks = vi.hoisted(() => ({
   resolvePluginMetadataSnapshot: vi.fn(),
 }));
 const officialCatalogMocks = vi.hoisted(() => ({
-  listOfficialExternalProviderCatalogEntries: vi.fn(),
+  listOfficialExternalPluginCatalogEntries: vi.fn(),
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
@@ -38,10 +39,11 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: pluginRegistryMocks.resolvePluginMetadataSnapshot,
 }));
-vi.mock("./official-external-plugin-catalog.js", () => ({
+vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
   getOfficialExternalPluginCatalogManifest: (entry: { openclaw?: unknown }) => entry.openclaw,
-  listOfficialExternalProviderCatalogEntries:
-    officialCatalogMocks.listOfficialExternalProviderCatalogEntries,
+  listOfficialExternalPluginCatalogEntries:
+    officialCatalogMocks.listOfficialExternalPluginCatalogEntries,
 }));
 
 vi.resetModules();
@@ -50,7 +52,6 @@ const {
   resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
-  resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
 const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
 const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
@@ -126,8 +127,8 @@ describe("provider auth choice manifest helpers", () => {
       (params?: { pluginMetadataSnapshot?: unknown }) =>
         params?.pluginMetadataSnapshot ?? pluginRegistryMocks.loadPluginMetadataSnapshot(params),
     );
-    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReset();
-    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
+    officialCatalogMocks.listOfficialExternalPluginCatalogEntries.mockReset();
+    officialCatalogMocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
     clearPluginMetadataLifecycleCaches();
   });
 
@@ -167,7 +168,7 @@ describe("provider auth choice manifest helpers", () => {
     });
   });
 
-  it("keeps installed manifest flags ahead of official cold-install flags", () => {
+  it("does not supplement installed manifest flags with stale catalog choices", () => {
     setSingleManifestProviderAuthChoices("cerebras", [
       createProviderAuthChoice({
         provider: "cerebras",
@@ -180,10 +181,14 @@ describe("provider auth choice manifest helpers", () => {
         cliDescription: "Installed Cerebras key",
       }),
     ]);
-    officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([
+    officialCatalogMocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
       {
+        name: "@vendor/cerebras",
+        source: "official",
+        kind: "provider",
         openclaw: {
-          plugin: { id: "cerebras" },
+          plugin: { id: "cerebras", label: "Cerebras" },
+          install: { npmSpec: "@vendor/cerebras", defaultChoice: "npm" },
           providers: [
             {
               id: "cerebras",
@@ -220,13 +225,6 @@ describe("provider auth choice manifest helpers", () => {
         cliFlag: "--cerebras-api-key",
         cliOption: "--cerebras-api-key <key>",
         description: "Installed Cerebras key",
-      },
-      {
-        optionKey: "groqApiKey",
-        authChoice: "groq-api-key",
-        cliFlag: "--groq-api-key",
-        cliOption: "--groq-api-key <key>",
-        description: "Groq API key",
       },
     ]);
   });

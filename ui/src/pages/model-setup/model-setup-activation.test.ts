@@ -83,8 +83,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const { context, client, request, snapshot, publishGatewaySnapshot } =
         createFirstRunContext();
       let releaseActivation: ((value: unknown) => void) | undefined;
-      const activatedMethod =
-        entry === "manual key" ? "openclaw.setup.activate.start" : "wizard.next";
+      const activatedMethod = "wizard.next";
       request.mockImplementation(async (method) => {
         if (method === "openclaw.setup.auth.start") {
           return { sessionId: "auth", done: false, status: "running" };
@@ -122,9 +121,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
         firstRun: true,
       });
       if (entry === "manual key") {
-        const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-        input.value = "test-only-provider-key";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
         page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
       } else {
         page
@@ -134,8 +130,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       await waitForFast(() => expect(releaseActivation).toBeTypeOf("function"));
       const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")!;
       expect(JSON.parse(receipt).modelRef).toBeNull();
-      expect(receipt).not.toContain("test-only-provider-key");
-      expect(receipt).not.toContain("provider-login");
+      expect(receipt).not.toContain(entry === "manual key" ? "provider-key" : "provider-login");
       publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
       await page.updateComplete;
       publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
@@ -460,8 +455,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         refreshing.resolve();
         await refresh.promise;
       });
-      const activatedMethod =
-        entry === "manual key" ? "openclaw.setup.activate.start" : "wizard.next";
+      const activatedMethod = "wizard.next";
       request.mockImplementation(async (method) => {
         if (method === "openclaw.setup.auth.start") {
           return { done: false, status: "running" };
@@ -492,9 +486,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
         firstRun: true,
       });
       if (entry === "manual key") {
-        const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-        input.value = "test-only-key";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
         page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
       } else {
         page
@@ -611,9 +602,6 @@ describe("ModelSetupPage first-run activation ownership", () => {
         firstRun: true,
       });
       if (entry === "manual") {
-        const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-        input.value = "test-only-provider-key";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
         page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
       }
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());

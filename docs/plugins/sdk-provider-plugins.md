@@ -79,6 +79,8 @@ catalog, API-key auth, and dynamic model resolution.
           "choiceLabel": "Acme AI API key",
           "groupId": "acme-ai",
           "groupLabel": "Acme AI",
+          "appGuidedSecret": true,
+          "optionKey": "acmeAiApiKey",
           "cliFlag": "--acme-ai-api-key",
           "cliOption": "--acme-ai-api-key <key>",
           "cliDescription": "Acme AI API key"
@@ -1298,6 +1300,33 @@ clawhub package publish your-org/your-plugin
 
 `clawhub skill publish <path>` is a different command for publishing a skill
 folder, not a plugin package - do not use it here.
+
+### Setup discovery
+
+Publish setup metadata in your existing `openclaw.plugin.json`; there is no
+separate provider registration file. For eligible official-channel releases from
+official publishers, ClawHub projects declared `providers`, `setup.providers`,
+and `providerAuthChoices` into its existing plugin feed. Publishing a community
+package alone does not grant official catalog placement. Users can still install
+it explicitly, after which its installed manifest supplies setup choices.
+
+OpenClaw prepares that catalog when opening setup or registering setup CLI
+commands. It combines accepted catalog choices with installed plugin manifests;
+an installed plugin owns its choices even if the feed describes a newer release.
+The bundled catalog remains available when the hosted feed cannot be used.
+
+Selecting a catalog-only provider starts the normal plugin installation flow,
+using the feed's exact package, version, and artifact integrity. Before asking
+for credentials, OpenClaw checks that the installed manifest and runtime provide
+the selected plugin, provider, and auth method. Mark manual credential choices
+with `appGuidedSecret: true` so the app can run the provider-owned masked prompt.
+Catalog metadata never executes discovery hooks or supplies credentials.
+
+Optional manifest `modelCatalog.providers` entries provide small display
+previews. OpenClaw can also use its existing hosted model catalog for those
+hints. Neither preview configures a model, supplies an API endpoint, nor replaces
+the installed provider's runtime catalog. The agent's generated `models.json`
+remains a runtime artifact, not a plugin discovery registry.
 
 ## File structure
 

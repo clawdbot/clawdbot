@@ -65,7 +65,13 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                 )}
               </div>`
             : props.state.phase === "done"
-              ? html`<div role="status">${t("modelSetup.wizard.checking")}</div>`
+              ? html`<div role="status">
+                  ${t(
+                    props.mode === "prepare"
+                      ? "modelSetup.wizard.working"
+                      : "modelSetup.wizard.checking",
+                  )}
+                </div>`
               : props.state.phase === "error" || props.state.phase === "cancelled"
                 ? html`<div class="callout danger" role="alert">${props.state.message}</div>`
                 : html`

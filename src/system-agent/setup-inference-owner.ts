@@ -31,6 +31,7 @@ export async function revalidateStableSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
   stagedOwnerPluginArtifacts: SystemAgentOwnerPluginArtifactSnapshot | undefined;
+  refreshPluginGeneration?: boolean;
   deps: ActivateSetupInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   let binding: SystemAgentVerifiedInferenceBinding;
@@ -38,6 +39,7 @@ export async function revalidateStableSetupInferenceOwner(params: {
     binding = await revalidateSetupInferenceOwner({
       route: params.route,
       auth: params.auth,
+      refreshPluginGeneration: params.refreshPluginGeneration,
       deps: params.deps,
     });
   } catch (error) {

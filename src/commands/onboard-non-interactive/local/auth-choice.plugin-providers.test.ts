@@ -1,7 +1,10 @@
 // Non-interactive plugin provider auth tests cover provider choice setup and runtime plugin install requirements.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { buildPluginCapabilityConsentReview } from "../../../plugins/capability-summary.js";
 import * as pluginEnable from "../../../plugins/enable.js";
+import { resolveProviderPluginChoiceCore } from "../../../plugins/provider-wizard.js";
+import type { ProviderPlugin } from "../../../plugins/types.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ModelSelectionRuntimePluginsResult =
@@ -24,46 +27,60 @@ const offerPostInstallMigrations = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../../../wizard/setup.post-install-migration.js", () => ({
   offerPostInstallMigrations,
 }));
-const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../../plugins/provider-auth-choice-preference.js", () => ({
-  resolvePreferredProviderForAuthChoice,
-}));
-const resolveManifestProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+type ResolveManifestProviderAuthChoice =
+  typeof import("../../../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
+const resolveManifestProviderAuthChoice = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoice>(() => undefined),
+);
 vi.mock("../../../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
 }));
-const resolveProviderInstallCatalogEntry = vi.hoisted(() => vi.fn(() => undefined));
+type ResolveProviderInstallCatalogEntry =
+  typeof import("../../../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntry;
+const resolveProviderInstallCatalogEntry = vi.hoisted(() =>
+  vi.fn<ResolveProviderInstallCatalogEntry>(() => undefined),
+);
 const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() => vi.fn(() => undefined));
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntry,
+  loadProviderSetupAuthChoices: vi.fn(async () => []),
 }));
-const ensureOnboardingPluginInstalled = vi.hoisted(() => vi.fn());
+type EnsureOnboardingPluginInstalled =
+  typeof import("../../onboarding-plugin-install.js").ensureOnboardingPluginInstalled;
+const ensureOnboardingPluginInstalled = vi.hoisted(() => vi.fn<EnsureOnboardingPluginInstalled>());
 vi.mock("../../onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
 }));
 
-const resolveOwningPluginIdsForProvider = vi.hoisted(() => vi.fn(() => undefined));
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
-const resolvePluginProvidersCore = vi.hoisted(() => vi.fn(() => []));
-vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
-  authChoicePluginProvidersRuntime: {
-    resolveOwningPluginIdsForProviderRef: resolveOwningPluginIdsForProvider,
-    resolveProviderPluginChoice,
-    resolvePluginProviders: resolvePluginProvidersCore,
-  },
+type ResolvePluginProviders =
+  typeof import("../../../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
+const resolvePluginProvidersCore = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
+type ResolvePluginSetupProvider =
+  typeof import("../../../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
+const resolvePluginSetupProvider = vi.hoisted(() =>
+  vi.fn<ResolvePluginSetupProvider>(() => undefined),
+);
+vi.mock("../../../plugins/provider-auth-choice.runtime.js", () => ({
+  resolveProviderPluginChoice,
+  resolvePluginProviders: resolvePluginProvidersCore,
+  resolvePluginSetupProvider,
 }));
-
 beforeEach(() => {
   vi.clearAllMocks();
-  resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
-  resolveManifestProviderAuthChoice.mockReturnValue(undefined);
-  resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue(undefined);
-  resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
-  ensureOnboardingPluginInstalled.mockResolvedValue(undefined);
-  resolveOwningPluginIdsForProvider.mockReturnValue(undefined as never);
-  resolveProviderPluginChoice.mockReturnValue(undefined);
-  resolvePluginProvidersCore.mockReturnValue([] as never);
+  resolveManifestProviderAuthChoice.mockReset().mockReturnValue(undefined);
+  resolveDeprecatedProviderInstallCatalogEntry.mockReset().mockReturnValue(undefined);
+  resolveProviderInstallCatalogEntry.mockReset().mockReturnValue(undefined);
+  ensureOnboardingPluginInstalled.mockReset().mockImplementation(async ({ cfg, entry }) => ({
+    cfg,
+    installed: false,
+    pluginId: entry?.pluginId ?? "missing-plugin",
+    status: "skipped",
+  }));
+  resolveProviderPluginChoice.mockReset().mockReturnValue(undefined);
+  resolvePluginProvidersCore.mockReset().mockReturnValue([]);
+  resolvePluginSetupProvider.mockReset().mockReturnValue(undefined);
   ensureModelSelectionRuntimePlugins.mockImplementation(async ({ cfg }) => ({
     ok: true,
     cfg,
@@ -85,6 +102,25 @@ const target = {
   agentDir: "/tmp/main-agent",
   workspaceDir: "/tmp/workspace",
 };
+
+type ProviderChoiceInput = Parameters<typeof applyNonInteractivePluginProviderChoice>[0];
+
+function createProviderChoiceInput(
+  authChoice: string,
+  runtime: ReturnType<typeof createRuntime>,
+  opts: ProviderChoiceInput["opts"] = {},
+): ProviderChoiceInput {
+  return {
+    nextConfig: { agents: { defaults: {} } },
+    authChoice,
+    opts,
+    runtime,
+    baseConfig: { agents: { defaults: {} } },
+    target,
+    resolveApiKey: vi.fn(),
+    toApiKeyCredential: vi.fn(),
+  };
+}
 
 type MockCalls = { mock: { calls: Array<Array<unknown>> } };
 
@@ -163,21 +199,36 @@ async function applyProviderModelChoice(params: {
 describe("applyNonInteractivePluginProviderChoice", () => {
   it("requires capability consent before loading a disabled provider in noninteractive setup", async () => {
     const config: OpenClawConfig = { plugins: { entries: { example: { enabled: false } } } };
-    resolveManifestProviderAuthChoice.mockReturnValue({ pluginId: "example" } as never);
+    resolveManifestProviderAuthChoice.mockReturnValue({
+      pluginId: "example",
+      providerId: "example",
+      methodId: "api-key",
+      choiceId: "example-api-key",
+      choiceLabel: "Example",
+    });
+    const review = buildPluginCapabilityConsentReview({
+      pluginId: "example",
+      manifest: { name: "Example", providers: ["example"] },
+      record: { source: "npm", spec: "@example/provider" },
+      config,
+    });
     const enable = vi
       .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
-      .mockResolvedValueOnce({
-        config,
-        enabled: false,
-        pluginId: "example",
-        reason: "Plugin requires capability consent.",
+      .mockImplementationOnce(async (_config, _pluginId, options) => {
+        await options?.onCapabilityConsent?.(review);
+        return {
+          config,
+          enabled: false,
+          pluginId: "example",
+          reason: "Plugin requires capability consent.",
+        };
       });
     const runtime = createRuntime();
     try {
       const result = await applyNonInteractivePluginProviderChoice({
         nextConfig: config,
         authChoice: "example-api-key",
-        opts: {},
+        opts: { json: true },
         runtime,
         baseConfig: config,
         target,
@@ -188,6 +239,12 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       expectRuntimeErrorIncludes(runtime, "capability consent");
       expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
       expect(resolveProviderPluginChoice).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        phase: "options",
+        message: expect.stringContaining("capability consent"),
+      });
     } finally {
       enable.mockRestore();
     }
@@ -311,30 +368,19 @@ describe("applyNonInteractivePluginProviderChoice", () => {
   it("loads plugin providers for provider-plugin auth choices", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["vllm"] } }));
-    resolveOwningPluginIdsForProvider.mockReturnValue(["vllm"] as never);
     resolvePluginProvidersCore.mockReturnValue([{ id: "vllm", pluginId: "vllm" }] as never);
     resolveProviderPluginChoice.mockReturnValue({
       provider: { id: "vllm", pluginId: "vllm", label: "vLLM" },
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "provider-plugin:vllm:custom",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    const result = await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("provider-plugin:vllm:custom", runtime),
+    );
 
-    expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledOnce();
-    expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
-    expect(mockArg(resolveOwningPluginIdsForProvider).provider).toBe("vllm");
     expect(resolvePluginProvidersCore).toHaveBeenCalledOnce();
     const providersInput = mockArg(resolvePluginProvidersCore);
-    expect(providersInput.onlyPluginIds).toEqual(["vllm"]);
+    expect(providersInput.providerRefs).toEqual(["vllm"]);
     expect(providersInput.includeUntrustedWorkspacePlugins).toBe(false);
     expect(resolveProviderPluginChoice).toHaveBeenCalledOnce();
     expect(runNonInteractive).toHaveBeenCalledWith(
@@ -350,7 +396,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     "keeps media setup global without replacing the text model (explicit fleet: %s)",
     async (explicitFleet) => {
       const runtime = createRuntime();
-      const provider = { id: "pixverse", pluginId: "pixverse", label: "PixVerse" };
       const initialConfig: OpenClawConfig = {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.6" } },
@@ -369,17 +414,28 @@ describe("applyNonInteractivePluginProviderChoice", () => {
           },
         },
       }));
-      resolvePreferredProviderForAuthChoice.mockResolvedValue("pixverse" as never);
-      resolvePluginProvidersCore.mockImplementation((...args: unknown[]) => {
-        const input = args[0] as { providerRefs?: string[] } | undefined;
-        return (input?.providerRefs?.includes("pixverse") ? [provider] : []) as never;
+      const provider: ProviderPlugin = {
+        id: "pixverse",
+        pluginId: "pixverse",
+        label: "PixVerse",
+        auth: [
+          {
+            id: "api-key",
+            label: "API key",
+            kind: "api_key",
+            run: async () => ({ profiles: [] }),
+            runNonInteractive,
+          },
+        ],
+      };
+      resolveManifestProviderAuthChoice.mockReturnValue({
+        pluginId: "pixverse",
+        providerId: "pixverse",
+        methodId: "api-key",
+        choiceId: "pixverse-api-key",
+        choiceLabel: "PixVerse",
       });
-      resolveProviderPluginChoice.mockImplementation((...args: unknown[]) => {
-        const input = args[0] as { providers?: unknown[] } | undefined;
-        return input?.providers?.includes(provider)
-          ? { provider, method: { runNonInteractive } }
-          : undefined;
-      });
+      resolvePluginSetupProvider.mockReturnValue(provider);
 
       const result = await applyNonInteractivePluginProviderChoice({
         nextConfig: initialConfig,
@@ -413,17 +469,33 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         },
       },
     }));
-    const provider = { id: "groq", pluginId: "groq", label: "Groq" };
+    const provider: ProviderPlugin = {
+      id: "groq",
+      pluginId: "groq",
+      label: "Groq",
+      auth: [
+        {
+          id: "api-key",
+          label: "API key",
+          kind: "api_key",
+          run: async () => ({ profiles: [] }),
+          runNonInteractive,
+        },
+      ],
+    };
     resolveProviderInstallCatalogEntry.mockReturnValue({
       pluginId: "groq",
       providerId: "groq",
+      methodId: "api-key",
+      choiceId: "groq-api-key",
+      choiceLabel: "Groq API key",
       label: "Groq",
       origin: "bundled",
       install: {
         npmSpec: "@openclaw/groq-provider",
         defaultChoice: "npm",
       },
-    } as never);
+    });
     ensureOnboardingPluginInstalled.mockResolvedValue({
       cfg: {
         plugins: {
@@ -436,22 +508,22 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       pluginId: "groq",
       status: "installed",
     });
-    resolvePluginProvidersCore.mockReturnValue([provider] as never);
-    resolveProviderPluginChoice.mockReturnValueOnce(undefined).mockReturnValue({
-      provider,
-      method: { runNonInteractive },
-    });
+    resolveManifestProviderAuthChoice.mockImplementation(() =>
+      ensureOnboardingPluginInstalled.mock.calls.length > 0
+        ? {
+            pluginId: "groq",
+            providerId: "groq",
+            methodId: "api-key",
+            choiceId: "groq-api-key",
+            choiceLabel: "Groq API key",
+          }
+        : undefined,
+    );
+    resolvePluginProvidersCore.mockReturnValue([provider]);
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "groq-api-key",
-      opts: { groqApiKey: "groq-key" } as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    const result = await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("groq-api-key", runtime, { groqApiKey: "groq-key" }),
+    );
 
     expect(resolveProviderInstallCatalogEntry).toHaveBeenCalledWith(
       "groq-api-key",
@@ -474,8 +546,8 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         promptInstall: false,
       }),
     );
-    expect(resolvePluginProvidersCore).toHaveBeenCalledTimes(2);
-    expect(mockArg(resolvePluginProvidersCore, 1).providerRefs).toEqual(["groq"]);
+    expect(resolvePluginProvidersCore).toHaveBeenCalledOnce();
+    expect(mockArg(resolvePluginProvidersCore).onlyPluginIds).toEqual(["groq"]);
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       agents: {
@@ -491,51 +563,129 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     });
   });
 
-  it("guides deprecated official auth choices before their plugin is installed", async () => {
-    const runtime = createRuntime();
-    resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue({
-      choiceId: "qwen-api-key",
-    } as never);
+  it.each([
+    { mismatch: "provider", providerId: "different-provider", methodId: "api-key" },
+    { mismatch: "method", providerId: "demo-provider", methodId: "different-method" },
+  ])(
+    "rejects an installed $mismatch that differs from the selected catalog choice",
+    async (input) => {
+      const runtime = createRuntime();
+      const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => config);
+      const provider: ProviderPlugin = {
+        id: input.providerId,
+        pluginId: "demo-plugin",
+        label: "Demo Provider",
+        auth: [
+          {
+            id: input.methodId,
+            label: "API key",
+            kind: "api_key",
+            wizard: { choiceId: "demo-api-key" },
+            run: async () => ({ profiles: [] }),
+            runNonInteractive,
+          },
+        ],
+      };
+      const installedConfig: OpenClawConfig = {
+        plugins: { entries: { "demo-plugin": { enabled: true } } },
+      };
+      resolveProviderInstallCatalogEntry.mockReturnValue({
+        pluginId: "demo-plugin",
+        providerId: "demo-provider",
+        methodId: "api-key",
+        choiceId: "demo-api-key",
+        choiceLabel: "Demo API key",
+        label: "Demo Provider",
+        origin: "bundled",
+        install: { npmSpec: "@openclaw/demo-provider" },
+      });
+      ensureOnboardingPluginInstalled.mockImplementation(
+        async ({ runtime: installRuntime, prompter }) => {
+          installRuntime.log("Installing Demo Provider");
+          await prompter.note("Demo Provider installed", "Plugin");
+          return {
+            cfg: installedConfig,
+            installed: true,
+            pluginId: "demo-plugin",
+            status: "installed",
+          };
+        },
+      );
+      resolveManifestProviderAuthChoice.mockImplementation(() =>
+        ensureOnboardingPluginInstalled.mock.calls.length > 0
+          ? {
+              pluginId: "demo-plugin",
+              providerId: input.providerId,
+              methodId: input.methodId,
+              choiceId: "demo-api-key",
+              choiceLabel: "Demo API key",
+            }
+          : undefined,
+      );
+      resolvePluginProvidersCore.mockImplementation(() =>
+        ensureOnboardingPluginInstalled.mock.calls.length > 0 ? [provider] : [],
+      );
+      resolveProviderPluginChoice.mockImplementation(resolveProviderPluginChoiceCore);
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "modelstudio-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+      const result = await applyNonInteractivePluginProviderChoice({
+        nextConfig: {},
+        authChoice: "demo-api-key",
+        opts: { json: true },
+        runtime,
+        baseConfig: {},
+        target,
+        resolveApiKey: vi.fn(),
+        toApiKeyCredential: vi.fn(),
+      });
 
-    expect(result).toBeNull();
-    expectRuntimeErrorIncludes(
-      runtime,
-      '"modelstudio-api-key" is no longer supported. Use --auth-choice "qwen-api-key" instead.',
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
-    expect(resolveProviderInstallCatalogEntry).not.toHaveBeenCalled();
-  });
+      expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+      expect(runNonInteractive).not.toHaveBeenCalled();
+      expect(result).toBeNull();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        phase: "options",
+        message: expect.stringContaining("selected authentication method"),
+      });
+    },
+  );
+
+  it.each([
+    { choiceId: "qwen-api-key", expectedArgument: "qwen-api-key" },
+    { choiceId: "modern$(printf quoted)", expectedArgument: "'modern$(printf quoted)'" },
+  ])(
+    "guides deprecated official auth choices safely before install: $choiceId",
+    async ({ choiceId, expectedArgument }) => {
+      const runtime = createRuntime();
+      resolveDeprecatedProviderInstallCatalogEntry.mockReturnValue({
+        choiceId,
+      } as never);
+
+      const result = await applyNonInteractivePluginProviderChoice(
+        createProviderChoiceInput("modelstudio-api-key", runtime),
+      );
+
+      expect(result).toBeNull();
+      expectRuntimeErrorIncludes(
+        runtime,
+        `"modelstudio-api-key" is no longer supported. Use --auth-choice ${expectedArgument} instead.`,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "rejects an unmatched provider-plugin auth choice while honoring json=%s",
     async (json) => {
       const runtime = createRuntime();
 
-      const result = await applyNonInteractivePluginProviderChoice({
-        nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        authChoice: "provider-plugin:workspace-provider:api-key",
-        opts: { json } as never,
-        runtime: runtime as never,
-        baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
-      });
+      const result = await applyNonInteractivePluginProviderChoice(
+        createProviderChoiceInput("provider-plugin:workspace-provider:api-key", runtime, { json }),
+      );
 
       expect(result).toBeNull();
-      expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
       expectRuntimeErrorIncludes(
         runtime,
         'Auth choice "provider-plugin:workspace-provider:api-key" was not matched to a trusted provider plugin.',
@@ -581,7 +731,6 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       expectRuntimeErrorIncludes(runtime, "is missing a provider id");
       expectRuntimeErrorIncludes(runtime, '"provider-plugin:<provider-id>"');
       expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
-      expect(resolvePreferredProviderForAuthChoice).not.toHaveBeenCalled();
       if (json) {
         expect(runtime.log).toHaveBeenCalledOnce();
         expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
@@ -597,22 +746,14 @@ describe("applyNonInteractivePluginProviderChoice", () => {
 
   it("fails explicitly when a non-prefixed auth choice resolves only with untrusted providers", async () => {
     const runtime = createRuntime();
-    resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
     resolveManifestProviderAuthChoice.mockReturnValueOnce(undefined).mockReturnValueOnce({
       pluginId: "workspace-provider",
       providerId: "workspace-provider",
     } as never);
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "workspace-provider-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    const result = await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("workspace-provider-api-key", runtime),
+    );
 
     expect(result).toBeNull();
     expectRuntimeErrorIncludes(
@@ -633,10 +774,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(untrustedManifestInput.includeUntrustedWorkspacePlugins).toBe(true);
   });
 
-  it("limits setup-provider resolution to owning plugin ids without pre-enabling them", async () => {
+  it("scopes legacy prefixed discovery before enabling its selected provider plugin", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));
-    resolveOwningPluginIdsForProvider.mockReturnValue(["demo-plugin"] as never);
     resolvePluginProvidersCore.mockReturnValue([
       { id: "demo-provider", pluginId: "demo-plugin" },
     ] as never);
@@ -645,44 +785,31 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "provider-plugin:demo-provider:custom",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    const result = await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("provider-plugin:demo-provider:custom", runtime),
+    );
 
     const providersInput = mockArg(resolvePluginProvidersCore);
     expectConfigDefaults(providersInput.config);
-    expect(providersInput.onlyPluginIds).toEqual(["demo-plugin"]);
+    expect(providersInput.providerRefs).toEqual(["demo-provider"]);
     expect(providersInput.includeUntrustedWorkspacePlugins).toBe(false);
     expect(runNonInteractive).toHaveBeenCalledOnce();
+    expect(mockArg(runNonInteractive).config).toMatchObject({
+      plugins: { entries: { "demo-plugin": { enabled: true } } },
+    });
     expect(result).toEqual({ plugins: { allow: ["demo-plugin"] } });
   });
 
-  it("filters untrusted workspace manifest choices when resolving inferred auth choices", async () => {
+  it("leaves unrelated auth choices for the core dispatcher without allowing untrusted providers", async () => {
     const runtime = createRuntime();
-    resolvePreferredProviderForAuthChoice.mockResolvedValue(undefined);
 
-    await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    const result = await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("custom-api-key", runtime),
+    );
 
-    const preferenceInput = mockArg(resolvePreferredProviderForAuthChoice);
-    expect(preferenceInput.choice).toBe("openai-api-key");
-    expect(preferenceInput.includeUntrustedWorkspacePlugins).toBe(false);
+    expect(result).toBeUndefined();
     expect(mockArg(resolvePluginProvidersCore).includeUntrustedWorkspacePlugins).toBe(false);
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("ensures Codex after a non-interactive OpenAI provider choice sets the default model", async () => {
@@ -706,16 +833,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    const result = await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("openai-api-key", runtime),
+    );
 
     expect(runNonInteractive).toHaveBeenCalledOnce();
     const ensureInput = mockArg(ensureModelSelectionRuntimePlugins);
@@ -747,16 +867,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
         method: { runNonInteractive },
       });
 
-      const result = await applyNonInteractivePluginProviderChoice({
-        nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        authChoice: "openai-api-key",
-        opts: { json: true } as never,
-        runtime: runtime as never,
-        baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-        target,
-        resolveApiKey: vi.fn(),
-        toApiKeyCredential: vi.fn(),
-      });
+      const result = await applyNonInteractivePluginProviderChoice(
+        createProviderChoiceInput("openai-api-key", runtime, { json: true }),
+      );
 
       expect(result).toBeNull();
       expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -799,16 +912,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "github-copilot",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    const result = await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("github-copilot", runtime),
+    );
 
     const ensureInput = mockArg(ensureModelSelectionRuntimePlugins);
     expect(ensureInput.cfg).toBe(selectedConfig);
@@ -835,16 +941,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    const result = await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "github-copilot",
-      opts: { json: true } as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    const result = await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("github-copilot", runtime, { json: true }),
+    );
 
     expect(result).toBeNull();
     expect(ensureModelSelectionRuntimePlugins).toHaveBeenCalledOnce();
@@ -869,16 +968,9 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       method: { runNonInteractive },
     });
 
-    await applyNonInteractivePluginProviderChoice({
-      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      authChoice: "openai-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
-      target,
-      resolveApiKey: vi.fn(),
-      toApiKeyCredential: vi.fn(),
-    });
+    await applyNonInteractivePluginProviderChoice(
+      createProviderChoiceInput("openai-api-key", runtime),
+    );
 
     expect(offerPostInstallMigrations).not.toHaveBeenCalled();
   });

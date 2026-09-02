@@ -117,14 +117,12 @@ export async function runManualStage(params: {
   hasActiveRoute?: boolean;
 }): Promise<string[] | null> {
   const interactiveOptions = [
+    ...params.detection.manualProviders,
     ...params.detection.authOptions,
     ...(params.detection.prepareOptions ?? []),
     ...CORE_AUTH_CHOICE_OPTIONS.map((option) => ({ id: option.value, label: option.label })),
   ];
-  const allowedChoices = new Set([
-    ...params.detection.manualProviders.map((provider) => provider.id),
-    ...interactiveOptions.map((option) => option.id),
-  ]);
+  const allowedChoices = new Set(interactiveOptions.map((option) => option.id));
   const detectedOptions = params.detection.candidates.map((candidate) => ({
     value: `candidate:${candidate.kind}`,
     label: t(
@@ -230,31 +228,6 @@ export async function runManualStage(params: {
       });
       continue;
     }
-
-    const provider = params.detection.manualProviders.find((item) => item.id === choice);
-    if (!provider) {
-      continue;
-    }
-    const apiKey = await params.prompter.text({
-      message: t("wizard.guided.apiKeyPrompt", { label: provider.label }),
-      sensitive: true,
-      validate: (value) => (value.trim() ? undefined : t("common.required")),
-    });
-    const result = await withConsoleSubsystemsSuppressed(() =>
-      params.activate({
-        kind: "api-key",
-        authChoice: provider.id,
-        apiKey,
-        workspace: params.workspace,
-        surface: "cli",
-        runtime: params.runtime,
-        prompter: params.prompter,
-      }),
-    );
-    if (result.ok) {
-      return activationLines(result);
-    }
-    await noteActivationFailure({ prompter: params.prompter, label: provider.label, result });
   }
 }
 

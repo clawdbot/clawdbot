@@ -3,11 +3,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { DefaultModelSelection } from "./data.ts";
+import { readModelProviderConfig, type DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
+  chooseProviderSetup,
   createHarness,
+  createProviderSetupHarness,
   deferred,
   publishableGateway,
   requestCount,
@@ -414,28 +416,58 @@ describe("ModelProvidersPage agent scope", () => {
     });
   });
 
-  it("keeps committed provider-add feedback visible when its refresh fails", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.refresh.mockImplementationOnce(async () => {
-      runtimeConfig.state.lastError = "config.get failed after provider add";
-    });
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.data?.config).toEqual({}));
-    page.addProviderOpen = true;
-    page.addProviderId = "anthropic";
-    page.addProviderKey = "new-provider-key";
-
-    await page.addProvider();
-    await page.updateComplete;
-
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(page.addProviderOpen).toBe(true);
-    expect(page.addProviderKey).toBe("");
-    const form = page.querySelector(".model-providers__add-form")?.parentElement;
-    expect(
-      [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
-    ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
-  });
+  it.each([false, true])(
+    "configures an opaque catalog choice without changing defaults, retaining refresh failure %s",
+    async (refreshFails) => {
+      const { context, request, runtimeConfig, authChoice, config } = createProviderSetupHarness();
+      const originalRequest = request.getMockImplementation()!;
+      let configured = false;
+      request.mockImplementation(async (method: string) => {
+        if (method === "config.get" && configured && refreshFails) {
+          throw new Error("config.get failed after provider add");
+        }
+        if (method === "openclaw.setup.prepare.start") {
+          return { sessionId: "provider-prepare", done: false, status: "running" };
+        }
+        if (method === "wizard.next") {
+          configured = true;
+          return { done: true, status: "done", preparedModelRef: "catalog-vendor/model" };
+        }
+        return originalRequest(method);
+      });
+      await runtimeConfig.ensureLoaded();
+      const page = appendPage(context);
+      try {
+        await waitForFast(() => expect(page.data?.config).toEqual(config));
+        expect(requestCount(request, "openclaw.setup.detect")).toBe(0);
+        await chooseProviderSetup(page, authChoice);
+        expect(requestCount(request, "openclaw.setup.detect")).toBe(1);
+        expect(page.querySelector('.model-providers__add-form input[type="password"]')).toBeNull();
+        page.querySelector<HTMLButtonElement>(".model-providers__add-form .primary")?.click();
+        await waitForFast(() =>
+          expect(page.textContent).toContain("Provider Catalog vendor configured."),
+        );
+        expect(request).toHaveBeenCalledWith(
+          "openclaw.setup.prepare.start",
+          { sessionId: expect.any(String), agentId: "main", authChoice },
+          { timeoutMs: null },
+        );
+        expect(requestCount(request, "config.patch")).toBe(0);
+        expect(requestCount(request, "openclaw.setup.activate.start")).toBe(0);
+        expect(
+          readModelProviderConfig(runtimeConfig.state.configSnapshot?.config ?? null).defaults
+            .primary,
+        ).toBe("existing/default");
+        expect(page.textContent).not.toContain("Connection verified");
+        if (refreshFails) {
+          expect(page.textContent).toContain("config.get failed after provider add");
+        }
+      } finally {
+        page.remove();
+        runtimeConfig.dispose();
+      }
+    },
+  );
 
   it("keeps committed default models visible until their authoritative refresh succeeds", async () => {
     const { context, runtimeConfig } = createHarness("main");
@@ -520,34 +552,71 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.messages.openai).toBeUndefined();
   });
 
-  it("keeps a replacement agent's matching add-provider draft after a global write", async () => {
-    const { agentSelection, context, notifySelection, runtimeConfig } = createHarness("main");
-    const gate = deferred<void>();
-    runtimeConfig.ensureLoaded.mockImplementationOnce(async () => gate.promise);
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.data?.config).toEqual({}));
-    page.addProviderOpen = true;
-    page.addProviderId = "anthropic";
-    page.addProviderKey = "shared-provider-key";
-
-    const adding = page.addProvider();
-    await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
-    notifySelection();
-    await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
-    page.addProviderOpen = true;
-    page.addProviderId = "anthropic";
-    page.addProviderKey = "shared-provider-key";
-    gate.resolve();
-    await adding;
-
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(page.addProviderOpen).toBe(true);
-    expect(page.addProviderId).toBe("anthropic");
-    expect(page.addProviderKey).toBe("shared-provider-key");
-    expect(page.messages.add).toBeUndefined();
-  });
+  it.each(["agent", "connection"] as const)(
+    "cancels provider setup on a %s change without clearing the next selection",
+    async (scope) => {
+      const {
+        agentSelection,
+        context,
+        notifySelection,
+        runtimeConfig,
+        request,
+        publishPhase,
+        authChoice,
+        config,
+      } = createProviderSetupHarness();
+      const runMutation = vi.spyOn(runtimeConfig, "runExternalMutation");
+      const gate = deferred<unknown>();
+      const originalRequest = request.getMockImplementation()!;
+      request.mockImplementation(async (method) => {
+        if (method === "openclaw.setup.prepare.start") {
+          return gate.promise;
+        }
+        if (method === "wizard.cancel") {
+          return { status: "cancelled" };
+        }
+        return originalRequest(method);
+      });
+      await runtimeConfig.ensureLoaded();
+      const page = appendPage(context);
+      try {
+        await waitForFast(() => expect(page.data?.config).toEqual(config));
+        await chooseProviderSetup(page, authChoice);
+        page.querySelector<HTMLButtonElement>(".model-providers__add-form .primary")?.click();
+        await waitForFast(() =>
+          expect(requestCount(request, "openclaw.setup.prepare.start")).toBe(1),
+        );
+        expect(runMutation).toHaveBeenCalledOnce();
+        const pendingSetup = runMutation.mock.results[0]!.value;
+        if (scope === "agent") {
+          agentSelection.state.selectedId = "writer";
+          agentSelection.state.scopeId = "writer";
+          notifySelection();
+          await waitForFast(() => expect(page.selectedAgentId).toBe("writer"));
+          agentSelection.state.selectedId = "main";
+          agentSelection.state.scopeId = "main";
+          notifySelection();
+        } else {
+          publishPhase("reconnecting");
+          publishPhase("connected");
+        }
+        await waitForFast(() => expect(requestCount(request, "wizard.cancel")).toBe(1));
+        await waitForFast(() => expect(page.data?.config).toEqual(config));
+        await chooseProviderSetup(page, authChoice);
+        gate.resolve({ done: true, status: "done", preparedModelRef: "catalog-vendor/model" });
+        await pendingSetup;
+        await page.updateComplete;
+        expect(
+          page.querySelector<HTMLSelectElement>(".model-providers__add-form select")?.value,
+        ).toBe(authChoice);
+        expect(page.textContent).not.toContain("Provider Catalog vendor configured.");
+      } finally {
+        gate.resolve({ done: true, status: "cancelled" });
+        page.remove();
+        runtimeConfig.dispose();
+      }
+    },
+  );
 
   it("stops queued agent-scoped logouts after the selected agent changes", async () => {
     const { agentSelection, context, notifySelection, request } = createHarness("main");
@@ -602,9 +671,6 @@ describe("ModelProvidersPage agent scope", () => {
     };
     page.keyEditorProvider = "openai";
     page.keyDraft = "synthetic-route-agent-key";
-    page.addProviderOpen = true;
-    page.addProviderId = "anthropic";
-    page.addProviderKey = "synthetic-route-provider-key";
     page.defaultsDraft = defaultsDraft;
     page.pendingLogoutProvider = "openai";
     page.messages = { openai: { kind: "error", text: "Previous agent failure" } };
@@ -628,9 +694,6 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.probeResults).toEqual({});
     expect(page.keyEditorProvider).toBeNull();
     expect(page.keyDraft).toBe("");
-    expect(page.addProviderOpen).toBe(false);
-    expect(page.addProviderId).toBe("");
-    expect(page.addProviderKey).toBe("");
     expect(page.defaultsDraft).toBe(defaultsDraft);
     firstLogout.resolve({});
     await loggingOut;
@@ -659,16 +722,10 @@ describe("ModelProvidersPage agent scope", () => {
     page.busy = { "logout:openai": true };
     page.keyEditorProvider = "openai";
     page.keyDraft = "synthetic-selected-agent-key";
-    page.addProviderOpen = true;
-    page.addProviderId = "anthropic";
-    page.addProviderKey = "synthetic-selected-provider-key";
     page.defaultsDraft = defaultsDraft;
     notifySelection();
     expect(page.keyEditorProvider).toBe("openai");
     expect(page.keyDraft).toBe("synthetic-selected-agent-key");
-    expect(page.addProviderOpen).toBe(true);
-    expect(page.addProviderId).toBe("anthropic");
-    expect(page.addProviderKey).toBe("synthetic-selected-provider-key");
     expect(page.defaultsDraft).toBe(defaultsDraft);
     agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
@@ -685,9 +742,6 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.busy).toEqual({});
     expect(page.keyEditorProvider).toBeNull();
     expect(page.keyDraft).toBe("");
-    expect(page.addProviderOpen).toBe(false);
-    expect(page.addProviderId).toBe("");
-    expect(page.addProviderKey).toBe("");
     expect(page.defaultsDraft).toBe(defaultsDraft);
   });
 

@@ -11,7 +11,7 @@ import {
   CORE_AUTH_CHOICE_OPTIONS,
   type AuthChoiceGroup,
   type AuthChoiceOption,
-  formatStaticAuthChoiceChoicesForCli,
+  listStaticAuthChoiceChoicesForCli,
 } from "./auth-choice-options.static.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
@@ -73,27 +73,34 @@ function resolveProviderChoiceOptions(params?: {
 }
 
 /**
- * Format every accepted `--auth-choice` value for CLI help and validation.
+ * List every accepted `--auth-choice` value without parsing display separators.
  *
  * This is the single owner of that set: help text, onboard preflight, and the
  * non-interactive dispatcher all render it, so an advertised value is always an
  * accepted one. Deprecated aliases stay out; `auth-choice-legacy.ts` normalizes
  * them before any surface sees them.
  */
-export function formatAuthChoiceChoicesForCli(params?: {
+export function listAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): string {
+}): string[] {
   const values = [
-    ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
+    ...listStaticAuthChoiceChoicesForCli(params),
     ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
       (contribution) => contribution.option.value,
     ),
   ];
 
-  return uniqueStrings(values).join("|");
+  return uniqueStrings(values);
+}
+
+/** Help is presentation only: an opaque auth-choice id may itself contain "|". */
+export function formatAuthChoiceChoicesForCli(
+  params?: Parameters<typeof listAuthChoiceChoicesForCli>[0],
+): string {
+  return listAuthChoiceChoicesForCli(params).join("|");
 }
 
 /** Build flat auth-choice options from core choices plus provider setup flows. */

@@ -1,6 +1,7 @@
 // Register onboard tests cover onboarding command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { inferAuthChoiceFromFlags } from "../../commands/onboard-non-interactive/local/auth-choice-inference.js";
 import { registerOnboardCommand } from "./register.onboard.js";
 
 const mocks = vi.hoisted(() => ({
@@ -9,6 +10,13 @@ const mocks = vi.hoisted(() => ({
   refreshOnboardRecommendationsCommand: vi.fn(),
   runSystemAgentWithInference: vi.fn(),
   setupWizardCommandMock: vi.fn(),
+  providerFlags: [] as Array<{
+    cliOption: string;
+    description: string;
+    optionKey: string;
+    authChoice: string;
+    cliFlag: string;
+  }>,
   runtime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -23,29 +31,28 @@ vi.mock("../../commands/auth-choice-options.js", () => ({
   formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
 }));
 
-vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
+vi.mock("../../commands/onboard-core-auth-flags.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/onboard-core-auth-flags.js")>()),
   CORE_ONBOARD_AUTH_FLAGS: [
     {
       cliOption: "--mistral-api-key <key>",
       description: "Mistral API key",
       optionKey: "mistralApiKey",
+      authChoice: "mistral-api-key",
+      cliFlag: "--mistral-api-key",
     },
     {
       cliOption: "--openai-api-key <key>",
       description: "OpenAI API key (core fallback)",
       optionKey: "openaiApiKey",
-    },
-  ] as Array<{ cliOption: string; description: string; optionKey: string }>,
-}));
-
-vi.mock("../../plugins/provider-auth-choices.js", () => ({
-  resolveProviderOnboardAuthFlags: () => [
-    {
-      cliOption: "--openai-api-key <key>",
-      description: "OpenAI API key",
-      optionKey: "openaiApiKey",
+      authChoice: "openai-api-key",
+      cliFlag: "--openai-api-key",
     },
   ],
+}));
+
+vi.mock("../../plugins/provider-install-catalog.js", () => ({
+  resolveProviderOnboardAuthFlags: () => mocks.providerFlags,
 }));
 
 vi.mock("../../commands/onboard.js", () => ({
@@ -85,6 +92,15 @@ describe("registerOnboardCommand", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.providerFlags = [
+      {
+        cliOption: "--openai-api-key <key>",
+        description: "OpenAI API key",
+        optionKey: "openaiApiKey",
+        authChoice: "openai-api-key",
+        cliFlag: "--openai-api-key",
+      },
+    ];
     mocks.runSystemAgentWithInference.mockResolvedValue(undefined);
     setupWizardCommandMock.mockResolvedValue(undefined);
   });
@@ -342,7 +358,83 @@ describe("registerOnboardCommand", () => {
   it("dedupes provider auth flags before registering command options", async () => {
     await runCli(["onboard", "--openai-api-key", "sk-openai-test"]);
     expect(setupWizardOptions().openaiApiKey).toBe("sk-openai-test"); // pragma: allowlist secret
+    expect(inferAuthChoiceFromFlags(setupWizardOptions()).matches).toEqual([
+      { optionKey: "openaiApiKey", authChoice: "openai-api-key", label: "--openai-api-key" },
+    ]);
   });
+
+  it("registers newly prepared provider flags without capturing core options as provider credentials", async () => {
+    mocks.providerFlags.push(
+      {
+        cliOption: "--dynamic-api-key <key>",
+        description: "Dynamic API key",
+        optionKey: "dynamicApiKey",
+        authChoice: "dynamic-connect",
+        cliFlag: "--dynamic-api-key",
+      },
+      {
+        cliOption: "--gateway-token <key>",
+        description: "Bad metadata collision",
+        optionKey: "gatewayToken",
+        authChoice: "wrong-owner",
+        cliFlag: "--gateway-token",
+      },
+      {
+        cliOption: "--constructor <key>",
+        description: "Inherited object property",
+        optionKey: "constructor",
+        authChoice: "wrong-inherited-owner",
+        cliFlag: "--constructor",
+      },
+      {
+        cliOption: "--to-string <key>",
+        description: "Inherited method name",
+        optionKey: "toString",
+        authChoice: "wrong-inherited-method",
+        cliFlag: "--to-string",
+      },
+    );
+    await runCli([
+      "onboard",
+      "--dynamic-api-key",
+      "fixture-key",
+      "--gateway-token",
+      "fixture-gateway-token",
+    ]);
+    const options = setupWizardOptions();
+    expect(options.dynamicApiKey).toBe("fixture-key");
+    expect(options.gatewayToken).toBe("fixture-gateway-token");
+    // Option spreads in later setup phases must retain the parser-owned admitted flag set.
+    expect(
+      inferAuthChoiceFromFlags({ ...options }).matches.map((match) => match.authChoice),
+    ).toEqual(["dynamic-connect"]);
+  });
+
+  it.each([
+    { cliFlag: "--no-json", optionKey: "noJson", code: "commander.unknownOption" },
+    { cliFlag: "--gatewayToken", optionKey: "providerKey", code: "commander.unknownOption" },
+    { cliFlag: "--help", optionKey: "help", code: "commander.helpDisplayed" },
+  ])(
+    "rejects provider flag $cliFlag that aliases a core option",
+    async ({ cliFlag, optionKey, code }) => {
+      mocks.providerFlags.push({
+        cliFlag,
+        cliOption: `${cliFlag} <key>`,
+        optionKey,
+        authChoice: "wrong-owner",
+        description: "Colliding provider flag",
+      });
+      const program = new Command()
+        .enablePositionalOptions()
+        .exitOverride()
+        .configureOutput({ writeErr: () => {}, writeOut: () => {} });
+      registerOnboardCommand(program);
+      await expect(
+        program.parseAsync(["onboard", cliFlag, "fixture-value"], { from: "user" }),
+      ).rejects.toMatchObject({ code });
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards --gateway-token-ref-env", async () => {
     await runCli(["onboard", "--gateway-token-ref-env", "OPENCLAW_GATEWAY_TOKEN"]);

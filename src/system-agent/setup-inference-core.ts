@@ -13,11 +13,8 @@ import type {
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { enablePluginInConfig } from "../plugins/enable.js";
-import type {
-  ProviderAuthChoiceMetadata,
-  resolveManifestProviderAuthChoice,
-  resolveManifestProviderAuthChoices,
-} from "../plugins/provider-auth-choices.js";
+import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import type { loadProviderSetupAuthChoices } from "../plugins/provider-install-catalog.js";
 import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
@@ -93,7 +90,7 @@ export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
   /** Installed integrations that cannot safely run the tool-free setup probe. */
   unavailableCandidates: SetupInferenceUnavailableCandidate[];
-  /** Text-inference key/token methods exposed by installed provider manifests. */
+  /** Text-inference key/token choices from installed manifests and accepted catalog metadata. */
   manualProviders: SetupInferenceManualProvider[];
   /** Interactive provider-owned browser and device-code sign-in methods. */
   authOptions: SetupInferenceAuthOption[];
@@ -264,9 +261,6 @@ export type ActivateSetupInferenceDeps = {
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
-  enablePluginInConfig?: typeof enablePluginInConfig;
   updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
   loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
   loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
@@ -297,7 +291,7 @@ export type DetectSetupInferenceDeps = {
   onPartial?: (detection: SetupInferenceDetection) => void;
   detectInferenceBackends?: typeof detectInferenceBackends;
   probeLocalCommand?: typeof probeLocalCommand;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
+  loadProviderSetupAuthChoices?: typeof loadProviderSetupAuthChoices;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   enablePluginInConfig?: typeof enablePluginInConfig;
 };

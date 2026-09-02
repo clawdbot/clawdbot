@@ -36,6 +36,13 @@ function withProgramOnlySpecs(
   }));
 }
 
+async function loadProviderSetupModule<T>(load: () => Promise<T>): Promise<T> {
+  const { loadProviderSetupAuthChoices } =
+    await import("../../plugins/provider-install-catalog.js");
+  await loadProviderSetupAuthChoices({ includeUntrustedWorkspacePlugins: false });
+  return await load();
+}
+
 // Note for humans and agents:
 // If you update the list of commands, also check whether they have subcommands
 // and set the flag accordingly.
@@ -46,17 +53,17 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
     defineImportedProgramCommandGroupSpecs([
       {
         commandNames: ["setup", "crestodian"], // hidden alias
-        loadModule: () => import("./register.setup.js"),
+        loadModule: () => loadProviderSetupModule(() => import("./register.setup.js")),
         exportName: "registerSetupCommand",
       },
       {
         commandNames: ["onboard"],
-        loadModule: () => import("./register.onboard.js"),
+        loadModule: () => loadProviderSetupModule(() => import("./register.onboard.js")),
         exportName: "registerOnboardCommand",
       },
       {
         commandNames: ["configure"],
-        loadModule: () => import("./register.configure.js"),
+        loadModule: () => loadProviderSetupModule(() => import("./register.configure.js")),
         exportName: "registerConfigureCommand",
       },
       {

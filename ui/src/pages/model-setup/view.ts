@@ -50,8 +50,6 @@ type ModelSetupViewProps = {
   onUseCurrentModel?: () => void;
   actionsDisabled: boolean;
   manualProviderId: string;
-  manualApiKey: string;
-  manualError: string | null;
   moreSignInOpen: boolean;
   firstRun: boolean;
   iconUrls: Readonly<Record<string, string>>;
@@ -62,7 +60,6 @@ type ModelSetupViewProps = {
   onStartPrepare: (option: ModelSetupPrepareOption) => void;
   onManualProviderChange: (providerId: string) => void;
   onUseManualProvider: (providerId: string) => void;
-  onManualApiKeyChange: (apiKey: string) => void;
   onManualConnect: () => void;
   onMoreSignInToggle: (open: boolean) => void;
   onIconError: (iconUrl: string) => void;
@@ -441,8 +438,6 @@ function renderManualProviderPicker(
 
 function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetectResult) {
   const provider = result.manualProviders.find((entry) => entry.id === props.manualProviderId);
-  const targetId = `manual:${props.manualProviderId}`;
-  const testing = props.activation.phase === "testing" && props.activation.targetId === targetId;
   return html`
     <section class="settings-section">
       <div class="settings-section__header">
@@ -453,39 +448,17 @@ function renderManual(props: ModelSetupViewProps, result: SystemAgentSetupDetect
           <span>${t("modelSetup.manual.provider")}</span>
           ${renderManualProviderPicker(props, result, provider)}
         </div>
-        <label class="field">
-          <span>
-            ${provider
-              ? t("modelSetup.manual.accessValueFor", { provider: manualProviderName(provider) })
-              : t("modelSetup.manual.accessValue")}
-          </span>
-          <input
-            class="input"
-            type="password"
-            autocomplete="off"
-            .value=${props.manualApiKey}
-            ?disabled=${props.actionsDisabled}
-            placeholder=${t("modelSetup.manual.accessValuePlaceholder")}
-            @input=${(event: Event) =>
-              props.onManualApiKeyChange((event.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
         <div class="model-setup__manual-help">
           ${icons.shieldCheck}
           <span>${t("modelSetup.manual.verifyHint")}</span>
         </div>
-        ${props.manualError
-          ? html`<div class="callout danger" role="alert">${props.manualError}</div>`
-          : nothing}
         <button
           type="button"
           class="btn primary"
           ?disabled=${props.actionsDisabled || !props.manualProviderId}
           @click=${props.onManualConnect}
         >
-          ${testing
-            ? t("modelSetup.candidates.testingButton")
-            : t("modelSetup.manual.connectAndVerify")}
+          ${t("modelSetup.manual.connectAndVerify")}
         </button>
       </div>
     </section>

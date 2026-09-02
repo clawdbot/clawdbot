@@ -148,7 +148,7 @@ describe("guided onboarding inference composition", () => {
                 },
               }),
             probeLocalCommand,
-            resolveManifestProviderAuthChoices: () => [],
+            loadProviderSetupAuthChoices: async () => [],
           });
           return result;
         },

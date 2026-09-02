@@ -56,6 +56,7 @@ export function loadSetupInferencePluginGeneration(params: {
 export async function revalidateSetupInferenceOwner(params: {
   route: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
+  refreshPluginGeneration?: boolean;
   deps: RevalidationDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
   const configuredHarnessId =
@@ -78,7 +79,7 @@ export async function revalidateSetupInferenceOwner(params: {
   if (
     params.route.runner === "embedded" &&
     successfulHarnessId &&
-    successfulHarnessId !== "openclaw"
+    (successfulHarnessId !== "openclaw" || params.refreshPluginGeneration)
   ) {
     const workspaceDir = resolveAgentWorkspaceDir(
       params.route.runConfig,

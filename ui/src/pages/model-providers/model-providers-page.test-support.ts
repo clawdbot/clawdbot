@@ -1,7 +1,10 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
 import type { ModelBehaviorConfig } from "./model-behavior.ts";
@@ -13,10 +16,6 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   busy: Record<string, boolean>;
   data: ModelProvidersData | null;
-  addProvider: () => Promise<void>;
-  addProviderId: string;
-  addProviderKey: string;
-  addProviderOpen: boolean;
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
   keyDraft: string;
   keyEditorProvider: string | null;
@@ -211,6 +210,69 @@ export function publishableGateway(initial: ApplicationGatewaySnapshot) {
       }
     },
   };
+}
+
+export function createProviderSetupHarness() {
+  const harness = createHarness("main");
+  harness.snapshot.hello = gatewayHelloForMethods([
+    "config.get",
+    "config.set",
+    "config.patch",
+    "openclaw.setup.detect",
+    "openclaw.setup.prepare.start",
+    "wizard.next",
+    "wizard.cancel",
+  ]);
+  const runtimeConfig = createRuntimeConfigCapability(harness.context.gateway);
+  const context = { ...harness.context, runtimeConfig };
+  const authChoice = "vendor/login:key?region=one";
+  const config = { agents: { defaults: { model: { primary: "existing/default" } } } };
+  const originalRequest = harness.request.getMockImplementation()!;
+  harness.request.mockImplementation(async (method: string) => {
+    if (method === "config.get") {
+      return { config, sourceConfig: config, hash: "config-hash", valid: true, issues: [] };
+    }
+    if (method === "openclaw.setup.detect") {
+      return {
+        candidates: [],
+        manualProviders: [
+          {
+            id: authChoice,
+            brandId: "catalog-vendor",
+            groupLabel: "Catalog vendor",
+            label: "Project key",
+          },
+        ],
+        authOptions: [],
+        prepareOptions: [],
+        workspace: "/tmp/workspace",
+        setupComplete: true,
+      };
+    }
+    return originalRequest(method);
+  });
+  return { ...harness, context, runtimeConfig, authChoice, config };
+}
+
+export async function chooseProviderSetup(page: ModelProvidersPageTestElement, authChoice: string) {
+  let button: HTMLButtonElement | undefined;
+  await waitForFast(() => {
+    button = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (entry) => entry.textContent?.trim() === "Add provider",
+    );
+    expect(button?.disabled).toBe(false);
+  });
+  button?.click();
+  await waitForFast(() => {
+    const options = page.querySelector<HTMLSelectElement>(
+      ".model-providers__add-form select",
+    )?.options;
+    expect([...(options ?? [])].map((option) => option.value)).toContain(authChoice);
+  });
+  const select = page.querySelector<HTMLSelectElement>(".model-providers__add-form select")!;
+  select.value = authChoice;
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await page.updateComplete;
 }
 
 export function requestCount(request: ReturnType<typeof vi.fn>, method: string): number {

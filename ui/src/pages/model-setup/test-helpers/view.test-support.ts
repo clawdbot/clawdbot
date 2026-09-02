@@ -116,8 +116,6 @@ export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupV
     refreshWarning: null,
     actionsDisabled: false,
     manualProviderId: "openai",
-    manualApiKey: "",
-    manualError: null,
     moreSignInOpen: false,
     firstRun: false,
     iconUrls: {
@@ -132,7 +130,6 @@ export function props(overrides: Partial<ModelSetupViewProps> = {}): ModelSetupV
     onStartPrepare: vi.fn(),
     onManualProviderChange: vi.fn(),
     onUseManualProvider: vi.fn(),
-    onManualApiKeyChange: vi.fn(),
     onManualConnect: vi.fn(),
     onMoreSignInToggle: vi.fn(),
     onIconError: vi.fn(),

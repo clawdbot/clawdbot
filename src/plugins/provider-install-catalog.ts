@@ -1,24 +1,27 @@
 // Builds provider install catalog entries from plugin metadata.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  loadOpenClawProviderIndex,
-  type OpenClawProviderIndexProvider,
-} from "../model-catalog/index.js";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { getRemoteModelCatalogProviderOverlay } from "../model-catalog/remote-overlay.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
   describePluginInstallSource,
   type PluginInstallSourceInfo,
 } from "./install-source-info.js";
 import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index.js";
+import { normalizeProviderAuthChoices } from "./manifest-setup-normalizers.js";
 import type { PluginPackageInstall } from "./manifest.js";
 import {
   getOfficialExternalPluginCatalogManifest,
-  listOfficialExternalProviderCatalogEntries,
   resolveOfficialExternalPluginInstall,
-  type OfficialExternalProviderAuthChoice,
 } from "./official-external-plugin-catalog.js";
+import {
+  getOfficialPluginCatalogSnapshot,
+  loadOfficialPluginCatalogSnapshot,
+} from "./official-plugin-catalog-snapshot.js";
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginRegistrySnapshot, type PluginRegistryRecord } from "./plugin-registry.js";
 import {
@@ -40,6 +43,8 @@ type ProviderInstallCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  includeWorkspacePlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 type PreferredInstallSource = {
@@ -49,22 +54,9 @@ type PreferredInstallSource = {
 };
 type PreferredInstallSources = {
   installedPluginIds: ReadonlySet<string>;
+  installedProviderIds: ReadonlySet<string>;
   installsByPluginId: Map<string, PreferredInstallSource>;
 };
-type ProviderInstallCatalogChoiceFields = Pick<
-  ProviderAuthChoiceMetadata,
-  | "choiceHint"
-  | "assistantPriority"
-  | "assistantVisibility"
-  | "groupId"
-  | "groupLabel"
-  | "groupHint"
-  | "optionKey"
-  | "cliFlag"
-  | "cliOption"
-  | "cliDescription"
-  | "onboardingScopes"
->;
 
 const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
@@ -157,41 +149,26 @@ function resolveInstallInfoFromRegistryRecord(params: {
   );
 }
 
-function resolveInstallInfoFromProviderIndex(
-  provider: OpenClawProviderIndexProvider,
-): PluginPackageInstall | null {
-  const install = provider.plugin.install;
-  if (!install) {
-    return null;
-  }
-  const clawhubSpec = install.clawhubSpec?.trim();
-  const npmSpec = install.npmSpec?.trim();
-  if (!clawhubSpec && !npmSpec) {
-    return null;
-  }
-  const defaultChoice =
-    normalizePluginInstallDefaultChoice(install.defaultChoice) ?? (clawhubSpec ? "clawhub" : "npm");
-  return {
-    ...(clawhubSpec ? { clawhubSpec } : {}),
-    ...(npmSpec ? { npmSpec } : {}),
-    defaultChoice,
-    ...(install.minHostVersion ? { minHostVersion: install.minHostVersion } : {}),
-    ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
-  };
-}
-
 function resolvePreferredInstallsByPluginId(
   params: ProviderInstallCatalogParams,
 ): PreferredInstallSources {
   const preferredByPluginId = new Map<string, PreferredInstallSource>();
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const index =
+    params.metadataSnapshot?.index ??
+    loadPluginRegistrySnapshot({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
   const installedPluginIds = new Set(index.plugins.map((record) => record.pluginId));
+  const installedProviderIds = new Set(
+    index.plugins.flatMap((record) => record.contributions?.providers ?? []),
+  );
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   for (const record of index.plugins) {
+    if (record.origin === "workspace" && params.includeWorkspacePlugins === false) {
+      continue;
+    }
     if (
       record.origin === "workspace" &&
       params.includeUntrustedWorkspacePlugins === false &&
@@ -221,157 +198,156 @@ function resolvePreferredInstallsByPluginId(
       });
     }
   }
-  return { installedPluginIds, installsByPluginId: preferredByPluginId };
+  return { installedPluginIds, installedProviderIds, installsByPluginId: preferredByPluginId };
 }
 
-function resolveProviderIndexInstallCatalogEntries(params: {
-  installedPluginIds: ReadonlySet<string>;
-  seenChoiceIds: ReadonlySet<string>;
-}): ProviderInstallCatalogEntry[] {
-  const entries: ProviderInstallCatalogEntry[] = [];
-  const index = loadOpenClawProviderIndex();
-  for (const provider of Object.values(index.providers)) {
-    if (params.installedPluginIds.has(provider.plugin.id)) {
-      continue;
-    }
-    const install = resolveInstallInfoFromProviderIndex(provider);
-    if (!install) {
-      continue;
-    }
-    for (const choice of provider.authChoices ?? []) {
-      if (params.seenChoiceIds.has(choice.choiceId)) {
-        continue;
-      }
-      entries.push({
-        pluginId: provider.plugin.id,
-        providerId: provider.id,
-        methodId: choice.method,
-        choiceId: choice.choiceId,
-        choiceLabel: choice.choiceLabel,
-        ...resolveProviderInstallCatalogChoiceFields({
-          choiceHint: choice.choiceHint,
-          assistantPriority: choice.assistantPriority,
-          assistantVisibility: choice.assistantVisibility,
-          groupId: choice.groupId,
-          groupLabel: choice.groupLabel,
-          groupHint: choice.groupHint,
-          optionKey: choice.optionKey,
-          cliFlag: choice.cliFlag,
-          cliOption: choice.cliOption,
-          cliDescription: choice.cliDescription,
-          onboardingScopes: choice.onboardingScopes ? [...choice.onboardingScopes] : undefined,
-        }),
-        label: provider.name,
-        origin: "bundled",
-        install,
-        installSource: describePluginInstallSource(install, {
-          expectedPackageName: provider.plugin.package,
-        }),
-      });
-    }
-  }
-  return entries;
+function safeCatalogId(value: unknown): string | undefined {
+  const id = normalizeOptionalString(value);
+  return id &&
+    id.length <= 256 &&
+    !isBlockedObjectKey(id) &&
+    /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/u.test(id)
+    ? id
+    : undefined;
 }
 
-function resolveProviderInstallCatalogChoiceFields(
-  choice: ProviderInstallCatalogChoiceFields,
-): Partial<ProviderInstallCatalogChoiceFields> {
-  return {
-    ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
-    ...(choice.assistantPriority !== undefined
-      ? { assistantPriority: choice.assistantPriority }
-      : {}),
-    ...(choice.assistantVisibility ? { assistantVisibility: choice.assistantVisibility } : {}),
-    ...(choice.groupId ? { groupId: choice.groupId } : {}),
-    ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-    ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-    ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
-    ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
-    ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
-    ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
-    ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
-  };
-}
-
-function isProviderFlowScope(
-  value: unknown,
-): value is "text-inference" | "image-generation" | "music-generation" {
-  return value === "text-inference" || value === "image-generation" || value === "music-generation";
-}
-
-function normalizeProviderAuthChoiceScopes(
-  scopes: OfficialExternalProviderAuthChoice["onboardingScopes"],
-): ("text-inference" | "image-generation" | "music-generation")[] | undefined {
-  if (!Array.isArray(scopes)) {
+function resolveCatalogModelHint(
+  params: ProviderInstallCatalogParams,
+  providerId: string,
+  catalog: unknown,
+): string | undefined {
+  const published = getRemoteModelCatalogProviderOverlay(params.config ?? {}, providerId);
+  const provider =
+    published ??
+    (isRecord(catalog) &&
+    isRecord(catalog.providers) &&
+    Object.hasOwn(catalog.providers, providerId)
+      ? catalog.providers[providerId]
+      : undefined);
+  if (!isRecord(provider) || !Array.isArray(provider.models)) {
     return undefined;
   }
-  const normalized = scopes.filter(isProviderFlowScope);
-  return normalized.length > 0 ? normalized : undefined;
+  // Preview labels never become runtime model rows or configuration/default authority.
+  const models = provider.models
+    .filter(isRecord)
+    .flatMap((model) => {
+      const id = normalizeOptionalString(model.id);
+      return id && id.length <= 256
+        ? [{ id, name: normalizeOptionalString(model.name) ?? id }]
+        : [];
+    })
+    .toSorted(
+      (left, right) =>
+        Number(right.id === provider.defaultModel) - Number(left.id === provider.defaultModel) ||
+        left.id.localeCompare(right.id),
+    );
+  const labels = [...new Set(models.map((model) => model.name))].slice(0, 3);
+  return labels.length ? `Models: ${labels.join(", ")}`.slice(0, 256) : undefined;
 }
 
 function resolveOfficialExternalProviderInstallCatalogEntries(params: {
   installedPluginIds: ReadonlySet<string>;
-  seenChoiceIds: ReadonlySet<string>;
+  installedProviderIds: ReadonlySet<string>;
+  manifestChoices: readonly ProviderAuthChoiceMetadata[];
+  catalogParams: ProviderInstallCatalogParams;
 }): ProviderInstallCatalogEntry[] {
   const entries: ProviderInstallCatalogEntry[] = [];
-  for (const entry of listOfficialExternalProviderCatalogEntries()) {
+  const seenChoiceIds = new Set(params.manifestChoices.map((choice) => choice.choiceId));
+  const installedProviderIds = new Set([
+    ...params.installedProviderIds,
+    ...params.manifestChoices.map((choice) => choice.providerId),
+  ]);
+  const catalogProviderOwners = new Map<string, string>();
+  const catalog = getOfficialPluginCatalogSnapshot();
+  for (const entry of catalog.entries) {
     const manifest = getOfficialExternalPluginCatalogManifest(entry);
-    const pluginId = manifest?.plugin?.id?.trim();
-    if (!manifest || !pluginId || params.installedPluginIds.has(pluginId)) {
+    const pluginId = safeCatalogId(manifest?.plugin?.id);
+    if (
+      !manifest ||
+      !pluginId ||
+      params.installedPluginIds.has(pluginId) ||
+      !Array.isArray(manifest.providers)
+    ) {
       continue;
     }
     const install = resolveOfficialExternalPluginInstall(entry);
     if (!install) {
       continue;
     }
-    for (const provider of manifest?.providers ?? []) {
-      const providerId = provider.id?.trim();
-      const label = provider.name?.trim() || manifest.plugin?.label?.trim() || entry.name?.trim();
-      if (!providerId || !label) {
+    for (const provider of manifest.providers.slice(0, 32)) {
+      if (!isRecord(provider)) {
         continue;
       }
-      const providerAliases = [
-        ...new Set(
-          (provider.aliases ?? [])
-            .map((alias) => alias.trim())
-            .filter((alias) => alias && alias !== providerId),
-        ),
-      ];
-      for (const choice of provider.authChoices ?? []) {
-        const methodId = choice.method?.trim();
-        const choiceId = choice.choiceId?.trim();
-        const choiceLabel = choice.choiceLabel?.trim();
-        if (!methodId || !choiceId || !choiceLabel || params.seenChoiceIds.has(choiceId)) {
+      const providerId = safeCatalogId(provider.id);
+      const label =
+        normalizeOptionalString(provider.name) ??
+        normalizeOptionalString(manifest.plugin?.label) ??
+        normalizeOptionalString(entry.title) ??
+        normalizeOptionalString(entry.name);
+      if (!providerId || !label || installedProviderIds.has(providerId)) {
+        continue;
+      }
+      const owner = catalogProviderOwners.get(providerId);
+      if (owner && owner !== pluginId) {
+        continue;
+      }
+      catalogProviderOwners.set(providerId, pluginId);
+      const providerAliases = normalizeUniqueTrimmedStringList(provider.aliases).filter(
+        (alias) => safeCatalogId(alias) && alias !== providerId,
+      );
+      const rawChoices = Array.isArray(provider.authChoices)
+        ? provider.authChoices.slice(0, 16)
+        : [];
+      // Scope a copy so setup never mutates the accepted catalog snapshot.
+      const providerScope = { provider: providerId, appGuidedDiscovery: false };
+      const choices =
+        normalizeProviderAuthChoices(
+          rawChoices.filter(isRecord).map((choice) => Object.assign({ ...choice }, providerScope)),
+        ) ?? [];
+      const modelHint = resolveCatalogModelHint(
+        params.catalogParams,
+        providerId,
+        manifest.modelCatalog,
+      );
+      for (const { provider: _provider, method, ...choice } of choices) {
+        // Auth identifiers are opaque manifest values, not provider/plugin object keys.
+        if (
+          [method, choice.choiceId].some((id) => id.length > 256 || /\p{Cc}/u.test(id)) ||
+          !choice.choiceLabel ||
+          seenChoiceIds.has(choice.choiceId)
+        ) {
           continue;
         }
+        seenChoiceIds.add(choice.choiceId);
+        const cliFlag = choice.cliFlag;
+        const expectedKey = cliFlag
+          ?.slice(2)
+          .replace(/-([a-z])/gu, (_, letter: string) => letter.toUpperCase());
+        if (
+          !cliFlag ||
+          !/^--[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(cliFlag) ||
+          choice.optionKey !== expectedKey ||
+          !choice.cliOption?.startsWith(`${cliFlag} <`) ||
+          !/^--[a-z0-9-]+ <[a-zA-Z][a-zA-Z0-9-]*>$/u.test(choice.cliOption)
+        ) {
+          delete choice.optionKey;
+          delete choice.cliFlag;
+          delete choice.cliOption;
+          delete choice.cliDescription;
+        }
         entries.push({
+          ...choice,
           pluginId,
           providerId,
-          ...(providerAliases.length > 0 ? { providerAliases } : {}),
-          methodId,
-          choiceId,
-          choiceLabel,
-          ...resolveProviderInstallCatalogChoiceFields({
-            choiceHint: choice.choiceHint,
-            assistantPriority: choice.assistantPriority,
-            assistantVisibility: choice.assistantVisibility,
-            groupId: choice.groupId,
-            groupLabel: choice.groupLabel,
-            groupHint: choice.groupHint,
-            optionKey: choice.optionKey,
-            cliFlag: choice.cliFlag,
-            cliOption: choice.cliOption,
-            cliDescription: choice.cliDescription,
-            onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes),
-          }),
-          ...(choice.deprecatedChoiceIds?.length
-            ? { deprecatedChoiceIds: [...choice.deprecatedChoiceIds] }
-            : {}),
+          methodId: method,
+          choiceLabel: choice.choiceLabel,
+          ...(providerAliases.length ? { providerAliases } : {}),
+          ...(!choice.choiceHint && modelHint ? { choiceHint: modelHint } : {}),
           label,
-          origin: "bundled",
+          origin: catalog.source === "bundled-fallback" ? "bundled" : "global",
           install,
           installSource: describePluginInstallSource(install, {
-            expectedPackageName: entry.name,
+            expectedPackageName: entry.name ?? entry.id,
           }),
         });
       }
@@ -385,9 +361,10 @@ export function resolveProviderInstallCatalogEntries(
   params?: ProviderInstallCatalogParams,
 ): ProviderInstallCatalogEntry[] {
   const installParams = params ?? {};
-  const { installedPluginIds, installsByPluginId } =
+  const { installedPluginIds, installedProviderIds, installsByPluginId } =
     resolvePreferredInstallsByPluginId(installParams);
-  const manifestEntries = resolveManifestProviderAuthChoices(params)
+  const manifestChoices = resolveManifestProviderAuthChoices(params);
+  const manifestEntries = manifestChoices
     .flatMap((choice) => {
       const install = installsByPluginId.get(choice.pluginId);
       if (!install) {
@@ -406,21 +383,43 @@ export function resolveProviderInstallCatalogEntries(
       ];
     })
     .toSorted((left, right) => left.choiceLabel.localeCompare(right.choiceLabel));
-  const seenChoiceIds = new Set(manifestEntries.map((entry) => entry.choiceId));
   const officialEntries = resolveOfficialExternalProviderInstallCatalogEntries({
     installedPluginIds,
-    seenChoiceIds,
+    installedProviderIds,
+    manifestChoices,
+    catalogParams: installParams,
   });
-  for (const entry of officialEntries) {
-    seenChoiceIds.add(entry.choiceId);
-  }
-  const indexEntries = resolveProviderIndexInstallCatalogEntries({
-    installedPluginIds,
-    seenChoiceIds,
-  });
-  return [...manifestEntries, ...officialEntries, ...indexEntries].toSorted((left, right) =>
+  return [...manifestEntries, ...officialEntries].toSorted((left, right) =>
     left.choiceLabel.localeCompare(right.choiceLabel),
   );
+}
+
+/** Installed metadata wins; hosted choices only describe owners not installed yet. */
+function resolveProviderSetupAuthChoices(
+  params?: ProviderInstallCatalogParams,
+): ProviderAuthChoiceMetadata[] {
+  const installed = resolveManifestProviderAuthChoices(params);
+  const seen = new Set(installed.map((choice) => choice.choiceId));
+  const config = normalizePluginsConfig(params?.config?.plugins);
+  const available = resolveProviderInstallCatalogEntries(params).filter(
+    (entry) =>
+      !seen.has(entry.choiceId) &&
+      resolveEffectiveEnableState({
+        id: entry.pluginId,
+        origin: entry.origin,
+        config,
+        rootConfig: params?.config,
+        enabledByDefault: true,
+      }).enabled,
+  );
+  return [...installed, ...available];
+}
+
+export async function loadProviderSetupAuthChoices(
+  params?: ProviderInstallCatalogParams,
+): Promise<ProviderAuthChoiceMetadata[]> {
+  await loadOfficialPluginCatalogSnapshot(params?.env ? { env: params.env } : undefined);
+  return resolveProviderSetupAuthChoices(params);
 }
 
 /** Resolves one provider install catalog entry by setup choice id. */
@@ -449,4 +448,37 @@ export function resolveDeprecatedProviderInstallCatalogEntry(
   return resolveProviderInstallCatalogEntries(params).find((entry) =>
     entry.deprecatedChoiceIds?.includes(normalizedChoiceId),
   );
+}
+
+/** Provider auth flags share the same accepted metadata snapshot as interactive setup. */
+export function resolveProviderOnboardAuthFlags(
+  params?: ProviderInstallCatalogParams & { installedOnly?: boolean },
+) {
+  const seenKeys = new Set<string>();
+  const seenFlags = new Set<string>();
+  const choices = params?.installedOnly
+    ? resolveManifestProviderAuthChoices(params)
+    : resolveProviderSetupAuthChoices(params);
+  return choices.flatMap((choice) => {
+    if (
+      !choice.optionKey ||
+      !choice.cliFlag ||
+      !choice.cliOption ||
+      seenKeys.has(choice.optionKey) ||
+      seenFlags.has(choice.cliFlag)
+    ) {
+      return [];
+    }
+    seenKeys.add(choice.optionKey);
+    seenFlags.add(choice.cliFlag);
+    return [
+      {
+        optionKey: choice.optionKey,
+        authChoice: choice.choiceId,
+        cliFlag: choice.cliFlag,
+        cliOption: choice.cliOption,
+        description: choice.cliDescription ?? choice.choiceLabel,
+      },
+    ];
+  });
 }

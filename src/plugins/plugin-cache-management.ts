@@ -21,7 +21,10 @@ export type PluginCacheManagement<TCache> = {
     snapshot: PluginMetadataSnapshot;
   };
   dependencyStatus: WeakMap<PluginManifestRecord, PluginDependencyStatus>;
-  officialCatalog?: Promise<HostedOfficialExternalPluginCatalogLoadResult>;
+  officialCatalog?: {
+    pending: Promise<HostedOfficialExternalPluginCatalogLoadResult>;
+    result?: HostedOfficialExternalPluginCatalogLoadResult;
+  };
 };
 
 export function createPluginCacheManagement<TCache>(): PluginCacheManagement<TCache> {

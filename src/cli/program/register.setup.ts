@@ -162,12 +162,13 @@ export function registerSetupCommand(program: Command): void {
     .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
     .option("--mode <mode>", "Onboard mode: local|remote");
 
-  registerOnboardAuthOptions(command);
   registerOnboardGatewayOptions(command);
   registerOnboardRuntimeOptions(command, "setup");
   registerOnboardRemoteOptions(command);
 
-  addSystemAgentOptions(command).action(async (rawOptions, commandRuntime: Command) => {
+  addSystemAgentOptions(command);
+  registerOnboardAuthOptions(command);
+  command.action(async (rawOptions, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       const options = rawOptions as Record<string, unknown>;

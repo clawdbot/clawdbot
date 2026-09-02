@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -745,70 +746,62 @@ describe("setupWizardCommand", () => {
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
   });
 
-  it("validates dependent auth-choice options before reset", async () => {
+  it("accepts an opaque auth choice containing the help separator before reset", async () => {
     const runtime = makeRuntime();
+    const authChoice = "fixture|project-key";
+    const choices = vi
+      .spyOn(providerAuthChoices, "resolveManifestProviderAuthChoices")
+      .mockReturnValue([
+        {
+          pluginId: "fixture-provider",
+          providerId: "fixture",
+          methodId: "project key@v1",
+          choiceId: authChoice,
+          choiceLabel: "Fixture project key",
+        },
+      ]);
 
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        authChoice: "token",
-        token: "value",
-      },
-      runtime,
-    );
+    try {
+      await setupWizardCommand({ reset: true, classic: true, authChoice }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Auth choice "token" requires --token-provider in non-interactive setup.',
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+      expect(mocks.handleReset).toHaveBeenCalledOnce();
+      expect(mocks.runInteractiveSetup).toHaveBeenCalledWith(
+        expect.objectContaining({ authChoice }),
+        runtime,
+      );
+      expect(runtime.exit).not.toHaveBeenCalled();
+    } finally {
+      choices.mockRestore();
+    }
   });
 
-  it("validates a required setup token before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        authChoice: "setup-token",
-        tokenProvider: "anthropic",
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Auth choice "setup-token" requires --token in non-interactive setup.',
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("validates setup-token expiry before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
+  it.each([
+    {
+      label: "dependent auth-choice options",
+      opts: { authChoice: "token", token: "value" },
+      message: 'Auth choice "token" requires --token-provider in non-interactive setup.',
+    },
+    {
+      label: "a required setup token",
+      opts: { authChoice: "setup-token", tokenProvider: "anthropic" },
+      message: 'Auth choice "setup-token" requires --token in non-interactive setup.',
+    },
+    {
+      label: "setup-token expiry",
+      opts: {
         authChoice: "setup-token",
         tokenProvider: "anthropic",
         token: "test-token",
         tokenExpiresIn: "nope",
       },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith("Invalid --token-expires-in: invalid duration");
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("validates the token provider before reset", async () => {
+      message: "Invalid --token-expires-in: invalid duration",
+    },
+    {
+      label: "the token provider",
+      opts: { authChoice: "token", tokenProvider: "typo", token: "value" },
+      message: 'Auth choice "token" was not matched to provider "typo".',
+    },
+  ])("validates $label before reset", async ({ opts, message }) => {
     const runtime = makeRuntime();
 
     await setupWizardCommand(
@@ -816,16 +809,12 @@ describe("setupWizardCommand", () => {
         reset: true,
         nonInteractive: true,
         acceptRisk: true,
-        authChoice: "token",
-        tokenProvider: "typo",
-        token: "value",
+        ...opts,
       },
       runtime,
     );
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Auth choice "token" was not matched to provider "typo".',
-    );
+    expect(runtime.error).toHaveBeenCalledWith(message);
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });

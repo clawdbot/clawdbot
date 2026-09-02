@@ -10,7 +10,7 @@ import {
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { buildAuthChoiceGroups, formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
+import { buildAuthChoiceGroups, listAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { listManifestInstalledChannelIds } from "./channel-setup/discovery.js";
 
 const tempDirs: string[] = [];
@@ -115,11 +115,11 @@ describe("command control-plane plugin discovery", () => {
     expect(authChoice?.label).toBe("Cold Provider API key");
     expect(authChoice?.groupId).toBe(plugin.providerId);
     expect(
-      formatAuthChoiceChoicesForCli({
+      listAuthChoiceChoicesForCli({
         config: cfg,
         workspaceDir,
         env,
-      }).split("|"),
+      }),
     ).toContain(plugin.authChoiceId);
     expect(isColdPluginRuntimeLoaded(plugin)).toBe(false);
   });

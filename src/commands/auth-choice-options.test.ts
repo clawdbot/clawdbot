@@ -4,10 +4,10 @@ import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import {
   buildAuthChoiceGroups,
-  formatAuthChoiceChoicesForCli,
+  listAuthChoiceChoicesForCli,
   isFeaturedAuthChoiceGroup,
 } from "./auth-choice-options.js";
-import { formatStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
+import { listStaticAuthChoiceChoicesForCli } from "./auth-choice-options.static.js";
 
 type ProviderWizardOption = ReturnType<
   (typeof import("../plugins/provider-wizard.js"))["resolveProviderWizardOptions"]
@@ -352,9 +352,9 @@ describe("buildAuthChoiceOptions", () => {
       },
     ]);
     const options = getOptions(true);
-    const cliChoices = formatAuthChoiceChoicesForCli({
+    const cliChoices = listAuthChoiceChoicesForCli({
       includeSkip: true,
-    }).split("|");
+    });
 
     expect(cliChoices).toContain("openai-api-key");
     expect(cliChoices).toContain("chutes");
@@ -385,7 +385,7 @@ describe("buildAuthChoiceOptions", () => {
       },
     ]);
 
-    const cliChoices = formatStaticAuthChoiceChoicesForCli({ includeSkip: true }).split("|");
+    const cliChoices = listStaticAuthChoiceChoicesForCli({ includeSkip: true });
 
     expect(cliChoices).not.toContain("ollama");
     expect(cliChoices).not.toContain("openai-api-key");
@@ -761,9 +761,9 @@ describe("buildAuthChoiceOptions", () => {
 
     const options = getOptions();
     const optionValues = options.map((option) => option.value);
-    const cliChoiceValues = formatAuthChoiceChoicesForCli({
+    const cliChoiceValues = listAuthChoiceChoicesForCli({
       includeSkip: true,
-    }).split("|");
+    });
 
     expect(optionValues).toContain("openai-api-key");
     expect(optionValues).toContain("ollama");

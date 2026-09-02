@@ -44,6 +44,7 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
           "openclaw.setup.detect",
           "openclaw.setup.verify",
           "openclaw.setup.activate.start",
+          "openclaw.setup.auth.start",
           "openclaw.setup.prepare.start",
         ],
       },

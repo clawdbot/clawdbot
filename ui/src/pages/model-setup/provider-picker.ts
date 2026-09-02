@@ -30,9 +30,7 @@ export function handleManualProviderKeydown(event: KeyboardEvent): void {
     event.stopPropagation();
     const focusTarget = event.shiftKey
       ? dropdown.querySelector<HTMLElement>('[slot="trigger"]')
-      : dropdown
-          .closest(".model-setup__manual")
-          ?.querySelector<HTMLElement>('input[type="password"]');
+      : dropdown.closest(".model-setup__manual")?.querySelector<HTMLElement>("button.btn.primary");
     dropdown.addEventListener("wa-after-hide", () => focusTarget?.focus({ preventScroll: true }), {
       once: true,
     });

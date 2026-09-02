@@ -241,10 +241,6 @@
   gap: 6px;
 }
 
-.model-setup__manual input {
-  width: 100%;
-}
-
 .model-setup-provider-select {
   display: block;
   width: 100%;

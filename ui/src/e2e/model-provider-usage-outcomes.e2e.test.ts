@@ -1,6 +1,7 @@
 // Control UI E2E proves provider-usage request failures remain distinct from provider data.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -13,6 +14,7 @@ const suite = createControlUiE2eSuite({
 });
 const now = Date.now();
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+const requireRecord = createRequireRecord("record", "expected-object-value");
 const unavailableMessage =
   "Provider usage is unavailable; the last request failed. Refresh to retry.";
 
@@ -240,7 +242,15 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           defaultAgentId: "main",
-          featureMethods: ["chat.metadata", "chat.startup", "config.patch"],
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "config.patch",
+            "openclaw.setup.detect",
+            "openclaw.setup.prepare.start",
+            "wizard.next",
+            "wizard.cancel",
+          ],
           methodResponses: {
             ...providerUsageResponses({ updatedAt: now, providers: [] }),
             "agents.list": {
@@ -261,6 +271,37 @@ suite.define(() => {
               valid: true,
             },
             "config.patch": { ok: true },
+            "openclaw.setup.detect": {
+              candidates: [],
+              manualProviders: [
+                {
+                  id: "provider/google:key@v2",
+                  brandId: "google",
+                  groupLabel: "Google",
+                  label: "Google AI Studio API key",
+                },
+              ],
+              authOptions: [],
+              prepareOptions: [],
+              workspace: "/tmp/openclaw-e2e",
+              setupComplete: true,
+            },
+            "openclaw.setup.prepare.start": {
+              sessionId: "writer-google-prepare",
+              done: false,
+              status: "running",
+            },
+            "wizard.next": {
+              done: false,
+              status: "running",
+              step: {
+                id: "project-key",
+                type: "text",
+                message: "Google project API key",
+                sensitive: true,
+              },
+            },
+            "wizard.cancel": { done: true, status: "cancelled" },
             "models.list": {
               models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
             },
@@ -319,14 +360,32 @@ suite.define(() => {
           has: page.getByRole("heading", { name: "Add provider" }),
         });
         await addSection.getByRole("button", { name: "Add provider", exact: true }).click();
-        await addSection.getByLabel("Provider").selectOption("google");
-        await addSection.getByLabel("API key").fill("synthetic-writer-provider-key");
+        await addSection.getByLabel("Provider").selectOption("provider/google:key@v2");
+        await addSection.getByRole("button", { name: "Configure provider" }).click();
+        const setupParams = requireRecord(
+          (await gateway.waitForRequest("openclaw.setup.prepare.start")).params,
+        );
+        expect(setupParams).toEqual({
+          sessionId: expect.any(String),
+          agentId: "writer",
+          authChoice: "provider/google:key@v2",
+        });
+        const wizard = page.locator("openclaw-modal-dialog");
+        await wizard.getByLabel("Google project API key").fill("synthetic-writer-provider-key");
+        await wizard.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect((await gateway.waitForRequest("wizard.cancel")).params).toEqual({
+          sessionId: setupParams.sessionId,
+        });
+        await wizard.waitFor({ state: "detached" });
         await agentPicker.locator(".agent-select__trigger").click();
         await agentPicker.locator('wa-dropdown-item[aria-label="Main"]').click();
         await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Main");
         await expect.poll(async () => page.locator(".model-providers__add-form").count()).toBe(0);
         await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        expect(await gateway.getRequests("wizard.next")).toEqual([
+          expect.objectContaining({ params: { sessionId: setupParams.sessionId } }),
+        ]);
         if (recordVisuals) {
           await page.screenshot({
             path: path.join(

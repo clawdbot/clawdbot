@@ -17,6 +17,7 @@ import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import { GEMINI_CLI_DEFAULT_MODEL_REF } from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -25,6 +26,18 @@ import {
   type SetupInferenceFailureStatus,
   parseProviderAutoSetupChoiceId,
 } from "./setup-inference-core.js";
+
+export type SetupInferenceConfigPatch = {
+  runtimeConfigBase: OpenClawConfig;
+  sourceConfigBase: OpenClawConfig;
+  configPatch: unknown;
+  pluginId?: string;
+};
+
+export type SetupInferencePluginPreparation = SetupInferenceConfigPatch & {
+  pluginId: string;
+  installation?: PluginInstallRecord;
+};
 
 export type SetupInferenceTestPlan = {
   runner: "cli" | "embedded";
@@ -45,12 +58,8 @@ export type SetupInferenceTestPlan = {
   authProfileId?: string;
   /** Model to persist as default on success; undefined keeps the current one. */
   persistModelRef?: string;
-  manualAuth?: {
+  manualAuth?: SetupInferenceConfigPatch & {
     profiles: ProviderAuthResult["profiles"];
-    runtimeConfigBase: OpenClawConfig;
-    sourceConfigBase: OpenClawConfig;
-    configPatch: unknown;
-    pluginId?: string;
   };
 };
 

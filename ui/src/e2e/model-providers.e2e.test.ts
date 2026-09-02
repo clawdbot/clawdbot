@@ -482,7 +482,16 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       models: { providers: { openai: providerConfig(redactedConfigValue) } },
     };
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "config.patch", "models.probe"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "config.patch",
+        "models.probe",
+        "openclaw.setup.detect",
+        "openclaw.setup.prepare.start",
+        "wizard.next",
+        "wizard.cancel",
+      ],
       models: [
         { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
         {
@@ -509,6 +518,52 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           valid: true,
         },
         "config.patch": { ok: true },
+        "openclaw.setup.detect": {
+          candidates: [],
+          manualProviders: [
+            {
+              id: "provider/google:key@v2",
+              brandId: "google",
+              groupLabel: "Google",
+              label: "Google AI Studio API key",
+              hint: "Model preview: Gemini 3 Pro. Setup installs the provider before asking for credentials.",
+            },
+          ],
+          authOptions: [],
+          prepareOptions: [],
+          workspace: "/tmp/openclaw-e2e",
+          setupComplete: true,
+        },
+        "openclaw.setup.prepare.start": {
+          sessionId: "google-prepare",
+          done: false,
+          status: "running",
+        },
+        "wizard.next": {
+          sequence: [
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "install-provider",
+                type: "confirm",
+                message: "Install the Google provider plugin?",
+                initialValue: true,
+              },
+            },
+            {
+              done: false,
+              status: "running",
+              step: {
+                id: "project-key",
+                type: "text",
+                message: "Google project API key",
+                sensitive: true,
+              },
+            },
+            { done: true, status: "done", preparedModelRef: "google/gemini-3-pro" },
+          ],
+        },
         "models.list": {
           cases: [
             {
@@ -682,9 +737,45 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       const addSection = page.locator(".settings-section", {
         has: page.getByRole("heading", { name: "Add provider" }),
       });
+      expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(0);
       await addSection.getByRole("button", { name: "Add provider", exact: true }).click();
-      await addSection.getByLabel("Provider").selectOption("google");
-      await addSection.getByLabel("API key").fill(googleInputValue);
+      expect((await gateway.waitForRequest("openclaw.setup.detect")).params).toEqual({
+        agentId: "main",
+      });
+      await addSection.getByLabel("Provider").selectOption("provider/google:key@v2");
+      await addSection.getByText("Model preview: Gemini 3 Pro.", { exact: false }).waitFor();
+      expect(await addSection.locator('input[type="password"]').count()).toBe(0);
+      if (recordVisuals) {
+        await addSection.scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: path.join(artifactDir, "02-provider-choice.png"),
+          fullPage: true,
+        });
+      }
+      const addPatchCount = (await gateway.getRequests("config.patch")).length;
+      await addSection.getByRole("button", { name: "Configure provider" }).click();
+      expect((await gateway.waitForRequest("openclaw.setup.prepare.start")).params).toEqual({
+        sessionId: expect.any(String),
+        agentId: "main",
+        authChoice: "provider/google:key@v2",
+      });
+      const wizard = page.locator("openclaw-modal-dialog");
+      await wizard.getByText("Install the Google provider plugin?").waitFor();
+      await wizard.getByRole("heading", { name: "Set up a provider", exact: true }).waitFor();
+      expect(await wizard.locator('input[type="password"]').count()).toBe(0);
+      if (recordVisuals) {
+        await expect
+          .poll(() =>
+            wizard.locator("dialog").evaluate((dialog) => getComputedStyle(dialog).opacity),
+          )
+          .toBe("1");
+        await page.screenshot({
+          path: path.join(artifactDir, "03-install-consent.png"),
+          fullPage: true,
+        });
+      }
+      await wizard.getByRole("button", { name: "Continue" }).click();
+      await wizard.getByLabel("Google project API key").fill(googleInputValue);
       const savedConfig = {
         ...updatedDefaultsConfig,
         models: {
@@ -732,14 +823,35 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
           },
         ],
       });
-      const addPatchCount = (await gateway.getRequests("config.patch")).length;
-      await addSection.getByRole("button", { name: "Save provider" }).click();
-      expect(
-        requestRaw(await gateway.waitForRequest("config.patch", { after: addPatchCount })),
-      ).toEqual({
-        models: { providers: { google: providerConfig(googleInputValue) } },
-      });
+      await wizard.getByRole("button", { name: "Submit" }).click();
+      await addSection.getByText("Provider Google configured.", { exact: true }).waitFor();
       await page.locator('[data-provider-id="google"]').waitFor();
+      await expect
+        .poll(() =>
+          addSection
+            .getByRole("button", { name: "Add provider", exact: true })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      expect(await gateway.getRequests("config.patch")).toHaveLength(addPatchCount);
+      expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+      expect(await gateway.getRequests("wizard.next")).toEqual([
+        expect.objectContaining({ params: { sessionId: expect.any(String) } }),
+        expect.objectContaining({
+          params: {
+            sessionId: expect.any(String),
+            answer: { stepId: "install-provider", value: true },
+          },
+        }),
+        expect.objectContaining({
+          params: {
+            sessionId: expect.any(String),
+            answer: { stepId: "project-key", value: googleInputValue },
+          },
+        }),
+      ]);
+      expect(await modelPickerValue(primary)).toBe("anthropic/claude-sonnet-4-5");
+      expect(await page.getByRole("heading", { name: "Connection verified" }).count()).toBe(0);
 
       if (recordVisuals) {
         await page.screenshot({ path: path.join(artifactDir, "02-probed.png"), fullPage: true });

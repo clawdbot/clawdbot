@@ -13,6 +13,7 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
+  SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import {
@@ -438,21 +439,43 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
   };
 }
 
-export type ProviderOption = { id: string; displayName: string };
-
-type ModelProviderCapability = NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number];
+export type ProviderOption = {
+  id: string;
+  displayName: string;
+  providerName: string;
+  hint?: string;
+};
 
 export function buildUnconfiguredProviderOptions(
-  capabilities: ModelProviderCapability[] | undefined,
+  inventory: Pick<
+    SystemAgentSetupDetectResult,
+    "manualProviders" | "authOptions" | "prepareOptions"
+  > | null,
   configuredProviderIds: Iterable<string>,
 ): ProviderOption[] {
   const configured = new Set(Array.from(configuredProviderIds, canonicalProviderId));
   const options = new Map<string, ProviderOption>();
-  for (const capability of capabilities ?? []) {
-    const id = canonicalProviderId(capability.provider);
-    if (capability.quickApiKeySetup && id && !configured.has(id) && !options.has(id)) {
-      options.set(id, { id, displayName: providerDisplayLabel(id) });
+  const choices: SystemAgentSetupDetectResult["manualProviders"] = [
+    ...(inventory?.manualProviders ?? []),
+    ...(inventory?.authOptions ?? []),
+    ...(inventory?.prepareOptions ?? []),
+  ];
+  for (const choice of choices) {
+    // Auth choices are opaque. Only declared provider identity can exclude a configured family.
+    if (
+      options.has(choice.id) ||
+      (choice.brandId && configured.has(canonicalProviderId(choice.brandId)))
+    ) {
+      continue;
     }
+    const providerName = choice.groupLabel || choice.label;
+    options.set(choice.id, {
+      id: choice.id,
+      providerName,
+      displayName:
+        providerName === choice.label ? providerName : `${providerName} · ${choice.label}`,
+      ...(choice.hint ? { hint: choice.hint } : {}),
+    });
   }
   return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
 }

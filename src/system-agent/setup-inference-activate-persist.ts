@@ -1,15 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
-import { applyMergePatch } from "../config/merge-patch.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizePluginTargetConfig } from "../plugins/config-state.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../process/gateway-work-admission.js";
 import {
   projectInferenceRoute,
@@ -22,7 +19,6 @@ import type {
 } from "./inference-route.js";
 import {
   SetupInferenceActivationIndeterminateError,
-  SetupInferenceActivationUnavailableError,
   setupInferenceLog,
   throwIfSetupInferenceCancelled,
   type ActivateSetupInferenceDeps,
@@ -31,11 +27,11 @@ import {
 } from "./setup-inference-core.js";
 import {
   configReferencesManualAuthProfiles,
-  isCodexInstallRecordPersisted,
+  isSetupPluginInstallRecordPersisted,
   manualAuthProfilesPersisted,
   persistManualAuthProfiles,
   rollbackManualAuthProfiles,
-  applyManualAuthConfig,
+  applySetupInferenceConfigPatch,
   type ManualAuthPersistenceReceipt,
   runSetupInferenceTest,
 } from "./setup-inference-persist.js";
@@ -43,6 +39,7 @@ import {
   projectSetupTargetModelMetadata,
   resolveSetupAgentRuntimeId,
   type SetupInferenceTestPlan,
+  type SetupInferencePluginPreparation,
 } from "./setup-inference-plan-helpers.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import type { SystemAgentOwnerPluginArtifactSnapshot } from "./verified-inference.js";
@@ -52,7 +49,7 @@ type ProjectedInferenceRoute = Awaited<ReturnType<typeof projectInferenceRoute>>
 export type SetupInferenceActivationPersistenceState = {
   committedConfig: OpenClawConfig | undefined;
   autoLocalModelLeanApplied: boolean;
-  codexInstallOwnership: "unknown" | "owned" | "unowned";
+  pluginInstallOwnership: "unknown" | "owned" | "unowned";
   gatewayRestartRequired: boolean;
 };
 
@@ -62,8 +59,7 @@ export async function persistActivatedSetupInference(input: {
   plan: SetupInferenceTestPlan;
   testPlan: SetupInferenceTestPlan;
   test: Extract<Awaited<ReturnType<typeof runSetupInferenceTest>>, { ok: true }>;
-  codexPluginPatch: unknown;
-  pendingCodexInstall: PluginInstallRecord | undefined;
+  pluginPreparation: SetupInferencePluginPreparation | undefined;
   cfg: OpenClawConfig;
   sourceCfg: OpenClawConfig;
   verifiedRoute: ProjectedInferenceRoute;
@@ -89,8 +85,7 @@ export async function persistActivatedSetupInference(input: {
     plan,
     testPlan,
     test,
-    codexPluginPatch,
-    pendingCodexInstall,
+    pluginPreparation,
     cfg,
     sourceCfg,
     verifiedRoute,
@@ -106,7 +101,8 @@ export async function persistActivatedSetupInference(input: {
     revalidateOwner,
   } = input;
   let committedConfig: OpenClawConfig | undefined;
-  let { codexInstallOwnership } = state;
+  let { pluginInstallOwnership } = state;
+  const pendingInstall = pluginPreparation?.installation;
   const requestedAgentId = params.agentId ? testPlan.routeAgentId : undefined;
   const projectRoute = (config: OpenClawConfig) =>
     projectInferenceRoute(config, requestedAgentId, routeDeps);
@@ -127,27 +123,21 @@ export async function persistActivatedSetupInference(input: {
     current: OpenClawConfig,
     configKind: "runtime" | "source",
   ): OpenClawConfig => {
-    let next = codexPluginPatch === undefined ? current : stripPendingPluginInstallRecords(current);
-    if (plan.manualAuth) {
-      next = applyManualAuthConfig(
-        next,
-        plan.manualAuth,
+    let next = current;
+    if (pluginPreparation) {
+      // Apply the host's install/enable patch before the separately projected auth result.
+      // Both patches compare against their own prepared baselines to reject concurrent edits.
+      next = applySetupInferenceConfigPatch(
+        normalizePluginTargetConfig(
+          stripPendingPluginInstallRecords(current),
+          pluginPreparation.pluginId,
+        ),
+        pluginPreparation,
         configKind,
-        deps.enablePluginInConfig ?? enablePluginInConfig,
       );
     }
-    if (codexPluginPatch !== undefined) {
-      const patched = applyMergePatch(next, codexPluginPatch) as OpenClawConfig;
-      const enabledCodex = enablePluginInConfig(
-        normalizePluginTargetConfig(patched, "codex"),
-        "codex",
-      );
-      if (!enabledCodex.enabled) {
-        throw new SetupInferenceActivationUnavailableError(
-          `Could not enable the Codex runtime plugin: ${enabledCodex.reason ?? "plugin disabled"}.`,
-        );
-      }
-      next = enabledCodex.config;
+    if (plan.manualAuth) {
+      next = applySetupInferenceConfigPatch(next, plan.manualAuth, configKind);
     }
     next = applyAutoLocalModelLean({
       config: next,
@@ -155,14 +145,14 @@ export async function persistActivatedSetupInference(input: {
       modelRef: plan.modelRef,
     }).config;
     next = selectModel ? selectModel(next) : next;
-    if (!pendingCodexInstall) {
+    if (!pendingInstall || !pluginPreparation) {
       return next;
     }
     return {
       ...next,
       plugins: {
         ...next.plugins,
-        installs: { codex: pendingCodexInstall },
+        installs: { [pluginPreparation.pluginId]: pendingInstall },
       },
     };
   };
@@ -170,7 +160,7 @@ export async function persistActivatedSetupInference(input: {
   // writer moves them into the installed-plugin index before committing,
   // so post-write reconciliation must compare against the stripped route
   // and verify the exact index record separately below.
-  const persistedRoute = pendingCodexInstall
+  const persistedRoute = pendingInstall
     ? await projectRoute(stripPendingPluginInstallRecords(stageCandidate(cfg, "runtime")))
     : verifiedRoute;
   // Runtime config may materialize provider defaults that are intentionally
@@ -334,8 +324,8 @@ export async function persistActivatedSetupInference(input: {
     });
     committedConfig = committed.nextConfig;
     state.gatewayRestartRequired = committed.followUp.requiresRestart;
-    if (pendingCodexInstall) {
-      codexInstallOwnership = "owned";
+    if (pendingInstall) {
+      pluginInstallOwnership = "owned";
     }
   } catch (error) {
     if (!commitMayHaveStarted) {
@@ -355,16 +345,21 @@ export async function persistActivatedSetupInference(input: {
         ? (reconciledSnapshot.runtimeConfig ?? reconciledSnapshot.config)
         : undefined;
     const reconciledRoute = reconciledRuntime ? await projectRoute(reconciledRuntime) : undefined;
-    const codexInstallPersisted = pendingCodexInstall
-      ? await isCodexInstallRecordPersisted(pendingCodexInstall, deps)
-      : true;
+    const pluginInstallPersisted =
+      pendingInstall && pluginPreparation
+        ? await isSetupPluginInstallRecordPersisted(
+            pluginPreparation.pluginId,
+            pendingInstall,
+            deps,
+          )
+        : true;
     const committedDespiteError =
       reconciledRoute !== undefined &&
       sameDefaultInferenceRoute(reconciledRoute, persistedRoute) &&
       (!manualAuthReceipt || manualAuthProfilesPersisted(manualAuthReceipt, deps)) &&
-      codexInstallPersisted;
-    if (pendingCodexInstall) {
-      codexInstallOwnership = committedDespiteError ? "owned" : "unowned";
+      pluginInstallPersisted;
+    if (pendingInstall) {
+      pluginInstallOwnership = committedDespiteError ? "owned" : "unowned";
     }
     if (!committedDespiteError) {
       if (manualAuthReceipt) {
@@ -386,13 +381,13 @@ export async function persistActivatedSetupInference(input: {
       throw error;
     }
     committedConfig = reconciledSnapshot?.sourceConfig ?? reconciledRuntime;
-    state.gatewayRestartRequired = pendingCodexInstall !== undefined;
+    state.gatewayRestartRequired = pendingInstall !== undefined;
     setupInferenceLog.warn(
       "Inference activation committed successfully despite a post-write cleanup error.",
     );
   }
 
   state.committedConfig = committedConfig;
-  state.codexInstallOwnership = codexInstallOwnership;
+  state.pluginInstallOwnership = pluginInstallOwnership;
   return undefined;
 }

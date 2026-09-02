@@ -561,7 +561,7 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.activate.start",
+            "openclaw.setup.auth.start",
             "openclaw.setup.prepare.start",
             "wizard.next",
           ],
@@ -602,15 +602,29 @@ suite.define(() => {
               workspace: "/tmp/openclaw-e2e",
               setupComplete: false,
             },
-            "openclaw.setup.activate.start": {
-              sessionId: "activation-session",
+            "openclaw.setup.auth.start": {
+              sessionId: "project-key-session",
               done: false,
               status: "running",
             },
             "wizard.next": {
-              done: true,
-              status: "done",
-              modelActivation: { modelRef: "qwen/qwen3-coder-plus" },
+              sequence: [
+                {
+                  done: false,
+                  status: "running",
+                  step: {
+                    id: "project-key",
+                    type: "text",
+                    message: "Qwen project API key",
+                    sensitive: true,
+                  },
+                },
+                {
+                  done: true,
+                  status: "done",
+                  modelActivation: { modelRef: "qwen/qwen3-coder-plus" },
+                },
+              ],
             },
           },
         });
@@ -701,7 +715,10 @@ suite.define(() => {
           .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
           .toBe(false);
 
-        const accessValue = page.locator('.model-setup__manual input[type="password"]');
+        const connect = page
+          .locator(".model-setup__manual")
+          .getByRole("button", { name: "Connect & verify" });
+        expect(await page.locator('.model-setup__manual input[type="password"]').count()).toBe(0);
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -727,13 +744,11 @@ suite.define(() => {
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
 
-        await accessValue.fill("same-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
         await armProviderHide();
         await page.locator('[data-manual-provider="zai-cn"]').click();
         await waitForProviderHide();
-        await expect.poll(() => accessValue.inputValue()).toBe("same-provider-secret");
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -754,10 +769,9 @@ suite.define(() => {
           .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
           .toBe(false);
         await expect
-          .poll(() => accessValue.evaluate((element) => element === document.activeElement))
+          .poll(() => connect.evaluate((element) => element === document.activeElement))
           .toBe(true);
 
-        await accessValue.fill("sk-old-provider-secret");
         await providerTrigger.click();
         await expect.poll(manualProviderMenuReady).toBe(true);
         await armProviderHide();
@@ -765,7 +779,6 @@ suite.define(() => {
         await waitForProviderHide();
         await expect.poll(() => providerTrigger.textContent()).toContain("Google");
         await expect.poll(() => providerTrigger.textContent()).toContain("AI Studio API key");
-        await expect.poll(() => accessValue.inputValue()).toBe("");
         await expect
           .poll(() => providerTrigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -778,25 +791,35 @@ suite.define(() => {
           .poll(() => providerPicker.evaluate((element) => element.hasAttribute("open")))
           .toBe(false);
         await expect.poll(() => providerTrigger.textContent()).toContain("Qwen Cloud");
-        await accessValue.fill("qwen-test-secret");
-        await expect.poll(() => accessValue.inputValue()).toBe("qwen-test-secret");
-        await page.evaluate(
-          () =>
-            new Promise<void>((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-            }),
-        );
-        await page.getByRole("button", { name: "Connect & verify" }).click();
-        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
-        expect(activate.params).toEqual({
+        await connect.click();
+        const start = await gateway.waitForRequest("openclaw.setup.auth.start");
+        expect(start.params).toEqual({
           sessionId: expect.any(String),
-          kind: "api-key",
           agentId: "main",
           authChoice: "qwen-cn",
-          apiKey: "qwen-test-secret",
         });
+        const wizard = page.locator("openclaw-modal-dialog");
+        await wizard.getByLabel("Qwen project API key").fill("qwen-test-secret");
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(artifactDir, "provider-owned-key-step.png"),
+          });
+        }
+        await wizard.getByRole("button", { name: "Submit" }).click();
         await page.getByRole("heading", { name: "Connection verified" }).waitFor();
         await page.getByText("qwen/qwen3-coder-plus", { exact: true }).waitFor();
+        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+        expect(await gateway.getRequests("wizard.next")).toEqual([
+          expect.objectContaining({ params: { sessionId: expect.any(String) } }),
+          expect.objectContaining({
+            params: {
+              sessionId: expect.any(String),
+              answer: { stepId: "project-key", value: "qwen-test-secret" },
+            },
+          }),
+        ]);
 
         if (artifactDir) {
           await page.screenshot({

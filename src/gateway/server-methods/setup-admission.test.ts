@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as officialExternalPluginCatalog from "../../plugins/official-external-plugin-catalog.js";
+import {
+  getOfficialPluginCatalogSnapshot,
+  loadOfficialPluginCatalogSnapshot,
+} from "../../plugins/official-plugin-catalog-snapshot.js";
+import { resetPluginCache } from "../../plugins/plugin-cache.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import {
@@ -28,11 +34,58 @@ import {
 describe("setup admission", () => {
   beforeEach(() => {
     mocks.stateDir = tempDirs.make("openclaw-setup-admission-");
+    resetPluginCache();
   });
 
   afterEach(() => {
     resetCommandQueueStateForTest();
     resetGatewayWorkAdmission();
+    resetPluginCache();
+    vi.restoreAllMocks();
+  });
+
+  it("pins a fresh catalog for admitted setup without replacing the Gateway snapshot", async () => {
+    const catalog = (
+      id: string,
+    ): officialExternalPluginCatalog.HostedOfficialExternalPluginCatalogLoadResult => {
+      const entries = [{ id, type: "plugin", state: "available" }];
+      return {
+        source: "hosted",
+        entries,
+        feed: {
+          schemaVersion: 2,
+          id: "setup-catalog",
+          generatedAt: "2026-08-01T00:00:00.000Z",
+          sequence: 1,
+          entries,
+        },
+        metadata: {
+          url: "https://catalog.example/plugins.json",
+          status: 200,
+          checksum: id,
+        },
+      };
+    };
+    const catalogA = catalog("@fixture/provider-a");
+    const catalogB = catalog("@fixture/provider-b");
+    const loadHostedCatalog = vi
+      .spyOn(
+        officialExternalPluginCatalog,
+        "loadConfiguredHostedOfficialExternalPluginCatalogEntries",
+      )
+      .mockResolvedValueOnce(catalogA)
+      .mockResolvedValue(catalogB);
+
+    expect((await loadOfficialPluginCatalogSnapshot()).entries).toEqual(catalogA.entries);
+    const setupCatalog = await runExclusiveSystemAgentSetupActivation(async () => {
+      const initial = await loadOfficialPluginCatalogSnapshot();
+      const resumed = await loadOfficialPluginCatalogSnapshot();
+      return { initial: initial.entries, resumed: resumed.entries };
+    });
+
+    expect(setupCatalog).toEqual({ initial: catalogB.entries, resumed: catalogB.entries });
+    expect(getOfficialPluginCatalogSnapshot().entries).toEqual(catalogA.entries);
+    expect(loadHostedCatalog).toHaveBeenCalledTimes(2);
   });
 
   it("rejects concurrent work instead of queueing it", async () => {

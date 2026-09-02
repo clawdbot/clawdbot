@@ -518,15 +518,46 @@ describe("model provider configuration data", () => {
     ).toEqual({ OpenAI: "oauth" });
   });
 
-  it("lists known providers that are not configured", () => {
+  it("joins setup methods by opaque choice while filtering only declared configured families", () => {
     const options = buildUnconfiguredProviderOptions(
-      [
-        { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-        { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-        { provider: "github-copilot", apiKeySupported: true, quickApiKeySetup: false },
-      ],
+      {
+        manualProviders: [
+          { id: "existing-login", brandId: "openai", label: "Existing project key" },
+          {
+            id: "vendor/login",
+            brandId: "vendor",
+            groupLabel: "Catalog vendor",
+            label: "Project key",
+            hint: "Models: Small, Large",
+          },
+          { id: "openai", label: "Unbranded choice" },
+        ],
+        authOptions: [
+          {
+            id: "vendor/device",
+            brandId: "vendor",
+            groupLabel: "Catalog vendor",
+            label: "Device sign-in",
+            kind: "device-code",
+            featured: false,
+          },
+          { id: "vendor/login", label: "Duplicate", kind: "oauth", featured: false },
+        ],
+        prepareOptions: [{ id: "local", brandId: "local-service", label: "Local service" }],
+      },
       ["openai"],
     );
-    expect(options).toEqual([{ id: "anthropic", displayName: "Anthropic" }]);
+    expect(options.map((option) => option.id)).toEqual([
+      "vendor/device",
+      "vendor/login",
+      "local",
+      "openai",
+    ]);
+    expect(options[1]).toEqual({
+      id: "vendor/login",
+      providerName: "Catalog vendor",
+      displayName: "Catalog vendor · Project key",
+      hint: "Models: Small, Large",
+    });
   });
 });

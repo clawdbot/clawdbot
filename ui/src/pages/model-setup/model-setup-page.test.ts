@@ -80,6 +80,7 @@ function createContext() {
           "openclaw.setup.detect",
           "openclaw.setup.verify",
           "openclaw.setup.activate.start",
+          "openclaw.setup.auth.start",
           "openclaw.setup.prepare.start",
         ],
       },
@@ -543,74 +544,94 @@ describe("ModelSetupPage catalog icons", () => {
     runtimeConfig.dispose();
   });
 
-  it("owns the complete wizard action between draft flush and authoritative refresh", async () => {
-    const { context, client, request, runtimeConfig } = createContext();
-    const order: string[] = [];
-    let config: Record<string, unknown> = { pending: false };
-    let hash = "hash-1";
-    request.mockImplementation(async (method: string, params?: unknown) => {
-      order.push(method);
-      if (method === "config.get") {
-        return {
-          config,
-          sourceConfig: config,
-          raw: JSON.stringify(config),
-          hash,
-          valid: true,
-          issues: [],
-        };
-      }
-      if (method === "config.set") {
-        config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
-        hash = "hash-2";
-        return { hash };
-      }
-      if (method === "openclaw.setup.auth.start") {
-        return { sessionId: "wizard-session", done: false, status: "running" };
-      }
-      if (method === "wizard.next") {
-        config = { ...config, configuredModel: "provider/model" };
-        hash = "hash-3";
-        return { done: true, status: "done", modelActivation: { modelRef: "provider/model" } };
-      }
-      if (method === "openclaw.setup.detect") {
-        return {
-          ...detection,
-          configuredModel: "provider/model",
-          setupComplete: true,
-        };
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    await runtimeConfig.ensureLoaded();
-    order.length = 0;
-    runtimeConfig.patchForm(["pending"], true);
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          authOptions: [{ id: "provider-auth", label: "Provider", kind: "oauth", featured: true }],
+  it.each(["provider sign-in", "API-key choice"] as const)(
+    "owns the complete $0 wizard action between draft flush and authoritative refresh",
+    async (entry) => {
+      const authChoice = "provider/auth:key?region=one";
+      const { context, client, request, runtimeConfig } = createContext();
+      const order: string[] = [];
+      let config: Record<string, unknown> = { pending: false };
+      let hash = "hash-1";
+      request.mockImplementation(async (method: string, params?: unknown) => {
+        order.push(method);
+        if (method === "config.get") {
+          return {
+            config,
+            sourceConfig: config,
+            raw: JSON.stringify(config),
+            hash,
+            valid: true,
+            issues: [],
+          };
+        }
+        if (method === "config.set") {
+          config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+          hash = "hash-2";
+          return { hash };
+        }
+        if (method === "openclaw.setup.auth.start") {
+          return { sessionId: "wizard-session", done: false, status: "running" };
+        }
+        if (method === "wizard.next") {
+          config = { ...config, configuredModel: "provider/model" };
+          hash = "hash-3";
+          return { done: true, status: "done", modelActivation: { modelRef: "provider/model" } };
+        }
+        if (method === "openclaw.setup.detect") {
+          return {
+            ...detection,
+            configuredModel: "provider/model",
+            setupComplete: true,
+          };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      await runtimeConfig.ensureLoaded();
+      order.length = 0;
+      runtimeConfig.patchForm(["pending"], true);
+      const { page } = await mountPage(context, {
+        state: {
+          phase: "ready",
+          result: {
+            ...detection,
+            manualProviders:
+              entry === "API-key choice"
+                ? [{ id: authChoice, brandId: "provider", label: "Project key" }]
+                : [],
+            authOptions:
+              entry === "provider sign-in"
+                ? [{ id: authChoice, label: "Provider", kind: "oauth", featured: true }]
+                : [],
+          },
         },
-      },
-      client,
-      firstRun: false,
-    });
+        client,
+        firstRun: false,
+      });
 
-    page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-auth"] button')?.click();
+      const selector =
+        entry === "API-key choice"
+          ? ".model-setup__manual .btn.primary"
+          : `[data-auth-choice="${authChoice}"] button`;
+      page.querySelector<HTMLButtonElement>(selector)?.click();
 
-    await waitForFast(() => {
-      expect(order).toEqual([
-        "config.set",
+      await waitForFast(() => {
+        expect(order).toEqual([
+          "config.set",
+          "openclaw.setup.auth.start",
+          "wizard.next",
+          "config.get",
+        ]);
+        expect(page.textContent).toContain("Connection verified");
+      });
+      expect(request).toHaveBeenCalledWith(
         "openclaw.setup.auth.start",
-        "wizard.next",
-        "config.get",
-      ]);
-      expect(page.textContent).toContain("Connection verified");
-    });
-    expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
-    runtimeConfig.dispose();
-  });
+        { sessionId: expect.any(String), agentId: "main", authChoice },
+        { timeoutMs: null },
+      );
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+      runtimeConfig.dispose();
+    },
+  );
 
   it("drops a queued wizard action when setup access changes before dispatch", async () => {
     const { context, client, request, runtimeConfig, snapshot } = createContext();

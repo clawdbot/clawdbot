@@ -4,8 +4,10 @@
  * It normalizes legacy choices, handles secret storage mode, delegates plugin
  * setup when applicable, and applies built-in custom provider config.
  */
+import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
+import { quoteCliArg } from "../../../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -19,7 +21,7 @@ import {
   isDeprecatedAuthChoice,
   resolveDeprecatedAuthChoiceReplacement,
 } from "../../auth-choice-legacy.js";
-import { formatAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
+import { listAuthChoiceChoicesForCli } from "../../auth-choice-options.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
 import type { OnboardingAgentTarget } from "../../onboard-agent-target.js";
 import {
@@ -176,17 +178,17 @@ export async function applyNonInteractiveAuthChoice(params: {
     rejectOnboardingOption(
       opts,
       runtime,
-      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(replacementChoiceId)} instead.`,
+      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${quoteCliArg(sanitizeTerminalText(replacementChoiceId))} instead.`,
     );
     return null;
   }
 
-  const validAuthChoices = formatAuthChoiceChoicesForCli({
+  const validAuthChoices = listAuthChoiceChoicesForCli({
     includeSkip: true,
     config: nextConfig,
     workspaceDir: params.target.workspaceDir,
     env: process.env,
-  }).split("|");
+  });
   if (!validAuthChoices.includes(authChoice) && !authChoice.startsWith("provider-plugin:")) {
     rejectOnboardingOption(
       opts,

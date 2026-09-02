@@ -450,6 +450,13 @@
       "text": "exec host=gateway/node"
     },
     {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/model-providers/model-providers-page.test-support.ts",
+      "text": "Project key"
+    },
+    {
       "count": 4,
       "kind": "html-text",
       "name": "text",

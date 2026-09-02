@@ -36,7 +36,6 @@ describe("Model Setup activation feedback", () => {
   );
   it.each([
     { entry: "discovered", targetId: activationTargetId("codex-cli", "openai/gpt-5") },
-    { entry: "manual", targetId: "manual:openai" },
     {
       entry: "prepared but undiscovered",
       targetId: activationTargetId("provider-auto:ollama", "ollama/qwen3:4b"),
@@ -47,12 +46,10 @@ describe("Model Setup activation feedback", () => {
       const viewProps = props({
         activation: { phase: "testing", targetId },
         actionsDisabled: true,
-        manualApiKey: "test-only-secret",
       });
       const container = mount(viewProps);
       expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
       expect(text(container.querySelector('[role="status"]')!)).toContain("Testing");
-      expect(text(container)).not.toContain("test-only-secret");
       const button = container.querySelector<HTMLButtonElement>(
         entry === "discovered"
           ? '[data-candidate-kind="codex-cli"] button'
@@ -82,10 +79,6 @@ describe("Model Setup activation feedback", () => {
         expect(text(button)).toBe("Retry test");
         button.click();
         expect(viewProps.onActivateCandidate).toHaveBeenCalledWith(detected.candidates[0]);
-      } else if (entry === "manual") {
-        expect(text(button)).toBe("Connect & verify");
-        button.click();
-        expect(viewProps.onManualConnect).toHaveBeenCalledOnce();
       }
 
       viewProps.page = { phase: "ready", result: { ...detected, candidates: [] } };

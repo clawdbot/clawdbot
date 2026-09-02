@@ -6,8 +6,11 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { resolveProviderOnboardAuthFlags } from "../../../plugins/provider-auth-choices.js";
-import { CORE_ONBOARD_AUTH_FLAGS } from "../../onboard-core-auth-flags.js";
+import { resolveProviderOnboardAuthFlags } from "../../../plugins/provider-install-catalog.js";
+import {
+  CORE_ONBOARD_AUTH_FLAGS,
+  getRegisteredProviderAuthFlags,
+} from "../../onboard-core-auth-flags.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
 type AuthChoiceFlag = {
@@ -23,7 +26,7 @@ export type AuthChoiceInference = {
 };
 
 function hasStringValue(value: unknown): boolean {
-  return typeof value === "string" ? Boolean(normalizeOptionalString(value)) : Boolean(value);
+  return typeof value === "string" && Boolean(normalizeOptionalString(value));
 }
 
 /** Infers auth choice from core, plugin, and custom provider API-key flags. */
@@ -35,23 +38,20 @@ export function inferAuthChoiceFromFlags(
     env?: NodeJS.ProcessEnv;
   },
 ): AuthChoiceInference {
-  const flags = [
+  // Parser-owned choices are authoritative. Programmatic callers may use installed
+  // trusted manifests, never unregistered catalog flags that could capture core options.
+  const flags = getRegisteredProviderAuthFlags(opts) ?? [
     ...CORE_ONBOARD_AUTH_FLAGS,
-    // Only trusted manifests can influence implicit auth choice; untrusted
-    // workspace plugins require the user to choose them explicitly.
     ...resolveProviderOnboardAuthFlags({
       config: params?.config,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
       includeUntrustedWorkspacePlugins: false,
+      installedOnly: true,
     }),
-  ] as ReadonlyArray<{
-    optionKey: string;
-    authChoice: string;
-    cliFlag: string;
-  }>;
+  ];
   const matches: AuthChoiceFlag[] = flags
-    .filter(({ optionKey }) => hasStringValue(opts[optionKey]))
+    .filter(({ optionKey }) => Object.hasOwn(opts, optionKey) && hasStringValue(opts[optionKey]))
     .map((flag) => ({
       optionKey: flag.optionKey,
       authChoice: flag.authChoice as AuthChoice,

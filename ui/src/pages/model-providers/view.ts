@@ -54,7 +54,7 @@ type ModelProvidersViewProps = {
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   configBusy: boolean;
-  quickAddSupported: boolean;
+  providerSetupAvailable: boolean;
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -68,8 +68,8 @@ type ModelProvidersViewProps = {
   keyDraft: string;
   pendingLogoutProvider: string | null;
   addProviderOpen: boolean;
+  addProviderLoading: boolean;
   addProviderId: string;
-  addProviderKey: string;
   onRefresh: () => void;
   onOpenKeyEditor: (provider: string) => void;
   onCloseKeyEditor: () => void;
@@ -81,8 +81,8 @@ type ModelProvidersViewProps = {
   onCancelLogout: () => void;
   onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
   onAddProviderToggle: () => void;
+  onAddProviderReload: () => void;
   onAddProviderIdChange: (provider: string) => void;
-  onAddProviderKeyChange: (value: string) => void;
   onAddProvider: () => void;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
@@ -396,12 +396,19 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
 
 function renderAddProvider(props: ModelProvidersViewProps) {
   const busy = Boolean(props.busy.add);
-  const disabled = configMutationDisabled(props) || busy;
+  const disabled = configMutationDisabled(props) || busy || props.addProviderLoading;
+  const selected = props.unconfiguredProviders.find((choice) => choice.id === props.addProviderId);
   const rows = html`
-    ${props.unconfiguredProviders.length === 0
+    ${props.addProviderOpen &&
+    !props.addProviderLoading &&
+    props.unconfiguredProviders.length === 0 &&
+    !props.messages.add
       ? renderSettingsEmpty(t("modelProviders.add.none"))
       : nothing}
-    ${props.addProviderOpen
+    ${props.addProviderLoading
+      ? html`<div role="status">${t("modelSetup.loading")}</div>`
+      : nothing}
+    ${props.addProviderOpen && !props.addProviderLoading && props.unconfiguredProviders.length > 0
       ? html`
           <div class="settings-row settings-row--stacked">
             <div class="model-providers__add-form">
@@ -421,29 +428,25 @@ function renderAddProvider(props: ModelProvidersViewProps) {
                   )}
                 </select>
               </label>
-              <label class="field">
-                <span>${t("modelProviders.apiKey.label")}</span>
-                <input
-                  type="password"
-                  autocomplete="off"
-                  placeholder=${t("modelProviders.apiKey.placeholder")}
-                  .value=${props.addProviderKey}
-                  ?disabled=${disabled}
-                  @input=${(event: Event) =>
-                    props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
-                />
-              </label>
               <button
                 class="btn primary"
-                ?disabled=${disabled || !props.addProviderId || !props.addProviderKey.trim()}
+                ?disabled=${disabled || !selected}
                 @click=${props.onAddProvider}
               >
                 ${props.busy.add ? t("modelProviders.saving") : t("modelProviders.add.save")}
               </button>
             </div>
-            ${renderMutationMessage(props.messages.add)}
+            ${selected?.hint
+              ? html`<div class="settings-row__desc">${selected.hint}</div>`
+              : nothing}
           </div>
         `
+      : nothing}
+    ${renderMutationMessage(props.messages.add)}
+    ${props.addProviderOpen && props.messages.add?.kind === "error"
+      ? html`<button class="btn" ?disabled=${disabled} @click=${props.onAddProviderReload}>
+          ${t("modelSetup.retry")}
+        </button>`
       : nothing}
   `;
   return renderSettingsSection(
@@ -453,9 +456,8 @@ function renderAddProvider(props: ModelProvidersViewProps) {
       actions: html`
         <button
           class="btn btn--sm"
-          ?disabled=${busy ||
-          (!props.addProviderOpen &&
-            (configMutationDisabled(props) || props.unconfiguredProviders.length === 0))}
+          data-provider-setup-toggle
+          ?disabled=${busy || (!props.addProviderOpen && configMutationDisabled(props))}
           title=${props.mutationBlockedReason ?? ""}
           @click=${props.onAddProviderToggle}
         >
@@ -611,7 +613,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       },
       providerRows,
     )}
-    ${props.quickAddSupported ? renderAddProvider(props) : nothing}
+    ${props.providerSetupAvailable ? renderAddProvider(props) : nothing}
     ${props.providerUsageStalled
       ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
       : nothing}

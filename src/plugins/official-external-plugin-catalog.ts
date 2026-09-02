@@ -28,7 +28,6 @@ import type { PluginPackageInstall } from "./package-manifest.types.js";
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 
 export type {
-  OfficialExternalProviderAuthChoice,
   OfficialExternalWebSearchProvider,
   OfficialExternalPluginCatalogEntry,
   OfficialExternalPluginCatalogFeed,

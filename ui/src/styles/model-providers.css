@@ -155,7 +155,7 @@
 
 .model-providers__add-form {
   display: grid;
-  grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 12px;
   margin-top: 16px;

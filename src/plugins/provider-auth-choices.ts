@@ -4,10 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import {
-  getOfficialExternalPluginCatalogManifest,
-  listOfficialExternalProviderCatalogEntries,
-} from "./official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
@@ -38,21 +34,8 @@ export type ProviderAuthChoiceMetadata = {
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
-type ProviderOnboardAuthFlag = {
-  optionKey: string;
-  authChoice: string;
-  cliFlag: string;
-  cliOption: string;
-  description: string;
-};
-
 type ProviderAuthChoiceCandidate = ProviderAuthChoiceMetadata & {
   origin: PluginOrigin;
-};
-type ProviderOnboardAuthFlagCandidate = ProviderAuthChoiceCandidate & {
-  optionKey: string;
-  cliFlag: string;
-  cliOption: string;
 };
 type ManifestProviderAuthChoiceParams = {
   config?: OpenClawConfig;
@@ -323,87 +306,4 @@ export function resolveManifestDeprecatedProviderAuthChoice(
     config: params,
     matches: (choice) => choice.deprecatedChoiceIds?.includes(normalized) === true,
   });
-}
-
-function resolveManifestProviderOnboardAuthFlags(
-  params?: ManifestProviderAuthChoiceParams,
-): ProviderOnboardAuthFlag[] {
-  const preferredByFlag = new Map<string, ProviderOnboardAuthFlagCandidate>();
-
-  for (const choice of resolveManifestProviderAuthChoiceCandidates(params)) {
-    if (!choice.optionKey || !choice.cliFlag || !choice.cliOption) {
-      continue;
-    }
-    const normalizedChoice: ProviderOnboardAuthFlagCandidate = {
-      ...choice,
-      optionKey: choice.optionKey,
-      cliFlag: choice.cliFlag,
-      cliOption: choice.cliOption,
-    };
-    const dedupeKey = `${choice.optionKey}::${choice.cliFlag}`;
-    const existing = preferredByFlag.get(dedupeKey);
-    if (
-      existing &&
-      resolveProviderAuthChoiceOriginPriority(normalizedChoice.origin) >=
-        resolveProviderAuthChoiceOriginPriority(existing.origin)
-    ) {
-      continue;
-    }
-    preferredByFlag.set(dedupeKey, normalizedChoice);
-  }
-
-  const flags: ProviderOnboardAuthFlag[] = [];
-  for (const choice of preferredByFlag.values()) {
-    flags.push({
-      optionKey: choice.optionKey,
-      authChoice: choice.choiceId,
-      cliFlag: choice.cliFlag,
-      cliOption: choice.cliOption,
-      description: choice.cliDescription ?? choice.choiceLabel,
-    });
-  }
-  return flags;
-}
-
-function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthFlag[] {
-  const flags: ProviderOnboardAuthFlag[] = [];
-  for (const entry of listOfficialExternalProviderCatalogEntries()) {
-    const manifest = getOfficialExternalPluginCatalogManifest(entry);
-    for (const provider of manifest?.providers ?? []) {
-      for (const choice of provider.authChoices ?? []) {
-        const optionKey = choice.optionKey?.trim();
-        const authChoice = choice.choiceId?.trim();
-        const cliFlag = choice.cliFlag?.trim();
-        const cliOption = choice.cliOption?.trim();
-        if (!optionKey || !authChoice || !cliFlag || !cliOption) {
-          continue;
-        }
-        flags.push({
-          optionKey,
-          authChoice,
-          cliFlag,
-          cliOption,
-          description: choice.cliDescription?.trim() || choice.choiceLabel?.trim() || authChoice,
-        });
-      }
-    }
-  }
-  return flags;
-}
-
-/** Resolves onboard auth flags from installed manifests and official cold-install metadata. */
-export function resolveProviderOnboardAuthFlags(
-  params?: ManifestProviderAuthChoiceParams,
-): ProviderOnboardAuthFlag[] {
-  const flags = resolveManifestProviderOnboardAuthFlags(params);
-  const seen = new Set(flags.map((flag) => `${flag.optionKey}::${flag.cliFlag}`));
-  for (const flag of resolveOfficialExternalProviderOnboardAuthFlags()) {
-    const dedupeKey = `${flag.optionKey}::${flag.cliFlag}`;
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
-    flags.push(flag);
-  }
-  return flags;
 }

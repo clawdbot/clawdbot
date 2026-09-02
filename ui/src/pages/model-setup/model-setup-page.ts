@@ -12,7 +12,6 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -63,8 +62,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private wizardMode: "auth" | "prepare" | "activate" = "auth";
   @state() private wizardValue: unknown;
   @state() private manualProviderId = "";
-  @state() private manualApiKey = "";
-  @state() private manualError: string | null = null;
   @state() private moreSignInOpen = false;
   @state() private iconUrls: Record<string, string> = {};
   @state() private setupRefreshWarning: string | null = null;
@@ -120,7 +117,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       const previousStep = this.wizardState.phase === "step" ? this.wizardState.step.id : null;
       this.wizardState =
         next.phase === "step" && this.wizardMutationActive ? { ...next, busy: true } : next;
-      if (next.phase === "step" && next.step.id !== previousStep) {
+      if (next.phase !== "step") {
+        this.wizardValue = undefined;
+      } else if (next.step.id !== previousStep) {
         this.wizardValue = initialWizardValue(next.step);
       }
     },
@@ -353,7 +352,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canUseSetup(client) || this.actionsDisabled() || this.firstRun.unresolved) {
       return;
     }
-    this.manualError = null;
     this.activationState = { phase: "testing", targetId };
     this.pendingPrepareOption = null;
     this.wizardMode = "activate";
@@ -372,9 +370,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       restartWarning: t("labsPage.restartRequired"),
       refreshWarning: refreshError,
     });
-    if (this.activationState.phase === "success") {
-      this.manualApiKey = "";
-    }
     this.firstRun.finishActivation(result, targetId, refreshError);
   }
 
@@ -385,34 +380,13 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     );
   }
 
-  private connectManual(): void {
-    const apiKey = this.manualApiKey.trim();
-    if (!this.manualProviderId || !apiKey) {
-      this.manualError = t("modelSetup.manual.required");
+  private startAuth(authChoice: string): void {
+    if (!authChoice) {
       return;
     }
-    void this.activate(
-      { kind: "api-key", authChoice: this.manualProviderId, apiKey },
-      `manual:${this.manualProviderId}`,
-    );
-  }
-
-  private selectManualProvider(providerId: string): void {
-    if (providerId !== this.manualProviderId) {
-      this.manualApiKey = "";
-    }
-    this.manualProviderId = providerId;
-    this.manualError = null;
-  }
-
-  private async useManualProvider(providerId: string): Promise<void> {
-    this.selectManualProvider(providerId);
-    await this.updateComplete;
-    const input = this.renderRoot.querySelector<HTMLInputElement>(
-      '.model-setup__manual input[type="password"]',
-    );
-    input?.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
-    input?.focus();
+    this.pendingPrepareOption = null;
+    this.wizardMode = "auth";
+    void this.runWizardMutation(() => this.wizard.start(authChoice));
   }
 
   private async handleWizardDone({
@@ -613,8 +587,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onUseCurrentModel: () => void this.firstRun.useCurrentModel(),
       actionsDisabled: this.actionsDisabled(),
       manualProviderId: this.manualProviderId,
-      manualApiKey: this.manualApiKey,
-      manualError: this.manualError,
       moreSignInOpen: this.moreSignInOpen,
       firstRun: this.routeData?.firstRun === true,
       iconUrls: this.iconUrls,
@@ -625,11 +597,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       },
       onVerify: () => void this.firstRun.verify(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
-      onStartAuth: (option) => {
-        this.pendingPrepareOption = null;
-        this.wizardMode = "auth";
-        void this.runWizardMutation(() => this.wizard.start(option.id));
-      },
+      onStartAuth: (option) => this.startAuth(option.id),
       onStartPrepare: (option: ModelSetupPrepareOption) => {
         this.pendingPrepareOption = option;
         this.wizardMode = "prepare";
@@ -637,13 +605,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
           this.wizard.start(option.id, "openclaw.setup.prepare.start"),
         );
       },
-      onManualProviderChange: (providerId) => this.selectManualProvider(providerId),
-      onUseManualProvider: (providerId) => void this.useManualProvider(providerId),
-      onManualApiKeyChange: (apiKey) => {
-        this.manualApiKey = apiKey;
-        this.manualError = null;
+      onManualProviderChange: (providerId) => (this.manualProviderId = providerId),
+      onUseManualProvider: (providerId) => {
+        this.manualProviderId = providerId;
+        this.startAuth(providerId);
       },
-      onManualConnect: () => this.connectManual(),
+      onManualConnect: () => this.startAuth(this.manualProviderId),
       onMoreSignInToggle: (open) => (this.moreSignInOpen = open),
       onIconError: (iconUrl) => this.iconLoader.invalidate(iconUrl),
       onOpenChat: () => this.firstRun.continueSetup(),

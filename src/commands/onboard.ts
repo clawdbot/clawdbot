@@ -31,7 +31,7 @@ import {
   normalizeLegacyOnboardAuthChoice,
   resolveDeprecatedAuthChoiceReplacement,
 } from "./auth-choice-legacy.js";
-import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
+import { listAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { GENERIC_PROVIDER_AUTH_CHOICES } from "./auth-choice-options.static.js";
 import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveOnboardingSetupTarget } from "./onboard-agent-target.js";
@@ -263,12 +263,12 @@ async function validateResetAuthChoice(params: {
     return true;
   }
   const availableChoices = new Set(
-    formatAuthChoiceChoicesForCli({
+    listAuthChoiceChoicesForCli({
       includeSkip: true,
       config: params.baseConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
-    }).split("|"),
+    }),
   );
   if (!availableChoices.has(authChoice)) {
     return rejectOption(

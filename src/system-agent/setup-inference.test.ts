@@ -35,7 +35,12 @@ import {
   rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
-import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import * as providerAuthChoiceRuntime from "../plugins/provider-auth-choice.js";
+import {
+  resolveManifestProviderAuthChoices,
+  type ProviderAuthChoiceMetadata,
+} from "../plugins/provider-auth-choices.js";
+import * as providerInstallCatalog from "../plugins/provider-install-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginRegistryLifecycleEpoch } from "../plugins/registry-lifecycle.js";
 import {
@@ -49,7 +54,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import type { ProviderPlugin } from "../plugins/types.js";
+import type { ProviderAuthContext, ProviderPlugin } from "../plugins/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   disposeOpenClawAgentDatabaseByPath,
@@ -209,6 +214,13 @@ afterAll(async () => {
 beforeEach(() => {
   inMemoryAuthProfileStores = new Map();
   pluginMetadataSnapshot?.rebindForCurrentEnv();
+  vi.spyOn(providerInstallCatalog, "loadProviderSetupAuthChoices").mockImplementation(
+    async (params) => resolveManifestProviderAuthChoices(params),
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 async function createMainAgentFixture() {
@@ -345,12 +357,35 @@ type TestSetupInferenceActivationParams = Omit<
 > &
   Partial<Pick<SetupInferenceActivationParams, "runtime" | "surface">> & {
     useRealAuthProfileStore?: boolean;
+    provider?: ProviderPlugin;
+    providerChoice?: ProviderAuthChoiceMetadata;
   };
 
 async function activateSetupInference(
   params: TestSetupInferenceActivationParams,
 ): ReturnType<typeof activateSetupInferenceImpl> {
-  const { useRealAuthProfileStore = false, ...activationParams } = params;
+  const { useRealAuthProfileStore = false, provider, providerChoice, ...activationParams } = params;
+  if (provider) {
+    const choice = expectDefined(providerChoice, "prepared provider choice");
+    vi.mocked(providerInstallCatalog.loadProviderSetupAuthChoices).mockResolvedValue([choice]);
+    vi.spyOn(providerAuthChoiceRuntime, "prepareProviderAuthChoiceRuntime").mockImplementation(
+      async ({ config }) => {
+        const enabled = pluginEnable.enablePluginInConfig(config, choice.pluginId);
+        return enabled.enabled
+          ? {
+              status: "ready",
+              config: enabled.config,
+              choice,
+              provider,
+              method: expectDefined(
+                provider.auth.find((method) => method.id === choice.methodId),
+                "prepared method",
+              ),
+            }
+          : { status: "blocked", config, message: "Provider plugin is disabled." };
+      },
+    );
+  }
   const deps = withSuiteFixtures(activationParams.deps, useRealAuthProfileStore);
   const ownerPluginArtifacts = { ownerPluginIds: [], ownerPluginArtifacts: [] } as const;
   const usesRealOwnerBinding =
@@ -515,6 +550,7 @@ function successfulRun(provider: string, model: string, params?: SuccessfulRunPa
   );
   return {
     meta: {
+      durationMs: 0,
       finalAssistantVisibleText: "OK",
       executionTrace: { winnerProvider: provider, winnerModel: params?.reportedModel ?? model },
     },
@@ -588,6 +624,7 @@ function createConfigTransformHarness(
   sourceConfig: OpenClawConfig = {},
   runtimeConfig: OpenClawConfig = sourceConfig,
 ) {
+  let installedRecords: Record<string, PluginInstallRecord> | undefined;
   const state = {
     sourceConfig: canonicalizeAgentEntriesForTest(sourceConfig),
     runtimeConfig: materializeRuntimeAgentListForTest(runtimeConfig),
@@ -605,6 +642,7 @@ function createConfigTransformHarness(
       previousHash: null,
       attempt: 0,
     });
+    installedRecords = transformed.nextConfig.plugins?.installs;
     state.sourceConfig = withoutPluginInstallRecords(transformed.nextConfig);
     state.runtimeConfig = materializeRuntimeAgentListForTest(state.sourceConfig);
     return {
@@ -612,19 +650,25 @@ function createConfigTransformHarness(
       followUp: { mode: "auto", requiresRestart: false },
     };
   });
-  const readSnapshot = vi.fn(async () => ({
-    exists: true as const,
-    valid: true as const,
-    path: "/tmp/openclaw.json",
-    issues: [],
-    config: state.runtimeConfig,
-    sourceConfig: state.sourceConfig,
-    runtimeConfig: state.runtimeConfig,
-  }));
+  const readSnapshot = vi.fn(async () =>
+    createConfigFileSnapshot({
+      exists: true,
+      valid: true,
+      path: "/tmp/openclaw.json",
+      raw: null,
+      parsed: state.sourceConfig,
+      sourceConfig: state.sourceConfig,
+      runtimeConfig: state.runtimeConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    }),
+  );
   return {
     transform,
     readSnapshot,
     current: () => structuredClone(state.sourceConfig),
+    installedRecords: () => structuredClone(installedRecords),
   };
 }
 
@@ -702,10 +746,10 @@ describe("detectSetupInference", () => {
     await vi.mocked(readConfigFileSnapshot).withImplementation(
       async () => (++reads === 1 ? initial : changed),
       async () => {
-        const resolveChoices = vi.fn(() => []);
+        const resolveChoices = vi.fn(async () => []);
         const result = await detect({
           detectInferenceBackends: async () => [],
-          resolveManifestProviderAuthChoices: resolveChoices,
+          loadProviderSetupAuthChoices: resolveChoices,
           probeLocalCommand: async (command) => ({ command, found: false }),
         });
 
@@ -728,7 +772,7 @@ describe("detectSetupInference", () => {
         expect(onPartial).toHaveBeenCalledOnce();
         throw failure;
       },
-      resolveManifestProviderAuthChoices: () => [
+      loadProviderSetupAuthChoices: async () => [
         {
           pluginId: "fixture",
           providerId: "fixture",
@@ -750,6 +794,42 @@ describe("detectSetupInference", () => {
     );
   });
 
+  it("loads hosted manual choices before discovery without importing provider code", async () => {
+    const choice: ProviderAuthChoiceMetadata = {
+      pluginId: "hosted-provider",
+      providerId: "hosted-provider",
+      methodId: "api-key",
+      choiceId: "hosted-api-key",
+      choiceLabel: "Hosted API key",
+      appGuidedSecret: true,
+    };
+    const onPartial = vi.fn();
+    const resolvePluginProviders = vi.fn(() => []);
+    const loadChoices = vi
+      .spyOn(providerInstallCatalog, "loadProviderSetupAuthChoices")
+      .mockResolvedValue([choice]);
+    try {
+      const detected = await detectSetupInference({
+        onPartial,
+        detectInferenceBackends: async () => {
+          expect(onPartial).toHaveBeenCalledWith(
+            expect.objectContaining({
+              manualProviders: [expect.objectContaining({ id: choice.choiceId })],
+            }),
+          );
+          return [];
+        },
+        probeLocalCommand: async (command) => ({ command, found: false }),
+        resolvePluginProviders,
+      });
+      expect(detected.manualProviders).toEqual([expect.objectContaining({ id: choice.choiceId })]);
+      expect(detected.prepareOptions).toEqual([]);
+      expect(resolvePluginProviders).not.toHaveBeenCalled();
+    } finally {
+      loadChoices.mockRestore();
+    }
+  });
+
   it("keeps unconsented provider choices visible without executing their discovery runtime", async () => {
     const enable = vi
       .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
@@ -764,7 +844,7 @@ describe("detectSetupInference", () => {
       const detection = await detectSetupInference({
         detectInferenceBackends: async () => [],
         probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
-        resolveManifestProviderAuthChoices: () => [
+        loadProviderSetupAuthChoices: async () => [
           {
             pluginId: "local-plugin",
             providerId: "local",
@@ -792,7 +872,7 @@ describe("detectSetupInference", () => {
   });
 
   it("preserves the shared inference candidate order", async () => {
-    const resolveManifestProviderAuthChoices = vi.fn(() => [
+    const loadProviderSetupAuthChoices = vi.fn(async () => [
       {
         pluginId: "anthropic",
         providerId: "anthropic",
@@ -805,7 +885,7 @@ describe("detectSetupInference", () => {
       },
     ]);
     const detection = await detectSetupInference({
-      resolveManifestProviderAuthChoices,
+      loadProviderSetupAuthChoices,
       enablePluginInConfig: ((config: OpenClawConfig) => ({ enabled: true, config })) as never,
       probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
     });
@@ -830,7 +910,7 @@ describe("detectSetupInference", () => {
       "codex-cli",
     ]);
     expect(detection.workspace.length).toBeGreaterThan(0);
-    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
+    expect(loadProviderSetupAuthChoices).toHaveBeenCalledWith(
       expect.objectContaining({ includeWorkspacePlugins: false }),
     );
   });
@@ -876,7 +956,7 @@ describe("detectSetupInference", () => {
         command,
         found: command === "pi" || command === "opencode",
       })),
-      resolveManifestProviderAuthChoices: () => [
+      loadProviderSetupAuthChoices: async () => [
         {
           pluginId: "google",
           providerId: "google",
@@ -1199,7 +1279,7 @@ describe("detectSetupInference", () => {
     ]);
 
     const detection = await detectSetupInference({
-      resolveManifestProviderAuthChoices: () => [],
+      loadProviderSetupAuthChoices: async () => [],
       probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
     });
 
@@ -1241,7 +1321,7 @@ describe("detectSetupInference", () => {
 
     const detection = await detectSetupInference(
       {
-        resolveManifestProviderAuthChoices: () => [],
+        loadProviderSetupAuthChoices: async () => [],
         probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
       },
       "research",
@@ -1303,7 +1383,7 @@ describe("detectSetupInference", () => {
     ]);
 
     const detection = await detectSetupInference({
-      resolveManifestProviderAuthChoices: () => [],
+      loadProviderSetupAuthChoices: async () => [],
       probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
     });
 
@@ -1355,7 +1435,7 @@ describe("detectSetupInference", () => {
     ]);
 
     const detection = await detectSetupInference({
-      resolveManifestProviderAuthChoices: () => [],
+      loadProviderSetupAuthChoices: async () => [],
       probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
     });
 
@@ -1384,7 +1464,7 @@ describe("detectSetupInference", () => {
     ]);
 
     const detection = await detectSetupInference({
-      resolveManifestProviderAuthChoices: () => [],
+      loadProviderSetupAuthChoices: async () => [],
       probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
     });
 
@@ -1402,7 +1482,7 @@ describe("detectSetupInference", () => {
     }));
 
     const detection = await detectSetupInference({
-      resolveManifestProviderAuthChoices: () => [],
+      loadProviderSetupAuthChoices: async () => [],
       probeLocalCommand,
     });
 
@@ -1440,7 +1520,7 @@ describe("detectSetupInference", () => {
     ]);
 
     const detection = await detectSetupInference({
-      resolveManifestProviderAuthChoices: () => [],
+      loadProviderSetupAuthChoices: async () => [],
       probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
     });
 
@@ -1600,10 +1680,6 @@ describe("activateSetupInference", () => {
     mocks.refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
   function createGroqSetupProvider(configPatch?: Partial<OpenClawConfig>): ProviderPlugin {
     return {
       id: "groq",
@@ -1651,10 +1727,10 @@ describe("activateSetupInference", () => {
     return activateSetupInference({
       kind: "api-key",
       authChoice: "groq-api-key",
+      provider: createGroqSetupProvider(),
+      providerChoice: groqSetupChoice(),
       ...params,
       deps: {
-        resolvePluginProviders: () => [createGroqSetupProvider()],
-        resolveManifestProviderAuthChoice: groqSetupChoice,
         runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
         ...params.deps,
       },
@@ -2181,17 +2257,17 @@ describe("activateSetupInference", () => {
     const result = await activateSetupInference({
       kind: "provider-auto:lmstudio",
       modelRef,
+      provider,
+      providerChoice: {
+        pluginId: "lmstudio",
+        providerId: "lmstudio",
+        methodId: "custom",
+        choiceId: "lmstudio",
+        choiceLabel: "LM Studio",
+        appGuidedDiscovery: true,
+      },
       deps: {
         readConfigFileSnapshot: mockConfigSnapshot(initialConfig, { includeMetadata: true }),
-        resolveManifestProviderAuthChoice: () => ({
-          pluginId: "lmstudio",
-          providerId: "lmstudio",
-          methodId: "custom",
-          choiceId: "lmstudio",
-          choiceLabel: "LM Studio",
-          appGuidedDiscovery: true,
-        }),
-        resolvePluginProviders: () => [provider],
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         updateAuthProfileStoreWithLock: updateAuthStore as never,
@@ -2989,10 +3065,6 @@ describe("activateSetupInference", () => {
       kind: "api-key",
       authChoice: "definitely-not-a-provider",
       apiKey: "sk-test",
-      deps: {
-        resolveManifestProviderAuthChoice: () => undefined,
-        resolvePluginProviders: () => [],
-      },
     });
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
   });
@@ -3040,6 +3112,15 @@ describe("activateSetupInference", () => {
       const result = await activateSetupInference({
         kind: "provider-auth",
         authChoice: "openai",
+        provider,
+        providerChoice: {
+          pluginId: "openai",
+          providerId: "openai",
+          methodId: "oauth",
+          choiceId: "openai",
+          choiceLabel: "ChatGPT Login",
+          appGuidedAuth: "oauth",
+        },
         useRealAuthProfileStore: true,
         workspace: "/tmp/openclaw-workspace",
         prompter: createWizardPrompter(),
@@ -3047,15 +3128,6 @@ describe("activateSetupInference", () => {
           readConfigFileSnapshot: mockConfigSnapshot(initialConfig, {
             includeMetadata: true,
             runtimeConfig,
-          }),
-          resolvePluginProviders: () => [provider],
-          resolveManifestProviderAuthChoice: () => ({
-            pluginId: "openai",
-            providerId: "openai",
-            methodId: "oauth",
-            choiceId: "openai",
-            choiceLabel: "ChatGPT Login",
-            appGuidedAuth: "oauth",
           }),
           runEmbeddedAgent: runEmbeddedAgent as never,
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
@@ -3142,20 +3214,20 @@ describe("activateSetupInference", () => {
       const result = await activateSetupInference({
         kind: "provider-auth",
         authChoice: "local-test",
+        provider,
+        providerChoice: {
+          pluginId: "local-test",
+          providerId: "local-test",
+          methodId: "local",
+          choiceId: "local-test",
+          choiceLabel: "Local Test Provider",
+          appGuidedDiscovery: true,
+        },
         workspace: "/tmp/openclaw-workspace",
         prompter: createWizardPrompter(),
         deps: {
           readConfigFileSnapshot: mockConfigSnapshot(initialConfig, {
             includeMetadata: true,
-          }),
-          resolvePluginProviders: () => [provider],
-          resolveManifestProviderAuthChoice: () => ({
-            pluginId: "local-test",
-            providerId: "local-test",
-            methodId: "local",
-            choiceId: "local-test",
-            choiceLabel: "Local Test Provider",
-            appGuidedDiscovery: true,
           }),
           runEmbeddedAgent: runEmbeddedAgent as never,
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
@@ -3188,18 +3260,18 @@ describe("activateSetupInference", () => {
     const result = await activateSetupInference({
       kind: "provider-auth",
       authChoice: "openai",
+      provider,
+      providerChoice: {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "oauth",
+        choiceId: "openai",
+        choiceLabel: "ChatGPT Login",
+        appGuidedAuth: "oauth",
+      },
       prompter: {} as never,
       isCancelled: () => true,
       deps: {
-        resolvePluginProviders: () => [provider],
-        resolveManifestProviderAuthChoice: () => ({
-          pluginId: "openai",
-          providerId: "openai",
-          methodId: "oauth",
-          choiceId: "openai",
-          choiceLabel: "ChatGPT Login",
-          appGuidedAuth: "oauth",
-        }),
         runEmbeddedAgent: runEmbeddedAgent as never,
       },
     });
@@ -3209,12 +3281,49 @@ describe("activateSetupInference", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "API-key", authKind: "api_key" as const, credentialType: "api_key" as const },
-    { name: "token", authKind: "token" as const, credentialType: "token" as const },
-  ])(
-    "uses a provider-owned $name method and persists it after a passing test",
-    async ({ authKind, credentialType }) => {
+  it.each(["raw", "padded"] as const)(
+    "redacts a %s prompted provider secret when authentication fails before persistence",
+    async (inputKind) => {
+      const secret = `prompted-${inputKind}-fixture-value-before-any-profile-write`;
+      const input = inputKind === "padded" ? ` \n${secret}\t ` : secret;
+      const provider = createGroqSetupProvider();
+      expectDefined(provider.auth[0], "provider method").run = async ({ prompter }) => {
+        const supplied = await prompter.text({ message: "Provider key", sensitive: true });
+        throw new Error(`The provider rejected this input: ${supplied.trim()}`);
+      };
+      const runEmbeddedAgent = vi.fn();
+      const result = await activateSetupInference({
+        kind: "provider-auth",
+        authChoice: "groq-api-key",
+        provider,
+        providerChoice: groqSetupChoice(),
+        prompter: createWizardPrompter({ text: vi.fn(async () => input) }),
+        deps: { runEmbeddedAgent },
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("provider rejected"),
+      });
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    [
+      { name: "API-key", authKind: "api_key" as const, credentialType: "api_key" as const },
+      { name: "token", authKind: "token" as const, credentialType: "token" as const },
+    ].flatMap(({ name, authKind, credentialType }) =>
+      (["api-key", "provider-auth"] as const).map((kind) => ({
+        name,
+        authKind,
+        credentialType,
+        kind,
+      })),
+    ),
+  )(
+    "uses a provider-owned $name method through $kind and persists it after a passing test",
+    async ({ authKind, credentialType, kind }) => {
       const stateDir = await suiteTempRootTracker.make("case");
       const agentDir = path.join(stateDir, "agent");
       const initialConfig = {
@@ -3238,19 +3347,26 @@ describe("activateSetupInference", () => {
         },
         order: { groq: ["groq:legacy"] },
       });
-      const runAuth = vi.fn(async (ctx: { opts?: { token?: string } }) => ({
-        profiles: [
-          {
-            profileId: "groq:default",
-            credential:
-              credentialType === "api_key"
-                ? { type: "api_key" as const, provider: "groq", key: ctx.opts?.token }
-                : { type: "token" as const, provider: "groq", token: ctx.opts?.token ?? "" },
-          },
-        ],
-        defaultModel: "groq/llama-3.3-70b-versatile",
-        configPatch: { agents: { defaults: { models: { "groq/llama-3.3-70b-versatile": {} } } } },
-      }));
+      const text = vi.fn(async () => "test-groq-key");
+      const prompter = createWizardPrompter({ text });
+      const runAuth = vi.fn(async (ctx: ProviderAuthContext) => {
+        const secret =
+          ctx.opts?.token ??
+          (await ctx.prompter.text({ message: "Provider key", sensitive: true }));
+        return {
+          profiles: [
+            {
+              profileId: "groq:default",
+              credential:
+                credentialType === "api_key"
+                  ? { type: "api_key" as const, provider: "groq", key: secret }
+                  : { type: "token" as const, provider: "groq", token: secret },
+            },
+          ],
+          defaultModel: "groq/llama-3.3-70b-versatile",
+          configPatch: { agents: { defaults: { models: { "groq/llama-3.3-70b-versatile": {} } } } },
+        };
+      });
       const provider: ProviderPlugin = {
         id: "groq",
         label: "Groq",
@@ -3261,18 +3377,10 @@ describe("activateSetupInference", () => {
             label: "Groq API key",
             kind: authKind,
             wizard: { choiceId: "groq-api-key" },
-            run: runAuth as never,
+            run: runAuth,
           },
         ],
       };
-      const resolvePluginProviders = vi.fn(() => [provider]);
-      const enablePluginInConfig = vi.fn((config: OpenClawConfig, pluginId: string) => ({
-        config: {
-          ...config,
-          plugins: { entries: { [pluginId]: { enabled: true } } },
-        },
-        enabled: true,
-      }));
       const runEmbeddedAgent = vi.fn(
         async (params: SuccessfulRunParams & { authProfileId?: string }) =>
           successfulRun("groq", "llama-3.3-70b-versatile", params),
@@ -3280,35 +3388,39 @@ describe("activateSetupInference", () => {
       const configHarness = createConfigTransformHarness(initialConfig);
 
       try {
-        const result = await activateGroqSetup({
-          apiKey: "test-groq-key",
+        const result = await activateSetupInference({
+          kind,
+          authChoice: "groq-api-key",
+          provider,
+          providerChoice: groqSetupChoice(),
+          ...(kind === "api-key" ? { apiKey: "test-groq-key" } : { prompter }),
           workspace: "/tmp/openclaw-workspace",
           deps: {
             readConfigFileSnapshot: mockConfigSnapshot(initialConfig, { includeMetadata: true }),
-            resolvePluginProviders,
-            enablePluginInConfig: enablePluginInConfig as never,
             runEmbeddedAgent: runEmbeddedAgent as never,
             transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           },
         });
 
         expect(result).toMatchObject({ ok: true, modelRef: "groq/llama-3.3-70b-versatile" });
-        expect(resolvePluginProviders).toHaveBeenCalledWith(
-          expect.objectContaining({
-            config: expect.objectContaining({
-              plugins: { entries: { groq: { enabled: true } } },
-            }),
-            onlyPluginIds: ["groq"],
-            workspaceDir: "/tmp/openclaw-workspace",
-          }),
-        );
         expect(runAuth).toHaveBeenCalledWith(
           expect.objectContaining({
-            opts: expect.objectContaining({ token: "test-groq-key", tokenProvider: "groq" }),
-            allowSecretRefPrompt: false,
-            secretInputMode: "plaintext",
+            config: expect.objectContaining({ plugins: { entries: { groq: { enabled: true } } } }),
           }),
         );
+        if (kind === "api-key") {
+          expect(runAuth).toHaveBeenCalledWith(
+            expect.objectContaining({
+              opts: expect.objectContaining({ token: "test-groq-key", tokenProvider: "groq" }),
+              allowSecretRefPrompt: false,
+              secretInputMode: "plaintext",
+            }),
+          );
+          expect(text).not.toHaveBeenCalled();
+        } else {
+          expect(text).toHaveBeenCalledWith(expect.objectContaining({ sensitive: true }));
+          expect(runAuth.mock.calls[0]?.[0].opts?.token).toBeUndefined();
+        }
         const activatedProfileId = runEmbeddedAgent.mock.calls[0]?.[0].authProfileId;
         if (!activatedProfileId) {
           throw new Error("expected setup auth profile");
@@ -3484,19 +3596,6 @@ describe("activateSetupInference", () => {
         },
       ],
     };
-    const enablePluginInConfig = (config: OpenClawConfig, pluginId: string) => ({
-      enabled: true as const,
-      config: {
-        ...config,
-        plugins: {
-          ...config.plugins,
-          entries: {
-            ...config.plugins?.entries,
-            [pluginId]: { ...config.plugins?.entries?.[pluginId], enabled: true },
-          },
-        },
-      },
-    });
     const runEmbeddedAgent = vi.fn(
       async (params: SuccessfulRunParams & { config: OpenClawConfig }) =>
         successfulRun("groq", "llama-3.3-70b-versatile", params),
@@ -3506,10 +3605,9 @@ describe("activateSetupInference", () => {
     try {
       const result = await activateGroqSetup({
         apiKey: "selected-key",
+        provider,
         deps: {
           readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
-          resolvePluginProviders: () => [provider],
-          enablePluginInConfig: enablePluginInConfig as never,
           runEmbeddedAgent: runEmbeddedAgent as never,
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         },
@@ -3795,7 +3893,6 @@ describe("activateSetupInference", () => {
         }),
       ).rejects.toThrow("default-agent inference route changed during its live test");
 
-      expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
       expect(
         Object.keys(readInMemoryAuthProfileStore(agentDir).profiles).filter((id) =>
           id.startsWith("groq:setup-"),
@@ -4054,9 +4151,9 @@ describe("activateSetupInference", () => {
       await expect(
         activateGroqSetup({
           apiKey: "candidate-key",
+          provider,
           deps: {
             readConfigFileSnapshot: mockConfigSnapshot(initialConfig),
-            resolvePluginProviders: () => [provider],
             transformConfigWithPendingPluginInstalls: configHarness.transform as never,
           },
         }),
@@ -4088,8 +4185,6 @@ describe("activateSetupInference", () => {
         config: initialConfig,
         runtimeConfig: initialConfig,
       })) as never,
-      resolvePluginProviders: () => [createGroqSetupProvider()],
-      resolveManifestProviderAuthChoice: groqSetupChoice,
       runEmbeddedAgent: vi.fn(successfulRunner("groq", "llama-3.3-70b-versatile")) as never,
       updateAuthProfileStoreWithLock: vi.fn(async (params) => {
         authWriteDirs.push(params.agentDir ?? "");
@@ -4108,6 +4203,8 @@ describe("activateSetupInference", () => {
           kind: "api-key",
           authChoice: "groq-api-key",
           apiKey: "candidate-key",
+          provider: createGroqSetupProvider(),
+          providerChoice: groqSetupChoice(),
           deps: deps as never,
         }),
       ).rejects.toThrow("simulated transformer resolution failure");
@@ -4204,20 +4301,20 @@ describe("activateSetupInference", () => {
         kind: "api-key",
         authChoice: "github-copilot",
         apiKey: "github-token",
+        provider,
+        providerChoice: {
+          pluginId: "github-copilot",
+          providerId: "github-copilot",
+          methodId: "device",
+          choiceId: "github-copilot",
+          choiceLabel: "GitHub Copilot",
+          optionKey: "githubCopilotToken",
+          cliOption: "--github-copilot-token <token>",
+          appGuidedSecret: true,
+        },
         workspace: "/tmp/openclaw-workspace",
         deps: {
           readConfigFileSnapshot: mockConfigSnapshot(initialConfig, { includeMetadata: true }),
-          resolvePluginProviders: () => [provider],
-          resolveManifestProviderAuthChoice: () => ({
-            pluginId: "github-copilot",
-            providerId: "github-copilot",
-            methodId: "device",
-            choiceId: "github-copilot",
-            choiceLabel: "GitHub Copilot",
-            optionKey: "githubCopilotToken",
-            cliOption: "--github-copilot-token <token>",
-            appGuidedSecret: true,
-          }),
           runEmbeddedAgent: runEmbeddedAgent as never,
           transformConfigWithPendingPluginInstalls: configHarness.transform as never,
         },
@@ -4858,6 +4955,101 @@ describe("activateSetupInference", () => {
     });
   });
 
+  it.each(["auth failure", "probe failure", "success"] as const)(
+    "owns a catalog provider installation through %s without replacing the Gateway generation",
+    async (outcome) => {
+      const { stateDir, agentDir, initialConfig } = await createMainAgentFixture();
+      const installPath = path.join(stateDir, "node_modules", "@fixture", "groq");
+      await fs.mkdir(installPath, { recursive: true });
+      const record: PluginInstallRecord = {
+        source: "npm",
+        spec: "@fixture/groq@1.0.0",
+        installPath,
+      };
+      const choice = groqSetupChoice();
+      const provider = createGroqSetupProvider();
+      const runAuth = vi.fn(async (context: ProviderAuthContext) => {
+        expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(true);
+        expect(readInMemoryAuthProfileStore(agentDir).profiles).toEqual({});
+        if (outcome === "auth failure") {
+          throw new Error("fixture auth failed");
+        }
+        return await expectDefined(provider.auth[0], "provider auth").run(context);
+      });
+      const method = { ...expectDefined(provider.auth[0], "provider auth"), run: runAuth };
+      vi.mocked(providerInstallCatalog.loadProviderSetupAuthChoices).mockResolvedValue([choice]);
+      vi.spyOn(providerAuthChoiceRuntime, "prepareProviderAuthChoiceRuntime").mockImplementation(
+        async ({ config, onPrepared }) => {
+          const preparedConfig: OpenClawConfig = {
+            ...config,
+            plugins: {
+              ...config.plugins,
+              allow: ["groq"],
+              load: { paths: [installPath] },
+              entries: { groq: { enabled: true } },
+              installs: { groq: record },
+            },
+          };
+          const preparation = {
+            config: preparedConfig,
+            installation: { pluginId: "groq", record },
+          };
+          await onPrepared?.(preparation);
+          return { ...preparation, status: "ready", choice, provider, method };
+        },
+      );
+      const oldRegistry = createEmptyPluginRegistry();
+      const probeRegistry = createEmptyPluginRegistry();
+      probeRegistry.providers.push({ pluginId: "groq", provider, source: "fixture" });
+      mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(probeRegistry);
+      const configHarness = createConfigTransformHarness(initialConfig);
+      const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(probeRegistry);
+        expect(readInMemoryAuthProfileStore(agentDir).profiles).toEqual({});
+        if (outcome === "probe failure") {
+          throw new Error("fixture inference failed");
+        }
+        return successfulRun("groq", "llama-3.3-70b-versatile", params);
+      });
+      await withPluginRuntimeGatewayRequestScope(
+        { isWebchatConnect: () => false, pluginRegistry: oldRegistry },
+        async () => {
+          const result = await activateSetupInference({
+            kind: "api-key",
+            authChoice: choice.choiceId,
+            apiKey: "fixture-key",
+            deps: {
+              readConfigFileSnapshot: configHarness.readSnapshot,
+              runEmbeddedAgent,
+              transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+              clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
+              clearPluginMetadataLifecycleCaches: vi.fn(),
+              invalidatePluginRuntimeDiscoveryAfterConfigMutation: vi.fn(async () => {}),
+            },
+          });
+          expect(result).toMatchObject({ ok: outcome === "success" });
+          expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(oldRegistry);
+        },
+      );
+      expect(hasRetainedManagedNpmInstallMarker(installPath)).toBe(true);
+      if (outcome === "success") {
+        expect(configHarness.installedRecords()).toEqual({ groq: record });
+        expect(configHarness.current().plugins).toMatchObject({
+          allow: ["groq"],
+          load: { paths: [installPath] },
+          entries: { groq: { enabled: true } },
+        });
+        expect(Object.keys(readInMemoryAuthProfileStore(agentDir).profiles)).toHaveLength(1);
+      } else {
+        expect(configHarness.transform).not.toHaveBeenCalled();
+        expect(readInMemoryAuthProfileStore(agentDir).profiles).toEqual({});
+        if (outcome === "auth failure") {
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        }
+      }
+    },
+  );
+
   it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {
     const oldRegistry = createEmptyPluginRegistry();
     const configHarness = createPreRosterConfigTransformHarness();
@@ -5128,7 +5320,7 @@ describe("activateSetupInference", () => {
     expect(result).toMatchObject({
       ok: false,
       status: "unavailable",
-      error: expect.stringContaining("retain the staged Codex runtime safely"),
+      error: expect.stringContaining("retain the staged plugin safely"),
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     expect(transformConfig).not.toHaveBeenCalled();
@@ -5175,7 +5367,7 @@ describe("activateSetupInference", () => {
     });
 
     await expect(activation).rejects.toThrow(
-      "stopped before its Codex runtime package could be retained safely",
+      "stopped before its plugin package could be retained safely",
     );
     expect(markRetainedInstall).toHaveBeenCalledTimes(2);
     expect(refreshPluginRegistry).toHaveBeenCalledTimes(2);

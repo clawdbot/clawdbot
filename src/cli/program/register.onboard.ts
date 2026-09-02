@@ -5,7 +5,10 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
-import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
+import {
+  CORE_ONBOARD_AUTH_FLAGS,
+  withRegisteredProviderAuthFlags,
+} from "../../commands/onboard-core-auth-flags.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -16,7 +19,8 @@ import type {
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
+import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
+import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-install-catalog.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -64,7 +68,6 @@ async function validateRecommendationParentOptions(
   );
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
 const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
 const NO_RECOMMENDATION_PARENT_OPTIONS = new Set<string>();
 
@@ -72,48 +75,30 @@ type OnboardAuthFlag = {
   readonly cliOption: string;
   readonly description: string;
   readonly optionKey: string;
+  readonly authChoice: string;
+  readonly cliFlag: string;
 };
 
-function extractCliFlags(cliOption: string): string[] {
-  return cliOption
-    .split(/[ ,|]+/)
-    .filter((part) => part.startsWith("-"))
-    .map((part) => {
-      const equalsIndex = part.indexOf("=");
-      return equalsIndex === -1 ? part : part.slice(0, equalsIndex);
-    });
-}
-
-function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
-  // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
-  const seenCliFlags = new Set<string>();
-  const flags: OnboardAuthFlag[] = [];
-  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveProviderOnboardAuthFlags()]) {
-    const cliFlags = extractCliFlags(flag.cliOption);
-    if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
-      continue;
-    }
-    for (const cliFlag of cliFlags) {
-      seenCliFlags.add(cliFlag);
-    }
-    flags.push(flag);
-  }
-  return flags;
-}
-
-const ONBOARD_AUTH_FLAGS = resolveOnboardAuthFlags();
+const registeredProviderAuthFlags = new WeakMap<Command, OnboardAuthFlag[]>();
 
 function pickOnboardProviderAuthOptionValues(
   opts: Record<string, unknown>,
+  command: Command,
 ): Partial<Record<string, string | undefined>> {
   return Object.fromEntries(
-    ONBOARD_AUTH_FLAGS.map((flag) => [flag.optionKey, opts[flag.optionKey] as string | undefined]),
+    (registeredProviderAuthFlags.get(command) ?? []).map((flag) => [
+      flag.optionKey,
+      Object.hasOwn(opts, flag.optionKey) ? readStringValue(opts[flag.optionKey]) : undefined,
+    ]),
   );
 }
 
 export function registerOnboardAuthOptions(command: Command): Command {
   command
-    .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
+    .option(
+      "--auth-choice <choice>",
+      `Auth: ${formatAuthChoiceChoicesForCli({ includeSkip: true })}`,
+    )
     .option(
       "--token-provider <id>",
       "Token provider id (non-interactive; used with --auth-choice token)",
@@ -131,11 +116,7 @@ export function registerOnboardAuthOptions(command: Command): Command {
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
 
-  for (const providerFlag of ONBOARD_AUTH_FLAGS) {
-    command.option(providerFlag.cliOption, providerFlag.description);
-  }
-
-  return command
+  command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -146,6 +127,30 @@ export function registerOnboardAuthOptions(command: Command): Command {
     )
     .option("--custom-image-input", "Mark the custom provider model as image-capable")
     .option("--custom-text-input", "Mark the custom provider model as text-only");
+  const reservedOptions = [...command.options, ...command.createHelp().visibleOptions(command)];
+  const reservedKeys = new Set(reservedOptions.map((option) => option.attributeName()));
+  const reservedFlags = new Set(reservedOptions.flatMap((option) => [option.short, option.long]));
+  const accepted: OnboardAuthFlag[] = [];
+  for (const providerFlag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveProviderOnboardAuthFlags()]) {
+    const option = new Option(providerFlag.cliOption, providerFlag.description);
+    // Commander aliases negated and camel-cased flags to their actual option key.
+    const optionKey = option.attributeName();
+    if (
+      optionKey !== providerFlag.optionKey ||
+      isBlockedObjectKey(optionKey) ||
+      reservedKeys.has(optionKey) ||
+      [option.short, option.long].some((flag) => flag !== undefined && reservedFlags.has(flag))
+    ) {
+      continue;
+    }
+    command.addOption(option);
+    accepted.push(providerFlag);
+    reservedKeys.add(optionKey);
+    reservedFlags.add(option.long);
+    reservedFlags.add(option.short);
+  }
+  registeredProviderAuthFlags.set(command, accepted);
+  return command;
 }
 
 export function registerOnboardGatewayOptions(command: Command): Command {
@@ -202,7 +207,10 @@ export function registerOnboardRuntimeOptions(
     .option("--import-secrets", "Import supported secrets during onboarding migration", false);
 }
 
-function pickOnboardAuthOptionValues(opts: Record<string, unknown>): Partial<OnboardOptions> {
+function pickOnboardAuthOptionValues(
+  opts: Record<string, unknown>,
+  command: Command,
+): Partial<OnboardOptions> {
   const customTextInput = opts.customTextInput === true;
   return {
     authChoice: opts.authChoice as AuthChoice | undefined,
@@ -211,7 +219,7 @@ function pickOnboardAuthOptionValues(opts: Record<string, unknown>): Partial<Onb
     tokenProfileId: opts.tokenProfileId as string | undefined,
     tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
     secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
-    ...pickOnboardProviderAuthOptionValues(opts),
+    ...pickOnboardProviderAuthOptionValues(opts, command),
     cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
     cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
     customBaseUrl: opts.customBaseUrl as string | undefined,
@@ -237,44 +245,47 @@ export async function resolveOnboardCommandOptions(
     const message = "Use either --custom-image-input or --custom-text-input, not both.";
     return rejectOnboardingOption({ json: opts.json === true }, runtime, message);
   }
-  return {
-    workspace: readStringValue(opts.workspace),
-    agentName: readStringValue(opts.agentName),
-    nonInteractive: Boolean(opts.nonInteractive),
-    acceptRisk: Boolean(opts.acceptRisk),
-    classic: Boolean(opts.classic),
-    tui: Boolean(opts.tui),
-    flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
-    mode: opts.mode as "local" | "remote" | undefined,
-    ...pickOnboardAuthOptionValues(opts),
-    gatewayPort: parseGatewayPortOption(opts.gatewayPort, "--gateway-port"),
-    gatewayBind: opts.gatewayBind as GatewayBind | undefined,
-    gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
-    gatewayToken: readStringValue(opts.gatewayToken),
-    gatewayTokenRefEnv: readStringValue(opts.gatewayTokenRefEnv),
-    gatewayPassword: readStringValue(opts.gatewayPassword),
-    remoteUrl: readStringValue(opts.remoteUrl),
-    remoteToken: readStringValue(opts.remoteToken),
-    remotePassword: readStringValue(opts.remotePassword),
-    tailscale: opts.tailscale as TailscaleMode | undefined,
-    reset: Boolean(opts.reset),
-    resetScope: opts.resetScope as ResetScope | undefined,
-    installDaemon: resolveInstallDaemonFlag(command),
-    daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
-    skipChannels: Boolean(opts.skipChannels),
-    skipSkills: Boolean(opts.skipSkills),
-    skipBootstrap: Boolean(opts.skipBootstrap),
-    skipSearch: Boolean(opts.skipSearch),
-    skipHealth: Boolean(opts.skipHealth),
-    skipUi: Boolean(opts.skipUi),
-    suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
-    skipHooks: Boolean(opts.skipHooks),
-    nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
-    importFrom: readStringValue(opts.importFrom),
-    importSource: readStringValue(opts.importSource),
-    importSecrets: Boolean(opts.importSecrets),
-    json: Boolean(opts.json),
-  };
+  return withRegisteredProviderAuthFlags(
+    {
+      workspace: readStringValue(opts.workspace),
+      agentName: readStringValue(opts.agentName),
+      nonInteractive: Boolean(opts.nonInteractive),
+      acceptRisk: Boolean(opts.acceptRisk),
+      classic: Boolean(opts.classic),
+      tui: Boolean(opts.tui),
+      flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
+      mode: opts.mode as "local" | "remote" | undefined,
+      ...pickOnboardAuthOptionValues(opts, command),
+      gatewayPort: parseGatewayPortOption(opts.gatewayPort, "--gateway-port"),
+      gatewayBind: opts.gatewayBind as GatewayBind | undefined,
+      gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
+      gatewayToken: readStringValue(opts.gatewayToken),
+      gatewayTokenRefEnv: readStringValue(opts.gatewayTokenRefEnv),
+      gatewayPassword: readStringValue(opts.gatewayPassword),
+      remoteUrl: readStringValue(opts.remoteUrl),
+      remoteToken: readStringValue(opts.remoteToken),
+      remotePassword: readStringValue(opts.remotePassword),
+      tailscale: opts.tailscale as TailscaleMode | undefined,
+      reset: Boolean(opts.reset),
+      resetScope: opts.resetScope as ResetScope | undefined,
+      installDaemon: resolveInstallDaemonFlag(command),
+      daemonRuntime: opts.daemonRuntime as GatewayDaemonRuntime | undefined,
+      skipChannels: Boolean(opts.skipChannels),
+      skipSkills: Boolean(opts.skipSkills),
+      skipBootstrap: Boolean(opts.skipBootstrap),
+      skipSearch: Boolean(opts.skipSearch),
+      skipHealth: Boolean(opts.skipHealth),
+      skipUi: Boolean(opts.skipUi),
+      suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
+      skipHooks: Boolean(opts.skipHooks),
+      nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
+      importFrom: readStringValue(opts.importFrom),
+      importSource: readStringValue(opts.importSource),
+      importSecrets: Boolean(opts.importSecrets),
+      json: Boolean(opts.json),
+    },
+    registeredProviderAuthFlags.get(command) ?? [],
+  );
 }
 
 export function registerOnboardCommand(program: Command): void {
@@ -308,11 +319,11 @@ export function registerOnboardCommand(program: Command): void {
     .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
     .option("--mode <mode>", "Onboard mode: local|remote");
 
-  registerOnboardAuthOptions(command);
   registerOnboardGatewayOptions(command);
   registerOnboardRemoteOptions(command);
   registerOnboardRuntimeOptions(command, "onboard");
   command.option("--json", "Output JSON summary", false);
+  registerOnboardAuthOptions(command);
 
   const recommendations = command
     .command("recommendations")

@@ -9,11 +9,11 @@ import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
 const writeWizardConfigFile = vi.hoisted(() => vi.fn(async (config: OpenClawConfig) => config));
 vi.mock("../../../wizard/setup.shared.js", () => ({ writeWizardConfigFile }));
 
-const formatAuthChoiceChoicesForCli = vi.hoisted(() =>
-  vi.fn(() => "custom-api-key|skip|demo-provider-api-key"),
+const listAuthChoiceChoicesForCli = vi.hoisted(() =>
+  vi.fn(() => ["custom-api-key", "skip", "demo-provider-api-key"]),
 );
 vi.mock("../../auth-choice-options.js", () => ({
-  formatAuthChoiceChoicesForCli,
+  listAuthChoiceChoicesForCli,
 }));
 
 const applyNonInteractivePluginProviderChoice = vi.hoisted(() => vi.fn(async () => undefined));
@@ -88,28 +88,34 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("continues to apply an enumerated provider auth choice", async () => {
-    const runtime = createRuntime();
-    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-    const resolvedConfig = { auth: { profiles: { "demo-provider:default": { mode: "api_key" } } } };
-    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
+  it.each(["demo-provider-api-key", "demo|provider-api-key"])(
+    "continues to apply an enumerated opaque provider auth choice %s",
+    async (authChoice) => {
+      const runtime = createRuntime();
+      listAuthChoiceChoicesForCli.mockReturnValueOnce(["custom-api-key", "skip", authChoice]);
+      const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+      const resolvedConfig = {
+        auth: { profiles: { "demo-provider:default": { mode: "api_key" } } },
+      };
+      applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
 
-    const result = await applyNonInteractiveAuthChoice({
-      nextConfig,
-      authChoice: "demo-provider-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: nextConfig,
-      target,
-    });
+      const result = await applyNonInteractiveAuthChoice({
+        nextConfig,
+        authChoice,
+        opts: {} as never,
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+      });
 
-    expect(result).toBe(resolvedConfig);
-    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledWith(
-      expect.objectContaining({ target }),
-    );
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+      expect(result).toBe(resolvedConfig);
+      expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledWith(
+        expect.objectContaining({ authChoice, target }),
+      );
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves generic provider auth from the selected agent workspace", async () => {
     const runtime = createRuntime();
@@ -176,7 +182,7 @@ describe("applyNonInteractiveAuthChoice", () => {
 
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
-      '"demo-provider-legacy" is no longer supported. Use --auth-choice "demo-provider-modern-api" instead.',
+      '"demo-provider-legacy" is no longer supported. Use --auth-choice demo-provider-modern-api instead.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
@@ -200,35 +206,41 @@ describe("applyNonInteractiveAuthChoice", () => {
 
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
-      '"legacy\\u001b[31mchoice" is no longer supported. Use --auth-choice "modern\\nchoice" instead.',
+      "\"legacy\\u001b[31mchoice\" is no longer supported. Use --auth-choice 'modern\\nchoice' instead.",
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
   });
 
-  it("keeps replacement guidance for deprecated install-catalog choices", async () => {
-    const runtime = createRuntime();
-    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-    resolveDeprecatedProviderInstallCatalogEntry.mockReturnValueOnce({
-      choiceId: "qwen-api-key",
-    } as never);
+  it.each([
+    { choiceId: "qwen-api-key", expectedArgument: "qwen-api-key" },
+    { choiceId: "modern$(printf quoted)", expectedArgument: "'modern$(printf quoted)'" },
+  ])(
+    "keeps shell-safe replacement guidance for $choiceId",
+    async ({ choiceId, expectedArgument }) => {
+      const runtime = createRuntime();
+      const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+      resolveDeprecatedProviderInstallCatalogEntry.mockReturnValueOnce({
+        choiceId,
+      } as never);
 
-    const result = await applyNonInteractiveAuthChoice({
-      nextConfig,
-      authChoice: "modelstudio-api-key",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: nextConfig,
-      target,
-    });
+      const result = await applyNonInteractiveAuthChoice({
+        nextConfig,
+        authChoice: "modelstudio-api-key",
+        opts: {} as never,
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+      });
 
-    expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(
-      '"modelstudio-api-key" is no longer supported. Use --auth-choice "qwen-api-key" instead.',
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
-  });
+      expect(result).toBeNull();
+      expect(runtime.error).toHaveBeenCalledWith(
+        `"modelstudio-api-key" is no longer supported. Use --auth-choice ${expectedArgument} instead.`,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(applyNonInteractivePluginProviderChoice).not.toHaveBeenCalled();
+    },
+  );
 
   it("stores custom provider env refs through the local auth-choice seam", async () => {
     const runtime = createRuntime();

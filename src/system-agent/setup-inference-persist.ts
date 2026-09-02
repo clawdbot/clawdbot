@@ -29,12 +29,14 @@ import {
   type ActivateSetupInferenceDeps,
   SETUP_INFERENCE_TEST_PROMPT,
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
+  SetupInferenceActivationUnavailableError,
   SetupInferenceCancelledError,
   type SetupInferenceFailureStatus,
   setupInferenceLog,
 } from "./setup-inference-core.js";
 import {
   type SetupInferenceTestPlan,
+  type SetupInferenceConfigPatch,
   extractRunWinnerError,
   mapFailoverReasonToSetupStatus,
   resolveStrictSetupAuthProfileError,
@@ -71,7 +73,8 @@ export async function cleanupSetupInferenceTempDir(params: {
   }
 }
 
-export async function isCodexInstallRecordPersisted(
+export async function isSetupPluginInstallRecordPersisted(
+  pluginId: string,
   record: PluginInstallRecord,
   deps: ActivateSetupInferenceDeps,
 ): Promise<boolean> {
@@ -81,20 +84,19 @@ export async function isCodexInstallRecordPersisted(
       (await import("../plugins/installed-plugin-index-records.js"))
         .readPersistedInstalledPluginIndexInstallRecords;
     const currentInstallRecords = await readInstallRecords();
-    return currentInstallRecords !== null && isDeepStrictEqual(currentInstallRecords.codex, record);
+    return (
+      currentInstallRecords !== null && isDeepStrictEqual(currentInstallRecords[pluginId], record)
+    );
   } catch {
     return false;
   }
 }
 
-export async function retainUnownedCodexInstall(params: {
+export async function retainUnownedSetupPluginInstall(params: {
+  pluginId: string;
   record: PluginInstallRecord;
-  verifyOwnership: boolean;
   deps: ActivateSetupInferenceDeps;
 }): Promise<boolean> {
-  if (params.verifyOwnership && (await isCodexInstallRecordPersisted(params.record, params.deps))) {
-    return true;
-  }
   if (params.record.source !== "npm" || !params.record.installPath?.trim()) {
     return true;
   }
@@ -107,24 +109,26 @@ export async function retainUnownedCodexInstall(params: {
       (await import("../plugins/managed-npm-retention.js")).markRetainedManagedNpmInstall;
     const marked = await markRetained({
       packageDir: params.record.installPath,
-      pluginId: "codex",
+      pluginId: params.pluginId,
       reason: "openclaw-inference-activation-not-committed",
     });
     if (!marked) {
-      setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");
+      setupInferenceLog.warn("Could not retain the uncommitted setup plugin package generation.");
     }
     return marked;
   } catch {
     // Retention is best effort and marker-after-adoption is non-destructive.
     // A later install or GC may still reuse or remove the unowned generation.
-    setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");
+    setupInferenceLog.warn("Could not retain the uncommitted setup plugin package generation.");
     return false;
   } finally {
-    await clearUnownedCodexInstallCaches(params.deps);
+    await clearUnownedSetupPluginInstallCaches(params.deps);
   }
 }
 
-async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps): Promise<void> {
+async function clearUnownedSetupPluginInstallCaches(
+  deps: ActivateSetupInferenceDeps,
+): Promise<void> {
   try {
     const clearInstallRecords =
       deps.clearLoadInstalledPluginIndexInstallRecordsCache ??
@@ -133,7 +137,7 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
     clearInstallRecords();
   } catch {
     setupInferenceLog.warn(
-      "Could not clear the plugin install-record cache after failed Codex activation.",
+      "Could not clear the plugin install-record cache after failed inference activation.",
     );
   }
   try {
@@ -142,7 +146,9 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
       (await import("../plugins/plugin-metadata-lifecycle.js")).clearPluginMetadataLifecycleCaches;
     clearPluginMetadata();
   } catch {
-    setupInferenceLog.warn("Could not clear plugin metadata caches after failed Codex activation.");
+    setupInferenceLog.warn(
+      "Could not clear plugin metadata caches after failed inference activation.",
+    );
   }
   try {
     const invalidateRuntimeDiscovery =
@@ -152,7 +158,7 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
     await invalidateRuntimeDiscovery({ logger: setupInferenceLog });
   } catch {
     setupInferenceLog.warn(
-      "Could not clear plugin runtime discovery after failed Codex activation.",
+      "Could not clear plugin runtime discovery after failed inference activation.",
     );
   }
 }
@@ -205,30 +211,31 @@ function mergePatchConflicts(base: unknown, current: unknown, patch: unknown): b
   );
 }
 
-export function applyManualAuthConfig(
+export function applySetupInferenceConfigPatch(
   config: OpenClawConfig,
-  manualAuth: NonNullable<SetupInferenceTestPlan["manualAuth"]>,
+  prepared: SetupInferenceConfigPatch,
   configKind: "runtime" | "source",
-  enablePlugin: typeof enablePluginInConfig = enablePluginInConfig,
 ): OpenClawConfig {
   let enabledConfig = config;
-  if (manualAuth.pluginId) {
-    const enableResult = enablePlugin(config, manualAuth.pluginId);
+  if (prepared.pluginId) {
+    const enableResult = enablePluginInConfig(config, prepared.pluginId);
     if (!enableResult.enabled) {
-      throw new Error(`Provider plugin ${manualAuth.pluginId} is ${enableResult.reason}.`);
+      throw new SetupInferenceActivationUnavailableError(
+        `Provider plugin ${prepared.pluginId} is ${enableResult.reason}.`,
+      );
     }
     enabledConfig = enableResult.config;
   }
   // Runtime validation includes resolved defaults; source validation must compare
   // only authored state so normal materialization cannot impersonate a concurrent edit.
   const configBase =
-    configKind === "runtime" ? manualAuth.runtimeConfigBase : manualAuth.sourceConfigBase;
-  if (mergePatchConflicts(configBase, enabledConfig, manualAuth.configPatch)) {
+    configKind === "runtime" ? prepared.runtimeConfigBase : prepared.sourceConfigBase;
+  if (mergePatchConflicts(configBase, enabledConfig, prepared.configPatch)) {
     throw new Error(
       "Provider configuration changed during the live inference test, so the verified credential was not saved. Review the current provider settings and retry.",
     );
   }
-  return applyMergePatch(enabledConfig, manualAuth.configPatch) as OpenClawConfig;
+  return applyMergePatch(enabledConfig, prepared.configPatch) as OpenClawConfig;
 }
 
 export type ManualAuthPersistenceReceipt = {

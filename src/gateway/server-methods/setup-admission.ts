@@ -4,6 +4,7 @@ import {
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import {
   SetupTargetLockedError,
@@ -37,7 +38,9 @@ export async function runExclusiveSystemAgentSetupActivation<T>(
   let admitted = false;
   const admittedTask = async () => {
     admitted = true;
-    return await task();
+    // Setup refreshes metadata once, then pins it through prompts without
+    // replacing the running Gateway's plugin cache.
+    return await withPluginCache(createPluginCache(), task);
   };
   try {
     return await withSetupMigrationTargetLock(resolveStateDir(), admittedTask);
