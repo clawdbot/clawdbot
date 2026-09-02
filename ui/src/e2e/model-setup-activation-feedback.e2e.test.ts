@@ -1,16 +1,27 @@
 // Real browser flow with a mocked Gateway; no Ollama server or model is used.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
-import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { beforeEach, expect, it } from "vitest";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Model Setup activation feedback mocked Gateway E2E",
   startServerBeforeBrowser: true,
 });
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("model-setup-activation-feedback", artifactRoot)
+    : undefined;
+});
 
 async function viewportIntersection(target: Locator): Promise<number> {
   return target.evaluate(
@@ -26,18 +37,126 @@ async function viewportIntersection(target: Locator): Promise<number> {
 }
 
 suite.define(() => {
+  it("bootstraps chat after leaving direct Model Setup despite unavailable auth status", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 800 } },
+      async ({ page }) => {
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "openclaw.setup.detect"],
+          heldMethods: ["openclaw.setup.detect"],
+          historyMessages: [
+            { role: "assistant", content: [{ type: "text", text: "The existing chat is ready." }] },
+          ],
+          methodResponses: {
+            "openclaw.setup.detect": {
+              candidates: [],
+              manualProviders: [],
+              workspace: "/tmp/openclaw-e2e",
+              setupComplete: false,
+            },
+            "models.authStatus": {
+              __mockError: {
+                code: "UNAVAILABLE",
+                message: "Model authentication status is unavailable.",
+                retryable: false,
+              },
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+        await gateway.waitForRequest("openclaw.setup.detect");
+        await page.locator(".model-setup__loading").waitFor();
+        await page.waitForFunction(() => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: ApplicationRuntime;
+          };
+          return app.runtime.context.gateway.snapshot.client?.recoveryScopeReady;
+        });
+        const connectionOwner = await page.evaluateHandle(() => {
+          const app = document.querySelector("openclaw-app") as HTMLElement & {
+            runtime: ApplicationRuntime;
+          };
+          const client = app.runtime.context.gateway.snapshot.client!;
+          return { client, recoveryScope: client.recoveryScope };
+        });
+        expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+        await page.getByRole("button", { name: "Back to app" }).click();
+        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("models.authStatus");
+        await page.getByText("The existing chat is ready.", { exact: true }).waitFor();
+
+        // Revisit before the old detection replies: this visit must own a fresh
+        // request rather than inherit the abandoned route loader's pending work.
+        await page.goBack();
+        await gateway.waitForRequest("openclaw.setup.detect", { after: 1 });
+        await gateway.resolveDeferred("openclaw.setup.detect");
+        await page
+          .locator(".model-setup__intro")
+          .getByRole("button", { name: "Check again" })
+          .waitFor();
+        expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(2);
+        await page.getByRole("button", { name: "Back to app" }).click();
+        await page.getByText("The existing chat is ready.", { exact: true }).waitFor();
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await expect.poll(() => composer.isEnabled()).toBe(true);
+        await composer.fill("Continue after setup.");
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const sent = await gateway.waitForRequest("chat.send");
+        const params = asOptionalRecord(sent.params);
+        expect(params).toMatchObject({
+          message: "Continue after setup.",
+          idempotencyKey: expect.any(String),
+        });
+        await gateway.emitChatFinal({
+          runId: String(params?.idempotencyKey),
+          text: "Chat remains usable.",
+        });
+        await page.getByRole("paragraph").filter({ hasText: "Chat remains usable." }).waitFor();
+        expect(await gateway.getRequests("connect")).toHaveLength(1);
+        expect(
+          await connectionOwner.evaluate(({ client, recoveryScope }) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: ApplicationRuntime;
+            };
+            return {
+              sameClient: app.runtime.context.gateway.snapshot.client === client,
+              recoveryReady: client.recoveryScopeReady,
+              sameRecoveryScope: client.recoveryScope === recoveryScope,
+            };
+          }),
+        ).toEqual({ sameClient: true, recoveryReady: true, sameRecoveryScope: true });
+        await connectionOwner.dispose();
+        expect(pageErrors).toEqual([]);
+        if (artifactDir) {
+          await page.screenshot({ path: path.join(artifactDir, "setup-back-to-chat.png") });
+        }
+      },
+    );
+  });
+
   it.each([
     { entry: "manual", width: 1080 },
     { entry: "candidate", width: 1280 },
   ])(
-    "reveals $entry activation feedback in the scrolled viewport without taking focus",
+    "shows $entry activation feedback in a modal and restores focus after closing",
     async ({ entry, width }) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 720 } },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
-            featureMethods: ["openclaw.setup.detect", "openclaw.setup.activate"],
+            featureMethods: [
+              "openclaw.setup.detect",
+              "openclaw.setup.activate.start",
+              "wizard.next",
+            ],
             methodResponses: {
+              "wizard.next": {
+                done: true,
+                status: "error",
+                error: "Authentication failed (provider returned HTTP 401).",
+              },
               "openclaw.setup.detect": {
                 candidates:
                   entry === "candidate"
@@ -81,60 +200,48 @@ suite.define(() => {
           expect(
             await page.locator(".content").evaluate((element) => element.scrollTop),
           ).toBeGreaterThan(0);
-          await gateway.deferNext("openclaw.setup.activate");
+          await gateway.deferNext("openclaw.setup.activate.start");
           await activate.click();
-          const request = await gateway.waitForRequest("openclaw.setup.activate");
+          const request = await gateway.waitForRequest("openclaw.setup.activate.start");
           expect(request.params).toMatchObject(
             entry === "manual"
               ? { kind: "api-key", authChoice: "openai", apiKey: "invalid-test-key" }
               : { kind: "provider-auto:local", modelRef: "local/model-5" },
           );
-          const progress = setup.getByRole("status");
+          const dialog = page.locator("openclaw-modal-dialog");
+          const progress = dialog.getByRole("status");
           await progress.waitFor();
           expect(await progress.count()).toBe(1);
           expect.soft(await viewportIntersection(progress)).toBeGreaterThan(0.99);
-          expect(
-            await page.evaluate(
-              () => document.activeElement?.closest('[role="status"], [role="alert"]') !== null,
-            ),
-          ).toBe(false);
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({
               path: path.join(artifactDir, `${entry}-viewport-pending.png`),
             });
           }
 
-          // The operator may scroll away while waiting. Completion must reveal
-          // feedback again without moving focus from another control.
-          await scrollToBottom();
-          expect(await viewportIntersection(progress)).toBe(0);
-          const focusAnchor = page.locator(".content-header a").first();
-          await focusAnchor.evaluate((element) =>
-            (element as HTMLElement).focus({ preventScroll: true }),
-          );
-          await gateway.resolveDeferred("openclaw.setup.activate", {
-            ok: false,
-            status: "auth",
-            error: "Authentication failed (provider returned HTTP 401).",
+          await gateway.resolveDeferred("openclaw.setup.activate.start", {
+            sessionId: "activation-session",
+            done: false,
+            status: "running",
           });
-          const failure = setup.getByRole("alert");
+          const failure = dialog.getByRole("alert");
           await failure.waitFor();
           expect(await failure.count()).toBe(1);
           expect(await failure.textContent()).toContain("HTTP 401");
           expect.soft(await viewportIntersection(failure)).toBeGreaterThan(0.99);
-          expect(await focusAnchor.evaluate((element) => document.activeElement === element)).toBe(
-            true,
-          );
           expect(await setup.textContent()).not.toContain("invalid-test-key");
           if (artifactDir) {
             await page.screenshot({ path: path.join(artifactDir, `${entry}-viewport-failed.png`) });
           }
+          await dialog.getByRole("button", { name: "Close", exact: true }).click();
+          await expect.poll(() => dialog.count()).toBe(0);
+          await expect
+            .poll(() => activate.evaluate((element) => document.activeElement === element))
+            .toBe(true);
           await scrollToBottom();
           await input.fill("another-invalid-test-key");
-          expect(await viewportIntersection(failure)).toBe(0);
           expect(await input.evaluate((element) => document.activeElement === element)).toBe(true);
-          expect(await gateway.getRequests("openclaw.setup.activate")).toHaveLength(1);
+          expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(1);
         },
       );
     },
@@ -157,7 +264,7 @@ suite.define(() => {
             featureMethods: [
               "openclaw.setup.detect",
               "openclaw.setup.prepare.start",
-              "openclaw.setup.activate",
+              "openclaw.setup.activate.start",
               "wizard.next",
             ],
             methodResponses: {
@@ -221,41 +328,43 @@ suite.define(() => {
           await expect
             .poll(() => page.getByLabel("Ollama base URL").inputValue())
             .toBe("http://127.0.0.1:11434");
-          await gateway.deferNext("openclaw.setup.activate");
+          await gateway.deferNext("openclaw.setup.activate.start");
           await page.getByRole("button", { name: "Submit", exact: true }).click();
-          expect((await gateway.waitForRequest("openclaw.setup.activate")).params).toEqual({
+          expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toEqual({
             kind: "provider-auto:ollama",
             modelRef: "ollama/qwen3:4b",
             agentId: "main",
+            sessionId: expect.any(String),
           });
-          await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
+          await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
           expect(await setup.locator("[data-candidate-kind]").count()).toBe(0);
           expect(await choose.isDisabled()).toBe(true);
-          const progress = setup.getByRole("status");
+          const dialog = page.locator("openclaw-modal-dialog");
+          const progress = dialog.getByRole("status");
           await progress.waitFor();
           expect.soft(await viewportIntersection(progress)).toBeGreaterThan(0.99);
           if (artifactDir) {
-            await mkdir(artifactDir, { recursive: true });
             await page.screenshot({ path: path.join(artifactDir, `${outcome}-pending.png`) });
           }
           expect.soft(await progress.count()).toBe(1);
           if (await progress.count()) {
             expect(await progress.isVisible()).toBe(true);
-            expect(await progress.textContent()).toContain("Testing");
+            expect(await progress.textContent()).toContain("Checking your model setup");
           }
 
-          await setup.locator(".model-setup__manual").scrollIntoViewIfNeeded();
-          expect(await viewportIntersection(progress)).toBe(0);
-
           if (outcome === "provider timeout") {
-            await gateway.resolveDeferred("openclaw.setup.activate", {
-              ok: false,
-              status: "timeout",
+            await gateway.setMethodResponse("wizard.next", {
+              done: true,
+              status: "error",
               error: "The model did not finish the setup test in time.",
             });
-            await expect.poll(() => choose.isEnabled()).toBe(true);
+            await gateway.resolveDeferred("openclaw.setup.activate.start", {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
+            });
           } else {
-            await gateway.rejectDeferred("openclaw.setup.activate", {
+            await gateway.rejectDeferred("openclaw.setup.activate.start", {
               code: "UNAVAILABLE",
               message: "The model did not finish the setup test in time.",
             });
@@ -264,8 +373,8 @@ suite.define(() => {
             await setup.getByText(/The previous activation is unresolved/u).waitFor();
             expect(await choose.isDisabled()).toBe(true);
           }
-          await expect.poll(() => setup.getByRole("status").count()).toBe(0);
-          const failure = setup
+          await expect.poll(() => dialog.getByRole("status").count()).toBe(0);
+          const failure = dialog
             .getByRole("alert")
             .filter({ hasText: "The model did not finish the setup test in time." });
           expect.soft(await viewportIntersection(failure)).toBeGreaterThan(0.99);
@@ -274,18 +383,19 @@ suite.define(() => {
           }
           expect(await failure.count()).toBe(1);
           expect(await failure.isVisible()).toBe(true);
-          expect(await failure.textContent()).toContain(
-            outcome === "provider timeout"
-              ? "Warm it or choose a faster model, then retry."
-              : "Review the connection details, then retry.",
+          expect(await failure.textContent()).toBe(
+            "The model did not finish the setup test in time.",
           );
+          await dialog.getByRole("button", { name: "Close", exact: true }).click();
+          await expect.poll(() => dialog.count()).toBe(0);
+          expect(await choose.isEnabled()).toBe(outcome === "provider timeout");
           expect(await setup.locator("[data-candidate-kind]").count()).toBe(0);
           expect(await page.locator(".model-setup-success").count()).toBe(0);
           expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
-          expect(await gateway.getRequests("openclaw.setup.activate")).toHaveLength(1);
+          expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(1);
           expect(await gateway.getRequests("config.set")).toHaveLength(0);
           const next = await gateway.getRequests("wizard.next");
-          expect(next).toHaveLength(3);
+          expect(next).toHaveLength(outcome === "provider timeout" ? 4 : 3);
           expect(next[1]?.params).toMatchObject({
             answer: { stepId: "ollama-mode", value: "local-only" },
           });

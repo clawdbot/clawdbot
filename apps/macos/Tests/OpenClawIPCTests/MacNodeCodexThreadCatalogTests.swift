@@ -1360,14 +1360,19 @@ extension MacNodeCodexThreadCatalogTests {
         do {
             // Complete the real handshake before exercising an active or queued deadline.
             _ = try await self.requestEmptyList(client: client, executable: fake.executable)
+        } catch {
+            await client.shutdown()
+            throw error
+        }
 
-            let first = Task {
-                try await self.requestEmptyList(
-                    client: client,
-                    executable: fake.executable,
-                    timeoutSeconds: 0.5)
-            }
-            #expect(await self.waitForFile(
+        let first = Task {
+            try await self.requestEmptyList(
+                client: client,
+                executable: fake.executable,
+                timeoutSeconds: MacNodeCodexThreadCatalog.defaultTimeoutSeconds)
+        }
+        do {
+            try #require(await self.waitForFile(
                 URL(fileURLWithPath: fake.executable.path + ".request-started")))
             let second = Task {
                 try await self.requestEmptyList(
@@ -1379,13 +1384,16 @@ extension MacNodeCodexThreadCatalogTests {
             await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
                 try await second.value
             }
-            await #expect(throws: MacNodeCodexThreadCatalog.CatalogError.timedOut) {
+            first.cancel()
+            await #expect(throws: CancellationError.self) {
                 try await first.value
             }
             #expect(!FileManager.default.fileExists(atPath: fake.executable.path + ".unexpected-request"))
             #expect(try self.readTrimmed(
                 URL(fileURLWithPath: fake.executable.path + ".processes")) == "1")
         } catch {
+            first.cancel()
+            _ = await first.result
             await client.shutdown()
             throw error
         }

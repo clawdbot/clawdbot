@@ -315,61 +315,70 @@ export async function executeFollowupTurn(params: {
     };
   } else {
     try {
-      execution = await executeAgentTurn({
-        commandBody: turn.queued.prompt,
-        transcriptCommandBody: turn.queued.transcriptPrompt,
-        followupRun: turn.queued,
-        sessionCtx,
-        replyOperation: turn.operation,
-        opts: progressOpts,
-        typingSignals,
-        blockReplyPipeline: null,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: turn.queued.run.blockReplyBreak,
-        applyReplyToMode: (payload) => payload,
-        shouldEmitToolResult,
-        shouldEmitToolOutput,
-        pendingToolTasks,
-        resetSessionAfterRoleOrderingConflict: async (reason) => {
-          const session = turn.session;
-          if (session.kind !== "session") {
-            return false;
-          }
-          return await resetReplyRunSession({
-            options: {
-              failureLabel: "role ordering conflict",
-              buildLogMessage: (nextSessionId) =>
-                `Role ordering conflict (${reason}). Restarting session ${session.key} -> ${nextSessionId}.`,
-              cleanupTranscripts: true,
-            },
-            sessionKey: session.key,
-            queueKey: session.key,
-            activeSessionEntry: session.current(),
-            activeSessionStore: turn.sessionStore,
-            storePath: session.storePath,
-            followupRun: turn.queued,
-            onActiveSessionEntry: (entry) => {
-              session.adopt(entry);
-              turn.operation.updateSessionId(entry.sessionId);
-            },
-            onNewSession: () => undefined,
-          });
-        },
-        isHeartbeat: sourceOpts?.isHeartbeat === true,
-        sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
-        runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
-        getActiveSessionEntry: turn.session.current,
-        activeSessionStore: turn.sessionStore,
-        storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-        resolvedVerboseLevel: currentVerboseLevel() ?? "off",
-        toolProgressDetail: defaults.toolProgressDetail,
-        onCompactionNoticePayload: (payload) =>
-          enqueueProgress(() =>
-            progressAllowed()
-              ? params.onCompactionNoticePayload(payload, { runId: turn.runId })
-              : undefined,
-          ),
-      });
+      const execute = () =>
+        executeAgentTurn({
+          commandBody: turn.queued.prompt,
+          transcriptCommandBody: turn.queued.transcriptPrompt,
+          followupRun: turn.queued,
+          sessionCtx,
+          replyOperation: turn.operation,
+          opts: progressOpts,
+          typingSignals,
+          blockReplyPipeline: null,
+          blockStreamingEnabled: false,
+          resolvedBlockStreamingBreak: turn.queued.run.blockReplyBreak,
+          applyReplyToMode: (payload) => payload,
+          shouldEmitToolResult,
+          shouldEmitToolOutput,
+          pendingToolTasks,
+          resetSessionAfterRoleOrderingConflict: async (reason) => {
+            const session = turn.session;
+            if (session.kind !== "session") {
+              return false;
+            }
+            return await resetReplyRunSession({
+              options: {
+                failureLabel: "role ordering conflict",
+                buildLogMessage: (nextSessionId) =>
+                  `Role ordering conflict (${reason}). Restarting session ${session.key} -> ${nextSessionId}.`,
+                cleanupTranscripts: true,
+              },
+              sessionKey: session.key,
+              queueKey: session.key,
+              activeSessionEntry: session.current(),
+              activeSessionStore: turn.sessionStore,
+              storePath: session.storePath,
+              followupRun: turn.queued,
+              onActiveSessionEntry: (entry) => {
+                session.adopt(entry);
+                turn.operation.updateSessionId(entry.sessionId);
+              },
+              onNewSession: () => undefined,
+            });
+          },
+          isHeartbeat: sourceOpts?.isHeartbeat === true,
+          sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
+          runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
+          getActiveSessionEntry: turn.session.current,
+          activeSessionStore: turn.sessionStore,
+          storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
+          resolvedVerboseLevel: currentVerboseLevel() ?? "off",
+          toolProgressDetail: defaults.toolProgressDetail,
+          onCompactionNoticePayload: (payload) =>
+            enqueueProgress(() =>
+              progressAllowed()
+                ? params.onCompactionNoticePayload(payload, { runId: turn.runId })
+                : undefined,
+            ),
+        });
+      const recorder = turn.queued.userTurnTranscriptRecorder;
+      // Queued execution outlives its ingress scope. Re-enter the exact source
+      // custody after lazy collection binds it, so runtime appends consume all sources.
+      await recorder?.resolveMessage();
+      turn.operation.abortSignal.throwIfAborted();
+      execution = await (recorder?.withPendingInput
+        ? recorder.withPendingInput(execute)
+        : execute());
     } catch (error) {
       while (
         pendingProgressTasks.size > 0 ||

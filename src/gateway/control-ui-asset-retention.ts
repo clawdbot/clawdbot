@@ -268,6 +268,7 @@ async function publishGeneration(params: {
   await fs.mkdir(staging, { recursive: false, mode: 0o700 });
   try {
     const rootRealPath = await fs.realpath(params.root);
+    let preparedDirectory: string | undefined;
     for (const entry of params.manifest.assets) {
       throwIfCancelled(params.operation);
       const contents = await readVerifiedAsset({
@@ -278,7 +279,12 @@ async function publishGeneration(params: {
       });
       const destination = path.join(staging, entry.path);
       throwIfCancelled(params.operation);
-      await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+      const directory = path.dirname(destination);
+      // This preparer owns staging; adjacent assets can reuse its last created directory.
+      if (directory !== preparedDirectory) {
+        await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+        preparedDirectory = directory;
+      }
       throwIfCancelled(params.operation);
       await fs.writeFile(destination, contents, {
         mode: 0o600,

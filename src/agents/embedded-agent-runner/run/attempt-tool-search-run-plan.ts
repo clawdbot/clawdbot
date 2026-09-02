@@ -1,7 +1,7 @@
 /**
  * Builds tool-search execution plans from allowlists and available controls.
  */
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
 import {

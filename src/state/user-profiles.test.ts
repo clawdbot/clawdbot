@@ -236,6 +236,10 @@ describe("user profiles", () => {
 
     expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
     expect(getUserProfileListItem(profile.id, options)).not.toHaveProperty("role");
+    expect(getUserProfileDisplay(profile.id, options)).toMatchObject({
+      id: profile.id,
+      hasAvatar: false,
+    });
     expect(listProfiles(options)[0]).not.toHaveProperty("role");
     expect(tableHasColumn(database, "user_profiles", "role")).toBe(false);
     expect(getUserProfileRole(profile.id, options)).toBeNull();
@@ -1028,11 +1032,22 @@ describe("user profiles", () => {
     });
   });
 
-  it("stores an allowlisted avatar", () => {
+  it.each([
+    {
+      name: "empty",
+      bytes: [],
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    },
+    {
+      name: "nonempty",
+      bytes: [1, 2, 3],
+      sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+    },
+  ])("stores an allowlisted avatar with $name content", ({ bytes, sha256 }) => {
     const options = stateOptions();
     const profile = ensureProfileForEmail("ada@example.com", options);
 
-    expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options)).toEqual({
+    expect(setAvatar(profile.id, new Uint8Array(bytes), "image/png", options)).toEqual({
       ok: true,
       value: expect.objectContaining({
         id: profile.id,
@@ -1042,17 +1057,26 @@ describe("user profiles", () => {
       }),
     });
     expect(getProfileAvatar(profile.id, options)).toEqual({
-      bytes: new Uint8Array([1, 2, 3]),
+      bytes: new Uint8Array(bytes),
       mime: "image/png",
-      sha256: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+      sha256,
       updatedAt: expect.any(Number),
     });
     expect(listProfiles(options)).toEqual([
       expect.objectContaining({ id: profile.id, hasAvatar: true }),
     ]);
+    expect(getUserProfileDisplay(profile.id, options)).toEqual({
+      id: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: true,
+      avatarRevision: `${sha256}-png`,
+    });
   });
 
-  it("keeps distinct avatar ETags when updates share a millisecond", () => {
+  it.each([
+    { change: "bytes", bytes: [2], mime: "image/png" },
+    { change: "MIME", bytes: [1], mime: "image/webp" },
+  ])("keeps distinct avatar ETags when $change changes within a millisecond", ({ bytes, mime }) => {
     const options = stateOptions();
     const profile = ensureProfileForEmail("ada@example.com", options);
     vi.spyOn(Date, "now").mockReturnValue(100);
@@ -1060,7 +1084,7 @@ describe("user profiles", () => {
     expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", options).ok).toBe(true);
     const first = getProfileAvatar(profile.id, options);
     const firstDisplay = getUserProfileDisplay(profile.id, options);
-    expect(setAvatar(profile.id, new Uint8Array([2]), "image/png", options).ok).toBe(true);
+    expect(setAvatar(profile.id, new Uint8Array(bytes), mime, options).ok).toBe(true);
     const second = getProfileAvatar(profile.id, options);
     const secondDisplay = getUserProfileDisplay(profile.id, options);
 
@@ -1068,24 +1092,6 @@ describe("user profiles", () => {
     expect(firstDisplay.avatarRevision).not.toBe(secondDisplay.avatarRevision);
     expect(formatUserProfileAvatarEtag(first?.sha256 ?? "", first?.mime ?? "image/png")).not.toBe(
       formatUserProfileAvatarEtag(second?.sha256 ?? "", second?.mime ?? "image/png"),
-    );
-  });
-
-  it("keeps distinct avatar ETags when MIME changes with identical bytes", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForEmail("ada@example.com", options);
-    const bytes = new Uint8Array([1, 2, 3]);
-
-    expect(setAvatar(profile.id, bytes, "image/png", options).ok).toBe(true);
-    const png = getProfileAvatar(profile.id, options);
-    const pngDisplay = getUserProfileDisplay(profile.id, options);
-    expect(setAvatar(profile.id, bytes, "image/webp", options).ok).toBe(true);
-    const webp = getProfileAvatar(profile.id, options);
-    const webpDisplay = getUserProfileDisplay(profile.id, options);
-
-    expect(pngDisplay.avatarRevision).not.toBe(webpDisplay.avatarRevision);
-    expect(formatUserProfileAvatarEtag(png?.sha256 ?? "", png?.mime ?? "image/png")).not.toBe(
-      formatUserProfileAvatarEtag(webp?.sha256 ?? "", webp?.mime ?? "image/png"),
     );
   });
 });

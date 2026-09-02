@@ -37,6 +37,11 @@ Choose the outcome from live GitHub state, current `main`, affected source and t
 2. **Confirmed issue:** Reproduce or otherwise prove the defect, trace the violated invariant to its producer or lifecycle owner, and implement the architectural root-cause fix when repair is authorized. Cover the original failure and affected sibling paths with focused regression tests and realistic behavior proof. Do not settle for a downstream guard, workaround, speculative fallback, or passing test that leaves the owner broken.
 3. **Confirmed bug-fix PR:** Independently prove both the defect and whether the proposed change repairs the root cause without regressions. If the PR is already the clean owner-boundary fix, verify and land it when authorized. If it is incomplete, in the wrong layer, needlessly complex, or only masks symptoms, rewrite/refactor the editable PR into the correct fix; verify the rewritten head and then land it. If the source branch cannot safely be edited, create an authorized replacement PR, preserve the original author's credit, and close the source only after the replacement exists. Never merge a speculative or merely plausible patch.
 
+Never squash a contributor-owned PR after maintainers replace its ancestry.
+Create a maintainer-owned replacement PR, link the original, and credit
+contributors with their public GitHub noreply address. Merge and rebase are not
+policy escapes.
+
 Prefer cleanup, deletion, coherent refactoring, and one canonical flow over additional branches, wrappers, fallbacks, or compatibility shims. Target net-neutral or net-negative **production** LOC; tests are counted separately and useful regression tests may grow freely. Inspect `git diff --numstat` before landing, report production and test deltas separately, and justify any unavoidable production growth with a concrete capability, ownership boundary, security invariant, or public/dependency contract.
 
 Honor the requested action boundary: a fix request authorizes scoped investigation, local edits, and verification; an explicit ship/land/merge request or autonomous repair sweep also authorizes the scoped publication, closing, and landing needed to finish it. An explicit request to autonomously process, resolve, or fix-and-land a named maintainer issue/PR queue is an authorized autonomous repair sweep, including necessary evidence-backed comments, closures, root-cause fixes, pushes, and landing for those items. Ordinary review-only, triage-only, listing, or landable-shortlist requests are read-only: they authorize neither local source edits nor GitHub writes, including labels, assignments, public comments, closures, pushes, or landing, unless separately authorized. For authorized end-to-end landing work, a review summary or unlanded local patch is not completion: finish with a proven already-fixed close, a verified root-cause repair landed, or a specific evidence, ownership, product, safety, or authorization blocker.
@@ -324,6 +329,41 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   --json number,title,state,url,updatedAt -- "auto update" \
   --jq '.[] | "\(.number) | \(.state) | \(.title) | \(.url)"'
 ```
+
+## Choose a writable landing checkout
+
+Before `review-init`, compare the editor's writable workspace with the Git
+common-directory parent. `scripts/pr` intentionally creates its worktree at
+`<canonical-repo>/.worktrees/pr-<PR>`; running it from a linked checkout does not
+put review artifacts under that caller. Shell access or a directory grant alone
+may not make those artifacts editable in an isolated session.
+
+When the canonical PR worktree lies outside the permitted workspace, start from
+a fresh ordinary checkout **inside** that workspace. Use the verified repository
+URL and normal Git, not another linked worktree pointing at the same outside
+common directory. Keep full history and blobs: shallow history breaks provenance
+checks, and blob filters can turn journaled historical restores into serial
+network fetches.
+
+```bash
+git clone --single-branch <verified-repository-url> <permitted-workspace>/landing-checkout
+```
+
+Verify its origin and Git root, then use that checkout's trusted `main` wrapper
+for the unchanged review/prepare/merge sequence. Its native PR worktrees now stay
+inside the permitted tree. Initialize review templates and verify editor access
+before investing in proof. Preserve the original checkout and unique work; never
+use symlinks, shell-mediated writes to denied paths, or weaker isolation flags.
+
+This is fresh workspace selection, not recovery: if another checkout has an
+active operation, uncertain merge capture/outcome, or pending auto/queue request
+for this PR, reconcile that original state first. Never clone away retained evidence or retry
+an uncertain dispatch from a new repository's independent lock/ref namespace.
+
+Keep the generated first line of `review.md` byte-for-byte, and keep `review.json`
+`pr.number`/`pr.headSha` aligned with the initialized metadata. Put descriptive
+prose below that line. Run native artifact validation before calling the review
+ready; regenerated templates, not hand-edited stamps, own head changes.
 
 ## Follow PR review and landing hygiene
 

@@ -1,8 +1,8 @@
 import { note } from "../../packages/terminal-core/src/note.js";
-import type { PluginPayloadSmokeFailure } from "../cli/update-cli/plugin-payload-validation.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
+import type { PluginPayloadSmokeFailure } from "../plugins/payload-verification.js";
 import {
   buildDegradedPluginsFromVerificationFailures,
   formatPluginVerificationDiagnostic,
@@ -87,7 +87,7 @@ export async function runStartupUpgradeConvergence(params: {
   }
   const { runPostCorePluginConvergence } = await measureDoctorConfigPreflightStep(
     "plugin-convergence-import",
-    () => import("../cli/update-cli/post-core-plugin-convergence.js"),
+    () => import("./doctor/shared/post-core-plugin-convergence.js"),
     params.measure,
   );
   const convergence = await measureDoctorConfigPreflightStep(
@@ -156,7 +156,7 @@ export async function refreshStartupPluginQuarantine(params: {
   }
   const { runActivePluginPayloadSmokeCheck } = await measureDoctorConfigPreflightStep(
     "plugin-payload-verification-import",
-    () => import("../cli/update-cli/active-plugin-payload-validation.js"),
+    () => import("../plugins/active-payload-verification.js"),
     params.measure,
   );
   const smoke = await measureDoctorConfigPreflightStep(

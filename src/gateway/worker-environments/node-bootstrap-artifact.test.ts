@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 
 const roots: string[] = [];
@@ -34,19 +35,32 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
     name: "openclaw",
     version,
     type: "module",
-    files: ["dist/", "!dist/extensions/remote-runtime/**", "scripts/preinstall.mjs"],
+    files: [
+      "dist/",
+      "!dist/extensions/remote-runtime/**",
+      "scripts/preinstall.mjs",
+      "scripts/postinstall.mjs",
+    ],
     dependencies: { "@fixture/ai": mode === "source" ? "workspace:*" : version },
     ...(mode !== "source" ? { bundleDependencies: ["@fixture/ai"] } : {}),
     devDependencies: { "typescript-only": "workspace:*" },
-    scripts: { prepare: "exit 91", prepack: "exit 92", preinstall: "node scripts/preinstall.mjs" },
+    scripts: {
+      prepare: "exit 91",
+      prepack: "exit 92",
+      preinstall: "node scripts/preinstall.mjs",
+      postinstall: "node scripts/postinstall.mjs",
+    },
   };
   await write(packageRoot, "package.json", sourcePackage);
-  await write(packageRoot, "openclaw.mjs", 'import "./dist/entry.js";');
+  await fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";', {
+    mode: 0o755,
+  });
   await write(packageRoot, "node-version.mjs", "export const supported = true;");
+  await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
   await write(
     packageRoot,
-    "scripts/preinstall.mjs",
-    'import { rmSync } from "node:fs"; rmSync(new URL("../dist/openclaw-install-guard", import.meta.url));',
+    "scripts/postinstall.mjs",
+    'import { rmSync } from "node:fs"; rmSync(new URL("../.openclaw-lifecycle-pending", import.meta.url));',
   );
   await write(
     packageRoot,
@@ -54,6 +68,8 @@ async function fixture(mode: "source" | "package" | "external-plugin" = "source"
     'import { answer } from "./extensions/remote-runtime/index.js"; import { name } from "@fixture/ai"; console.log(`${name}:${answer}`);',
   );
   await write(packageRoot, "dist/shared.js", 'export const answer = "cloud-ready";');
+  await write(packageRoot, "dist/worker/worker.mjs", 'console.log("separate-worker-bundle");');
+  await write(packageRoot, "dist/worker/workspace-rsync-receiver.mjs", "export {};");
   await write(packageRoot, "dist/build-info.json", { version, buildId });
   await write(packageRoot, "dist/extensions/remote-runtime/package.json", pluginPackage);
   await write(packageRoot, "dist/extensions/remote-runtime/openclaw.plugin.json", {
@@ -133,7 +149,14 @@ describe("node bootstrap distribution", () => {
     "runs an unpublished %s snapshot with its plugin and private JavaScript dependency",
     async (mode) => {
       const { root, packageRoot, provider, sourcePackage } = await fixture(mode);
-      const [artifact, concurrent] = await Promise.all([provider.prepare(), provider.prepare()]);
+      // Node's getter temporarily changes the process mask and races parallel file creation.
+      const readUmask = vi.spyOn(process, "umask").mockImplementation(() => {
+        throw new Error("Artifact preparation must not read or mutate the process umask");
+      });
+      const [artifact, concurrent] = await Promise.all([
+        provider.prepare(),
+        provider.prepare(),
+      ]).finally(() => readUmask.mockRestore());
       expect(concurrent).toBe(artifact);
       expect(artifact).toMatchObject({
         buildId,
@@ -146,11 +169,13 @@ describe("node bootstrap distribution", () => {
       const installed = path.join(root, "node");
       await fs.mkdir(installed);
       const entries: string[] = [];
+      const modes = new Map<string, number | undefined>();
       await tar.extract({
         file: artifact.tarballPath,
         cwd: installed,
         onReadEntry: (entry) => {
           entries.push(entry.path);
+          modes.set(entry.path, entry.mode);
         },
       });
       expect(
@@ -158,6 +183,16 @@ describe("node bootstrap distribution", () => {
           /(?:\.env|private\.ts|host-native|\.map|\.buildstamp)$/u.test(entry),
         ),
       ).toBe(false);
+      expect(entries.some((entry) => entry.startsWith("package/dist/worker/"))).toBe(false);
+      if (process.platform !== "win32") {
+        for (const [relative, requestedMode] of [
+          ["openclaw.mjs", 0o755],
+          ["dist/shared.js", 0o644],
+        ] as const) {
+          const sourceMode = (await fs.stat(path.join(packageRoot, relative))).mode;
+          expect(modes.get(`package/${relative}`)).toBe(sourceMode & requestedMode);
+        }
+      }
       if (mode === "external-plugin") {
         expect(entries).not.toContain("package/dist/extensions/remote-runtime/index.js");
       }
@@ -165,9 +200,17 @@ describe("node bootstrap distribution", () => {
       const manifest = JSON.parse(await fs.readFile(path.join(target, "package.json"), "utf8"));
       expect(manifest.dependencies).toEqual({ "@fixture/ai": version, "native-runtime": "1.2.3" });
       expect(manifest.bundleDependencies).toEqual(["@fixture/ai"]);
-      expect(manifest.scripts).toEqual({ preinstall: "node scripts/preinstall.mjs" });
+      expect(manifest.scripts).toEqual({
+        preinstall: "node scripts/preinstall.mjs",
+        postinstall: "node scripts/postinstall.mjs",
+      });
       expect(manifest.devDependencies).toBeUndefined();
+      const lifecycleMarker = path.join(target, ".openclaw-lifecycle-pending");
+      await expect(fs.readFile(lifecycleMarker, "utf8")).resolves.toBe("pending\n");
       await promisify(execFile)(process.execPath, [path.join(target, "scripts/preinstall.mjs")]);
+      await expect(fs.readFile(lifecycleMarker, "utf8")).resolves.toBe("pending\n");
+      await promisify(execFile)(process.execPath, [path.join(target, "scripts/postinstall.mjs")]);
+      await expect(fs.access(lifecycleMarker)).rejects.toHaveProperty("code", "ENOENT");
       const { stdout } = await promisify(execFile)(process.execPath, [
         path.join(target, "openclaw.mjs"),
       ]);
@@ -234,13 +277,43 @@ describe("node bootstrap distribution", () => {
     await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("does not retain an artifact for an enrollment cancelled during preparation", async () => {
+  it("cancels one waiting enrollment without abandoning shared artifact preparation", async () => {
     const { provider } = await fixture();
+    const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), "node-artifact-held-"));
+    roots.push(stagingRoot);
+    const entered = createDeferredCore();
+    const resume = createDeferredCore<string>();
+    const makeTemp = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async () => {
+      entered.resolve();
+      return await resume.promise;
+    });
     const enrollment = new AbortController();
-    const pending = provider.prepare(enrollment.signal);
-    enrollment.abort(new Error("enrollment cancelled"));
-    await expect(pending).rejects.toThrow("enrollment cancelled");
-    await provider.close();
+    const completed = vi.fn();
+    const pending = provider.prepare(enrollment.signal).then(
+      (artifact) => completed({ artifact }),
+      (error: unknown) => completed({ error }),
+    );
+    const retained = provider.prepare();
+    try {
+      await entered.promise;
+      enrollment.abort(new DOMException("enrollment cancelled", "AbortError"));
+      await vi.waitFor(() =>
+        expect(completed).toHaveBeenCalledExactlyOnceWith({
+          error: expect.objectContaining({ name: "AbortError" }),
+        }),
+      );
+      expect(makeTemp).toHaveBeenCalledOnce();
+      resume.resolve(stagingRoot);
+      const artifact = await retained;
+      expect(await provider.prepare()).toBe(artifact);
+      expect(makeTemp).toHaveBeenCalledOnce();
+      await provider.close();
+      await expect(fs.access(artifact.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      resume.resolve(stagingRoot);
+      await Promise.allSettled([pending, retained]);
+      makeTemp.mockRestore();
+    }
   });
 
   it.each(["plugin", "private runtime"])(
@@ -284,5 +357,29 @@ describe("node bootstrap distribution", () => {
     const [left, right] = await Promise.all([first.provider.prepare(), second.provider.prepare()]);
     expect(left.openclawVersion).toBe(right.openclawVersion);
     expect(left.tarballSha256).not.toBe(right.tarballSha256);
+  });
+
+  it("rejects staged bytes substituted after copying the running build", async () => {
+    const { provider } = await fixture();
+    const writeFile = fs.writeFile.bind(fs);
+    let substituted = false;
+    const writer = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      await writeFile(...args);
+      if (
+        typeof args[0] === "string" &&
+        args[0].endsWith(path.join("package", "dist", "shared.js"))
+      ) {
+        await writeFile(args[0], 'export const answer = "cloud-wrong";');
+        substituted = true;
+      }
+    });
+    try {
+      await expect(provider.prepare()).rejects.toThrow(
+        "Node bootstrap archive does not match the staged distribution",
+      );
+      expect(substituted).toBe(true);
+    } finally {
+      writer.mockRestore();
+    }
   });
 });

@@ -13,7 +13,6 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
-  findCliMaxTurnsError,
   hasProviderRequestSizeCeiling,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
@@ -531,11 +530,6 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
-    // Max-turn termination can follow successful tool actions. Stop before
-    // candidate fallback so the user can verify effects before any replay.
-    if (findCliMaxTurnsError(err)) {
-      throw err;
-    }
     if (isAgentHarnessPreflightError(err)) {
       const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
       if (!failedHarnessId) {

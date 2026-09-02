@@ -1,5 +1,5 @@
 import type { ApplicationContext } from "../app/context.ts";
-import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
+import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,

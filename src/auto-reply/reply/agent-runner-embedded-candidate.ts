@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  RunEmbeddedAgentInternalParams,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
@@ -25,7 +28,6 @@ import {
 } from "./agent-runner-event-handler.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
-import { withRecentHistoryImageNotes } from "./history-media.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
@@ -47,7 +49,7 @@ export async function runEmbeddedFallbackCandidate(
     messageToolDeliveryState: MessageToolDeliveryState;
     githubPublicationAvailable: boolean;
     onCompactionFacts: (facts: {
-      totalCount: number;
+      accounting?: CompactionAccountingFact;
       postCompactionModelAttempted: boolean;
     }) => void;
   },
@@ -136,6 +138,7 @@ export async function runEmbeddedFallbackCandidate(
       : undefined;
   let attemptCompactionCount = 0;
   let postCompactionModelAttempted = false;
+  let compactionAccounting: CompactionAccountingFact | undefined;
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
@@ -185,7 +188,7 @@ export async function runEmbeddedFallbackCandidate(
         fastModeAutoProgressState: params.fastModeAutoProgressState,
         isFinalFallbackAttempt: params.isFinalFallbackAttempt,
         sandboxSessionKey: turn.runtimePolicySessionKey,
-        prompt: withRecentHistoryImageNotes(turn.commandBody, params.currentTurnImages),
+        prompt: turn.commandBody,
         transcriptPrompt: turn.transcriptCommandBody,
         media: turn.followupRun.media,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
@@ -232,6 +235,9 @@ export async function runEmbeddedFallbackCandidate(
         abortSignal: params.runAbortSignal,
         replyOperation: turn.replyOperation,
         deferTerminalLifecycle: true,
+        onCompactionAccounting: (fact) => {
+          compactionAccounting = fact;
+        },
         onDeferredLifecycleOwner: params.deferredLifecycle.adopt,
         onDeferredLifecycleAbort: params.deferredLifecycle.abort,
         onExecutionStarted: (info) => {
@@ -414,10 +420,17 @@ export async function runEmbeddedFallbackCandidate(
       ),
     };
   } finally {
-    params.onCompactionFacts({
-      totalCount: attemptCompactionCount,
-      postCompactionModelAttempted,
-    });
+    // Runtime event/result counts are observable, but cannot prove a durable write target.
+    const accounting: CompactionAccountingFact | undefined =
+      compactionAccounting ??
+      (attemptCompactionCount > 0
+        ? {
+            kind: "presentation-only",
+            count: attemptCompactionCount,
+            currentContextSnapshot: { tokens: undefined },
+          }
+        : undefined);
+    params.onCompactionFacts({ accounting, postCompactionModelAttempted });
     revokeMessageActionTurnCapability(messageActionTurnCapability);
   }
 }

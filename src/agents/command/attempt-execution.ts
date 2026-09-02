@@ -73,6 +73,7 @@ import {
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
+import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
   getCliSessionBinding,
@@ -81,6 +82,7 @@ import {
 } from "../cli-session.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
+import { resolveDelegationCapability } from "../delegation-capability.js";
 import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -100,7 +102,7 @@ import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../session-placement-admission.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   isSubagentAnnounceCompletionHandoff,
@@ -602,6 +604,7 @@ export function runAgentAttempt(params: {
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
+  onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
   onSuccessfulAuthProfile?: (selection: {
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
@@ -975,7 +978,7 @@ export function runAgentAttempt(params: {
               ...mutableCliSessionStore,
             }
           : undefined;
-      return withLocalSessionPlacementTurnAdmission(
+      return withLocalSessionPlacementTurnSettlement(
         {
           sessionId: params.sessionId,
           sessionKey: params.sessionKey ?? params.sessionId,
@@ -1018,6 +1021,7 @@ export function runAgentAttempt(params: {
             lane: params.opts.lane,
             extraSystemPrompt: params.opts.extraSystemPrompt,
             inputProvenance: params.opts.inputProvenance,
+            skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
             cronCreatorCallerOrigin: params.opts.cronCreatorAuthorityCapability?.callerOrigin,
             sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
             requireExplicitMessageTarget:
@@ -1093,6 +1097,17 @@ export function runAgentAttempt(params: {
             toolsAllow: resolveCliRuntimeToolsAllow(
               runtimeToolsAllow,
               params.opts.toolsAllowIsDefault,
+            ),
+            // This loop is the command-origin sibling of the auto-reply fallback
+            // candidate, so its CLI grant needs the same delegation gate; the
+            // inputs match the tool state this invocation actually runs with.
+            ...buildCliMcpDelegationCapabilityBinding(
+              resolveDelegationCapability({
+                fallbackActive: params.isFallbackRetry,
+                inputProvenance: params.opts.inputProvenance,
+                disableTools,
+                toolsAllow: runtimeToolsAllow,
+              }),
             ),
             scheduledToolPolicy: params.opts.scheduledToolPolicy,
             cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
@@ -1302,6 +1317,7 @@ export function runAgentAttempt(params: {
       : undefined,
     scheduledToolPolicy: params.opts.scheduledToolPolicy,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
+    skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
@@ -1332,6 +1348,7 @@ export function runAgentAttempt(params: {
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
+    onCompactionAccounting: params.onCompactionAccounting,
     onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
       ? (successfulProfileId) =>
           params.onSuccessfulAuthProfile?.({

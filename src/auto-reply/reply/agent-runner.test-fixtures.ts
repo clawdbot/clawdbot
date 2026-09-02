@@ -43,7 +43,13 @@ export function createTestFollowupRun(overrides: Partial<FollowupRun["run"]> = {
       skillsSnapshot: { prompt: "", skills: [] },
       provider: "anthropic",
       model: "claude",
-      thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
+      thinkingCatalog: [
+        {
+          provider: overrides.provider ?? "anthropic",
+          id: overrides.model ?? "claude",
+          input: ["text"],
+        },
+      ],
       thinkLevel: "low",
       verboseLevel: "off",
       elevatedLevel: "off",

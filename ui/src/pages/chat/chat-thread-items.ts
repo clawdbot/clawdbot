@@ -4,14 +4,12 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
-import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
   stripMessageDisplayMetadataText,
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
-import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -101,7 +99,7 @@ export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePrev
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }
-  const cards = extractToolCardsCached(toolMessage, "preview");
+  const cards = extractToolCardsCached(toolMessage);
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {
@@ -178,12 +176,12 @@ export function transcriptPositionTimestamp(
   return next;
 }
 
-export function findNearestAssistantMessageIndex(
+export function findNearestAssistantMessage(
   items: ChatItem[],
   toolTimestamp: number | null,
   minimumIndex = 0,
   maximumIndex = items.length,
-): number | null {
+) {
   let currentTurnStart = minimumIndex;
   let currentTurnEnd = maximumIndex;
   for (let index = minimumIndex; index < maximumIndex; index += 1) {
@@ -203,47 +201,34 @@ export function findNearestAssistantMessageIndex(
     }
     currentTurnStart = index + 1;
   }
-  const assistantEntries = items
-    .map((item, index) => {
-      if (index < currentTurnStart || index >= currentTurnEnd || item.kind !== "message") {
-        return null;
-      }
-      const message = asRecord(item.message);
-      const role = typeof message?.role === "string" ? message.role.toLowerCase() : "";
-      if (role !== "assistant") {
-        return null;
-      }
-      return {
-        index,
-        timestamp: safeNormalizeMessage(item.message)?.timestamp ?? null,
-      };
-    })
-    .filter(Boolean) as Array<{ index: number; timestamp: number | null }>;
-  if (assistantEntries.length === 0) {
-    return null;
-  }
-  if (toolTimestamp == null) {
-    return assistantEntries[assistantEntries.length - 1]?.index ?? null;
-  }
-  let previous: { index: number; timestamp: number } | null = null;
-  let next: { index: number; timestamp: number } | null = null;
-  for (const entry of assistantEntries) {
-    if (entry.timestamp == null) {
+  type Anchor = { index: number; item: Extract<ChatItem, { kind: "message" }> };
+  let last: Anchor | null = null;
+  let previous: { anchor: Anchor; timestamp: number } | null = null;
+  // Keep stable traversal order: last preceding / first following assistant,
+  // not a timestamp sort that could cross an existing reply.
+  for (let index = currentTurnStart; index < currentTurnEnd; index++) {
+    const item = items[index];
+    if (item?.kind !== "message") {
       continue;
     }
-    if (entry.timestamp <= toolTimestamp) {
-      previous = { index: entry.index, timestamp: entry.timestamp };
+    const message = asRecord(item.message);
+    if (typeof message?.role !== "string" || message.role.toLowerCase() !== "assistant") {
       continue;
     }
-    next = { index: entry.index, timestamp: entry.timestamp };
-    break;
+    last = { index, item };
+    const timestamp = safeNormalizeMessage(item.message)?.timestamp;
+    if (toolTimestamp == null || timestamp == null) {
+      continue;
+    }
+    if (timestamp <= toolTimestamp) {
+      previous = { anchor: last, timestamp };
+      continue;
+    }
+    return previous && toolTimestamp - previous.timestamp <= timestamp - toolTimestamp
+      ? previous.anchor
+      : last;
   }
-  if (previous && next) {
-    const previousDelta = toolTimestamp - previous.timestamp;
-    const nextDelta = next.timestamp - toolTimestamp;
-    return nextDelta < previousDelta ? next.index : previous.index;
-  }
-  return previous?.index ?? next?.index ?? assistantEntries.at(-1)?.index ?? null;
+  return previous?.anchor ?? last;
 }
 
 export function findCanvasInsertionIndex(
@@ -316,7 +301,7 @@ export function readPendingSendFailure(message: unknown): {
   };
 }
 
-function readChatThreadMessageIdentity(message: unknown) {
+export function readChatThreadMessageIdentity(message: unknown) {
   const record = asRecord(message);
   const surfaceId =
     typeof record?.messageId === "string" && record.messageId.trim()
@@ -325,12 +310,10 @@ function readChatThreadMessageIdentity(message: unknown) {
   return readSessionMessageIdentity(message, { messageId: surfaceId });
 }
 
-/** Every projection of one composer submit (pending queue row, locally
- * materialized turn, authoritative history) shares this identity so the
- * rendered bubble keeps one Lit key and never remounts mid-handoff. */
-export function userTurnSendIdentity(message: unknown): string | null {
+/** Causal boundaries follow execution ownership, which can differ from the submit key. */
+export function userTurnRunId(message: unknown): string | null {
   const identity = readChatThreadMessageIdentity(message);
-  return identity?.role === "user" && identity.runId ? `send:${identity.runId}` : null;
+  return identity?.role === "user" ? identity.runId : null;
 }
 
 export function persistedMessageEntryId(message: unknown): string | null {
@@ -344,11 +327,10 @@ function transcriptMessageSourceKey(message: unknown): string | null {
   // Send identity outranks transcript ids: the same submit is re-projected with
   // different id/seq metadata across the pending -> history handoff, and a key
   // change there remounts the bubble (visible flicker).
-  const sendIdentity = userTurnSendIdentity(message);
-  if (sendIdentity) {
-    return sendIdentity;
-  }
   const identity = readChatThreadMessageIdentity(message);
+  if (identity?.sendId) {
+    return `send:${identity.sendId}`;
+  }
   if (identity?.isImported) {
     if (identity.externalSource) {
       return `import:${identity.externalSource}`;
@@ -383,7 +365,9 @@ function messageProjectionDigest(message: unknown): string {
   return digest;
 }
 
-export function buildMessageKeys(messages: unknown[], indexOffset = 0): string[] {
+export function buildMessageItems<Message>(
+  messages: Message[],
+): Array<Extract<ChatItem, { kind: "message" }> & { message: Message }> {
   const sourceKeys = messages.map(transcriptMessageSourceKey);
   const sourceCounts = new Map<string, number>();
   for (const sourceKey of sourceKeys) {
@@ -400,162 +384,18 @@ export function buildMessageKeys(messages: unknown[], indexOffset = 0): string[]
       : (sourceKey ?? "legacy");
     const occurrence = projectionOccurrences.get(projectionKey) ?? 0;
     projectionOccurrences.set(projectionKey, occurrence + 1);
-    return messageKey(message, index + indexOffset, `${projectionKey}:${occurrence}`);
+    const record = asRecord(message);
+    const callId = typeof record?.toolCallId === "string" ? record.toolCallId : "";
+    const role = typeof record?.role === "string" ? record.role : "unknown";
+    const transcriptKey = `${projectionKey}:${occurrence}`;
+    return {
+      kind: "message",
+      key: callId ? `tool:${role}:${callId}:${transcriptKey}` : `msg:${transcriptKey}`,
+      message,
+    };
   });
 }
 
-function collapseDuplicateSourceKey(message: unknown): string | null {
-  if (isPendingSendMessage(message)) {
-    return null;
-  }
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized) {
-    return null;
-  }
-  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  if (role !== "assistant" && role !== "user") {
-    return null;
-  }
-  const identity = readChatThreadMessageIdentity(message);
-  if (!identity?.isImported) {
-    return identity?.id ? `${role}:${identity.id}` : null;
-  }
-  if (identity.externalSource) {
-    return `${role}:import:${identity.externalSource}`;
-  }
-  return identity.sequence === null ? null : `${role}:import-seq:${identity.sequence}`;
-}
-
-function prefersNativeChatSurface(message: unknown): boolean {
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized) {
-    return false;
-  }
-  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  return (role === "user" || role === "assistant") && !(normalized.senderLabel ?? "").trim();
-}
-
-function stripSenderLabelPrefix(text: string, senderLabel: string): string {
-  const label = senderLabel.trim();
-  if (!label) {
-    return text;
-  }
-  return text.replace(new RegExp(`^${escapeRegExp(label)}(?::|：|-|—)?[ \\t]+`), "");
-}
-
-function textOnlyMessageParts(message: unknown) {
-  const normalized = safeNormalizeMessage(message);
-  if (!normalized || normalized.content.length === 0) {
-    return null;
-  }
-  const textParts: string[] = [];
-  for (const block of normalized.content) {
-    if (block.type !== "text" || typeof block.text !== "string") {
-      return null;
-    }
-    textParts.push(block.text);
-  }
-  return {
-    role: normalizeRoleForGrouping(normalized.role).toLowerCase(),
-    senderLabel: (normalized.senderLabel ?? "").trim(),
-    senderKey: senderIdentityKey(normalized.sender),
-    text: textParts.join("\n"),
-  };
-}
-
-function sourceDuplicateDisplayParts(message: unknown) {
-  const parts = textOnlyMessageParts(message);
-  return parts?.role === "assistant" && parts.text.trim() ? parts : null;
-}
-
-function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage: unknown): boolean {
-  const previous = sourceDuplicateDisplayParts(previousMessage);
-  const next = sourceDuplicateDisplayParts(nextMessage);
-  if (!previous || !next || previous.role !== next.role) {
-    return false;
-  }
-  if (Boolean(previous.senderLabel) === Boolean(next.senderLabel)) {
-    return false;
-  }
-  const labeled = previous.senderLabel ? previous : next;
-  const native = previous.senderLabel ? next : previous;
-  return (
-    labeled.text === native.text ||
-    stripSenderLabelPrefix(labeled.text, labeled.senderLabel) === native.text
-  );
-}
-
-function collapseDuplicateDisplaySignature(message: unknown): string | null {
-  if (isPendingSendMessage(message)) {
-    return null;
-  }
-  const parts = textOnlyMessageParts(message);
-  if (!parts || !parts.role || parts.role === "tool") {
-    return null;
-  }
-  const { role } = parts;
-  const text = parts.text.trim().replace(/\s+/g, " ");
-  if (!text) {
-    return null;
-  }
-  const senderLabel = role === "user" || role === "assistant" ? parts.senderLabel : "";
-  return `${role}:${senderLabel}:${parts.senderKey ?? ""}:${text}`;
-}
-
-export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
-  const collapsed: ChatItem[] = [];
-  let previousSignature: string | null = null;
-  let previousSourceKey: string | null = null;
-  let previousSourceIsUnprovenImport = false;
-
-  for (const item of items) {
-    if (item.kind !== "message") {
-      collapsed.push(item);
-      previousSignature = null;
-      previousSourceKey = null;
-      previousSourceIsUnprovenImport = false;
-      continue;
-    }
-    const signature = collapseDuplicateDisplaySignature(item.message);
-    const sourceKey = collapseDuplicateSourceKey(item.message);
-    const identity = readChatThreadMessageIdentity(item.message);
-    const sourceIsUnprovenImport =
-      sourceKey === null &&
-      identity?.isImported === true &&
-      identity.externalSource === null &&
-      identity.sequence === null;
-    const previous = collapsed[collapsed.length - 1];
-    if (
-      sourceKey &&
-      previousSourceKey === sourceKey &&
-      previous?.kind === "message" &&
-      isSameSourceRelayNativeDuplicate(previous.message, item.message)
-    ) {
-      if (!prefersNativeChatSurface(previous.message) && prefersNativeChatSurface(item.message)) {
-        collapsed[collapsed.length - 1] = item;
-        previousSignature = signature;
-      }
-      continue;
-    }
-    if (
-      signature &&
-      previousSignature === signature &&
-      previous?.kind === "message" &&
-      !sourceIsUnprovenImport &&
-      !previousSourceIsUnprovenImport &&
-      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
-    ) {
-      previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
-      continue;
-    }
-    collapsed.push(item);
-    previousSignature = signature;
-    previousSourceKey = sourceKey;
-    previousSourceIsUnprovenImport = sourceIsUnprovenImport;
-  }
-
-  return collapsed;
-}
 export function hasRenderableNormalizedMessage(
   message: unknown,
   normalized = safeNormalizeMessage(message),
@@ -565,9 +405,12 @@ export function hasRenderableNormalizedMessage(
   }
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
-  const media = role === "user" && readTranscriptMediaEntries(message).length;
   return Boolean(
-    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+    role === "tool" ||
+    normalized.content.length ||
+    normalized.replyTarget ||
+    label ||
+    (role === "user" && readTranscriptMediaEntries(message).length),
   );
 }
 
@@ -632,6 +475,12 @@ export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: 
 // assistant replies when their timestamps come from different clocks (#112943).
 export type TurnInsertionBounds = { afterKey?: string; beforeKey?: string };
 
+export type ChatProjection<Item extends ChatItem = ChatItem> = {
+  item: Item;
+  bounds?: TurnInsertionBounds;
+  predecessorKey?: string;
+};
+
 export function insertionIndexesForBounds(
   items: ChatItem[],
   bounds: TurnInsertionBounds | undefined,
@@ -648,26 +497,32 @@ export function insertionIndexesForBounds(
   };
 }
 
-export function insertChatItemsByTimestamp(
-  items: ChatItem[],
-  inserts: ChatItem[],
-  insertionBoundsByKey: ReadonlyMap<string, TurnInsertionBounds>,
-  toolStreamPredecessors: ReadonlyMap<string, string>,
-): void {
+export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {
   const timestampsByKey = new Map<string, number>();
-  for (const item of inserts) {
+  const placementsByKey = new Map<string, Pick<ChatProjection, "bounds" | "predecessorKey">>();
+  for (const { item, bounds, predecessorKey } of inserts) {
     const timestamp = chatItemTimestamp(item);
     if (timestamp != null) {
       timestampsByKey.set(item.key, timestamp);
     }
+    // Repeated logical keys share the last supplied fact for each field;
+    // an unbounded projection must not erase an earlier causal constraint.
+    const placement = placementsByKey.get(item.key) ?? {};
+    if (bounds) {
+      placement.bounds = bounds;
+    }
+    if (predecessorKey) {
+      placement.predecessorKey = predecessorKey;
+    }
+    placementsByKey.set(item.key, placement);
   }
   // Sort inserts among themselves by timestamp, preserving the original index
   // order for ties and honoring predecessor relationships so a stream segment
   // stays before the tool card it introduced.
   const sortedInserts = inserts
-    .map((item, index) => {
+    .map(({ item }, index) => {
       const rawTimestamp = chatItemTimestamp(item);
-      const predecessorKey = toolStreamPredecessors.get(item.key);
+      const predecessorKey = placementsByKey.get(item.key)?.predecessorKey;
       const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
       return {
         item,
@@ -704,7 +559,7 @@ export function insertChatItemsByTimestamp(
   for (const { item, effectiveTimestamp } of sortedInserts) {
     const { minimum, maximum } = insertionIndexesForBounds(
       items,
-      insertionBoundsByKey.get(item.key),
+      placementsByKey.get(item.key)?.bounds,
     );
     if (effectiveTimestamp == null) {
       items.splice(maximum, 0, item);
@@ -728,26 +583,4 @@ export function insertChatItemsByTimestamp(
       items.splice(insertionIndex, 0, item);
     }
   }
-}
-
-export function messageKey(message: unknown, index: number, transcriptKey?: string): string {
-  const m = asRecord(message) ?? {};
-  const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
-  const role = typeof m.role === "string" ? m.role : "unknown";
-  const id = typeof m.id === "string" && m.id ? m.id : null;
-  const messageId = typeof m.messageId === "string" && m.messageId ? m.messageId : null;
-  const identity = id ?? messageId;
-  const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
-  if (toolCallId) {
-    const suffix =
-      transcriptKey ?? identity ?? (timestamp == null ? index : `${timestamp}:${index}`);
-    return `tool:${role}:${toolCallId}:${suffix}`;
-  }
-  if (transcriptKey) {
-    return `msg:${transcriptKey}`;
-  }
-  if (identity) {
-    return `msg:${identity}`;
-  }
-  return timestamp == null ? `msg:${role}:${index}` : `msg:${role}:${timestamp}:${index}`;
 }

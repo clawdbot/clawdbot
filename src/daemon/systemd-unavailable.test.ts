@@ -2,7 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Writable } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as processExec from "../process/exec.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { isLaunchctlNotLoaded } from "./launchd-exec.js";
@@ -122,14 +124,52 @@ describe.skipIf(process.platform === "win32")("systemd process availability", ()
         { mode: 0o700 },
       );
       const env = systemctlEnv(dir);
-      await expect(assertSystemdAvailable(env, 500)).rejects.toThrow(
-        "systemctl --user unavailable",
-      );
-      const result = await execFileUtf8("systemctl", ["--user", "status"], {
-        env,
-        timeout: 500,
-        killSignal: "SIGKILL",
+      const timeout = termination === "timeout" ? 500 : undefined;
+      const runAfterOutput = async <T>(run: () => Promise<T>): Promise<T> => {
+        if (termination !== "timeout") {
+          return await run();
+        }
+        const ready = createDeferredCore();
+        const runCommand = processExec.runCommandWithTimeout;
+        const commandSpy = vi
+          .spyOn(processExec, "runCommandWithTimeout")
+          .mockImplementation((argv, options) =>
+            runCommand(argv, {
+              ...(typeof options === "number" ? { timeoutMs: options } : options),
+              onOutputChunk: (_chunk, stream) => {
+                if (stream === "stdout") {
+                  ready.resolve();
+                }
+              },
+            }),
+          );
+        // Timeout normalization must follow observed child output, not race
+        // a cold shell startup on a loaded test worker.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const result = run();
+        try {
+          await ready.promise;
+          await vi.advanceTimersByTimeAsync(500);
+          return await result;
+        } finally {
+          await vi.runOnlyPendingTimersAsync();
+          vi.useRealTimers();
+          commandSpy.mockRestore();
+          await result.catch(() => undefined);
+        }
+      };
+      await runAfterOutput(async () => {
+        await expect(assertSystemdAvailable(env, timeout)).rejects.toThrow(
+          "systemctl --user unavailable",
+        );
       });
+      const result = await runAfterOutput(() =>
+        execFileUtf8("systemctl", ["--user", "status"], {
+          env,
+          timeout,
+          killSignal: "SIGKILL",
+        }),
+      );
       expect(result).toMatchObject({ stdout: "Could not find service\n", termination });
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain(

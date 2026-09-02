@@ -1,4 +1,4 @@
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
@@ -6,6 +6,7 @@ import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { createRuntimeToolMatcher } from "../../tool-policy-match.js";
@@ -47,33 +48,35 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     toolsEnabled,
     toolsRaw,
   } = params.preparedToolBase;
-  const tools = normalizeAgentRuntimeTools({
-    runtimePlan: params.attempt.runtimePlan,
-    tools: toolsEnabled ? toolsRaw : [],
-    provider: params.attempt.provider,
-    config: params.attempt.config,
-    workspaceDir: params.effectiveWorkspace,
-    env: process.env,
-    modelId: params.attempt.modelId,
-    modelApi: params.attempt.model.api,
-    model: params.attempt.model,
-    runtimeHandle: params.getProviderRuntimeHandle(),
-    onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
-      logRuntimeToolSchemaQuarantine({
-        diagnostics,
-        tools: sourceTools,
-        runId: params.attempt.runId,
-        agentId: params.sessionAgentId,
-        sessionKey: params.attempt.sessionKey,
-        sessionId: params.attempt.sessionId,
-      }),
-  });
+  const normalizeTools = (tools: Parameters<typeof normalizeAgentRuntimeTools>[0]["tools"]) =>
+    normalizeAgentRuntimeTools({
+      runtimePlan: params.attempt.runtimePlan,
+      tools,
+      provider: params.attempt.provider,
+      config: params.attempt.config,
+      workspaceDir: params.effectiveWorkspace,
+      env: process.env,
+      modelId: params.attempt.modelId,
+      modelApi: params.attempt.model.api,
+      model: params.attempt.model,
+      runtimeHandle: params.getProviderRuntimeHandle(),
+      onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
+        logRuntimeToolSchemaQuarantine({
+          diagnostics,
+          tools: sourceTools,
+          runId: params.attempt.runId,
+          agentId: params.sessionAgentId,
+          sessionKey: params.attempt.sessionKey,
+          sessionId: params.attempt.sessionId,
+        }),
+    });
+  const tools = normalizeTools(toolsEnabled ? toolsRaw : []);
   const providedClientTools =
     toolsEnabled &&
     !params.attempt.disableTools &&
     !params.isRawModelRun &&
     !params.attempt.forceRestartSafeTools &&
-    !params.attempt.forceCodeModeReconciliationTools
+    params.attempt.codeModeRecovery?.kind !== "inspect"
       ? params.attempt.clientTools
       : undefined;
   // Client functions share the attempt's authority; filter before their names
@@ -102,7 +105,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   };
   const bundleMcpEnabled =
     !params.attempt.forceRestartSafeTools &&
-    !params.attempt.forceCodeModeReconciliationTools &&
+    params.attempt.codeModeRecovery?.kind !== "inspect" &&
     shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.attempt.disableTools || params.isRawModelRun,
@@ -150,7 +153,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   try {
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
-      !params.attempt.forceCodeModeReconciliationTools &&
+      params.attempt.codeModeRecovery?.kind !== "inspect" &&
       shouldCreateBundleLspRuntimeForAttempt({
         toolsEnabled,
         disableTools: params.attempt.disableTools || params.isRawModelRun,
@@ -204,66 +207,60 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       bundleMcpRuntime.restrictAppTools(allowedAppTools);
     }
     const normalizedBundledTools =
-      filteredBundledTools.length > 0
-        ? normalizeAgentRuntimeTools({
-            runtimePlan: params.attempt.runtimePlan,
-            tools: filteredBundledTools,
-            provider: params.attempt.provider,
-            config: params.attempt.config,
-            workspaceDir: params.effectiveWorkspace,
-            env: process.env,
-            modelId: params.attempt.modelId,
-            modelApi: params.attempt.model.api,
-            model: params.attempt.model,
-            runtimeHandle: params.getProviderRuntimeHandle(),
-            onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) =>
-              logRuntimeToolSchemaQuarantine({
-                diagnostics,
-                tools: sourceTools,
-                runId: params.attempt.runId,
-                agentId: params.sessionAgentId,
-                sessionKey: params.attempt.sessionKey,
-                sessionId: params.attempt.sessionId,
-              }),
-          })
-        : filteredBundledTools;
-    const projectedTools = filterLocalModelLeanTools({
-      tools: [...tools, ...normalizedBundledTools],
-      config: params.attempt.config,
-      agentId: params.sessionAgentId,
-      preserveToolNames: localModelLeanPreserveToolNames,
-    });
-    const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
-    if (cronCreatorToolAllowlistCaptureRef) {
-      // Cron is constructed before bundled tools; capture only the executable
-      // surface that survived provider normalization and schema quarantine.
-      captureFinalEffectiveCronCreatorToolAllowlist(
-        cronCreatorToolAllowlist,
-        cronCreatorToolAllowlistCaptureRef,
-        schemaProjection.tools,
-        (tool) => getPluginToolMeta(tool),
-      );
-    }
-    if (inheritedToolAllowlist?.length) {
-      // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
-      // only after final policy and schema projection so children inherit the
-      // parent's complete authorized surface, never denied bundled tools.
-      replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
-    }
-    logRuntimeToolSchemaQuarantine({
-      diagnostics: schemaProjection.diagnostics,
-      tools: projectedTools,
-      runId: params.attempt.runId,
-      agentId: params.sessionAgentId,
-      sessionKey: params.attempt.sessionKey,
-      sessionId: params.attempt.sessionId,
-    });
+      filteredBundledTools.length > 0 ? normalizeTools(filteredBundledTools) : filteredBundledTools;
+    const projectTools = (coreTools: typeof toolsRaw) => {
+      const projectedTools = filterLocalModelLeanTools({
+        tools: [...coreTools, ...normalizedBundledTools].map((tool) =>
+          wrapToolWithAbortSignal(tool, params.preparedToolBase.toolAbortSignal),
+        ),
+        config: params.attempt.config,
+        agentId: params.sessionAgentId,
+        preserveToolNames: localModelLeanPreserveToolNames,
+      });
+      const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+      if (cronCreatorToolAllowlistCaptureRef) {
+        // Cron is constructed before bundled tools; capture only the executable
+        // surface that survived provider normalization and schema quarantine.
+        captureFinalEffectiveCronCreatorToolAllowlist(
+          cronCreatorToolAllowlist,
+          cronCreatorToolAllowlistCaptureRef,
+          schemaProjection.tools,
+          (tool) => getPluginToolMeta(tool),
+        );
+      }
+      if (inheritedToolAllowlist?.length) {
+        // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
+        // only after final policy and schema projection so children inherit the
+        // parent's complete authorized surface, never denied bundled tools.
+        replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+      }
+      logRuntimeToolSchemaQuarantine({
+        diagnostics: schemaProjection.diagnostics,
+        tools: projectedTools,
+        runId: params.attempt.runId,
+        agentId: params.sessionAgentId,
+        sessionKey: params.attempt.sessionKey,
+        sessionId: params.attempt.sessionId,
+      });
+      return schemaProjection.tools;
+    };
+    const uncompactedEffectiveTools = [...projectTools(tools)];
     return {
       bundleLspRuntime,
       bundleMcpRuntime,
       clientTools,
       tools,
-      uncompactedEffectiveTools: [...schemaProjection.tools],
+      uncompactedEffectiveTools,
+      refreshTools: () => {
+        const nextTools = normalizeTools(toolsEnabled ? toolsRaw : []);
+        tools.splice(0, tools.length, ...nextTools);
+        const nextEffectiveTools = projectTools(tools);
+        uncompactedEffectiveTools.splice(
+          0,
+          uncompactedEffectiveTools.length,
+          ...nextEffectiveTools,
+        );
+      },
     };
   } catch (error) {
     try {

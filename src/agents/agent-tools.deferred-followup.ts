@@ -15,8 +15,8 @@ const TOOL_FOLLOWUPS = [
   [
     "sessions_search",
     "sessions_history",
-    "Search your own past sessions for matching user and assistant text.",
-    "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+    "Search visible past sessions for matching user and assistant text.",
+    "Search visible past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
   ],
   [
     "conversations_send",

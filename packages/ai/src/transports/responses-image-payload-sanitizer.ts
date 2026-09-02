@@ -5,6 +5,7 @@
  */
 import { sanitizeInlineImageDataUrl as sanitizeSharedInlineImageDataUrl } from "@openclaw/media-core/inline-image-data-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withRequestImageHistory } from "../internal/request-image-history.js";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
@@ -24,7 +25,9 @@ function sanitizeValue(value: unknown): unknown {
 
   if (value.type === "input_image" && typeof value.image_url === "string") {
     const imageUrl = sanitizeSharedInlineImageDataUrl(value.image_url);
-    return imageUrl ? { ...value, image_url: imageUrl } : invalidSnakeImage();
+    return imageUrl
+      ? withRequestImageHistory({ ...value, image_url: imageUrl }, value, "responses")
+      : invalidSnakeImage();
   }
 
   const next: JsonRecord = {};

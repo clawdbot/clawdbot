@@ -251,6 +251,8 @@ export const TalkClientMutationResultSchema = closedObject({
 export const TalkClientToolCallResultSchema = closedObject({
   runId: NonEmptyString,
   idempotencyKey: NonEmptyString,
+  agentId: NonEmptyString,
+  agentSessionKey: NonEmptyString,
 });
 
 /** Text steering request for a Talk session bound to an agent turn. */
@@ -599,7 +601,7 @@ export const ChannelsStatusParamsSchema = closedObject({
 });
 
 /**
- * Per-account status snapshot for channel docking.
+ * Per-account channel status snapshot.
  *
  * This is intentionally schema-light so new channel-specific metadata can ship
  * without a gateway protocol update; known fields stay documented for UI use.

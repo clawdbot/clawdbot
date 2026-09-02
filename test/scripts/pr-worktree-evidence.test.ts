@@ -68,14 +68,18 @@ function fixture() {
     captureName = "merge-output.log",
   ) => {
     const dir = join(repo, ".worktrees", `pr-${pr}`);
-    if (registered) git(["worktree", "add", "-q", "-b", `temp/pr-${pr}`, dir]);
-    else git(["branch", `temp/pr-${pr}`]);
+    if (registered) {
+      git(["worktree", "add", "-q", "-b", `temp/pr-${pr}`, dir]);
+    } else {
+      git(["branch", `temp/pr-${pr}`]);
+    }
     git(["branch", `pr-${pr}`]);
     git(["branch", `pr-${pr}-prep`]);
     mkdirSync(join(dir, ".local"), { recursive: true });
     writeFileSync(join(dir, ".local", "prep.env"), "synthetic metadata\n");
-    if (capture === "symlink") symlinkSync("missing-capture", join(dir, ".local", captureName));
-    else if (capture) {
+    if (capture === "symlink") {
+      symlinkSync("missing-capture", join(dir, ".local", captureName));
+    } else if (capture) {
       writeFileSync(
         join(dir, ".local", captureName),
         capture === "empty" ? "" : "Synthetic response\n",
@@ -105,8 +109,8 @@ gh() {
   fi
 }
 gh_plain() {
-  if [ "$*" = 'api graphql -f query=query { viewer { login } } --jq .data.viewer.login' ]; then
-    printf 'fixture-user\\n'
+  if [ "$*" = 'api graphql -f query=query { viewer { login } } --include' ]; then
+    printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'
   else
     echo "Unexpected direct GitHub call: $*" >&2; exit 97
   fi
@@ -253,7 +257,9 @@ describePosix("native worktree cleanup preserves merge evidence", () => {
         "echo unexpected-entry-completed",
       ]);
       expect.soft(existsSync(join(dir, ".local/merge-output.log")), result.output).toBe(true);
-      if (existsSync(join(dir, ".local/merge-output.log"))) expect(evidence(dir)).toEqual(before);
+      if (existsSync(join(dir, ".local/merge-output.log"))) {
+        expect(evidence(dir)).toEqual(before);
+      }
       expect.soft(f.worktrees()).toBe(registrations);
       expect(f.branches()).toBe(branches);
       expect(result.status, result.output).not.toBe(0);
@@ -270,8 +276,9 @@ describePosix("native worktree cleanup preserves merge evidence", () => {
       const f = fixture();
       const dir = f.add(910001, "populated");
       const ref = f.record(910001);
-      if (fault === "corrupt")
+      if (fault === "corrupt") {
         f.git(["update-ref", ref, f.git(["hash-object", "-w", "--stdin"], "bad")]);
+      }
       if (fault === "symbolic") {
         f.git(["update-ref", "refs/fixture/retained", f.git(["rev-parse", ref])]);
         f.git(["symbolic-ref", ref, "refs/fixture/retained"]);

@@ -220,6 +220,60 @@ describe("worker command lifetime gate", () => {
     expect(diagnostics).toContain("worker state diagnostic");
   });
 
+  it("rejects an internal worker IPC start type inherited from the prototype", async () => {
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const originalConsole = globalThis.console;
+    const previousLogging = { ...loggingState };
+    const originalProperties = new Map(
+      ["connected", "channel", "send", "disconnect", "stdin", "stdout", "stderr"].map((key) => [
+        key,
+        Object.getOwnPropertyDescriptor(process, key),
+      ]),
+    );
+    Object.defineProperties(process, {
+      connected: { configurable: true, value: true },
+      channel: { configurable: true, value: {} },
+      send: { configurable: true, value: vi.fn() },
+      disconnect: { configurable: true, value: vi.fn() },
+      stdin: { configurable: true, value: commandInput() },
+      stdout: { configurable: true, value: stdout },
+      stderr: { configurable: true, value: stderr },
+    });
+    globalThis.console = new Console({ stdout, stderr });
+    loggingState.consolePatched = false;
+    loggingState.forceConsoleToStderr = false;
+    loggingState.rawConsole = null;
+    loggingState.streamErrorHandlersInstalled = false;
+    const invalidStart = Object.assign(
+      Object.create({ type: "openclaw-worker-start-v1" }) as Record<string, unknown>,
+      { unexpected: true },
+    );
+
+    try {
+      const running = runWorkerProcess({ internalWorkerIpc: true });
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+      process.emit("message", invalidStart);
+
+      await expect(running).rejects.toThrow("invalid internal worker IPC start message");
+      expect(runWorkerDescriptor).not.toHaveBeenCalled();
+    } finally {
+      for (const [key, propertyDescriptor] of originalProperties) {
+        if (propertyDescriptor) {
+          Object.defineProperty(process, key, propertyDescriptor);
+        } else {
+          Reflect.deleteProperty(process, key);
+        }
+      }
+      globalThis.console = originalConsole;
+      Object.assign(loggingState, previousLogging);
+      stdout.destroy();
+      stderr.destroy();
+    }
+  });
+
   it("passes the build-composed Browser runtime into the worker boundary", async () => {
     const output = new PassThrough();
     const browserRuntime = {

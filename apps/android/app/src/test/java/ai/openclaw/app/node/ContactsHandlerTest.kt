@@ -323,6 +323,7 @@ private class TestContactsProvider : ContentProvider() {
           )
         ContentUris.withAppendedId(uri, rawContactId)
       }
+
       "data" -> {
         val row = ContentValues(requireNotNull(values))
         val rawContactId = row.getAsLong(ContactsContract.Data.RAW_CONTACT_ID)
@@ -345,7 +346,10 @@ private class TestContactsProvider : ContentProvider() {
         updateDisplayName(contactId, row)
         ContentUris.withAppendedId(uri, dataId)
       }
-      else -> error("unexpected contacts URI: $uri")
+
+      else -> {
+        error("unexpected contacts URI: $uri")
+      }
     }
 
   private fun updateDisplayName(

@@ -13,6 +13,10 @@ import {
   type ThinkingConfig,
   ThinkingLevel,
 } from "@google/genai";
+import {
+  projectRequestImageHistory,
+  withRequestImageHistory,
+} from "../internal/request-image-history.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
@@ -211,12 +215,16 @@ export function convertMessages<T extends GoogleApiType>(
           if (item.type === "text") {
             return { text: sanitizeSurrogates(item.text) || " " };
           }
-          return {
-            inlineData: {
-              mimeType: item.mimeType,
-              data: item.data,
+          return withRequestImageHistory(
+            {
+              inlineData: {
+                mimeType: item.mimeType,
+                data: item.data,
+              },
             },
-          };
+            item,
+            "google",
+          );
         });
         if (parts.length === 0) {
           parts.push({ text: " " });
@@ -446,7 +454,9 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
     if (nextParams !== undefined) {
       requestParams = nextParams as GenerateContentParameters;
     }
-    const googleStream = await client.models.generateContentStream(requestParams);
+    const googleStream = await client.models.generateContentStream(
+      projectRequestImageHistory(requestParams, "google"),
+    );
     const googleIterator = googleStream[Symbol.asyncIterator]();
     await notifyProviderStreamOpened({
       options,

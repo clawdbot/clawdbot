@@ -12,7 +12,7 @@ import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { SessionManager } from "../sessions/index.js";
+import type { SessionManager } from "../sessions/index.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import {
   calculateMaxToolResultCharsWithCap,
@@ -29,10 +29,6 @@ import {
   sliceToolResultTextToBudget,
 } from "./tool-result-text-budget.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
-import {
-  resolveRuntimeTranscriptReadTarget,
-  type RuntimeTranscriptScope,
-} from "./transcript-runtime-state.js";
 
 export {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -655,11 +651,7 @@ export function truncateOversizedToolResultsInMessages(
     maxCharsOverride,
     aggregateMaxCharsOverride,
   });
-  const sourceBranch = messages.map((message, index) => ({
-    id: `message-${index}`,
-    type: "message",
-    message,
-  }));
+  const sourceBranch = buildToolResultPlanningBranch(messages);
   const projection = projectionState
     ? projectToolResultBranch({
         branch: sourceBranch,
@@ -667,10 +659,8 @@ export function truncateOversizedToolResultsInMessages(
         recordSources: true,
       })
     : undefined;
-  const branch = projection?.branch ?? sourceBranch;
-  const projectionKeys = projection?.keys ?? [];
   const plan = buildToolResultReplacementPlan({
-    branch,
+    branch: projection?.branch ?? sourceBranch,
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
@@ -678,9 +668,9 @@ export function truncateOversizedToolResultsInMessages(
   });
   const replacedBranch = plan.branch;
   if (projectionState) {
-    for (const [index, originalMessage] of messages.entries()) {
+    for (const [index, { message: originalMessage }] of sourceBranch.entries()) {
       const projectedMessage = replacedBranch[index]?.message;
-      const projectionKey = projectionKeys[index];
+      const projectionKey = projection?.keys[index];
       if (projectionKey) {
         projectionState.frozen.add(projectionKey);
         if (
@@ -742,6 +732,17 @@ type ToolResultBranchEntry = {
   message?: AgentMessage;
   aggregateEligible?: boolean;
 };
+
+type ToolResultMessageBranchEntry = ToolResultBranchEntry & { message: AgentMessage };
+// Non-tool messages cannot affect a plan; avoid allocating a full branch for that common path.
+function buildToolResultPlanningBranch(messages: AgentMessage[]): ToolResultMessageBranchEntry[] {
+  const sourceMessages = messages.some((message) => message.role === "toolResult") ? messages : [];
+  return sourceMessages.map((message, index) => ({
+    id: `message-${index}`,
+    type: "message",
+    message,
+  }));
+}
 
 type ToolResultReplacement = {
   entryId: string;
@@ -1222,18 +1223,13 @@ export function estimateToolResultReductionPotential(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
 }): ToolResultReductionPotential {
-  const { messages } = params;
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
-  const branch = messages.map((message, index) => ({
-    id: `message-${index}`,
-    type: "message",
-    message,
-  }));
+  const branch = buildToolResultPlanningBranch(params.messages);
 
   let toolResultCount = 0;
   let totalToolResultChars = 0;
-  for (const msg of messages) {
-    if ((msg as { role?: string }).role !== "toolResult") {
+  for (const { message: msg } of branch) {
+    if (msg.role !== "toolResult") {
       continue;
     }
     const textLength = getToolResultTextBudget(msg);
@@ -1352,39 +1348,10 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  storePath?: string;
 }): { truncated: boolean; truncatedCount: number; reason?: string } {
   try {
     return truncateOversizedToolResultsInExistingSessionManager(params);
-  } catch (err) {
-    const errMsg = formatErrorMessage(err);
-    log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
-    return { truncated: false, truncatedCount: 0, reason: errMsg };
-  }
-}
-
-export async function truncateOversizedToolResultsInActiveTarget(params: {
-  scope: RuntimeTranscriptScope;
-  contextWindowTokens: number;
-  maxCharsOverride?: number;
-  aggregateMaxCharsOverride?: number;
-  protectTrailingToolResults?: boolean;
-  projectionState?: ToolResultPromptProjectionState;
-}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
-  try {
-    const target = await resolveRuntimeTranscriptReadTarget(params.scope);
-    const sessionManager = SessionManager.open(target);
-    return truncateOversizedToolResultsInExistingSessionManager({
-      sessionManager,
-      contextWindowTokens: params.contextWindowTokens,
-      maxCharsOverride: params.maxCharsOverride,
-      aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
-      protectTrailingToolResults: params.protectTrailingToolResults,
-      projectionState: params.projectionState,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      agentId: target.agentId,
-      storePath: target.storePath,
-    });
   } catch (err) {
     const errMsg = formatErrorMessage(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);

@@ -4,6 +4,7 @@ import type {
   ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import { projectRequestImageHistory } from "../internal/request-image-history.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import {
@@ -20,6 +21,7 @@ import {
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
+  assignTransportErrorDetails,
   transportAbortError,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
@@ -33,7 +35,6 @@ import type {
   Usage,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -92,7 +93,7 @@ type ResponsesStreamClient = {
 
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
-  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse" | "sessionId"
+  "signal" | "timeoutMs" | "onPayload" | "onResponse" | "sessionId"
 > &
   Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
   FirstStreamEventInternalOptions;
@@ -236,7 +237,7 @@ function buildResponsesRequestOptions(
   return {
     ...(options?.signal ? { signal: options.signal } : {}),
     ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-    maxRetries: options?.maxRetries ?? 0,
+    maxRetries: 0,
   };
 }
 
@@ -273,7 +274,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       if (nextRequest !== undefined) {
         request = nextRequest as ResponsesLifecycleRequest;
       }
-      return request;
+      return projectRequestImageHistory(request, "responses");
     };
     const requestParams = await buildRequest("checkpoint");
 
@@ -343,9 +344,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     stream.push({ type: "done", reason: output.stopReason, message: output });
     stream.end();
   } catch (error) {
+    const terminal = assignTransportErrorDetails(output, error, options?.signal);
     cleanStreamingScratchBuffers(output);
-    const terminal = projectProviderError(error, options?.signal);
-    Object.assign(output, terminal);
     stream.push({ type: "error", reason: terminal.stopReason, error: output });
     stream.end();
   } finally {

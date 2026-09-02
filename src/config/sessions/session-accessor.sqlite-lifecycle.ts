@@ -8,6 +8,7 @@ import {
   resolveAgentHarnessSessionStoreEntryError,
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import { deletePersonalGitHubSessionReceipts } from "../../state/github-personal-publication-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -53,6 +54,7 @@ import {
   readReferencedSessionIdsAfterTargetMutation,
   shouldRemoveSessionEntry,
 } from "./session-accessor.sqlite-lifecycle-state.js";
+import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
@@ -176,6 +178,13 @@ export async function cleanupSessionLifecycleArtifactsCore(
       });
     },
   );
+  // The SQL commit survives a later archive-publication failure, so refresh
+  // planner statistics before crossing that separate artifact boundary.
+  const deletedEntries = Math.max(
+    committed.removedEntries,
+    new Set(cleanupPlan.deletePlans.map((plan) => plan.sessionId)).size,
+  );
+  await refreshSqliteSessionPlannerStatisticsBestEffort(resolved, deletedEntries);
   const archivedTranscripts = await publishSessionStateArchives(
     resolved,
     committed.archivedTranscripts,
@@ -216,7 +225,9 @@ export async function resetSessionEntryLifecycle(
         assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
         if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
           const event = buildSessionResetBoundaryEvent({
-            events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId),
+            events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId, {
+              projection: "reset-boundary",
+            }),
             ...params.resetBoundary,
           });
           const appended = appendTranscriptEventsInTransaction(
@@ -529,6 +540,15 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         }, toDatabaseOptions(resolved)),
       );
       if (result.deleted) {
+        deletePersonalGitHubSessionReceipts({
+          agentId: resolved.agentId,
+          env: resolved.env,
+          sessionKeys: [
+            params.target.canonicalKey,
+            ...params.target.storeKeys,
+            ...prepared.targetSnapshot.map((row) => row.sessionKey),
+          ],
+        });
         emitSessionIdentityMutation({
           kind: "delete",
           previous: {

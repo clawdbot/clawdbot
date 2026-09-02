@@ -144,9 +144,15 @@ function projectedSessionsSendHistoryMessage(
   timestamp: number,
   fields: ChatHistoryTestMessage = {},
 ): ChatHistoryTestMessage {
+  const provenance = (fields.provenance ?? sessionsSendProvenance()) as {
+    sourceSessionKey?: string;
+  };
+  const sessionKey = provenance.sourceSessionKey;
+  const agentId = sessionKey?.split(":")[1];
   return assistantHistoryMessage(text, {
     senderLabel: "Forwarded from main",
     provenance: sessionsSendProvenance(),
+    ...(sessionKey ? { senderSession: { sessionKey, ...(agentId ? { agentId } : {}) } } : {}),
     timestamp,
     ...fields,
   });
@@ -1180,6 +1186,26 @@ describe("projectChatDisplayMessages", () => {
       name: "projects empty text-block assistant errors as a generic safe failure",
       message: { content: [{ type: "text", text: "" }], errorMessage: "Connection error." },
       content: safeFailureContent,
+    },
+    {
+      name: "projects provider refusals before classifying their explanation text",
+      message: {
+        content: [],
+        errorMessage: "Anthropic refusal: prompt is too long.",
+        diagnostics: [
+          {
+            type: "provider_refusal",
+            timestamp: 1,
+            details: { category: "reasoning_extraction", explanation: "private upstream" },
+          },
+        ],
+      },
+      content: [
+        {
+          type: "text",
+          text: "The provider refused this request (category: reasoning_extraction). Revise the request and try again.",
+        },
+      ],
     },
     {
       name: "preserves visible output_text from a failed assistant turn",

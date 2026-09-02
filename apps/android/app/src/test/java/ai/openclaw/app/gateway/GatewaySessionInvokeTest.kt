@@ -270,7 +270,7 @@ class GatewaySessionInvokeTest {
         },
       ) { webSocket, id, method, frame ->
         when (method) {
-          "connect" ->
+          "connect" -> {
             webSocket.send(
               connectResponseFrame(
                 id,
@@ -278,6 +278,8 @@ class GatewaySessionInvokeTest {
                   mapOf("canvas" to "http://127.0.0.1:18789/__openclaw__/cap/old-token"),
               ),
             )
+          }
+
           expectedMethod -> {
             refreshRequests.incrementAndGet()
             activeDocumentPath.set(documentPaths.last())
@@ -442,7 +444,10 @@ class GatewaySessionInvokeTest {
         startGatewayServer(json) { webSocket, id, method, _ ->
           serverWebSocket.set(webSocket)
           when (method) {
-            "connect" -> webSocket.send(connectResponseFrame(id))
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+            }
+
             "slow.method" -> {
               if (!slowRequestSeen.isCompleted) slowRequestSeen.complete(Unit)
             }
@@ -607,8 +612,10 @@ class GatewaySessionInvokeTest {
               webSocket.send(connectResponseFrame(id))
               webSocket.send("""{"type":"event","event":"health","payload":null}""")
             }
-            "test.null-payload" ->
+
+            "test.null-payload" -> {
               webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":null}""")
+            }
           }
         }
       val harness =
@@ -871,6 +878,7 @@ class GatewaySessionInvokeTest {
                   )
                   webSocket.close(1000, "retry")
                 }
+
                 else -> {
                   if (!secondConnectAuth.isCompleted) {
                     secondConnectAuth.complete(auth)
@@ -1309,7 +1317,10 @@ class GatewaySessionInvokeTest {
                 """{"type":"event","event":"node.invoke.request","payload":{"id":"invoke-cancelled","nodeId":"node-1","command":"camera.snap","timeoutMs":5000}}""",
               )
             }
-            "node.invoke.result" -> invokeResult.complete(Unit)
+
+            "node.invoke.result" -> {
+              invokeResult.complete(Unit)
+            }
           }
         }
       val harness =
@@ -1344,6 +1355,7 @@ class GatewaySessionInvokeTest {
             "connect" -> {
               webSocket.send(connectResponseFrame(id))
             }
+
             "node.event" -> {
               if (!nodeEventParams.isCompleted) {
                 nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
@@ -1402,6 +1414,7 @@ class GatewaySessionInvokeTest {
             "connect" -> {
               webSocket.send(connectResponseFrame(id))
             }
+
             "node.event" -> {
               if (!nodeEventParams.isCompleted) {
                 nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
@@ -1458,6 +1471,7 @@ class GatewaySessionInvokeTest {
                 webSocket.send(connectResponseFrame(id))
               }
             }
+
             "node.event" -> {
               val event =
                 frame["params"]
@@ -1635,6 +1649,7 @@ class GatewaySessionInvokeTest {
             webSocket.send(connectResponseFrame(id))
             webSocket.send(invokeEventFrame)
           }
+
           "node.invoke.result" -> {
             if (!invokeResultParams.isCompleted) {
               invokeResultParams.complete(frame["params"]?.toString().orEmpty())

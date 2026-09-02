@@ -115,6 +115,12 @@ function formatRecentHistoryImageSentAt(sentAtMs: number): string {
   return Number.isFinite(date.getTime()) ? date.toISOString() : `${sentAtMs}ms since epoch`;
 }
 
+export function formatRecentHistoryImageSource(image: RecentInboundHistoryImage): string {
+  const message = image.messageId ? `, message ${image.messageId}` : "";
+  const sentAt = formatRecentHistoryImageSentAt(image.sentAtMs);
+  return `from ${image.sender}${message}, sent at ${sentAt}, message ${image.messagePosition} of ${image.messageCount} in available history`;
+}
+
 export function appendRecentHistoryImageContext(params: {
   promptText: string;
   images: RecentInboundHistoryImage[];
@@ -122,28 +128,11 @@ export function appendRecentHistoryImageContext(params: {
   if (params.images.length === 0) {
     return params.promptText;
   }
-  const notes = params.images.map((image, index) => {
-    const message = image.messageId ? `, message ${image.messageId}` : "";
-    const sentAt = formatRecentHistoryImageSentAt(image.sentAtMs);
-    return `[Recent image ${index + 1} from ${image.sender}${message}, sent at ${sentAt}, message ${image.messagePosition} of ${image.messageCount} in available history, attached as media.]`;
-  });
+  const notes = params.images.map(
+    (image, index) =>
+      `[Recent image ${index + 1} ${formatRecentHistoryImageSource(image)}, attached as media.]`,
+  );
   return [params.promptText, notes.join("\n")]
     .filter((part) => part.trim().length > 0)
     .join("\n\n");
-}
-
-/**
- * Attach inherited-image provenance to a turn prompt so the model can place them.
- *
- * Renders from the retained images themselves rather than a pre-rendered block, so
- * the notes are numbered against the set the turn actually carries: a collected
- * batch renumbers across its merged images instead of restarting per queued turn.
- */
-export function withRecentHistoryImageNotes(
-  prompt: string,
-  images: { historyImages?: readonly RecentInboundHistoryImage[] },
-): string {
-  return images.historyImages?.length
-    ? appendRecentHistoryImageContext({ promptText: prompt, images: [...images.historyImages] })
-    : prompt;
 }

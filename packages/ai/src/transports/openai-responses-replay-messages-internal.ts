@@ -6,6 +6,7 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import { withRequestImageHistory } from "../internal/request-image-history.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
   describeToolResultMediaPlaceholder,
@@ -363,11 +364,15 @@ function convertResponsesMessagesWithStyle(
           msg.content.map((item) =>
             item.type === "text"
               ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-              : {
-                  type: "input_image",
-                  detail: "auto",
-                  image_url: `data:${item.mimeType};base64,${item.data}`,
-                },
+              : withRequestImageHistory(
+                  {
+                    type: "input_image",
+                    detail: "auto",
+                    image_url: `data:${item.mimeType};base64,${item.data}`,
+                  },
+                  item,
+                  "responses",
+                ),
           ) as ResponseInputMessageContentList
         ).filter(
           (item) => providerStyle || model.input.includes("image") || item.type !== "input_image",

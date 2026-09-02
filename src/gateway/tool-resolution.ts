@@ -8,6 +8,10 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import {
+  applyDelegationCapability,
+  type DelegationCapability,
+} from "../agents/delegation-capability.js";
+import {
   resolveExecDefaults,
   type ExecPolicyOverrides,
   type ExecSessionDefaults,
@@ -50,7 +54,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import type { ExecMode } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
@@ -98,6 +102,12 @@ export function resolveGatewayScopedTools(params: {
   allowGatewaySubagentBinding?: boolean;
   allowMediaInvokeCommands?: boolean;
   surface?: GatewayScopedToolSurface;
+  /**
+   * Attempt-local authority to start or redirect delegated work. Loopback
+   * grants carry it so CLI backends get the same fallback gate as embedded
+   * attempts; unset keeps the full delegation surface.
+   */
+  delegationCapability?: DelegationCapability;
   excludeToolNames?: Iterable<string>;
   /** Server-minted coding tools that must be mediated through the loopback surface. */
   mediatedToolNames?: Iterable<string>;
@@ -494,7 +504,7 @@ export function resolveGatewayScopedTools(params: {
           },
           {
             description:
-              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.",
+              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. The sole connected node that can execute commands is selected automatically; set node when several can.",
             displaySummary: "Run commands on a connected node",
             parameters: nodeExecSchema,
           },
@@ -543,7 +553,10 @@ export function resolveGatewayScopedTools(params: {
     ].map(normalizeToolPolicyName),
   );
   const tools = applyToolAvailabilityDescriptions(
-    policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+    applyDelegationCapability(
+      policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+      params.delegationCapability,
+    ),
   );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.

@@ -17,7 +17,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
-import { extractFileContentFromSource } from "../media/input-files.js";
+import { extractFileContentFromBuffer } from "../media/input-files.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { runMediaCapability } from "./apply-capability.js";
 import { resolveAttachmentKind } from "./attachments.js";
@@ -232,16 +232,13 @@ async function classifyFileAttachment(params: {
         };
     return { outcome, filename, mimeType };
   }
-  let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
+  let extracted: Awaited<ReturnType<typeof extractFileContentFromBuffer>>;
   try {
     const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
-    extracted = await extractFileContentFromSource({
-      source: {
-        type: "base64",
-        data: bufferResult.buffer.toString("base64"),
-        mediaType: mimeType,
-        filename: bufferResult.fileName,
-      },
+    extracted = await extractFileContentFromBuffer({
+      // Extractor plugins receive owned mutable bytes, never the attachment cache's buffer.
+      buffer: Buffer.from(bufferResult.buffer),
+      filename: bufferResult.fileName,
       limits: { ...baseLimits, allowedMimes },
       config: cfg,
       classification,
@@ -513,7 +510,6 @@ export async function applyMediaUnderstanding(params: {
     }
 
     if (outputs.length > 0) {
-      ctx.Body = formatMediaUnderstandingBody({ body: ctx.Body, outputs });
       const audioOutputs = outputs.filter((output) => output.kind === "audio.transcription");
       if (audioOutputs.length > 0) {
         const transcript = formatAudioTranscripts(audioOutputs);
@@ -567,14 +563,14 @@ export async function applyMediaUnderstanding(params: {
       deliveredImageIndexes: params.deliveredImageIndexes,
     });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
-    if (contextBlocks.length > 0) {
-      ctx.Body = appendFileBlocks(ctx.Body, contextBlocks);
-    }
     if (outputs.length > 0 || contextBlocks.length > 0) {
-      finalizeInboundContext(ctx, {
-        forceBodyForAgent: true,
-        forceBodyForCommands: true,
-      });
+      const enrich = (body?: string) =>
+        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), contextBlocks);
+      // Channels may carry preflight transcripts only in prepared agent text.
+      // Enrich that base before changing the separate transport envelope.
+      ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);
+      ctx.Body = enrich(ctx.Body);
+      finalizeInboundContext(ctx, { forceBodyForCommands: true });
     }
 
     return {

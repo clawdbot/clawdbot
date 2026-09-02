@@ -11,9 +11,14 @@ import type {
 import { Chat } from "@mistralai/mistralai/sdk/chat";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import {
+  projectRequestImageHistory,
+  withRequestImageHistory,
+} from "../internal/request-image-history.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import {
+  assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpResponse,
   transportAbortError,
@@ -39,7 +44,6 @@ import {
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -168,6 +172,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
         serverURL: model.baseUrl,
         // Keep bounded fetch and response hooks on every streaming attempt.
         httpClient,
+        retryConfig: { strategy: "none" },
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -180,6 +185,7 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       if (nextPayload !== undefined) {
         payload = nextPayload as ChatCompletionStreamRequest;
       }
+      payload = projectRequestImageHistory(payload, "mistral");
       const headers = { ...model.headers, ...options?.headers };
       // Mistral infrastructure uses `x-affinity` for KV-cache reuse (prefix caching).
       // Respect explicit caller-provided header values.
@@ -212,10 +218,9 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      const terminal = assignTransportErrorDetails(output, error, options?.signal);
       // Failed or canceled generations must never retain partially repaired tool calls.
       output.content = output.content.filter((block) => block.type !== "toolCall");
-      const terminal = projectProviderError(error, options?.signal);
-      Object.assign(output, terminal);
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     }
@@ -873,7 +878,14 @@ function toChatMessages(
           if (item.type === "text") {
             return { type: "text", text: sanitizeSurrogates(item.text) };
           }
-          return { type: "image_url", imageUrl: `data:${item.mimeType};base64,${item.data}` };
+          return withRequestImageHistory(
+            {
+              type: "image_url",
+              imageUrl: `data:${item.mimeType};base64,${item.data}`,
+            } satisfies ContentChunk,
+            item,
+            "mistral",
+          );
         });
       if (content.length > 0) {
         result.push({ role: "user", content });

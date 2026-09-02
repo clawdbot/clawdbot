@@ -10,6 +10,9 @@ import {
 
 describe("system-presence", () => {
   afterEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1);
+    listSystemPresence();
     vi.useRealTimers();
   });
 
@@ -188,4 +191,78 @@ describe("system-presence", () => {
     expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
     expect(entries.map((entry) => entry.reason)).toContain("self");
   });
+
+  it("keeps the gateway when the clock jumps forward during expiry pruning", () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const self = listSystemPresence().find((entry) => entry.reason === "self");
+    expect(self?.instanceId).toBeDefined();
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(now)
+      .mockReturnValue(now + 5 * 60 * 1000 + 1);
+    try {
+      expect(
+        listSystemPresence().filter((entry) => entry.instanceId === self?.instanceId),
+      ).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  function addCapacityPeers(prefix: string) {
+    for (let index = 0; index < 205; index += 1) {
+      const deviceId = `${prefix}${index}`;
+      upsertPresence(deviceId, { deviceId, host: deviceId, mode: "ui" });
+    }
+  }
+
+  it("counts the gateway within the capacity limit when peers have tied timestamps", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+    const self = listSystemPresence().find((entry) => entry.reason === "self");
+    expect(self?.instanceId).toBeDefined();
+    const prefix = `bounded-${randomUUID()}-`;
+    addCapacityPeers(prefix);
+
+    const snapshot = listSystemPresence();
+    expect(snapshot).toHaveLength(200);
+    expect(snapshot.filter((entry) => entry.instanceId === self?.instanceId)).toHaveLength(1);
+    expect(snapshot.some((entry) => entry.deviceId === `${prefix}0`)).toBe(false);
+    expect(snapshot.some((entry) => entry.deviceId === `${prefix}204`)).toBe(true);
+  });
+
+  it.each(["connection", "beacon"] as const)(
+    "keeps the genuine gateway row when a %s uses its hostname key",
+    (source) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
+      const self = listSystemPresence().find((entry) => entry.reason === "self");
+      if (!self?.host || !self.instanceId) {
+        throw new Error("gateway presence was not initialized");
+      }
+      const forged = {
+        deviceId: self.host,
+        instanceId: self.instanceId,
+        host: self.host,
+        mode: "gateway",
+        reason: "self",
+        text: "caller-controlled gateway row",
+      };
+      if (source === "connection") {
+        upsertPresence(self.host, forged);
+      } else {
+        updateSystemPresence(forged);
+      }
+      const snapshot = listSystemPresence();
+      expect(snapshot.filter((entry) => entry.text === self.text)).toHaveLength(1);
+      expect(snapshot.filter((entry) => entry.text === forged.text)).toHaveLength(1);
+      expect(snapshot.find((entry) => entry.text === self.text)?.deviceId).toBeUndefined();
+      addCapacityPeers(`collision-${randomUUID()}-`);
+      const bounded = listSystemPresence();
+      expect(bounded).toHaveLength(200);
+      expect(bounded.filter((entry) => entry.text === self.text)).toHaveLength(1);
+      expect(bounded.some((entry) => entry.text === forged.text)).toBe(false);
+    },
+  );
 });

@@ -61,6 +61,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
   "browser.ssrfPolicy.allowedHostnames":
     "Exact hostnames or IP literals allowed by browser SSRF policy checks. Keep the list minimal.",
+  "browser.ssrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules, even with private-network access enabled. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
   "browser.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for trusted fake-IP proxy environments.",
   "browser.ssrfPolicy.allowIpv6UniqueLocalRange":
@@ -541,7 +543,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send. ("agent" default = any session in the current agent id, including other users; "self" = only current; "tree" = current session + spawned subagent sessions; "all" = any session; cross-agent still requires tools.agentToAgent).',
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":
@@ -600,6 +602,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Allows web_fetch access to private and internal network targets. Keep disabled unless model-selected URLs are trusted in this deployment.",
   "tools.web.fetch.ssrfPolicy.allowedHostnames":
     "Exact hostnames or IP literals allowed for web_fetch, including otherwise blocked targets. Keep the list minimal.",
+  "tools.web.fetch.ssrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules on every web_fetch redirect. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
   "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
     "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
   "tools.web.fetch.ssrfPolicy.allowIpv6UniqueLocalRange":

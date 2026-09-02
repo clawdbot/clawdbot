@@ -24,6 +24,10 @@ import {
   resolveAnthropicImageMediaType,
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
+import {
+  projectRequestImageHistory,
+  withRequestImageHistory,
+} from "../internal/request-image-history.js";
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import {
@@ -399,14 +403,18 @@ async function convertAnthropicMessages(
               type: "text",
               text: sanitizeTransportPayloadText(item.text),
             }
-          : {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: resolveAnthropicImageMediaType(item.mimeType),
-                data: item.data,
+          : withRequestImageHistory(
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: resolveAnthropicImageMediaType(item.mimeType),
+                  data: item.data,
+                },
               },
-            },
+              item,
+              "anthropic",
+            ),
       );
       let filteredBlocks = model.input.includes("image")
         ? blocks
@@ -1192,6 +1200,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           params = nextParams as Record<string, unknown>;
         }
         applyClaudeRequestContract(params, model);
+        params = projectRequestImageHistory(params, "anthropic");
         const { response, stream: anthropicStream } = await client.messages.stream(
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
@@ -1774,21 +1783,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         flushPendingTextEnds();
         finalizeTransportStream({ stream, output });
       } catch (error) {
-        if (refusalBuffer) {
-          refusalBuffer.discard();
-          output.content = [];
-        } else {
-          output.content = output.content.filter((block) => block.type !== "toolCall");
-        }
-        if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
-          suppressAnthropicCompaction(output, model, options);
-        }
         failTransportStream({
           stream,
           output,
           signal: options?.signal,
           error,
           cleanup: () => {
+            if (refusalBuffer) {
+              refusalBuffer.discard();
+              output.content = [];
+            } else {
+              output.content = output.content.filter((block) => block.type !== "toolCall");
+            }
+            if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
+              suppressAnthropicCompaction(output, model, options);
+            }
             for (const block of output.content) {
               delete block.index;
             }

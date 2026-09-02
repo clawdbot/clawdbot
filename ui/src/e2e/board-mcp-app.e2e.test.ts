@@ -7,6 +7,7 @@ import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -66,7 +67,7 @@ async function openDashboard(page: Page): Promise<void> {
     },
     { key: sessionKey, storageKey: settingsKey },
   );
-  await page.goto(`${controlUi.baseUrl}dashboard`);
+  await page.goto(controlUiSessionUrl(controlUi.baseUrl, sessionKey, "dashboard"));
   await page.locator(".board-session-surface").waitFor();
 }
 
@@ -271,6 +272,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     expect(widgetBackgrounds.frame).not.toBe("rgba(0, 0, 0, 0)");
     expect((await gateway.getRequests("board.widget.appView"))[0]?.params).toEqual({
       sessionKey,
+      agentId: "main",
       name: "app-0",
       revision: 1,
       instanceId: "instance-0",
@@ -435,9 +437,21 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     expect(await gateway.getRequests("sessions.list")).toHaveLength(faceListCount);
     await expectRetainedBoardMode(page, "split");
     expect((await gateway.getRequests("board.update")).map((request) => request.params)).toEqual([
-      { sessionKey, ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }] },
-      { sessionKey, ops: [{ kind: "tab_update", tabId: "main", chatDock: "hidden" }] },
-      { sessionKey, ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }] },
+      {
+        sessionKey,
+        agentId: "main",
+        ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }],
+      },
+      {
+        sessionKey,
+        agentId: "main",
+        ops: [{ kind: "tab_update", tabId: "main", chatDock: "hidden" }],
+      },
+      {
+        sessionKey,
+        agentId: "main",
+        ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }],
+      },
     ]);
     expect(await gateway.getRequests("board.get")).toHaveLength(stableCounts.boardGet);
     expect(await gateway.getRequests("board.widget.appView")).toHaveLength(stableCounts.appView);

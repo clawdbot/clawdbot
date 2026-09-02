@@ -64,6 +64,7 @@ const PLAYBACK_TRANSCODE_POLICY = {
       "audio/webm": "matroska,webm",
       "audio/x-aiff": "aiff",
       "audio/x-caf": "caf",
+      "audio/x-ms-asf": "asf",
       "audio/x-ms-wma": "asf",
     },
     target: { contentType: "audio/mp4", extension: ".m4a" },
@@ -354,13 +355,6 @@ async function inspectPlaybackSource(params: PlaybackSourceParams): Promise<Play
 export async function resolvePlaybackModeForSource(
   params: PlaybackSourceParams,
 ): Promise<PlaybackMode | undefined> {
-  const containerMode = resolvePlaybackMode(
-    params.mimeType,
-    PLAYBACK_TRANSCODE_POLICY[params.kind],
-  );
-  if (!containerMode) {
-    return undefined;
-  }
   const inspection = await inspectPlaybackSource(params);
   return inspection.mode === "transcode"
     ? "transcode"

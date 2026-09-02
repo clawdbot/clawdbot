@@ -1,14 +1,14 @@
+import path from "node:path";
 import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureSessionOwnerProof,
   captureUiProofEnabled,
   openSidebarSortMenu,
   routeAvatarFixtures,
-  sessionOwnerProofArtifactDir,
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -75,14 +75,14 @@ suite.define(() => {
       ...(captureUiProofEnabled
         ? {
             recordVideo: {
-              dir: sessionOwnerProofArtifactDir,
+              dir: path.join(suite.artifactDir, "session-owner-stack"),
               size: { height: 800, width: 1200 },
             },
           }
         : {}),
     });
     const page = await context.newPage();
-    await routeAvatarFixtures(context, page, [
+    await routeAvatarFixtures(page, [
       { id: "profile-ada", background: "#3f6f76", label: "A" },
       { id: "profile-bob", background: "#985b42", label: "B" },
       { id: "profile-morgan", background: "#66508c", label: "M" },
@@ -95,7 +95,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await page.getByText("Ada research", { exact: true }).first().waitFor();
       const menu = await openSidebarSortMenu(page);
       await selectMenuValue(menu, "grouping:person");
@@ -138,7 +138,7 @@ suite.define(() => {
         adaSection.locator(".session-owner-chip:not(.session-owner-chip--away)"),
       ).toHaveCount(1);
       await expectBrowser(bobSection.locator('[data-viewer-id="profile-morgan"]')).toHaveCount(1);
-      await captureSessionOwnerProof(page, "person-grouping-live-presence.png");
+      await captureSessionOwnerProof(suite, page, "person-grouping-live-presence.png");
       await expectBrowser(bobSection.locator("openclaw-session-owner-chip")).toHaveCount(0);
     } finally {
       await context.close();

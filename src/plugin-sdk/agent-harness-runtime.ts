@@ -70,6 +70,7 @@ export function buildWatchedSessionsHarnessContext(params: {
 }
 
 export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export { appendRuntimeImageHistory } from "@openclaw/media-core";
 export {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
@@ -131,6 +132,7 @@ type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
   | "authoredContextTokenCap"
+  | "codeModeRecovery"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "pluginHarnessToolPolicySafeDeniedTools"
@@ -212,6 +214,7 @@ export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js"
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
+export { hasGatewayToolRoutingContext } from "../agents/tools/in-process-gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
 export {
   listNodes,
@@ -289,7 +292,7 @@ export {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-export { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../plugins/tools.js";
+export { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../plugins/tool-metadata.js";
 export {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,

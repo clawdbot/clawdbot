@@ -126,6 +126,14 @@ snapshot. Preserve the selected attempt's profile, API, and fallback restriction
 when materializing credentials; this keeps control calls on the same billing
 route as agent turns.
 
+For tools that support both standalone and Gateway execution,
+`hasGatewayToolRoutingContext()` from
+`openclaw/plugin-sdk/agent-harness-runtime` reports whether the caller or hosting
+process owns Gateway routing. Local embedded RPC contexts do not count as a
+running Gateway. A caller's or ambient binding remains present after its
+Gateway retires, so dispatch can reject the stale call. The helper does not
+check credentials, grant authority, or guarantee that the Gateway is available.
+
 ### Request-transport contract
 
 `supports(ctx)` receives the resolved model transport in `ctx.modelProvider`.
@@ -380,6 +388,23 @@ field; OpenClaw does not infer it from assistant prose. The helper
 intentionally leaves prompt errors, in-flight turns, and intentional silent
 replies such as `NO_REPLY` unclassified.
 
+### Live output-token usage
+
+Call `params.hostCapabilities.reportOutputTokens?.(outputTokens)` once per
+completed model response. Pass that response's output tokens, not a
+thread-lifetime or cumulative attempt total. Deduplicate native response
+notifications before calling it.
+
+The host binds this callback to the admitted run, adds the response to its
+lifecycle-scoped total, and publishes the cumulative `usage` event globally and
+through `params.onAgentEvent`. Do not emit a second usage event. Retries share
+the same run total; run cleanup releases it. A closed or superseded capability
+rejects reporting. Invalid or nonpositive counts do not emit an event.
+
+The capability is optional for compatibility with older hosts; when absent,
+live output-token reporting is unavailable. Keep last-response context
+snapshots and persisted billing usage separate from this live counter.
+
 ### Agent-end side effects
 
 Native harnesses must call `runAgentEndSideEffects(...)` from
@@ -467,6 +492,21 @@ tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
+
+### Prompt images
+
+Use `detectAndLoadAgentHarnessPromptImages(...)` from
+`openclaw/plugin-sdk/agent-harness-runtime` with the selected model and the
+attempt's workspace policy. After the native encoder validates and filters
+images, call `appendRuntimeImageHistory(prompt, acceptedImages)` with the
+surviving host image objects. Keep each host image paired with its native
+representation until this final decision.
+
+The helper adds at most four bounded source notes for images retained from
+room history. Ordinary images leave the prompt unchanged. Apply this at both
+initial-input and steering boundaries; adding notes before filtering can tell
+the model it received an image that the runtime omitted. These notes are a
+request projection, not a replacement for the canonical transcript.
 
 ### Paired-device execution
 
@@ -758,14 +798,35 @@ rejects canonical failure, tool, delivery, replay, and lifecycle evidence, then
 projects only the narrow result. It is defense in depth after native isolation,
 not a substitute for removing the native capability surface.
 
-A projection-backed harness must put the complete context on
-`settledAttempt.settledTurnFinalizationContext` with
-`source: "openclaw-transcript"`. It must capture the active branch after the
-settled turn is mirrored, prove that the current prompt and every current tool
-call/result are present through that boundary, and freeze the resulting message
-array before returning the attempt. The finalizer must reject a missing,
+A projection-backed harness must capture the active branch after the settled
+turn is mirrored and prove that the current prompt and every current tool
+call/result are present through that boundary. Put the frozen evidence on
+`settledAttempt.settledTurnFinalizationContext` as one of:
+
+- `source: "openclaw-transcript"` with `messages`: the complete application
+  transcript through the boundary.
+- `source: "harness"` with `data`: an immutable, bounded projection interpreted
+  only by the owning harness. Core passes this opaque value through; the
+  finalizer must verify its own context type before using it.
+- `source: "unavailable"`: the harness permits finalization for this settled
+  turn, but safe replay evidence could not be captured. The finalizer must
+  reject this state before provider or native I/O; core can still use its
+  existing host-owned fallback without repeating tools.
+
+The unavailable state records eligibility, not validated history. Eligible
+capture failures, including missing, drifting, or oversized evidence, can reach
+that no-model fallback. Do not emit it for failures the harness excludes from
+finalization, such as authentication or usage-limit errors. Command-only
+harnesses must retain the attributed assistant tool-call entry in
+`messagesSnapshot`; the host fallback can use that settled-batch identity when
+visible-assistant fields are absent.
+
+Enforce projection limits while acquiring messages, rather than cloning the
+whole transcript before checking its size. Successful capture must finish all
+identity and source-evidence checks before returning the attempt. Do not retain
+an open transcript reader in `data`. The finalizer must reject a missing,
 unsupported, ambiguous, or oversized context. It must not truncate messages,
-drop earlier history, or describe this application transcript as exact native
+drop earlier history, or describe an application projection as exact native
 history. Harnesses that resume one restricted native session do not need this
 projection field.
 

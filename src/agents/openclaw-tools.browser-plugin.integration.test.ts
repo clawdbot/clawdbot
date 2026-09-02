@@ -159,7 +159,7 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(details.workspaceOnly).toBe(true);
   });
 
-  it("binds plugin delivery to the current route, media roots, and turn lifetime", async () => {
+  it.each(["agent:main:telegram:group:123", undefined])("binds delivery for %s", async (key) => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-delivery-"));
     const mediaUrl = path.join(workspaceDir, "photo.png");
     const outsideMediaUrl = `${workspaceDir}-outside.png`;
@@ -237,7 +237,8 @@ describe("createOpenClawTools browser plugin integration", () => {
     const turnCapability = mintMessageActionTurnCapability({
       agentId: "main",
       runId: "run-1",
-      sessionKey: "agent:main:telegram:group:123",
+      sessionKey: key ?? "agent:main:main",
+      sourceReplySessionKey: "agent:main:main",
       sessionId: "session-1",
       requesterAccountId: "work",
       requesterSenderId: "sender-1",
@@ -263,6 +264,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       const context = (
         params as {
           context?: {
+            sessionKey?: string;
             deliveryContext?: {
               to?: string;
               accountId?: string;
@@ -274,6 +276,7 @@ describe("createOpenClawTools browser plugin integration", () => {
           };
         }
       ).context;
+      expect(context?.sessionKey).toBe("agent:main:main");
       delivery = context?.delivery;
       if (context?.deliveryContext) {
         context.deliveryContext.to = "attacker-chat";
@@ -288,7 +291,8 @@ describe("createOpenClawTools browser plugin integration", () => {
     try {
       createOpenClawTools({
         config,
-        agentSessionKey: "agent:main:telegram:group:123",
+        agentSessionKey: key,
+        runSessionKey: "agent:main:main",
         runId: "run-1",
         sessionId: "session-1",
         agentChannel: "telegram",
@@ -341,12 +345,14 @@ describe("createOpenClawTools browser plugin integration", () => {
       nextTurnCapability = mintMessageActionTurnCapability({
         agentId: "main",
         runId: "run-2",
-        sessionKey: "agent:main:telegram:group:123",
+        sessionKey: key ?? "agent:main:main",
+        sourceReplySessionKey: "agent:main:main",
         sessionId: "session-2",
       });
       createOpenClawTools({
         config,
-        agentSessionKey: "agent:main:telegram:group:123",
+        agentSessionKey: key,
+        runSessionKey: "agent:main:main",
         runId: "run-2",
         sessionId: "session-2",
         agentChannel: "telegram",

@@ -4,6 +4,7 @@ import {
   createSubsystemLogger,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
+  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -15,10 +16,10 @@ import {
   type MemoryReadResult,
   type MemorySearchManager,
   type MemorySessionSyncTarget,
-  type MemorySource,
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
 import { awaitPendingManagerWork } from "./manager-async-state.js";
@@ -43,13 +44,13 @@ import {
   resolveMemoryIndexManagerCacheKey,
   type MemoryIndexManagerPurpose,
 } from "./manager-registry.js";
+import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import {
   collectMemoryStatusAggregate,
   resolveInitialMemoryDirty,
-  resolveMemoryManagerSyncStatus,
   resolveStatusProviderInfo,
 } from "./manager-status-state.js";
 import {
@@ -236,11 +237,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         (initialIndexIdentity.status === "missing" && this.sources.has("memory"));
       const transient =
         params.purpose === "status" || params.purpose === "cli" || params.purpose === "maintenance";
-      if (!transient) {
-        this.ensureWatcher();
-        this.ensureSessionListener();
-        this.ensureIntervalSync();
-      }
       const invalidatedSources = new Set(
         (
           this.db
@@ -267,7 +263,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
       this.batch = this.resolveBatchConfig();
       if (!transient) {
-        this.ensureSessionStartupCatchup();
+        runInMemoryBackgroundContext(() => {
+          this.ensureWatcher();
+          this.ensureSessionListener();
+          this.ensureIntervalSync();
+          this.ensureSessionStartupCatchup();
+        });
       }
     } catch (err) {
       closeMemoryDatabase(this.db);
@@ -297,18 +298,21 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
-    await runMemorySearchMaintenance({
-      reason: params.reason,
-      takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
-      restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
-      acquireManager: async () =>
-        await MemoryIndexManager.get({
-          cfg: this.cfg,
-          agentId: this.agentId,
-          purpose: "maintenance",
-          acquireLocalService: this.acquireLocalService,
+    await this.syncOutcomes.track(
+      async () =>
+        await runMemorySearchMaintenance({
+          reason: params.reason,
+          takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
+          restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
+          acquireManager: async () =>
+            await MemoryIndexManager.get({
+              cfg: this.cfg,
+              agentId: this.agentId,
+              purpose: "maintenance",
+              acquireLocalService: this.acquireLocalService,
+            }),
         }),
-    });
+    );
   }
 
   protected async syncAdmitted(
@@ -348,7 +352,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         throw err;
       }
     }
-    this.syncing = (async () => {
+    const run = async () => {
       const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
       let forceFtsOnly =
         this.embeddingBootstrapFailure !== undefined &&
@@ -379,11 +383,20 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
 
       const runGeneration = async (keywordOnly: boolean) => {
-        this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
+        // Reset must not overtake embeddings awaiting their final incremental writes.
+        // All sync generations own the existing maintenance lease through cleanup.
+        const lock = await waitForMemoryReindexLock(
+          resolveUserPath(this.settings.store.databasePath),
+        );
         try {
-          await this.runSync(params);
+          this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
+          try {
+            await this.runSync(params);
+          } finally {
+            this.endSyncProviderGeneration();
+          }
         } finally {
-          this.endSyncProviderGeneration();
+          lock.release();
         }
       };
       try {
@@ -414,7 +427,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       ) {
         this.clearEmbeddingBootstrapFailureAfterRecovery();
       }
-    })().finally(() => {
+    };
+    this.syncing = this.syncOutcomes.track(run, true).finally(() => {
       this.syncing = null;
     });
     return this.syncing ?? Promise.resolve();
@@ -472,19 +486,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     const sourceFilter = this.buildSourceFilter();
     const aggregateState = collectMemoryStatusAggregate({
-      db: {
-        prepare: (sql) => ({
-          all: (...args) =>
-            this.db.prepare(sql).all(...args) as Array<{
-              kind: "files" | "chunks";
-              source: MemorySource;
-              c: number;
-            }>,
-        }),
-      },
+      db: this.db,
       sources: this.sources,
       sourceFilterSql: sourceFilter.sql,
       sourceFilterParams: sourceFilter.params,
+      // Source inspection is explicit; routine query status must stay count-only.
+      includeChunkBytes: this.sourceInspections.size > 0,
     });
 
     // Status projects the effective keyword-only search mode while degraded.
@@ -496,20 +503,16 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });
-    const syncStatus = resolveMemoryManagerSyncStatus({
-      syncing: this.syncing !== null,
-      memoryDirty: this.dirty,
-      sessionsDirty: this.sessionsDirty,
-      indexIdentityDirty: this.indexIdentityDirty,
-      backgroundMaintenance: this.activeBackgroundSearchSyncs.size > 0,
-      sources: this.sources,
-    });
-
     return {
       backend: "builtin",
       files: aggregateState.files,
       chunks: aggregateState.chunks,
-      ...syncStatus,
+      dirty:
+        this.dirty ||
+        this.sessionsDirty ||
+        this.indexIdentityDirty ||
+        this.activeBackgroundSearchSyncs.size > 0,
+      lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,
       provider: providerInfo.provider,

@@ -1,6 +1,11 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
+import { readPersistedMediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
@@ -8,11 +13,16 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
+import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
+import type { RuntimeMsgContext } from "../templating.js";
 import { runReplyAgent } from "./agent-runner.runtime.js";
+import type { CurrentTurnImages } from "./current-turn-images.js";
 import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
 import { prepareReplyRunContext } from "./get-reply-run-context.js";
 import {
@@ -548,6 +558,59 @@ describe("runPreparedReply media-only handling", () => {
     expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
   });
 
+  it.each([
+    {
+      name: "unset",
+      defaultCwd: undefined,
+      agentCwd: undefined,
+      spawnedCwd: undefined,
+      expected: undefined,
+    },
+    {
+      name: "defaults",
+      defaultCwd: "/tmp/default-repo",
+      agentCwd: undefined,
+      spawnedCwd: undefined,
+      expected: "/tmp/default-repo",
+    },
+    {
+      name: "agent override",
+      defaultCwd: "/tmp/default-repo",
+      agentCwd: "/tmp/agent-repo",
+      spawnedCwd: undefined,
+      expected: "/tmp/agent-repo",
+    },
+    {
+      name: "spawned override",
+      defaultCwd: "/tmp/default-repo",
+      agentCwd: "/tmp/agent-repo",
+      spawnedCwd: "/tmp/session-repo",
+      expected: "/tmp/session-repo",
+    },
+  ])(
+    "keeps workspace separate from $name run cwd",
+    async ({ defaultCwd, agentCwd, spawnedCwd, expected }) => {
+      await runPreparedReply(
+        baseParams({
+          cfg: {
+            agents: { defaults: { cwd: defaultCwd }, entries: { default: { cwd: agentCwd } } },
+          },
+          workspaceDir: "/tmp/agent-workspace",
+          sessionEntry: {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            spawnedCwd,
+            spawnedBy: spawnedCwd ? "agent:default:main" : undefined,
+          },
+        }),
+      );
+      expect(requireRunReplyAgentCall().followupRun.run).toMatchObject({
+        cwd: expected,
+        workspaceDir: "/tmp/agent-workspace",
+      });
+    },
+  );
+
   beforeEach(async () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
@@ -584,6 +647,36 @@ describe("runPreparedReply media-only handling", () => {
       fullAccessAvailable: true,
     });
   });
+
+  it.each([
+    {
+      label: "agent raw overrides default explain",
+      defaults: "explain",
+      entry: "raw",
+      expected: "raw",
+    },
+    {
+      label: "agent explain overrides default raw",
+      defaults: "raw",
+      entry: "explain",
+      expected: "explain",
+    },
+    { label: "agent without a default", defaults: undefined, entry: "raw", expected: "raw" },
+    { label: "default without an override", defaults: "raw", entry: undefined, expected: "raw" },
+    { label: "unset detail", defaults: undefined, entry: undefined, expected: undefined },
+  ] as const)(
+    "passes $label tool progress detail into reply execution",
+    async ({ defaults, entry, expected }) => {
+      const agentCfg = { toolProgressDetail: defaults };
+      await runPrepared({
+        agentId: "worker",
+        agentCfg,
+        cfg: { agents: { defaults: agentCfg, entries: { worker: { toolProgressDetail: entry } } } },
+      });
+
+      expect(requireRunReplyAgentCall().toolProgressDetail).toBe(expected);
+    },
+  );
 
   it("includes current exec overrides in the queued runner prompt", async () => {
     await runPrepared({
@@ -2150,6 +2243,139 @@ describe("runPreparedReply media-only handling", () => {
       )?.["__openclaw"],
     ).toMatchObject({
       mediaImageLayout: { slots: [{ kind: "inline", factIndex: 1 }] },
+    });
+  });
+
+  it("keeps unbound history separate from one current managed image across prompt projection", async () => {
+    await withTestDir({ prefix: "openclaw-prompt-media-history-" }, async (base) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: base }, async () => {
+        const inboundDir = path.join(base, "media", "inbound");
+        const workspaceDir = path.join(base, "workspace");
+        await Promise.all([
+          fs.mkdir(inboundDir, { recursive: true }),
+          fs.mkdir(workspaceDir, { recursive: true }),
+        ]);
+        const historyBytes = Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+          "base64",
+        );
+        const currentBytes = Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC",
+          "base64",
+        );
+        const historyPath = path.join(inboundDir, "history.png");
+        await Promise.all([
+          fs.writeFile(historyPath, historyBytes),
+          fs.writeFile(path.join(inboundDir, "current.png"), currentBytes),
+        ]);
+        const imageHash = (image: { data: string }) =>
+          createHash("sha256").update(Buffer.from(image.data, "base64")).digest("hex");
+        const expectedHashes = [historyBytes, currentBytes].map((bytes) =>
+          createHash("sha256").update(bytes).digest("hex"),
+        );
+        expect(new Set(expectedHashes).size).toBe(2);
+        const now = 1_800_000_000_000;
+        const body = "Compare the retained photo with this current photo.";
+        const ctx: RuntimeMsgContext = {
+          ...createInboundTurn(body, "webchat", "direct"),
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          Timestamp: now,
+          media: [{ url: "media://inbound/current.png", contentType: "image/png" }],
+          InboundHistory: [
+            {
+              sender: "Ada",
+              body: "A retained photo.",
+              timestamp: now - 1_000,
+              messageId: "history-image",
+              media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        };
+        const currentTurnOwner = await vi.importActual<typeof import("./current-turn-images.js")>(
+          "./current-turn-images.js",
+        );
+        let resolvedCurrent: CurrentTurnImages | undefined;
+        resolveCurrentTurnImagesMock.mockImplementationOnce(
+          async (params: Parameters<typeof currentTurnOwner.resolveCurrentTurnImages>[0]) => {
+            resolvedCurrent = await currentTurnOwner.resolveCurrentTurnImages(params);
+            return resolvedCurrent;
+          },
+        );
+        const result = await runPrepared({
+          ctx,
+          sessionCtx: { ...ctx, BodyStripped: body },
+          cfg: { agents: { defaults: { workspace: workspaceDir } } },
+          workspaceDir,
+          agentDir: path.join(base, "agent"),
+          isNewSession: false,
+        });
+        expect(result).toEqual({ text: "ok" });
+        expect(runReplyAgent).toHaveBeenCalledOnce();
+        expect(resolveCurrentTurnImagesMock).toHaveBeenCalledOnce();
+        const current = expectDefined<CurrentTurnImages>(resolvedCurrent, "real image admission");
+        expect(current.images?.map(imageHash)).toEqual([expectedHashes[0]]);
+        expect(current.imageSourceIndexes).toEqual([1]);
+        expect(current.imageOrder).toEqual(["inline"]);
+        expect(current.unresolvedSourceIndexes ?? []).toEqual([]);
+        const run = requireRunReplyAgentCall().followupRun;
+        expect(run.images?.map(imageHash)).toEqual([expectedHashes[0]]);
+        expect(run.media).toHaveLength(1);
+        expect(run.media?.[0]).toMatchObject({
+          url: "media://inbound/current.png",
+          contentType: "image/png",
+        });
+        expect(run.prompt).toContain(body);
+        const recorder = expectDefined(run.userTurnTranscriptRecorder, "actual turn recorder");
+        const message = expectDefined(await recorder.resolveMessage(), "actual turn message");
+        const persistedLayout = readPersistedMediaImageLayout(message);
+        expect(persistedLayout).toEqual({
+          slots: [{ kind: "inline" }, { kind: "offloaded", factIndex: 0 }],
+          suppressedFactIndexes: [],
+        });
+        const localRoots = getDefaultMediaLocalRoots();
+        expect(localRoots).toContain(path.join(base, "media"));
+        const input = {
+          prompt: run.prompt,
+          media: run.media,
+          existingImages: run.images,
+          imageOrder: run.imageOrder,
+          mediaImageLayout: run.mediaImageLayout,
+          model: { input: ["text", "image"] },
+          workspaceDir,
+          localRoots,
+          workspaceOnly: true,
+        };
+        const persisted = await detectAndLoadPromptImages({
+          ...input,
+          userTurnTranscriptRecorder: recorder,
+        });
+        const expected = {
+          imageHashes: expectedHashes,
+          imageFactIndexes: [null, 0],
+          loadedCount: 1,
+          failedMediaCount: 0,
+          skippedCount: 0,
+        };
+        expect({
+          imageHashes: persisted.images.map(imageHash),
+          imageFactIndexes: persisted.imageFactIndexes,
+          loadedCount: persisted.loadedCount,
+          failedMediaCount: persisted.failedMediaCount,
+          skippedCount: persisted.skippedCount,
+        }).toEqual(expected);
+        expect(recorder.hasPersisted()).toBe(false);
+        const prompt = await detectAndLoadPromptImages(input);
+        expect(prompt.failedMediaCount).toBe(0);
+        expect(prompt.skippedCount).toBe(0);
+        expect({
+          imageHashes: prompt.images.map(imageHash),
+          imageFactIndexes: prompt.imageFactIndexes,
+          loadedCount: prompt.loadedCount,
+          failedMediaCount: prompt.failedMediaCount,
+          skippedCount: prompt.skippedCount,
+        }).toEqual(expected);
+      });
     });
   });
 

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  BILLING_ERROR_USER_MESSAGE,
   renderFormatErrorCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderFailoverCodeUserCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -12,6 +12,18 @@ import {
 describe("failover user copy", () => {
   const tokenLimitCopy =
     "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.";
+
+  it("renders only the allowlisted selected-profile code", () => {
+    expect(renderFailoverCodeUserCopy("selected_auth_profile_unavailable")).toBe(
+      "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
+        "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.",
+    );
+    expect(renderFailoverCodeUserCopy("plugin_selected_profile_unavailable")).toBeUndefined();
+    expect(
+      renderFailoverCodeUserCopy({ code: "selected_auth_profile_unavailable" }),
+    ).toBeUndefined();
+  });
+
   it("renders transient copy from the classified reason", () => {
     const raw = "429 Too Many Requests: model overloaded";
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(
@@ -83,7 +95,9 @@ describe("failover user copy", () => {
     ).toBe(
       "⚠️ Anthropic (claude) returned a billing error — check your account for subscription or usage limits, then try again.",
     );
-    expect(renderBillingReplyCopy({})).toBe(BILLING_ERROR_USER_MESSAGE);
+    expect(renderBillingReplyCopy({})).toBe(
+      "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.",
+    );
   });
 
   it("renders provider-safe missing-key guidance", () => {

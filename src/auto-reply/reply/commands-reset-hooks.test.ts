@@ -103,6 +103,7 @@ function buildResetParams(
     directives: parseInlineSessionDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
+    agentId: "main",
     workspaceDir: "/tmp/openclaw-commands",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
@@ -459,7 +460,18 @@ describe("handleCommands reset hooks", () => {
     expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    provider?: string;
+    surface: string;
+    scopes?: string[];
+    allowed: boolean;
+    body?: string;
+    source?: "text" | "native";
+    originatingChannel?: string;
+    commandAuthorized?: boolean;
+    silent?: boolean;
+  }>([
     {
       name: "write scope",
       provider: "webchat",
@@ -509,18 +521,58 @@ describe("handleCommands reset hooks", () => {
       scopes: ["operator.write"],
       allowed: false,
     },
+    ...["/new Create a note", "/reset Create a note", "/reset soft Create a note"].flatMap((body) =>
+      (["text", "native"] as const).flatMap((source) => [
+        {
+          name: `${source} ${body} forwarded from Gateway to external origin`,
+          body,
+          source,
+          provider: "webchat",
+          surface: "webchat",
+          originatingChannel: "telegram",
+          scopes: ["operator.write"],
+          allowed: false,
+          silent: true,
+        },
+        {
+          name: `${source} ${body} from external Provider with internal Surface and origin`,
+          body,
+          source,
+          provider: "telegram",
+          surface: "webchat",
+          originatingChannel: "webchat",
+          commandAuthorized: false,
+          allowed: false,
+          silent: true,
+        },
+      ]),
+    ),
   ])(
-    "preserves internal soft-reset scope policy: $name",
-    async ({ provider, surface, scopes, allowed }) => {
+    "preserves reset authorization and denial routing: $name",
+    async ({
+      provider,
+      surface,
+      scopes,
+      allowed,
+      body = "/reset soft",
+      source = "text",
+      originatingChannel,
+      commandAuthorized = true,
+      silent = false,
+    }) => {
       const params = buildResetParams(
-        "/reset soft",
+        body,
         {
           commands: { text: true },
         } as OpenClawConfig,
         {
           Provider: provider,
           Surface: surface,
-          CommandAuthorized: true,
+          OriginatingChannel: originatingChannel,
+          OriginatingTo: originatingChannel ? "chat:reset-test" : undefined,
+          ExplicitDeliverRoute: originatingChannel !== undefined,
+          CommandSource: source,
+          CommandAuthorized: commandAuthorized,
           GatewayClientScopes: scopes,
         },
       );
@@ -529,8 +581,8 @@ describe("handleCommands reset hooks", () => {
         cfg: params.cfg,
         sessionKey: params.sessionKey,
         isGroup: false,
-        triggerBodyNormalized: "/reset soft",
-        commandAuthorized: true,
+        triggerBodyNormalized: body,
+        commandAuthorized,
       });
       params.sessionEntry = {
         sessionId: "existing-soft-session",
@@ -542,13 +594,22 @@ describe("handleCommands reset hooks", () => {
 
       const result = await maybeHandleResetCommand(params);
 
-      expect(result).toEqual(allowed ? null : { shouldContinue: false });
+      if (allowed) {
+        expect(result).toBeNull();
+      } else if (silent) {
+        expect(result).toStrictEqual({ shouldContinue: false });
+      } else {
+        expect(result?.shouldContinue).toBe(false);
+        expect(result?.reply?.text).toMatch(/not authorized/i);
+        expect(result?.reply?.text).toContain("operator.admin");
+      }
       expect(params.sessionEntry.sessionId).toBe(before.sessionId);
       expect(params.sessionEntry.lifecycleRevision).toBe(before.lifecycleRevision);
       expect(params.command.softResetTriggered === true).toBe(allowed);
       expect(triggerInternalHookMock).toHaveBeenCalledTimes(allowed ? 1 : 0);
       expect(clearBootstrapSnapshotSpy).toHaveBeenCalledTimes(allowed ? 1 : 0);
       expect(routeReplyMock).not.toHaveBeenCalled();
+      expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
       if (allowed) {
         expect(params.sessionEntry.cliSessionIds).toBeUndefined();
       } else {

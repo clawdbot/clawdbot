@@ -5,9 +5,7 @@ export function sessionMessagesContainIdempotencyKey(
   idempotencyKey: string,
 ): boolean {
   return messages.some(
-    (message) =>
-      typeof (message as { idempotencyKey?: unknown }).idempotencyKey === "string" &&
-      (message as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey,
+    (message) => (message as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey,
   );
 }
 
@@ -35,7 +33,11 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
   const tail = messages.at(-1) as (AgentMessage & { idempotencyKey?: unknown }) | undefined;
   const activeTailMatches = tail?.role === "user" && tail.idempotencyKey === idempotencyKey;
   if (!activeTailMatches && !durableTurnMatches) {
-    return false;
+    // Excluded turns deliberately lack a model-context copy; writes still validate admission.
+    return (
+      (params.currentUserTurnMessage as { excludeFromContext?: unknown }).excludeFromContext ===
+      true
+    );
   }
   if (activeTailMatches) {
     // Persistence is recorder-owned; either synchronized representation can

@@ -100,12 +100,13 @@ export const TUI_PTY_RENDERING_FIXTURE_SCRIPT = `
   async function waitForRenderingRelease(gate: string) {
     const target = actionLogPath + "." + gate + ".release";
     if (existsSync(target)) return;
-    await new Promise<void>((resolve, reject) => {
-      const watcher = watch(dirname(target), () => {
-        if (existsSync(target)) { watcher.close(); resolve(); }
-      });
-      watcher.on("error", (error) => { watcher.close(); reject(error); });
-      if (existsSync(target)) { watcher.close(); resolve(); }
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (existsSync(target)) { unwatchFile(target, check); resolve(); }
+      };
+      // Release is file state; native watch delivery can outlast the fixture budget.
+      watchFile(target, { interval: 50, persistent: false }, check);
+      check();
     });
   }
   function emitAssistant(backend, runId, sessionKey, state, value) {

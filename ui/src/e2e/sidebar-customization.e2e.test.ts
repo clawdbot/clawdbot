@@ -21,12 +21,6 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "sidebar-customization",
-);
 
 async function trimmedTextContents(locator: Locator): Promise<string[]> {
   return (await locator.allTextContents()).map((text) => text.trim());
@@ -69,11 +63,11 @@ async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
   });
 }
 
@@ -81,10 +75,10 @@ async function captureSettingsSidebarProof(sidebar: Locator, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
   await sidebar.screenshot({
     animations: "disabled",
-    path: path.join(uiProofArtifactDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
   });
 }
 
@@ -161,17 +155,23 @@ suite.define(() => {
       expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
 
       if (captureUiProofEnabled) {
-        await mkdir(uiProofArtifactDir, { recursive: true });
+        await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
         await recovery.scrollIntoViewIfNeeded();
         for (const theme of ["light", "dark"] as const) {
           await setThemeMode(page, theme);
           await page.screenshot({
             animations: "disabled",
-            path: path.join(uiProofArtifactDir, `after-${theme}-context.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "sidebar-customization"),
+              `after-${theme}-context.png`,
+            ),
           });
           await recovery.screenshot({
             animations: "disabled",
-            path: path.join(uiProofArtifactDir, `after-${theme}-rows.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "sidebar-customization"),
+              `after-${theme}-rows.png`,
+            ),
           });
         }
       }
@@ -188,12 +188,15 @@ suite.define(() => {
 
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(uiProofArtifactDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
-        ? { dir: path.join(uiProofArtifactDir, "video"), size: { height: 900, width: 1300 } }
+        ? {
+            dir: path.join(path.join(suite.artifactDir, "sidebar-customization"), "video"),
+            size: { height: 900, width: 1300 },
+          }
         : undefined,
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
@@ -248,7 +251,6 @@ suite.define(() => {
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
-      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
@@ -369,6 +371,7 @@ suite.define(() => {
           "Logs",
           "Updates",
           "About",
+          "Profile",
           "Appearance",
           "Notifications",
           "Gateway",
@@ -436,7 +439,10 @@ suite.define(() => {
         .toContain("No matching settings.");
       if (captureUiProofEnabled) {
         await writeFile(
-          path.join(uiProofArtifactDir, "settings-search-accessibility.yml"),
+          path.join(
+            path.join(suite.artifactDir, "sidebar-customization"),
+            "settings-search-accessibility.yml",
+          ),
           await settingsSidebar.ariaSnapshot(),
           "utf8",
         );
@@ -567,20 +573,20 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
 
-      // The shell chrome search button is the command palette entry point.
-      const searchButton = page.locator(".shell-chrome-controls__search");
+      // The sidebar header search button is the command palette entry point.
+      const searchButton = page.locator(".sidebar-brand__search");
       await searchButton.click();
       const paletteInput = page.locator("#cmd-palette-input");
       await expect.poll(() => paletteInput.isVisible()).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // The shell chrome toggle stays visible while the desktop sidebar
-      // collapses and expands (there is no icon rail).
-      const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
+      // The sidebar header toggle collapses the rail; collapsed shell chrome
+      // then provides the matching expand control.
+      const collapseButton = page.locator(".sidebar-brand__collapse");
       await expect
         .poll(() =>
-          collapseButton.evaluate((element) => Boolean(element.closest(".shell-chrome-controls"))),
+          collapseButton.evaluate((element) => Boolean(element.closest(".sidebar-brand__actions"))),
         )
         .toBe(true);
       await collapseButton.click();
@@ -600,9 +606,7 @@ suite.define(() => {
       await expect.poll(() => navExpand.isVisible()).toBe(true);
       await page.reload();
       // Sidebar visibility is tab-local and intentionally not persisted; width is.
-      await expect
-        .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
-        .toBe(true);
+      await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(true);
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-collapsed");
@@ -643,7 +647,7 @@ suite.define(() => {
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
       await page.setViewportSize({ height: 900, width: 1440 });
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator(".sidebar-brand__collapse").click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
@@ -672,7 +676,12 @@ suite.define(() => {
     } finally {
       await context.close();
       if (video) {
-        await video.saveAs(path.join(uiProofArtifactDir, "settings-search-flow.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "sidebar-customization"),
+            "settings-search-flow.webm",
+          ),
+        );
       }
     }
   });

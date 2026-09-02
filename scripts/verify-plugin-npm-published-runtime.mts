@@ -9,10 +9,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as tar from "tar";
+import {
+  isTypeScriptPackageEntry,
+  listBuiltRuntimeEntryCandidates,
+} from "../src/plugins/package-entrypoints.js";
 import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
+import { resolveNpmJsonString } from "./lib/npm-json-output.mts";
 import { sleep } from "./lib/sleep.mjs";
-
-export { readPositiveIntEnv };
 
 const DEFAULT_NPM_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_NPM_COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
@@ -59,33 +62,6 @@ function normalizePackagePath(value: string) {
     .replace(/\\/g, "/")
     .replace(/^package\//u, "")
     .replace(/^\.\//u, "");
-}
-
-function isTypeScriptPackageEntry(entryPath: string) {
-  return [".ts", ".mts", ".cts"].includes(path.extname(entryPath).toLowerCase());
-}
-
-function listBuiltRuntimeEntryCandidates(entryPath: string) {
-  if (!isTypeScriptPackageEntry(entryPath)) {
-    return [];
-  }
-  const normalized = entryPath.replace(/\\/g, "/");
-  const withoutExtension = normalized.replace(/\.[^.]+$/u, "");
-  const normalizedRelative = normalized.replace(/^\.\//u, "");
-  const distWithoutExtension = normalizedRelative.startsWith("src/")
-    ? `./dist/${normalizedRelative.slice("src/".length).replace(/\.[^.]+$/u, "")}`
-    : `./dist/${withoutExtension.replace(/^\.\//u, "")}`;
-  const withJavaScriptExtensions = (basePath: string) => [
-    `${basePath}.js`,
-    `${basePath}.mjs`,
-    `${basePath}.cjs`,
-  ];
-  return [
-    ...new Set([
-      ...withJavaScriptExtensions(distWithoutExtension),
-      ...withJavaScriptExtensions(withoutExtension),
-    ]),
-  ].filter((candidate) => candidate !== normalized);
 }
 
 function hasPackedFile(packageFiles: Set<string>, entryPath: string) {
@@ -264,6 +240,9 @@ function npmPack(spec: string, destinationDir: string) {
     "pack",
     spec,
     "--ignore-scripts",
+    // Publication readback must include fresh releases; this downloads only the
+    // requested artifact and does not change the dependency-install age policy.
+    "--min-release-age=0",
     "--pack-destination",
     destinationDir,
   ]);
@@ -278,7 +257,7 @@ export function parseNpmReadmeMetadata(raw: string) {
   } catch {
     return "";
   }
-  return typeof parsed === "string" ? parsed.trim() : "";
+  return resolveNpmJsonString(parsed);
 }
 
 function npmViewReadme(spec: string) {

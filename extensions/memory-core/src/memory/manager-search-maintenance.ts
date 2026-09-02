@@ -3,7 +3,7 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 
 type MemorySearchMaintenanceManager = {
   sync(params: { reason: string; force: true }): Promise<void>;
-  status(): { dirty?: boolean };
+  status(): { dirty?: boolean; lastSyncError?: string };
   close(): Promise<void>;
 };
 
@@ -12,7 +12,7 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
   takeDirtyGeneration: () => DirtyGeneration;
   restoreDirtyGeneration: (generation: DirtyGeneration) => void;
   acquireManager: () => Promise<MemorySearchMaintenanceManager | null>;
-}): Promise<void> {
+}): Promise<string | undefined> {
   const dirtyGeneration = params.takeDirtyGeneration();
   let manager: MemorySearchMaintenanceManager | null;
   try {
@@ -23,18 +23,21 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
   }
   if (!manager) {
     params.restoreDirtyGeneration(dirtyGeneration);
-    return;
+    return undefined;
   }
 
   let maintenanceError: Error | undefined;
+  let incompleteReason: string | undefined;
   try {
     // The transient manager has no watcher state. Force every source represented
     // by the handed-off generation while the default manager serves published reads.
     await manager.sync({ reason: params.reason, force: true });
-    if (manager.status().dirty === true) {
+    const status = manager.status();
+    if (status.dirty === true) {
       // A provider fallback may deliberately resolve in keyword-only mode while
       // retaining retry state. Return that incomplete generation to its serving owner.
       params.restoreDirtyGeneration(dirtyGeneration);
+      incompleteReason = status.lastSyncError;
     }
   } catch (err) {
     params.restoreDirtyGeneration(dirtyGeneration);
@@ -48,4 +51,5 @@ export async function runMemorySearchMaintenance<DirtyGeneration>(params: {
   if (maintenanceError) {
     throw maintenanceError;
   }
+  return incompleteReason;
 }

@@ -107,7 +107,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     try {
       await runWithGatewayIndependentRootWorkContinuation(async () => {
         await completeSubagentRunWithRecoveryAttempt(params, source);
-      });
+      }, "subagents:completion");
     } catch (error) {
       if (!isGatewayRestartDraining()) {
         throw error;

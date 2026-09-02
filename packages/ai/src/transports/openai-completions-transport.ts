@@ -1,6 +1,7 @@
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { projectRequestImageHistory } from "../internal/request-image-history.js";
 import {
   codeModeToolSurfaceObserver,
   reasoningTagTextPolicy,
@@ -258,6 +259,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (compat.requiresNonEmptyUserOrAssistantMessage) {
           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
+        params = projectRequestImageHistory(params, "chat");
         const emitReasoning = shouldEmitOpenAICompletionsReasoning(
           model as OpenAIModeModel,
           options as OpenAICompletionsOptions | undefined,
@@ -268,7 +270,6 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
             params as unknown as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
             buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
               timeoutMs: options?.timeoutMs,
-              maxRetries: options?.maxRetries,
             }),
           )
           .withResponse();

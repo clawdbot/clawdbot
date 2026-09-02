@@ -1,18 +1,25 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  cleanupPreparedModelRuntimeHarness,
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "../agents/prepared-model-runtime.test-harness.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
 
 const mocks = getPreparedModelRuntimeMocks();
+let state: OpenClawTestState;
 
 describe("EmbeddedPreparedModelRuntimeHost", () => {
-  beforeEach(() => {
-    resetPreparedModelRuntimeHarness();
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
+    resetPreparedModelRuntimeHarness(state);
   });
 
   it("reuses its configured publication across two actual run admissions", async () => {
@@ -25,8 +32,8 @@ describe("EmbeddedPreparedModelRuntimeHost", () => {
     const input = {
       agentId: "default",
       config,
-      agentDir: "/tmp/unused-agent",
-      inheritedAuthDir: "/tmp/unused-agent",
+      agentDir: state.agentDir("default"),
+      inheritedAuthDir: state.agentDir("default"),
       workspaceDir: "/tmp/unused-workspace",
       runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", agentId: "default" }],
     };
@@ -38,4 +45,8 @@ describe("EmbeddedPreparedModelRuntimeHost", () => {
     expect(second.snapshot).toBe(first.snapshot);
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
+});
+
+afterEach(async ({ task }) => {
+  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

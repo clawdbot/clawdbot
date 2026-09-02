@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { MeetingAudioBackendSelection, MeetingAudioRuntime } from "./audio-backend.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
+import { splitCommandArgv } from "./command-argv.js";
 import {
   prepareMeetingNodeAudio,
   readMeetingNodeCommand,
@@ -97,10 +98,7 @@ function readOutputGeneration(value: unknown): number | undefined {
 }
 
 function runCommandWithTimeout(argv: string[], timeoutMs: number) {
-  const [command, ...args] = argv;
-  if (!command) {
-    throw new Error("command must not be empty");
-  }
+  const { command, args } = splitCommandArgv(argv, "command");
   const result = spawnSync(command, args, { encoding: "utf8", timeout: timeoutMs });
   const errorMessage = result.error ? formatErrorMessage(result.error) : "";
   const stderr =
@@ -112,14 +110,6 @@ function runCommandWithTimeout(argv: string[], timeoutMs: number) {
     stdout: result.stdout ?? "",
     stderr,
   };
-}
-
-function splitCommand(argv: string[]): { command: string; args: string[] } {
-  const [command, ...args] = argv;
-  if (!command) {
-    throw new Error("audio command must not be empty");
-  }
-  return { command, args };
 }
 
 function waitForInputDrain(
@@ -277,8 +267,8 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     url?: string;
     mode?: string;
   }): NodeBridgeSession => {
-    const input = splitCommand(params.inputCommand);
-    const output = splitCommand(params.outputCommand);
+    const input = splitCommandArgv(params.inputCommand, "audio command");
+    const output = splitCommandArgv(params.outputCommand, "audio command");
     const session: NodeBridgeSession = {
       id: `${options.bridgeIdPrefix}${randomUUID()}`,
       url: params.url,

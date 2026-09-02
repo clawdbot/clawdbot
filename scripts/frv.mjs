@@ -163,18 +163,27 @@ async function execGhRead(args, options = {}) {
   throw lastError;
 }
 
+function readFreshGhApi(repository, path, args = []) {
+  // Rerun decisions require current attempts and jobs, not a relay's earlier snapshot.
+  return execGhRead([
+    "api",
+    `repos/${repository}/${path}`,
+    "-H",
+    "Cache-Control: max-age=0",
+    ...args,
+  ]);
+}
+
 async function ghJson(repository, path) {
-  return JSON.parse(await execGhRead(["api", `repos/${repository}/${path}`]));
+  return JSON.parse(await readFreshGhApi(repository, path));
 }
 
 async function ghAttemptJobs(repository, runId, runAttempt) {
-  const output = await execGhRead([
-    "api",
-    "--paginate",
-    `repos/${repository}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
-    "--jq",
-    ".jobs[] | @json",
-  ]);
+  const output = await readFreshGhApi(
+    repository,
+    `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
+    ["--paginate", "--jq", ".jobs[] | @json"],
+  );
   return output
     ? output
         .split("\n")
@@ -281,6 +290,20 @@ export async function preflightContinuation(
     throw new Error("source full release parent identity changed");
   }
   const parentJobs = await client.getParentJobs(source.sourceRunId);
+  if (
+    parentJobs.some(
+      (job) =>
+        Number(job.run_attempt) === source.sourceRunAttempt &&
+        job.conclusion !== "skipped" &&
+        /^(?:Prepare release npm artifacts|Prepare release Docker artifacts) \/ /u.test(
+          job.name ?? "",
+        ),
+    )
+  ) {
+    throw new Error(
+      "parent-owned publication artifacts do not survive parent reruns; start a fresh all-group FRV",
+    );
+  }
   const resolveJobs = parentJobs.filter(
     (job) =>
       job.name === "Resolve target ref" &&
@@ -404,12 +427,7 @@ export function createClient(repository, dependencies = {}) {
   const apiJson = dependencies.apiJson ?? ((path) => ghJson(repository, path));
   const apiText =
     dependencies.apiText ??
-    ((path, jq) =>
-      execGhRead(
-        jq
-          ? ["api", "--paginate", `repos/${repository}/${path}`, "--jq", jq]
-          : ["api", `repos/${repository}/${path}`],
-      ));
+    ((path, jq) => readFreshGhApi(repository, path, jq ? ["--paginate", "--jq", jq] : []));
   const mutate = dependencies.mutate ?? ((args) => execGh(args));
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);

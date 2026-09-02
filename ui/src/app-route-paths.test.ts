@@ -1,8 +1,14 @@
 // @vitest-environment node
+import {
+  CONTROL_UI_RESERVED_ROUTE_SEGMENTS,
+  isControlUiReservedRouteSegment,
+} from "@openclaw/session-url-contract";
 import { notFound, type RouteLocation, type RouterHistory } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
+  APP_ROUTE_IDS,
+  CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
@@ -12,6 +18,7 @@ import {
   pathForWorkboardBoard,
   pluginsHubTabFromPath,
   routeIdFromPath,
+  routePageSpec,
   type RouteId,
   type MemoryRouteTab,
   type PluginsHubRouteTab,
@@ -59,6 +66,15 @@ const DYNAMIC_STARTUP_CASES = [
     },
   },
   {
+    label: "Beam share",
+    routeId: "chat",
+    location: {
+      pathname: "/beam/0123456789ab",
+      search: "",
+      hash: "#message",
+    },
+  },
+  {
     label: "workboard board",
     routeId: "workboard",
     location: {
@@ -92,6 +108,62 @@ const DYNAMIC_STARTUP_CASES = [
 }[];
 
 describe("Dynamic route startup bridge", () => {
+  it("keeps share-route reservations aligned with every built-in path and alias", () => {
+    const reservedRouteSegments = [
+      ...new Set([
+        "focus",
+        ...Object.values(CONTROL_UI_DOCUMENT_ROUTE_PATHS).map((path) => path.slice(1)),
+        ...APP_ROUTE_IDS.flatMap((routeId) => {
+          const definition = routePageSpec(routeId);
+          return [definition.path, ...(definition.aliases ?? [])]
+            .map((path) => path.split("/").find(Boolean))
+            .filter((segment): segment is string => Boolean(segment));
+        }),
+      ]),
+    ].toSorted();
+
+    expect([...CONTROL_UI_RESERVED_ROUTE_SEGMENTS].toSorted()).toEqual(reservedRouteSegments);
+    expect(reservedRouteSegments.every(isControlUiReservedRouteSegment)).toBe(true);
+  });
+
+  it("keeps plausible generic catalog share paths on chat", () => {
+    for (const pathname of [
+      "/beam/0123456789ab",
+      "/beam/ABCDEF012345",
+      "/beam/nothexvaluezz",
+      "/beam/0123456789abcdef0123456789abcdef0",
+    ]) {
+      expect(routeIdFromPath(pathname)).toBe("chat");
+    }
+    expect(routeIdFromPath("/openclaw/beam/0123456789ab", "/openclaw")).toBe("chat");
+    expect(inferBasePathFromPathname("/openclaw/beam/0123456789ab")).toBe("/openclaw");
+  });
+
+  it("does not steal mounted routes, docs, app resources, or reserved routes", () => {
+    for (const pathname of [
+      "/ui/chat",
+      "/ui/config",
+      "/concepts/agent-workspace",
+      "/api/files/1",
+      "/control/avatar/main",
+      "/plugins/diffs/view/id/token",
+      "/beam/0123456789a",
+      "/beam/not-valid",
+      "/approve/0123456789ab",
+      "/ask/0123456789ab",
+    ]) {
+      expect(routeIdFromPath(pathname)).toBeNull();
+    }
+    expect(routeIdFromPath("/control/avatar/main", "/control")).toBeNull();
+    expect(routeIdFromPath("/settings/about")).toBe("about");
+    expect(routeIdFromPath("/workboard/0123456789ab")).toBe("workboard");
+    expect(routeIdFromPath("/focus/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/plugin/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/usage/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/settings/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/openclaw/skills/0123456789ab", "/openclaw")).toBeNull();
+  });
+
   it("registers the Updates settings path", () => {
     expect(pathForRoute("updates")).toBe("/settings/updates");
     expect(routeIdFromPath("/settings/updates")).toBe("updates");

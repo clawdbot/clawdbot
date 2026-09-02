@@ -1,3 +1,6 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resizeToJpeg } from "openclaw/plugin-sdk/media-runtime";
+import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createCuaComputerProvider } from "./commands.js";
 import {
@@ -19,6 +22,24 @@ import {
 } from "./driver-client.js";
 
 describe("cua-computer provider", () => {
+  it("settles the native driver during node preparation without opening a computer execution", async () => {
+    const { session, getDesktopState } = driver();
+    const ready = createDeferred<void>();
+    let available = false;
+    session.isAvailable = () => available;
+    session.prepareAvailability = async () => {
+      await ready.promise;
+      available = true;
+    };
+    const provider = createCuaComputerProvider({ platform: "linux", driver: session });
+    const preparing = provider.prepare?.({ config: {}, env: {} });
+    expect(provider.isAvailable()).toBe(false);
+    ready.resolve();
+    await preparing;
+    expect(provider.isAvailable()).toBe(true);
+    expect(getDesktopState).not.toHaveBeenCalled();
+  });
+
   it("advertises the implemented Linux v2 capability", () => {
     const { session } = driver();
     const descriptor = createCuaComputerProvider({
@@ -483,6 +504,13 @@ describe("cua-computer provider", () => {
 
   it("maps window pixels, app lifecycle, menu, zoom, and escalation tools", async () => {
     const { session, callTool, escalateScope } = driver();
+    const zoomImage = (
+      await resizeToJpeg({
+        buffer: createSolidPngBuffer(300, 200, { r: 70, g: 125, b: 180 }),
+        maxSide: 300,
+        quality: 85,
+      })
+    ).toString("base64");
     callTool.mockImplementation(async (name) => {
       switch (name) {
         case "list_apps":
@@ -492,7 +520,10 @@ describe("cua-computer provider", () => {
         case "get_window_state":
           return cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.windowState, { image: true });
         case "zoom":
-          return cuaToolResult({ screenshot_width: 300, screenshot_height: 200 }, { image: true });
+          return {
+            ...cuaToolResult({ width: 300, height: 200, format: "jpeg", mime_type: "image/jpeg" }),
+            images: [{ mimeType: "image/jpeg", dataBase64: zoomImage }],
+          };
         default:
           return cuaToolResult(
             {},
@@ -535,6 +566,26 @@ describe("cua-computer provider", () => {
       ),
     ) as { observation: { observationId: string } };
     expect(zoomed.observation.observationId).not.toBe(observed.observation.observationId);
+    expect(zoomed.observation).toMatchObject({
+      base64: zoomImage,
+      format: "jpeg",
+      width: 300,
+      height: 200,
+    });
+    await computer.act(
+      JSON.stringify({
+        action: "left_click",
+        windowRef,
+        observationId: zoomed.observation.observationId,
+        x: 0,
+        y: 0,
+      }),
+    );
+    expect(callTool).toHaveBeenLastCalledWith(
+      "click",
+      { pid: 4242, window_id: 99, x: 0, y: 0, from_zoom: true, button: "left", count: 1 },
+      undefined,
+    );
     await computer.act(
       JSON.stringify({ action: "escalate_scope", reason: "background_delivery_failed" }),
     );

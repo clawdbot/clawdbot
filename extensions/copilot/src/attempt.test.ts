@@ -714,6 +714,10 @@ describe("runCopilotAttempt", () => {
   });
 
   it("runs generic prompt and lifecycle hooks through the standard harness helpers", async () => {
+    const params = makeParams({
+      agentAccountId: "account-a",
+      sandboxSessionKey: "agent:agent-1:policy",
+    });
     const beforePromptBuild = vi.fn(() => ({
       prependContext: "Use the current repository state.",
       appendContext: "Finish with the current test status.",
@@ -746,7 +750,7 @@ describe("runCopilotAttempt", () => {
       return createStubToolBridge();
     });
 
-    await runCopilotAttempt(makeParams(), {
+    await runCopilotAttempt(params, {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -754,7 +758,12 @@ describe("runCopilotAttempt", () => {
 
     expect(beforePromptBuild).toHaveBeenCalledWith(
       expect.objectContaining({ prompt: "hello" }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        accountId: "account-a",
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
     const cfg = sdk.createSession.mock.calls[0]?.[0] as {
       systemMessage?: { content?: string };
@@ -773,7 +782,11 @@ describe("runCopilotAttempt", () => {
         provider: "github-copilot",
         runId: "run-1",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
     expect(llmOutput).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -781,11 +794,11 @@ describe("runCopilotAttempt", () => {
         model: "gpt-4o",
         provider: "github-copilot",
       }),
-      expect.objectContaining({ runId: "run-1" }),
+      expect.objectContaining({ runId: "run-1", sessionKey: params.sessionKey }),
     );
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({ success: true }),
-      expect.objectContaining({ sessionId: "session-1" }),
+      expect.objectContaining({ sessionId: "session-1", sessionKey: params.sessionKey }),
     );
     expect(afterToolCall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -793,7 +806,11 @@ describe("runCopilotAttempt", () => {
         toolCallId: "tool-call-1",
         toolName: "read",
       }),
-      expect.objectContaining({ agentId: "agent-1", sessionId: "session-1" }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: params.sessionKey,
+      }),
     );
   });
 
@@ -821,7 +838,7 @@ describe("runCopilotAttempt", () => {
       });
     });
 
-    const attempt = runCopilotAttempt(makeParams(), {
+    const attempt = runCopilotAttempt(makeParams({ agentAccountId: "account-a" }), {
       createToolBridge,
       pool: makeFakePool(sdk),
     });
@@ -849,7 +866,7 @@ describe("runCopilotAttempt", () => {
         messageCount: -1,
         sessionFile: "session.json",
       }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
     );
     expect(afterCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -857,7 +874,7 @@ describe("runCopilotAttempt", () => {
         messageCount: -1,
         sessionFile: "session.json",
       }),
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1" }),
+      expect.objectContaining({ accountId: "account-a", runId: "run-1", sessionId: "session-1" }),
     );
     expect(beforeCompaction.mock.calls[0]?.[0]).not.toHaveProperty("messages");
   });
@@ -1872,11 +1889,34 @@ describe("runCopilotAttempt", () => {
     expect(capturedParams).toBe(params);
   });
 
-  it("F7: result.yieldDetected is true when the tool bridge fires onYieldDetected during the attempt", async () => {
+  it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
     const createToolBridge = vi.fn(
-      async (input: { onYieldDetected?: (message?: string, acknowledgment?: string) => void }) => {
+      async (input: {
+        onToolCompleted?: (completion: {
+          args: Record<string, unknown>;
+          result: unknown;
+          startedAt: number;
+          toolCallId: string;
+          toolName: string;
+        }) => void | Promise<void>;
+        onYieldDetected?: (message?: string, acknowledgment?: string) => void;
+      }) => {
+        await input.onToolCompleted?.({
+          args: { task: "review" },
+          result: {
+            details: {
+              status: "accepted",
+              runId: "run-copilot-child",
+              childSessionKey: "agent:main:subagent:copilot-child",
+              expectsCompletionMessage: true,
+            },
+          },
+          startedAt: Date.now(),
+          toolCallId: "spawn-1",
+          toolName: "sessions_spawn",
+        });
         // Simulate a wrapped tool invoking sessions_yield before the
         // attempt settles. The bridge is responsible for notifying the
         // caller via onYieldDetected so the final result can carry the
@@ -1894,6 +1934,13 @@ describe("runCopilotAttempt", () => {
 
     expect(result.yieldDetected).toBe(true);
     expect(result.yieldAcknowledgment).toBe("Research started; results will follow.");
+    expect(result.acceptedSessionSpawns).toEqual([
+      {
+        runId: "run-copilot-child",
+        childSessionKey: "agent:main:subagent:copilot-child",
+        expectsCompletionMessage: true,
+      },
+    ]);
   });
 
   it("F7: result.yieldDetected is false on a clean attempt (no sessions_yield fired)", async () => {

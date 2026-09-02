@@ -1,3 +1,4 @@
+import { on } from "node:events";
 import http from "node:http";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -43,29 +44,19 @@ class SocketReader {
 }
 
 class WebSocketReader {
-  private readonly chunks: Buffer[] = [];
-  private readonly waiters: Array<(chunk: Buffer) => void> = [];
+  private readonly messages: AsyncIterator<unknown[]>;
 
   constructor(ws: WebSocket) {
-    ws.on("message", (data: RawData) => {
-      const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-      const waiter = this.waiters.shift();
-      if (waiter) {
-        waiter(chunk);
-      } else {
-        this.chunks.push(chunk);
-      }
-    });
+    this.messages = on(ws, "message", { close: ["close"] });
   }
 
   async next(): Promise<Buffer> {
-    const chunk = this.chunks.shift();
-    return (
-      chunk ??
-      (await new Promise<Buffer>((resolve) => {
-        this.waiters.push(resolve);
-      }))
-    );
+    const message = await this.messages.next();
+    if (message.done) {
+      throw new Error("WebSocket closed before the next RFB frame");
+    }
+    const [data] = message.value as [RawData];
+    return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
   }
 }
 
@@ -136,7 +127,7 @@ describe("gateway host desktop observe integration", () => {
         }),
     );
 
-    const registry = createDesktopSessionRegistry({ lingerMs: 10 });
+    const registry = createDesktopSessionRegistry();
     const service = createHostDesktopService({
       config: { enabled: true, port: rfbAddress.port },
       registry,

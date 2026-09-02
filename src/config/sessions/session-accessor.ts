@@ -6,9 +6,12 @@
  */
 export * from "./session-history.js";
 export {
+  bindSessionPendingInputSources,
+  listSessionPendingInputReceipts,
   listSessionPendingInputs,
   readSessionPendingInput,
   stageSessionPendingInput,
+  withSessionPendingInputPersistence,
   type SessionPendingInput,
   type SessionPendingInputPage,
   type SessionPendingInputReceipt,
@@ -108,7 +111,6 @@ export type {
   SessionTranscriptWriteLockAccessorContext,
   SessionTranscriptWriteScope,
   SessionTranscriptWriteTransactionContext,
-  TemporarySessionMappingPreservationResult,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
@@ -156,6 +158,7 @@ export {
   patchSessionEntryTarget,
   patchSessionEntryWithKey,
   readSessionUpdatedAtCore,
+  readSessionStoreSummaryReadOnly,
   replaceSessionEntry,
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
@@ -214,7 +217,6 @@ export {
   cleanupPluginHostSessionStore,
   cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
-  preserveTemporarySessionMapping,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
   restoreSessionFromCompactionCheckpoint,

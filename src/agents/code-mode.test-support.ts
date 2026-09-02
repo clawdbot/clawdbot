@@ -1,5 +1,5 @@
 import { expect, vi } from "vitest";
-import { setPluginToolMeta } from "../plugins/tools.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
@@ -9,7 +9,7 @@ import {
   removeExpiredRuns,
   resumingRunIds,
 } from "./code-mode-state.js";
-import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
+import { normalizeCodeModeTimeoutResult, runCodeModeWorker } from "./code-mode-worker.js";
 import { createCodeModeTools } from "./code-mode.js";
 import {
   createToolSearchCatalogRef,
@@ -24,7 +24,7 @@ export const testing = {
   resumingRunIds,
   codeModeReplayIdForToolCall,
   removeExpiredRuns,
-  normalizeCodeModeWorkerResult,
+  normalizeCodeModeTimeoutResult,
   runCodeModeWorker,
   resolveCodeModeHeadlessConfig,
 };

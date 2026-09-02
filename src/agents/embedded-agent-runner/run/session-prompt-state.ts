@@ -1,13 +1,20 @@
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+  type SessionTranscriptWriterFence,
+} from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import {
-  resolveAgentRunSessionTarget,
-  type AgentRunSessionTarget,
-} from "../../run-session-target.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
+import type { AcceptedCompactionSuccessor } from "../compaction-successor.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
-import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
+import {
+  buildContextEngineCompactionSessionTarget,
+  prepareInitialSessionWriter,
+} from "./session-bootstrap.js";
 
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
@@ -17,11 +24,6 @@ type ActivePrompt = {
   persisted: boolean;
   internal: boolean;
 };
-
-type SessionWriterFence = Pick<
-  AgentRunSessionTarget,
-  "expectedLifecycleRevision" | "expectedWriterRunId"
->;
 
 export function createEmbeddedRunSessionPromptState(input: {
   runParams: PreparedEmbeddedRunInput["runParams"];
@@ -42,15 +44,19 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionTarget: params.sessionTarget,
     });
   const expectedWriterRunId = params.sessionTarget?.expectedWriterRunId?.trim();
-  const sessionWriterFence: SessionWriterFence | undefined = expectedWriterRunId
+  const existingWriterFence: SessionTranscriptWriterFence | undefined = expectedWriterRunId
     ? {
-        ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
-          ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
-          : {}),
+        expectedLifecycleRevision: params.sessionTarget?.expectedLifecycleRevision,
         expectedWriterRunId,
       }
     : undefined;
+  const initialWriter = prepareInitialSessionWriter({
+    runParams: params,
+    target: activeSessionTarget,
+  });
+  const initialTarget = initialWriter ? { ...activeSessionTarget } : undefined;
   let sessionTargetAdopted = false;
+  let committedCompactionSuccessor: AcceptedCompactionSuccessor | undefined;
   // Only retries after this run mutates its transcript may wait for deferred projection work.
   // Fresh attempts retain the projection owner's bounded, retryable failure contract.
   let settleOwnedTranscriptProjection = false;
@@ -60,39 +66,37 @@ export function createEmbeddedRunSessionPromptState(input: {
     internal: false,
   };
 
+  const notifySessionIdChanged = () => {
+    // Update host provenance before callbacks can close the exact run owner.
+    registerAgentRunContext(params.runId, { sessionId: activeSessionId, lifecycleGeneration });
+    params.replyOperation?.updateSessionId(activeSessionId);
+    params.onSessionIdChanged?.(activeSessionId);
+  };
   const adoptSessionId = (nextSessionId: string | undefined) => {
     if (!nextSessionId || nextSessionId === activeSessionId) {
       return;
     }
     activeSessionId = nextSessionId;
-    // Keep every active-run owner on the rotated identity. Restart recovery
-    // uses the reply registry while lifecycle persistence uses run context.
-    params.replyOperation?.updateSessionId(activeSessionId);
-    params.onSessionIdChanged?.(activeSessionId);
-    registerAgentRunContext(params.runId, {
-      sessionId: activeSessionId,
-      lifecycleGeneration,
-    });
+    notifySessionIdChanged();
   };
-  const adoptSessionTarget = async (nextSessionTarget: ContextEngineSessionTarget | undefined) => {
-    if (!nextSessionTarget) {
-      return;
-    }
-    const resolvedTarget = await resolveAgentRunSessionTarget({
-      agentId: nextSessionTarget.agentId ?? sessionAgentId,
-      config: params.config,
-      missingSessionKey: "resolve-existing",
-      sessionId: nextSessionTarget.sessionId ?? activeSessionId,
-      sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
-      sessionTarget: nextSessionTarget,
-    });
-    activeSessionTarget = {
-      ...resolvedTarget,
-      ...(nextSessionTarget.threadId !== undefined ? { threadId: nextSessionTarget.threadId } : {}),
-    };
+  const capturePreparedCompactionTarget = (
+    target: Pick<AcceptedCompactionSuccessor, "sessionId" | "sessionFile" | "sessionTarget">,
+  ) => {
+    activeSessionId = target.sessionId;
+    activeSessionFile = target.sessionFile;
+    activeSessionTarget = target.sessionTarget;
     sessionTargetAdopted = true;
-    activeSessionFile = resolvedTarget.sessionKey;
-    adoptSessionId(resolvedTarget.sessionId);
+  };
+  const recordCommittedCompactionSuccessor = (accepted: AcceptedCompactionSuccessor) => {
+    // Commit-edge bookkeeping only: observers may cancel before the patch promise
+    // returns, so neither notification callbacks nor another await belongs here.
+    committedCompactionSuccessor = accepted;
+    capturePreparedCompactionTarget(accepted);
+  };
+  const notifyCompactionSessionAdopted = (previousSessionId: string | undefined) => {
+    if (previousSessionId && previousSessionId !== activeSessionId) {
+      notifySessionIdChanged();
+    }
   };
   // Internal control prompts are model-only context, never operator-authored transcript turns.
   const activateInternalPrompt = (prompt: string) => {
@@ -159,11 +163,25 @@ export function createEmbeddedRunSessionPromptState(input: {
     get sessionTargetAdopted() {
       return sessionTargetAdopted;
     },
+    get committedCompactionSuccessor() {
+      return committedCompactionSuccessor;
+    },
     // Context engines receive only portable session identity. Keep the admitted
     // writer fact private while carrying it across rebased/adopted targets.
     get sessionWriterFence() {
-      return sessionWriterFence;
+      return existingWriterFence ?? initialWriter?.committedFence;
     },
+    withSessionWriterContext: <T>(run: () => Promise<T>): Promise<T> =>
+      initialWriter && !initialWriter.committedFence
+        ? withOwnedSessionTranscriptWrites(
+            {
+              sessionTarget: initialTarget,
+              initialWriter,
+              withTranscriptWrite: async (write) => await write(),
+            },
+            run,
+          )
+        : runWithoutOwnedSessionTranscriptWrites(run),
     get activePrompt() {
       return activePrompt;
     },
@@ -174,7 +192,9 @@ export function createEmbeddedRunSessionPromptState(input: {
       suppressNextUserMessagePersistence = value;
     },
     adoptSessionId,
-    adoptSessionTarget,
+    capturePreparedCompactionTarget,
+    recordCommittedCompactionSuccessor,
+    notifyCompactionSessionAdopted,
     activateInternalPrompt,
     markOwnedTranscriptRetry: () => {
       settleOwnedTranscriptProjection = true;
@@ -184,20 +204,26 @@ export function createEmbeddedRunSessionPromptState(input: {
       abortSignal?: AbortSignal,
     ) => {
       const sessionId = target?.sessionId ?? activeSessionId;
-      if (settleOwnedTranscriptProjection && target && sessionId) {
+      // A caller's manager owns the transcript even when metadata has a durable target.
+      // Waiting on that borrowed identity can block an unrelated in-memory retry.
+      if (settleOwnedTranscriptProjection && !params.sessionManager && target && sessionId) {
         settleOwnedTranscriptProjection = false;
         const { waitForSessionTranscriptProjection } =
           await import("../../../config/sessions/session-transcript-reconcile.js");
         await waitForSessionTranscriptProjection({ ...target, sessionId }, abortSignal);
       }
     },
-    continueFromCurrentTranscript: () => {
-      activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT);
+    continueFromCurrentTranscript: (options?: { includeToolFailureInstruction?: boolean }) => {
+      const prompt = options?.includeToolFailureInstruction
+        ? `${MID_TURN_PRECHECK_CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
+        : MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+      activateInternalPrompt(prompt);
     },
     onUserMessagePersisted,
     waitForCurrentUserMessagePersistence,
-    prepareCompactedTranscriptRetry: async () => {
+    prepareCompactedTranscriptRetry: async (assertActive: () => void) => {
       await waitForCurrentUserMessagePersistence();
+      assertActive();
       settleOwnedTranscriptProjection = true;
       if (activePrompt.internal) {
         suppressNextUserMessagePersistence = activePrompt.persisted;

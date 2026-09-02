@@ -1,6 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Memory Core integration tests exercise the real SQLite search manager through tools.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +26,148 @@ describe("memory_search real manager", () => {
 
   beforeEach(() => {
     testing.resetMemorySearchToolCooldowns();
+  });
+
+  it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({ model: "old-embed", vectorEnabled: false, onSearch: false }),
+    );
+    await manager.sync({ reason: "cli", force: true });
+    await manager.close();
+    const embeddingCalls = fixture.provider.embedBatchCalls;
+    const wikiHit = {
+      corpus: "wiki" as const,
+      path: "entities/alpha.md",
+      score: 1,
+      snippet: "Alpha wiki entry",
+    };
+    registerMemoryCorpusSupplement("memory-guidance-fixture", {
+      search: async () => [wikiHit],
+      get: async () => null,
+    });
+    try {
+      const tool = createMemorySearchTool({
+        config: fixture.createConfig({
+          model: "new-embed",
+          vectorEnabled: false,
+          onSearch: false,
+        }),
+        agentId: "main",
+      });
+      if (!tool) {
+        throw new Error("memory_search tool missing");
+      }
+      const action =
+        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
+      const primary = await tool.execute("paused-primary", { query: "alpha" });
+      expect(primary.details).toMatchObject({ disabled: true, unavailable: true, action });
+
+      const combined = await tool.execute("paused-with-wiki", { query: "alpha", corpus: "all" });
+      expect(combined.details).toMatchObject({
+        results: [wikiHit],
+        corpora: [
+          { corpus: "memory", outcome: "unavailable" },
+          { corpus: "wiki", outcome: "ok" },
+        ],
+        warning: expect.stringContaining("Memory corpus unavailable"),
+        action,
+      });
+      expect(combined.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(action),
+      });
+      expect(combined.details).not.toHaveProperty("disabled");
+      expect(combined.details).not.toHaveProperty("unavailable");
+      expect(fixture.provider.embedBatchCalls).toBe(embeddingCalls);
+      expect(fixture.provider.embedQueryCalls).toBe(0);
+    } finally {
+      clearMemoryPluginState();
+    }
+  });
+
+  it("keeps routine transcript refresh silent during memory_search", async () => {
+    const cfg = fixture.createConfig({
+      provider: "none",
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      minScore: 0,
+      vectorEnabled: false,
+      onSearch: true,
+    });
+    const sessionKey = "agent:main:telegram:direct:refresh-proof";
+    await fixture.seedSessionTranscript({
+      sessionId: "refresh-proof",
+      sessionKey,
+      messages: [
+        {
+          role: "user",
+          content: "The transcript refresh marker is cobalt orchid.",
+          timestamp: "2026-08-30T09:00:00.000Z",
+        },
+      ],
+    });
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "baseline", force: true });
+    await fixture.seedSessionTranscript({
+      sessionId: "refresh-proof",
+      sessionKey,
+      messages: [
+        {
+          role: "assistant",
+          content: "A second transcript write is waiting for indexing.",
+          timestamp: "2026-08-30T09:01:00.000Z",
+        },
+      ],
+    });
+    Reflect.set(manager, "sessionsDirty", true);
+
+    const maintenanceReady = createDeferred<void>();
+    const releaseMaintenance = createDeferred<void>();
+    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+      const acquired = await originalGet(params);
+      if (params.purpose !== "maintenance" || !acquired) {
+        return acquired;
+      }
+      const fields = acquired as unknown as {
+        syncArchiveFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+      };
+      const syncArchiveFiles = fields.syncArchiveFiles.bind(acquired);
+      vi.spyOn(fields, "syncArchiveFiles").mockImplementation(async (syncParams) => {
+        const result = await syncArchiveFiles(syncParams);
+        maintenanceReady.resolve();
+        await releaseMaintenance.promise;
+        return result;
+      });
+      return acquired;
+    });
+
+    try {
+      const tool = createMemorySearchTool({
+        config: cfg,
+        agentId: "main",
+        agentSessionKey: "agent:main:telegram:direct:active-refresh-proof",
+      });
+      if (!tool) {
+        throw new Error("memory_search tool missing");
+      }
+      const execution = tool.execute("routine-refresh", {
+        query: "zebra",
+        corpus: "memory",
+      });
+      await maintenanceReady.promise;
+      const result = await execution;
+
+      expect(result.details).toMatchObject({
+        results: [expect.objectContaining({ snippet: expect.stringContaining("Zebra") })],
+      });
+      expect(result.details).not.toHaveProperty("stale");
+      expect(result.details).not.toHaveProperty("warning");
+      expect(result.details).not.toHaveProperty("action");
+    } finally {
+      releaseMaintenance.resolve();
+      getSpy.mockRestore();
+    }
   });
 
   it("backfills visible sessions with one bounded query embedding", async () => {

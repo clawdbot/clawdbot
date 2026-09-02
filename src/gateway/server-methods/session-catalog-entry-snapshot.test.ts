@@ -86,6 +86,60 @@ describe("session catalog entry snapshots", () => {
     hoisted.listSessionEntriesReadOnly.mockReset();
   });
 
+  it("resolves catalog senders against current profiles without attributing unknown turns", async () => {
+    vi.spyOn(userProfiles, "hasMultipleSessionSharingIdentities").mockReturnValue(false);
+    vi.spyOn(userProfiles, "getUserProfileDisplay").mockImplementation((id) => {
+      if (id !== "merged-profile") {
+        throw new Error("unknown profile");
+      }
+      return { id: "current-profile", displayName: "Taylor", avatarRevision: "2", hasAvatar: true };
+    });
+    const items = [
+      { type: "userMessage" as const, text: "Unknown author" },
+      {
+        type: "userMessage" as const,
+        text: "Known author",
+        sender: { identity: { type: "profile" as const, id: "merged-profile" }, label: "Stale" },
+      },
+      {
+        type: "userMessage" as const,
+        text: "Deleted author",
+        sender: { identity: { type: "profile" as const, id: "deleted-profile" } },
+      },
+    ];
+    const catalog = provider("external", "unused");
+    catalog.read = async ({ hostId, threadId }) => ({
+      hostId,
+      threadId,
+      items,
+      nextCursor: "older",
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: catalog }];
+    const respond = vi.fn();
+    await sessionCatalogHandlers["sessions.catalog.read"]?.({
+      params: { catalogId: "external", hostId: "gateway", threadId: "shared" },
+      respond,
+      context: { getRuntimeConfig: () => ({}) },
+    } as never);
+    expect(respond).toHaveBeenCalledWith(true, {
+      hostId: "gateway",
+      threadId: "shared",
+      nextCursor: "older",
+      items: [
+        items[0],
+        {
+          ...items[1],
+          sender: {
+            identity: { type: "profile", id: "current-profile" },
+            label: "Taylor",
+            avatarUrl: "/api/users/current-profile/avatar?v=2",
+          },
+        },
+        items[2],
+      ],
+    });
+  });
+
   it.each([
     [" BLUE ", "blue"],
     ["default", undefined],

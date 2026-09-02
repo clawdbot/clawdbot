@@ -19,6 +19,7 @@ import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
+  isUiGlobalSessionKey,
   normalizeAgentId,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
@@ -296,13 +297,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     defaults?: SessionsListResult["defaults"],
     options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ): boolean => {
+    const historyAgentId =
+      row?.agentId ??
+      (isUiGlobalSessionKey(row?.key) ? options?.selectedGlobalAgentId : undefined) ??
+      options?.resultAgentId ??
+      state.agentId;
     if (
       row &&
-      !deletions.acceptsGeneration(
-        row.key,
-        row.sessionId,
-        row.agentId ?? options?.resultAgentId ?? state.agentId,
-      )
+      (!deletions.acceptsGeneration(row.key, row.sessionId, historyAgentId) ||
+        deletions.deletionState(row.key, historyAgentId, row.sessionId))
     ) {
       return false;
     }
@@ -313,15 +316,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const result = decorateRows(
       reconcileSessionHistory(state.result, row, defaults, historyOptions, preserveCanonicalRow),
     );
-    if (result === state.result) {
-      return false;
+    const agentId = options?.resultAgentId?.trim()
+      ? normalizeAgentId(options.resultAgentId)
+      : state.agentId;
+    // Ownership can change without changing any rows; subscribers need both.
+    if (result === state.result && agentId === state.agentId) {
+      return true;
     }
     publish({
       ...state,
       result,
-      agentId: options?.resultAgentId?.trim()
-        ? normalizeAgentId(options.resultAgentId)
-        : state.agentId,
+      agentId,
     });
     return true;
   };
@@ -486,14 +491,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (hydratedClient !== next.client || hydratedSelfUserId !== selfUserId) {
+    const hydrateConnection = hydratedClient !== next.client;
+    if (hydrateConnection || hydratedSelfUserId !== selfUserId) {
       const scope = connection.capture();
       if (!scope) {
         return;
       }
       hydratedClient = scope.client;
       hydratedSelfUserId = selfUserId;
-      void (async () => {
+      if (!hydrateConnection) {
+        // Identity updates refresh the current roster without displacing queued picker intent.
+        roster.scheduleEvent();
+        return;
+      }
+      const hydrate = async () => {
         if (connection.isCurrent(scope)) {
           const sessionKey = gateway.snapshot.sessionKey?.trim();
           const agentScope = sessionKey
@@ -511,7 +522,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             await roster.refreshManagedLists();
           }
         }
-      })();
+      };
+      void hydrate().catch(() => undefined);
     }
   });
 
@@ -519,10 +531,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!isSessionStateEvent(event)) {
       return;
     }
-    swarmActivity.observe(event.payload);
-    const decoratedResult = decorateRows(state.result);
-    if (decoratedResult !== state.result) {
-      publish({ ...state, result: decoratedResult });
+    if (swarmActivity.observe(event.payload)) {
+      const decoratedResult = decorateRows(state.result);
+      if (decoratedResult !== state.result) {
+        publish({ ...state, result: decoratedResult });
+      }
     }
     const { eventInfo, reconciled, claimChanged } = reconcileChangedEvent(event.payload, {
       resultAgentId: state.agentId,

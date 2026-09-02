@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
+import { readRuntimeImageHistory } from "@openclaw/media-core";
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
+import {
+  type MediaImageLayout,
+  readPersistedMediaImageLayout,
+  resolveMediaImageLayout,
+} from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
@@ -12,6 +17,7 @@ import {
 } from "../../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { normalizeMediaFacts, readPersistedMediaFacts } from "../../../media/media-facts.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
   channelRouteCompactKey,
@@ -20,9 +26,10 @@ import {
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
-  buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
+import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import {
@@ -48,8 +55,13 @@ import {
   type InternalFollowupRun,
 } from "./types.js";
 
-function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
-  return (run as InternalFollowupRun).currentTurnImagesPrepared === true;
+type FollowupPromptMedia = Pick<
+  InternalFollowupRun,
+  "images" | "imageOrder" | "media" | "currentTurnImagesPrepared" | "mediaImageLayout"
+>;
+
+function hasPreparedCurrentTurnImages(run: FollowupPromptMedia): boolean {
+  return run.currentTurnImagesPrepared === true;
 }
 
 // Persists the most recent runFollowup callback per queue key so that
@@ -320,6 +332,8 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       threadId: run.originatingThreadId,
     }),
     hasPreparedCurrentTurnImages(run),
+    // Approved sources skip the write hook; never carry unstaged input past it.
+    Boolean(run.userTurnTranscriptRecorder?.getPendingInputMessage?.()),
     run.originatingChatId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
@@ -421,7 +435,26 @@ function splitCollectItemsByDeliveryContext(items: FollowupRun[]): FollowupRun[]
 }
 
 function renderCollectItem(item: FollowupRun, idx: number): string {
-  return renderCollectItemPrompt(item, idx, item.prompt);
+  return renderCollectItemPrompt(
+    item,
+    idx,
+    resolveCollectedSourceText(
+      item.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+      item.prompt,
+    ),
+  );
+}
+
+function resolveCollectedSourceText(
+  message: PersistedUserTurnMessage | undefined,
+  fallback: string,
+): string {
+  return message
+    ? (extractTextFromChatContent(message.content, {
+        normalizeText: (text) => text,
+        joinWith: "\n",
+      }) ?? "")
+    : fallback;
 }
 
 function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string): string {
@@ -431,122 +464,81 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
   return `---\nQueued #${idx + 1}${senderSuffix}\n${prompt}`.trim();
 }
 
-/** Identity of a retained image, stable across the history windows that re-read it. */
-function historyImageIdentity(image: { messageId?: string; path: string }): string {
-  return [image.messageId ?? "", image.path].join("\0");
-}
-
-function collectQueuedPromptMedia(
-  items: InternalFollowupRun[],
-): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
-  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout" | "historyImages"> {
-  const images: NonNullable<FollowupRun["images"]> = [];
-  const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
+function collectQueuedPromptMedia(items: readonly FollowupPromptMedia[]): FollowupPromptMedia {
+  const entries: Array<{
+    image?: NonNullable<FollowupRun["images"]>[number];
+    slot: MediaImageLayout["slots"][number];
+  }> = [];
   const media: NonNullable<FollowupRun["media"]> = [];
-  const mediaImageSlots: MediaImageLayout["slots"] = [];
   const suppressedFactIndexes: number[] = [];
-  // Retained images and their provenance travel together, selected per image.
-  // Identity is the image, never its rendered note: a note carries its position in
-  // the history window, so the same image re-read from a grown window renders
-  // differently and text equality would call it new, filling the budget with
-  // duplicates and dropping whatever arrived last. The batch reuses the per-turn
-  // limit, so a collected turn never carries more retained images than one turn could.
-  const historyImages: NonNullable<InternalFollowupRun["historyImages"]> = [];
-  // Pick the survivors before building anything, walking newest item first: a
-  // rolling window re-reads mostly the same images, so filling the budget in queue
-  // order spends it on the oldest and drops the newly arrived one - the image the
-  // member is most likely asking about.
-  const keptHistoryIdentities = new Set<string>();
-  for (const item of items.toReversed()) {
-    const candidates = item.historyImages ?? [];
-    if (candidates.length === 0 || item.images?.length !== candidates.length) {
-      continue;
-    }
-    for (const image of candidates.toReversed()) {
-      if (keptHistoryIdentities.size >= RECENT_HISTORY_IMAGE_LIMIT) {
-        break;
-      }
-      keptHistoryIdentities.add(historyImageIdentity(image));
-    }
-  }
-  const seenHistoryImages = new Set<string>();
   const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
     const mediaOffset = media.length;
-    const itemHistoryImages = item.historyImages ?? [];
-    // A retained image already carried by an earlier item in this batch is dropped,
-    // but the rest of that item still travels: successive turns re-read a growing
-    // window, so skipping a partly-seen item whole would discard the newest image.
-    const takenHistoryIndexes = itemHistoryImages.flatMap((image, index) => {
-      const identity = historyImageIdentity(image);
-      return keptHistoryIdentities.has(identity) && !seenHistoryImages.has(identity) ? [index] : [];
+    media.push(...(item.media ?? []));
+    // Resolve each source before flattening; matching aggregate counts can bind
+    // an unowned inline image to another turn's offloaded attachment.
+    const layout = resolveMediaImageLayout({
+      media: normalizeMediaFacts(item.media),
+      imageOrder: item.imageOrder,
+      mediaImageLayout: item.mediaImageLayout,
+      inlineImageCount: item.images?.length ?? 0,
     });
-    // Per-image selection needs provenance and payload index-aligned, which is what
-    // a history-carrying turn produces: it only inherits images when it brought none
-    // of its own. Should that ever not hold, the item travels whole rather than being
-    // sliced against an alignment this cannot confirm - dropping a member's image is
-    // the worse failure, and the per-turn resolver still bounds what one item carries.
-    const canSelectPerImage = item.images?.length === itemHistoryImages.length;
-    const keptHistoryIndexes = canSelectPerImage
-      ? takenHistoryIndexes
-      : itemHistoryImages.map((_, index) => index);
-    // Every retained image here is already in the batch, so the item adds nothing.
-    if (itemHistoryImages.length > 0 && canSelectPerImage && keptHistoryIndexes.length === 0) {
-      if (item.media) {
-        media.push(...item.media);
-      }
-      continue;
-    }
-    const keepsEveryImage = itemHistoryImages.length === 0 || !canSelectPerImage;
-    const itemImages = keepsEveryImage
-      ? (item.images ?? [])
-      : keptHistoryIndexes.flatMap((index) => item.images?.[index] ?? []);
-    const itemImageOrder = keepsEveryImage
-      ? (item.imageOrder ?? [])
-      : keptHistoryIndexes.flatMap((index) => item.imageOrder?.[index] ?? []);
-    images.push(...itemImages);
-    imageOrder.push(...itemImageOrder);
-    if (currentTurnImagesPrepared) {
-      const allSlots: MediaImageLayout["slots"] =
-        item.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
-      const itemSlots: MediaImageLayout["slots"] = keepsEveryImage
-        ? allSlots
-        : keptHistoryIndexes.flatMap((index) => allSlots[index] ?? []);
-      mediaImageSlots.push(
-        ...itemSlots.map((slot) =>
+    // Suppression belongs to the admitted media facts, even when every retained
+    // image from this item is already present in the collected batch.
+    suppressedFactIndexes.push(
+      ...(layout.suppressedFactIndexes ?? []).map((factIndex) => factIndex + mediaOffset),
+    );
+    let inlineIndex = 0;
+    for (const slot of layout.slots) {
+      entries.push({
+        image: slot.kind === "inline" ? item.images?.[inlineIndex++] : undefined,
+        slot:
           slot.factIndex === undefined
             ? { kind: slot.kind }
             : { kind: slot.kind, factIndex: slot.factIndex + mediaOffset },
-        ),
-      );
-      suppressedFactIndexes.push(
-        ...(item.mediaImageLayout?.suppressedFactIndexes ?? []).map(
-          (factIndex) => factIndex + mediaOffset,
-        ),
-      );
+      });
     }
-    if (item.media) {
-      media.push(...item.media);
-    }
-    for (const index of keptHistoryIndexes) {
-      const image = itemHistoryImages[index];
-      if (image) {
-        seenHistoryImages.add(historyImageIdentity(image));
-        historyImages.push(image);
-      }
+    // Like current-turn admission, images without explicit slots remain inline.
+    for (const image of item.images?.slice(inlineIndex) ?? []) {
+      entries.push({ image, slot: { kind: "inline" } });
     }
   }
+  // Choose the newest identities, then emit them in forward queue order. Current
+  // images and offloaded slots do not consume the retained-history budget.
+  const keptHistoryIdentities = new Set<string>();
+  for (const { image } of entries.toReversed()) {
+    const history = readRuntimeImageHistory(image);
+    if (history && keptHistoryIdentities.size < RECENT_HISTORY_IMAGE_LIMIT) {
+      keptHistoryIdentities.add(history.key);
+    }
+  }
+  const seenHistoryImages = new Set<string>();
+  const keptEntries = entries.filter(({ image }) => {
+    const history = readRuntimeImageHistory(image);
+    if (!history) {
+      return true;
+    }
+    if (!keptHistoryIdentities.has(history.key) || seenHistoryImages.has(history.key)) {
+      return false;
+    }
+    seenHistoryImages.add(history.key);
+    return true;
+  });
+  const images = keptEntries.flatMap(({ image }) => (image ? [image] : []));
+  const imageOrder = keptEntries.map(({ slot }) => slot.kind);
+  const mediaImageSlots = keptEntries.map(({ slot }) => slot);
   const mediaImageLayout =
     mediaImageSlots.length > 0 || suppressedFactIndexes.length > 0
       ? { slots: mediaImageSlots, suppressedFactIndexes }
       : undefined;
   return {
     ...(currentTurnImagesPrepared ? { currentTurnImagesPrepared: true as const } : {}),
-    ...(currentTurnImagesPrepared || images.length > 0 ? { images } : {}),
-    ...(currentTurnImagesPrepared || imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(currentTurnImagesPrepared || mediaImageLayout || images.length > 0 ? { images } : {}),
+    ...(currentTurnImagesPrepared || mediaImageLayout || imageOrder.length > 0
+      ? { imageOrder }
+      : {}),
     ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
-    ...(historyImages.length > 0 ? { historyImages } : {}),
   };
 }
 
@@ -578,12 +570,20 @@ function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
   return item.currentInboundEventKind === "room_event" || item.currentInboundAudio === true;
 }
 
-function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
+function buildCollectTranscriptPrompt(
+  items: FollowupRun[],
+  messages?: (PersistedUserTurnMessage | undefined)[],
+): string {
   return buildCollectPrompt({
     title: "[Queued messages while agent was busy]",
     items,
-    renderItem: (item, index) =>
-      renderCollectItemPrompt(item, index, item.transcriptPrompt ?? item.prompt),
+    renderItem: (item, index) => {
+      const message = messages?.[index] ?? item.userTurnTranscriptRecorder?.message;
+      // Staging may redact or rewrite a source. Collection must never restore
+      // its pre-approval text from the queue's display/runtime projection.
+      const text = resolveCollectedSourceText(message, item.transcriptPrompt ?? item.prompt);
+      return renderCollectItemPrompt(item, index, text);
+    },
   });
 }
 
@@ -620,8 +620,17 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
         async (item) => await item.userTurnTranscriptRecorder?.resolveMessage(),
       ),
     );
-    const media = messages.flatMap((message) =>
-      buildPersistedUserTurnMediaInputsFromFields(message),
+    // Prompt media may omit transcribed audio or other facts. Preserve the full
+    // approved fact space and its layout together when the transcript is collected.
+    const { media, mediaImageLayout } = collectQueuedPromptMedia(
+      messages.map((message, index) => ({
+        media: message ? readPersistedMediaFacts(message) : undefined,
+        mediaImageLayout: message ? readPersistedMediaImageLayout(message) : undefined,
+        // Without an optional layout, source order keeps current images bound to
+        // their facts and history-only images in unbound inline positions.
+        imageOrder: message ? transcriptSources[index]?.imageOrder : undefined,
+        images: message ? transcriptSources[index]?.images : undefined,
+      })),
     );
     const timestamp = messages.reduce<number | undefined>((latest, message) => {
       const candidate = message?.timestamp;
@@ -629,7 +638,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
         ? candidate
         : latest;
     }, undefined);
-    const transcriptPrompt = buildCollectTranscriptPrompt(transcriptSources);
+    const transcriptPrompt = buildCollectTranscriptPrompt(transcriptSources, messages);
     const identityHash = createHash("sha256")
       .update(
         JSON.stringify(
@@ -647,7 +656,8 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       provenance: source.run.inputProvenance,
       idempotencyKey: `followup-collect:${source.run.sessionId}:${identityHash}`,
       ...(timestamp === undefined ? {} : { timestamp }),
-      ...(media.length === 0 ? {} : { media }),
+      ...(media?.length ? { media } : {}),
+      ...(mediaImageLayout ? { mediaImageLayout } : {}),
     };
   };
   const initialTranscriptPrompt = buildCollectTranscriptPrompt(transcriptSources);
@@ -658,6 +668,7 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
       provenance: source.run.inputProvenance,
     },
     resolveInput: buildInput,
+    pendingInputSources: transcriptSources.flatMap((item) => item.userTurnTranscriptRecorder ?? []),
     target: () => resolveFollowupTranscriptTarget(source),
     errorContext: "collected followup user turn transcript",
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
@@ -678,6 +689,7 @@ function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   return (
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
+    item.run.skillLibraryAuthoring !== undefined ||
     hasRuntimeOnlyFollowupMetadata(item)
   );
 }
@@ -1177,6 +1189,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    userTurnTranscriptRecorder: source.userTurnTranscriptRecorder,
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
@@ -1244,6 +1257,9 @@ async function runSyntheticOverflowSummary(params: {
       provenance: params.source.run.inputProvenance,
     },
     target: () => resolveFollowupTranscriptTarget(params.source),
+    pendingInputSources: params.sources.flatMap(
+      (source) => source.userTurnTranscriptRecorder ?? [],
+    ),
     beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     errorContext: "followup overflow summary transcript",
   });
@@ -1720,8 +1736,9 @@ export function scheduleFollowupDrain(
   // Queued turns re-admit on the generation current at drain time: the detached
   // drain runs outside any ambient prepared-generation scope, so a parked turn
   // never inherits the predecessor run's replaced generation.
-  void runWithGatewayIndependentRootWorkContinuation(() =>
-    runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+  void runWithGatewayIndependentRootWorkContinuation(
+    () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
+    "session:followup-drain",
   ).catch((err: unknown) => {
     if (FOLLOWUP_QUEUES.get(key) === queue && queue.drainOwner === drainOwner) {
       queue.draining = false;

@@ -1,6 +1,7 @@
 // Resolves package version metadata for CLI and library callers.
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveLoadedCommitHash } from "./infra/git-commit.js";
 
 const CORE_PACKAGE_NAME = "openclaw";
 
@@ -153,12 +154,17 @@ export function resolveRuntimeServiceVersion(
   });
 }
 
-// Generated build provenance is immutable for a process. Resolve it once so
-// handshakes never poll the filesystem on the connection hot path.
+// Loaded build provenance is immutable for a process. Resolve it once so a
+// checkout update cannot change the identity reported by the running service.
 const RUNTIME_SERVICE_BUILD_ID = readBuildIdFromBuildInfoForModuleUrl(import.meta.url);
+const RUNTIME_SERVICE_COMMIT = resolveLoadedCommitHash({ moduleUrl: import.meta.url });
 
 export function resolveRuntimeServiceBuildId(): string | null {
   return RUNTIME_SERVICE_BUILD_ID;
+}
+
+export function resolveRuntimeServiceCommit(): string | null {
+  return RUNTIME_SERVICE_COMMIT;
 }
 
 export function resolveCompatibilityHostVersion(

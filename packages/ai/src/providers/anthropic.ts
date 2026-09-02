@@ -18,6 +18,10 @@ import {
   resolveAnthropicImageMediaType,
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
+import {
+  projectRequestImageHistory,
+  withRequestImageHistory,
+} from "../internal/request-image-history.js";
 import { calculateCost } from "../model-utils.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
@@ -30,6 +34,7 @@ import {
 } from "../transports/anthropic-compaction-replay.js";
 import { applyAnthropicCacheControlToMessages } from "../transports/anthropic-payload-policy.js";
 import {
+  assignTransportErrorDetails,
   finalizeTerminalToolCallArguments,
   notifyProviderHttpResponse,
   transportAbortError,
@@ -60,7 +65,6 @@ import {
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
   splitSystemPromptCacheBoundary,
@@ -420,10 +424,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         params = nextParams as MessageCreateParamsStreaming;
       }
       applyClaudeRequestContract(params, model);
+      params = projectRequestImageHistory(params, "anthropic");
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
-        maxRetries: requestOptions?.maxRetries ?? 0,
+        maxRetries: 0,
       };
       const response = await client.messages
         .create({ ...params, stream: true }, sdkRequestOptions)
@@ -709,6 +714,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      const terminal = assignTransportErrorDetails(output, error, requestOptions?.signal);
       output.content = output.content.filter((block) => block.type !== "toolCall");
       for (const block of output.content) {
         delete (block as { index?: number }).index;
@@ -722,8 +728,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
         suppressAnthropicCompaction(output, model, requestOptions);
       }
-      const terminal = projectProviderError(error, requestOptions?.signal);
-      Object.assign(output, terminal);
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     }
@@ -911,6 +915,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -934,6 +939,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -961,6 +967,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -985,6 +992,7 @@ function createClient(
         optionsHeaders,
       ),
       fetch,
+      maxRetries: 0,
     });
 
     return { client, isOAuthToken: true, serverSideFallback: false };
@@ -1015,6 +1023,7 @@ function createClient(
       optionsHeaders,
     ),
     fetch,
+    maxRetries: 0,
   });
 
   return { client, isOAuthToken: false, serverSideFallback };
@@ -1202,14 +1211,18 @@ async function convertMessages(
               text: sanitizeSurrogates(item.text),
             };
           }
-          return {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: resolveAnthropicImageMediaType(item.mimeType),
-              data: item.data,
-            },
-          };
+          return withRequestImageHistory(
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: resolveAnthropicImageMediaType(item.mimeType),
+                data: item.data,
+              },
+            } satisfies ContentBlockParam,
+            item,
+            "anthropic",
+          );
         });
         const filteredBlocks = blocks.filter((b) => {
           if (b.type === "text") {

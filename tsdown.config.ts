@@ -1,8 +1,8 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { isBuiltin } from "node:module";
 import path from "node:path";
-import type { UserConfig } from "tsdown";
+import type { DtsOptions, UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   collectChannelConfigDoctorBuildEntries,
@@ -14,6 +14,7 @@ import {
   productionPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
+import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
   createStateSchemaInlinePlugin,
   STATE_SCHEMA_INLINE_PLUGIN_NAME,
@@ -23,7 +24,9 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
+import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
+import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-artifacts.mts";
 import {
   createWorkerDeployBuildPlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
@@ -172,18 +175,6 @@ function nodeBuildConfig(
   };
 }
 
-function fsSafeNativeCopy(): UserConfig["copy"] {
-  const packageRoot = path.dirname(
-    createRequire(import.meta.url).resolve("@openclaw/fs-safe/package.json"),
-  );
-  return ({ outDir }) => ({
-    from: path.join(packageRoot, "dist/native"),
-    // Both package graphs resolve this canonical directory, so npm ships one
-    // native tree even though their emitted loaders have different depths.
-    to: path.resolve(outDir, "..", "dist"),
-  });
-}
-
 function workerDeployBuildConfig(): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
@@ -303,19 +294,25 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@anthropic-ai/claude-agent-sdk",
     "@anthropic-ai/vertex-sdk",
     "@discordjs/voice",
-    "@lancedb/lancedb",
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
+    // Its crypto loader uses createRequire(import.meta.url) for package-owned dependencies.
+    "@openclaw/crabline",
+    // Its native loader resolves optional platform packages from the package scope.
+    "@openclaw/fs-safe",
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
     "jimp",
     "matrix-js-sdk",
     "prism-media",
-    "sharp",
     "typescript",
     "vitest",
+    // Selected plugin distributions install platform optionals beside bundled JavaScript.
+    ...bundledPluginBuildEntries.flatMap(({ packageJson }) =>
+      Object.keys(packageJson?.optionalDependencies ?? {}),
+    ),
   ],
 });
 
@@ -324,14 +321,16 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
-  return shouldNeverBundleDependency(id) || id === "zod" || id.startsWith("zod/");
+  // Arrow's relative module augmentations must stay beside their package modules.
+  return (
+    shouldNeverBundleDependency(id) ||
+    ["zod", "apache-arrow"].some((name) => id === name || id.startsWith(`${name}/`))
+  );
 }
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
-    id === "@openclaw/fs-safe" ||
-    id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
@@ -372,12 +371,15 @@ function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
     "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
     "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
+    "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    "agents/mcp-auth-profile.runtime": "src/agents/mcp-auth-profile.runtime.ts",
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
@@ -386,13 +388,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
-    "config/sessions/session-accessor.sqlite-archive.worker":
-      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
-    "config/sessions/session-transcript-reconcile.worker":
-      "src/config/sessions/session-transcript-reconcile.worker.ts",
-    "infra/sqlite-readonly-location.worker": "src/infra/sqlite-readonly-location.worker.ts",
-    "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
-    "infra/tailscale-route-owner.worker": "src/infra/tailscale-route-owner.worker.ts",
+    ...runtimeProcessBuildEntries,
+    ...runtimeProcessDeclarationEntries,
     "system-agent/setup-inference-detection.worker":
       "src/system-agent/setup-inference-detection.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
@@ -408,8 +405,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
-    "commands/doctor/shared/plugin-registry-migration":
-      "src/commands/doctor/shared/plugin-registry-migration.ts",
     "commands/status.summary.runtime": "src/status/summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
@@ -420,11 +415,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    "process/supervisor/service-child-relay": "src/process/supervisor/service-child-relay.ts",
-    "process/supervisor/service-child-group-anchor":
-      "src/process/supervisor/service-child-group-anchor.ts",
-    "process/supervisor/service-child-windows-job-anchor":
-      "src/process/supervisor/service-child-windows-job-anchor.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
       "src/telegram-ingress-worker.runtime.ts",
@@ -442,8 +432,8 @@ function buildCoreDistEntries(): Record<string, string> {
 function buildDockerE2eHarnessEntries(): Record<string, string> {
   return {
     // Mounted Docker harnesses need stable package dist entries for asserted internal modules.
+    "agents/agent-bundle-mcp-manager-api": "src/agents/agent-bundle-mcp-manager-api.ts",
     "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
-    "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
     "agents/conversation-capability-profile": "src/agents/conversation-capability-profile.ts",
     "agents/embedded-agent-runner/effective-tool-policy":
       "src/agents/embedded-agent-runner/effective-tool-policy.ts",
@@ -454,6 +444,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "cli/run-main": "src/cli/run-main.ts",
     "config/config": "src/config/config.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
+    "plugins/official-external-install-records": "src/plugins/official-external-install-records.ts",
     "system-agent/audit": "src/system-agent/audit.ts",
     "system-agent/system-agent": "src/system-agent/system-agent.ts",
     "system-agent/rescue-message": "src/system-agent/rescue-message.ts",
@@ -462,7 +453,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
     "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
-    "plugins/tools": "src/plugins/tools.ts",
+    "plugins/tool-metadata": "src/plugins/tool-metadata.ts",
     "normalization-core/string-coerce": "packages/normalization-core/src/string-coerce.ts",
   };
 }
@@ -623,10 +614,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
-    "extensions/memory-core/memory-search-knn.child":
-      "extensions/memory-core/src/memory/manager-search-knn.child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
+    "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
     ...bundledHookEntries,
   };
 }
@@ -708,7 +698,11 @@ function buildUnifiedDeclarationPartitions(
     }
     return {
       name,
-      sources: partition.map(([, source]) => normalizeDeclarationEntrySource(source)),
+      // The compiler's TypeScript-only policy leaves JavaScript runtime assets
+      // without declarations; they remain in the unified runtime entry graph.
+      sources: partition
+        .filter(([, source]) => /\.[cm]?tsx?$/u.test(source))
+        .map(([, source]) => normalizeDeclarationEntrySource(source)),
     };
   });
 }
@@ -720,6 +714,11 @@ const unifiedDeps = {
   // Keep dependency-owned types canonical across independently emitted declaration graphs.
   dts: { neverBundle: shouldNeverBundleDeclarationDependency },
 };
+
+// TypeScript supports this hidden flag before get-tsconfig's option type does.
+const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions"]> & {
+  stableTypeOrdering: true;
+} = { stableTypeOrdering: true };
 
 const configs = [
   nodeBuildConfig({
@@ -775,7 +774,6 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      copy: fsSafeNativeCopy(),
       plugins: [createStateSchemaInlinePlugin()],
     },
     false,
@@ -800,8 +798,13 @@ const configs = [
             name,
             entry: unifiedDistEntries,
             deps: unifiedDeps,
+            hooks: { "build:done": createDeclarationInputCapture(name) },
           },
-          { emitDtsOnly: true, entry: sources },
+          {
+            emitDtsOnly: true,
+            entry: sources,
+            compilerOptions: unifiedDeclarationCompilerOptions,
+          },
         ),
       )
     : []),

@@ -123,7 +123,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
           activeSession,
           clientToolCallSlots: [],
           coreReadAuthorized: true,
-          getCodeModeReconciliationCandidate: vi.fn(() => false),
+          getCodeModeRecoveryCandidate: vi.fn(() => undefined),
           hasDeliveredSourceReply: vi.fn(() => false),
           hookRunner: {},
           setCodeModeReconciliationReadAuthorized: vi.fn(),
@@ -445,7 +445,8 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     expect(fixture.order).toEqual(["pending-events", "settle", "settled-published", "after-turn"]);
     expect(mocks.settleStream).toHaveBeenCalledWith(
       expect.objectContaining({
-        runAbortDeadlineAtMs: 123,
+        getRunAbortDeadlineAtMs:
+          fixture.input.preparedStreamRuntime.timeout.getRunAbortDeadlineAtMs,
         shouldFlushForContextEngine: true,
       }),
     );

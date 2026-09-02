@@ -1,9 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   expectRequestCountStable,
+  controlUiSessionUrl,
   installMockGateway,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
@@ -30,10 +32,10 @@ suite.define(() => {
   ])(
     "settles a $name without repeatedly loading the reply preview",
     async ({ artifact, response }) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
-      }
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-reply-preview-recovery", artifactRoot)
+        : undefined;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         ...(artifactDir
@@ -58,7 +60,7 @@ suite.define(() => {
 
       let firstCount = 0;
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-preview"));
         const reply = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
         await reply.waitFor({ state: "visible" });
         expect(await reply.textContent()).toContain("Replying to message");
@@ -75,7 +77,6 @@ suite.define(() => {
           await page
             .locator(".chat-pane-cache__pane--active")
             .getByRole("alert")
-            .locator("summary")
             .getByText("The original message is unavailable.", { exact: true })
             .waitFor();
           await expectRequestCountStable(gateway, "chat.message.get", 1);
@@ -180,10 +181,11 @@ suite.define(() => {
           },
         },
         sessionKey: "agent:main:reply-reconnect",
+        sessions: [{ key: "agent:main:reply-reconnect", sessionId: "reply-preview-history" }],
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-reconnect"));
         const preview = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
         await preview.waitFor();
         await gateway.waitForRequest("chat.message.get");

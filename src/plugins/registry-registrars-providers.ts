@@ -23,9 +23,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     pushDiagnostic,
     reportRegistrationError,
     reportRegistrationWarning,
-    registerSynthesizedTextModelCatalogProvider,
-    registerSynthesizedMediaModelCatalogProvider,
-    registerSynthesizedVoiceModelCatalogProvider,
+    registerModelCatalogProvider,
   } = state;
 
   const registerProvider = (record: PluginRecord, provider: ProviderPlugin) => {
@@ -54,7 +52,13 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       source: record.source,
       rootDir: record.rootDir,
     });
-    registerSynthesizedTextModelCatalogProvider({ record, provider: normalizedProvider });
+    // Reserve catalog ownership without duplicating the discovery-owned model row builders.
+    if (normalizedProvider.catalog || normalizedProvider.staticCatalog) {
+      registerModelCatalogProvider(record, {
+        provider: normalizedProvider.id,
+        kinds: ["text"],
+      });
+    }
   };
 
   const registerAgentHarness = (
@@ -269,11 +273,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registrations: registry.speechProviders,
     ownedIds: (record) => record.speechProviderIds,
     onRegister: (record, provider) =>
-      registerSynthesizedVoiceModelCatalogProvider({
-        record,
-        provider,
-        capabilities: { tts: true },
-        modes: ["tts"],
+      registerModelCatalogProvider(record, {
+        provider: provider.id,
+        kinds: ["voice"],
       }),
   });
 
@@ -282,11 +284,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registrations: registry.realtimeTranscriptionProviders,
     ownedIds: (record) => record.realtimeTranscriptionProviderIds,
     onRegister: (record, provider) =>
-      registerSynthesizedVoiceModelCatalogProvider({
-        record,
-        provider,
-        capabilities: { realtime_transcription: true },
-        modes: ["realtime_transcription"],
+      registerModelCatalogProvider(record, {
+        provider: provider.id,
+        kinds: ["voice"],
       }),
   });
 
@@ -295,11 +295,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registrations: registry.realtimeVoiceProviders,
     ownedIds: (record) => record.realtimeVoiceProviderIds,
     onRegister: (record, provider) =>
-      registerSynthesizedVoiceModelCatalogProvider({
-        record,
-        provider,
-        capabilities: { realtime_voice: true },
-        modes: ["realtime_voice"],
+      registerModelCatalogProvider(record, {
+        provider: provider.id,
+        kinds: ["voice"],
       }),
   });
 
@@ -320,7 +318,10 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registrations: registry.imageGenerationProviders,
     ownedIds: (record) => record.imageGenerationProviderIds,
     onRegister: (record, provider) =>
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "image_generation", provider }),
+      registerModelCatalogProvider(record, {
+        provider: provider.id,
+        kinds: ["image_generation"],
+      }),
   });
 
   const registerVideoGenerationProvider = createProviderLikeRegistrar({
@@ -328,7 +329,10 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registrations: registry.videoGenerationProviders,
     ownedIds: (record) => record.videoGenerationProviderIds,
     onRegister: (record, provider) =>
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "video_generation", provider }),
+      registerModelCatalogProvider(record, {
+        provider: provider.id,
+        kinds: ["video_generation"],
+      }),
   });
 
   const registerMusicGenerationProvider = createProviderLikeRegistrar({
@@ -336,7 +340,10 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registrations: registry.musicGenerationProviders,
     ownedIds: (record) => record.musicGenerationProviderIds,
     onRegister: (record, provider) =>
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "music_generation", provider }),
+      registerModelCatalogProvider(record, {
+        provider: provider.id,
+        kinds: ["music_generation"],
+      }),
   });
 
   const registerWebFetchProvider = createProviderLikeRegistrar({

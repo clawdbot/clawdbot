@@ -1,7 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
@@ -12,6 +13,7 @@ import {
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -20,7 +22,10 @@ suite.define(() => {
     { label: "desktop hover", mobile: false, viewport: { height: 900, width: 1280 } },
     { label: "mobile tap", mobile: true, viewport: { height: 844, width: 390 } },
   ])("shows turn metadata only after completion on $label", async ({ mobile, viewport }) => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       hasTouch: mobile,
       isMobile: mobile,
@@ -53,7 +58,6 @@ suite.define(() => {
             : { opacity: "1", pointerEvents: "auto" },
         );
       if (artifactDir && !mobile) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, "before-user-follow-up-actions-visible.png"),
@@ -123,12 +127,41 @@ suite.define(() => {
         stream: "tool",
         ts: Date.now(),
       });
+      // The working indicator predates the tool event; wait for its deferred projection
+      // before scrolling a bubble that the stream-to-tool render may replace.
+      await page.locator('[data-message-id^="tool:assistant:footer-read"]').waitFor();
       await page.locator(".chat-working-indicator").waitFor({ state: "visible" });
-      await reveal();
+      const heldTouch = mobile ? await context.newCDPSession(page) : null;
+      if (heldTouch) {
+        // A touch can begin during work and disclose the row when released after completion.
+        const bubble = activeGroup.locator(".chat-bubble").last();
+        await bubble.scrollIntoViewIfNeeded();
+        const point = await bubble.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        });
+        await heldTouch.send("Input.dispatchTouchEvent", {
+          type: "touchStart",
+          touchPoints: [point],
+        });
+      } else {
+        await reveal();
+      }
       expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
 
       await gateway.emitChatFinal({ runId, text: "The turn is complete." });
       await activeGroup.getByText("The turn is complete.", { exact: true }).waitFor();
+      if (heldTouch) {
+        await heldTouch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await expect
+          .poll(() => footerPresentation(activeGroup))
+          .toEqual({
+            opacity: "1",
+            pointerEvents: "auto",
+          });
+        // Mouse movement cannot clear touch disclosure; select another row before testing rest.
+        await earlierAssistant.locator(".chat-bubble").last().tap();
+      }
       await page.mouse.move(0, 0);
       const footer = activeGroup.locator(".chat-group-footer");
       await expect
@@ -150,7 +183,10 @@ suite.define(() => {
   });
 
   it("keeps a bottom-anchored transcript pinned while the composer grows", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactDirParent
+      ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -192,7 +228,6 @@ suite.define(() => {
         ).toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
       }
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           fullPage: true,
           path: path.join(artifactDir, "composer-resize-pinned.png"),
@@ -352,7 +387,10 @@ suite.define(() => {
   ])(
     "keeps streamed text visible when a chat error terminates the turn on $label",
     async ({ label, viewport }) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactDirParent
+        ? createControlUiE2eArtifactDir("chat-flow.streaming", artifactDirParent)
+        : undefined;
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -432,11 +470,12 @@ suite.define(() => {
           await page.locator(".chat-thread-inner").getByText(partialText, { exact: true }).count(),
         ).toBe(1);
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({ path: path.join(artifactDir, `terminal-partial-${label}.png`) });
         }
         const alert = page.locator(".chat-error");
-        await alert.locator("summary").getByText(errorText).waitFor({ timeout: 10_000 });
+        await alert.getByText("Error details", { exact: true }).click();
+        await alert.getByText(errorText, { exact: true }).waitFor({ timeout: 10_000 });
+        await alert.getByText("Error details", { exact: true }).click();
         expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
         expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
         expect(await page.locator(".chat-thread-inner").getByText(errorText).count()).toBe(0);
@@ -596,7 +635,7 @@ suite.define(() => {
         .poll(async () =>
           (await page.locator(".chat-working-indicator__tokens").textContent())?.trim(),
         )
-        .toBe("2.4k tokens");
+        .toBe("2,400 output tokens");
 
       const response = "The streamed response is now visible.";
       await gateway.emitGatewayEvent("chat", {
@@ -617,7 +656,7 @@ suite.define(() => {
         (row, visibleResponse) => ({
           connected: row.isConnected,
           hasResponse: row.textContent?.includes(visibleResponse) ?? false,
-          hasTokens: row.textContent?.includes("2.4k tokens") ?? false,
+          hasTokens: row.textContent?.includes("2,400 output tokens") ?? false,
           key: row.getAttribute("data-virtual-row-key"),
         }),
         response,
@@ -767,11 +806,53 @@ suite.define(() => {
 
       const prompt = "use a tool then reconnect";
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await gateway.deferNext("chat.send");
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      const sessionKey = requireString(params.sessionKey, "accepted session key");
+      // The Gateway registers the run before its started ACK; losing the socket
+      // during a tool call must not turn this fixture into a lost-delivery test.
+      const acceptedSession = {
+        key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        hasActiveRun: true,
+        activeRunIds: [runId],
+        status: "running",
+      };
+      await gateway.setMethodResponse("chat.history", {
+        sessionId: acceptedSession.sessionId,
+        sessionInfo: acceptedSession,
+        messages: [],
+      });
+      await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      // Publish acceptance after the ACK settles, then wait for its durable
+      // retirement before disconnecting this already accepted tool run.
+      await waitForCommittedState(
+        page,
+        ({ runId: expectedRunId }) => {
+          const state = document.querySelector<HTMLElement & { state: ChatHost }>(
+            "openclaw-chat-pane",
+          )?.state;
+          return state !== undefined && state.chatRunId === expectedRunId && !state.chatSending;
+        },
+        { runId },
+      );
+      await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
+      await waitForCommittedState(
+        page,
+        ({ runId: expectedRunId }) => {
+          const state = document.querySelector<HTMLElement & { state: ChatHost }>(
+            "openclaw-chat-pane",
+          )?.state;
+          return (
+            state !== undefined && state.chatRunId === expectedRunId && state.chatQueue.length === 0
+          );
+        },
+        { runId },
+      );
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
 
       await gateway.emitGatewayEvent("agent", {
@@ -783,7 +864,7 @@ suite.define(() => {
         },
         runId,
         seq: 1,
-        sessionKey: "main",
+        sessionKey,
         stream: "tool",
         ts: Date.now(),
       });
@@ -801,6 +882,9 @@ suite.define(() => {
         },
       ]);
 
+      // This scenario loses the connection during an already accepted tool run.
+      expect(await page.locator(".chat-send-status").count()).toBe(0);
+
       await gateway.closeLatest(1006, "lost during tool call");
 
       await page
@@ -808,6 +892,7 @@ suite.define(() => {
         .getByText("Recovered from refreshed history.")
         .waitFor({ timeout: 15_000 });
       expect(await page.locator(".chat-queue").count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

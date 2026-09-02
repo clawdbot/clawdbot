@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
+import { formatGatewayRestartFailure } from "./restart-health-diagnostics.js";
 
 const service = {
   readCommand: vi.fn(),
@@ -76,13 +77,14 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("../../daemon/systemd.js", () => ({
   findInstalledSystemdGatewayScope: () => findInstalledSystemdGatewayScope(),
+  refreshLegacySystemdServiceMetadata: vi.fn(async () => false),
   restartSystemdService: vi.fn(),
   stopSystemdService: vi.fn(),
 }));
-
 vi.mock("./restart-health.js", () => ({
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
+  formatGatewayRestartFailure,
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart: vi.fn(),
   renderGatewayPortHealthDiagnostics: vi.fn(() => []),

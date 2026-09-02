@@ -33,6 +33,7 @@ import {
 } from "./node-plugin-tool-snapshot.js";
 import {
   forgetNodeRunnerInventory,
+  invokeLifecycleNodeRegistry,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
   reconcileNodeRunnerAvailability,
@@ -1123,9 +1124,21 @@ export class NodeRegistry {
     return await invokePublicNodeRegistry(this, params);
   }
 
+  /** Internal cleanup retains its owner through replies without admitting new root work. */
+  invokeLifecycle(
+    params: Parameters<NodeRegistry["invoke"]>[0] & { isDispatchAuthorized: () => boolean },
+  ): Promise<NodeInvokeResult> {
+    return invokeLifecycleNodeRegistry(this, params);
+  }
+
   /** Send one ordered input frame to a pending streaming invoke. */
   sendInvokeInput(invokeId: string, payload: unknown): void {
     this.invokeStreams.sendInput(invokeId, payload);
+  }
+
+  /** Synchronous effect fence for callbacks retained across awaited host work. */
+  isInvokeCurrent(invokeId: string, nodeId: string, connId: string): boolean {
+    return this.invokeStreams.isPending(invokeId, nodeId, connId);
   }
 
   handleInvokeProgress(params: NodeInvokeProgressParams): boolean {

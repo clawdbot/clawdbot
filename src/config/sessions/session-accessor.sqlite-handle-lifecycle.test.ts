@@ -18,6 +18,7 @@ import {
   withTranscriptWriteLock,
 } from "./session-accessor.js";
 import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
+import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -166,6 +167,28 @@ describe("SQLite session handle lifecycle", () => {
       }),
     ).resolves.toMatchObject({ afterCount: 1 });
     expect(loadSessionEntry(scope)).toMatchObject({ label: "built after close" });
+  });
+
+  it("revalidates label ownership after the planning handle closes", async () => {
+    await applySessionEntryCanonicalReplacements({
+      storePath: scope.storePath,
+      sessionKeys: [scope.sessionKey],
+      includeLabelOwners: "Renamed",
+      update: async ([snapshot]) => {
+        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        return {
+          result: undefined,
+          replacements: [
+            {
+              entry: { ...snapshot!.entry, label: "Renamed" },
+              sessionKey: scope.sessionKey,
+              previousSessionKeys: [],
+            },
+          ],
+        };
+      },
+    });
+    expect(loadSessionEntry(scope)?.label).toBe("Renamed");
   });
 
   it("waits for projection repair after its polling handle closes", async () => {

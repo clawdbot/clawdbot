@@ -4,7 +4,7 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   disposeSelectedSessionMessageSubscription,
   syncSelectedSessionMessageSubscription,
-} from "./chat-history.ts";
+} from "./chat-history-subscription.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
 type Subscription = { key: string; agentId: null };

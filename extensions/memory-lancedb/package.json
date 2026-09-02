@@ -8,13 +8,22 @@
   },
   "type": "module",
   "dependencies": {
-    "@lancedb/lancedb": "0.37.1",
     "apache-arrow": "18.1.0",
     "openai": "7.5.0",
-    "typebox": "1.3.16"
+    "typebox": "1.3.17"
   },
   "devDependencies": {
+    "@lancedb/lancedb": "0.37.1",
     "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "optionalDependencies": {
+    "@lancedb/lancedb-darwin-arm64": "0.37.1",
+    "@lancedb/lancedb-linux-arm64-gnu": "0.37.1",
+    "@lancedb/lancedb-linux-arm64-musl": "0.37.1",
+    "@lancedb/lancedb-linux-x64-gnu": "0.37.1",
+    "@lancedb/lancedb-linux-x64-musl": "0.37.1",
+    "@lancedb/lancedb-win32-arm64-msvc": "0.37.1",
+    "@lancedb/lancedb-win32-x64-msvc": "0.37.1"
   },
   "openclaw": {
     "extensions": [

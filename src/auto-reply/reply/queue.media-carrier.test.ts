@@ -1,4 +1,5 @@
 // Prompt metadata carrier tests cover collect batching, deferral, and retry identity.
+import { readRuntimeImageHistory, withRuntimeImageHistory } from "@openclaw/media-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -21,6 +22,7 @@ import {
   resolveFollowupDeliveryContextKey,
 } from "./queue/drain.js";
 import { clearFollowupQueue } from "./queue/state.js";
+import type { ReplyBackendQueueMessageOptions } from "./reply-run-registry.contracts.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -93,26 +95,22 @@ afterEach(() => {
 
 describe("followup prompt metadata carrier", () => {
   it("carries inherited-image provenance into an accepted steer", async () => {
-    // `steer` is the default queue mode, so this is the ordinary path an active
-    // run takes. Images ride in the payload while the prompt is injected
-    // separately; without the notes the run gets bytes it cannot attribute.
+    // Keep origin on the image until the backend knows which images survive.
     const key = "agent:main:steer-history-notes";
     queueKeys.add(key);
+    const history = {
+      key: "m-kept\0/openclaw-test/m-kept.png",
+      sourceText:
+        "from Ada, message m-kept, sent at 2023-11-14T22:13:20.000Z, message 1 of 1 in available history",
+    };
+    const image = withRuntimeImageHistory(
+      { type: "image" as const, data: "kept-png", mimeType: "image/png" },
+      history,
+    );
     const run: InternalFollowupRun = {
       ...createQueueTestRun({ prompt: "what was in that photo?", messageId: "steer-notes" }),
-      images: [{ type: "image", data: "kept-png", mimeType: "image/png" }],
+      images: [image],
       imageOrder: ["inline"],
-      historyImages: [
-        {
-          path: "/openclaw-test/m-kept.png",
-          contentType: "image/png",
-          sender: "Ada",
-          sentAtMs: 1_700_000_000_000,
-          messagePosition: 1,
-          messageCount: 1,
-          messageId: "m-kept",
-        },
-      ],
     };
     const operation = createReplyOperation({
       sessionKey: key,
@@ -120,7 +118,7 @@ describe("followup prompt metadata carrier", () => {
       resetTriggered: false,
     });
     operation.bindToolAuthorityFingerprint("steer-authority");
-    const injected: string[] = [];
+    const injected: Array<{ text: string; options?: ReplyBackendQueueMessageOptions }> = [];
     operation.attachBackend({
       kind: "embedded",
       supportsQueueMessageImages: true,
@@ -128,8 +126,8 @@ describe("followup prompt metadata carrier", () => {
       cancel: vi.fn(),
       messageInjection: {
         isAvailable: () => true,
-        queueMessage: vi.fn(async (text: string) => {
-          injected.push(text);
+        queueMessage: vi.fn(async (text: string, options?: ReplyBackendQueueMessageOptions) => {
+          injected.push({ text, options });
         }),
       },
     });
@@ -156,11 +154,11 @@ describe("followup prompt metadata carrier", () => {
         }),
       ).resolves.toBe("handled");
 
-      // The steer path renders provenance from the retained image itself.
       expect(injected).toHaveLength(1);
-      expect(injected[0]).toContain("what was in that photo?");
-      expect(injected[0]).toContain("[Recent image 1 from Ada");
-      expect(injected[0]).toContain("message m-kept");
+      expect(injected[0]?.text).toBe("what was in that photo?");
+      expect(injected[0]?.options?.images).toEqual([image]);
+      expect(injected[0]?.options?.imageOrder).toEqual(["inline"]);
+      expect(injected[0]?.options?.images?.map(readRuntimeImageHistory)).toEqual([history]);
     } finally {
       operation.complete();
     }

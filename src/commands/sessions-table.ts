@@ -1,10 +1,9 @@
 /**
  * Shared table formatting helpers for session commands.
  *
- * Cleanup and listing commands use the same row shape and fixed-width cells so
- * terminal output stays aligned across commands.
+ * Cleanup and listing share display labels; terminal-core owns column layout.
  */
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { splitGraphemes } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -58,10 +57,6 @@ export type SessionDisplayRow = {
   contextTokens?: number;
   runtimePolicySessionKey?: string;
 };
-
-export const SESSION_KEY_PAD = 26;
-export const SESSION_AGE_PAD = 9;
-export const SESSION_MODEL_PAD = 14;
 
 /** Converts a persisted session entry into the shared display row shape. */
 export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDisplayRow {
@@ -119,31 +114,30 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
 }
 
 function truncateSessionKey(key: string): string {
-  if (key.length <= SESSION_KEY_PAD) {
+  const graphemes = splitGraphemes(key);
+  if (graphemes.length <= 26) {
     return key;
   }
   // Keep both the stable prefix and suffix; the tail often contains direct
   // recipient or runtime identifiers that distinguish otherwise similar keys.
-  const head = Math.max(4, SESSION_KEY_PAD - 10);
-  return `${truncateUtf16Safe(key, head)}...${sliceUtf16Safe(key, -6)}`;
+  return `${graphemes.slice(0, 16).join("")}...${graphemes.slice(-6).join("")}`;
 }
 
 /** Formats a session key cell for table output. */
 export function formatSessionKeyCell(key: string, rich: boolean): string {
-  const label = truncateSessionKey(sanitizeTerminalText(key)).padEnd(SESSION_KEY_PAD);
+  const label = truncateSessionKey(sanitizeTerminalText(key));
   return rich ? theme.accent(label) : label;
 }
 
 /** Formats a relative session age cell for table output. */
 export function formatSessionAgeCell(updatedAt: number | null | undefined, rich: boolean): string {
   const ageLabel = updatedAt ? formatTimeAgo(Date.now() - updatedAt) : "unknown";
-  const padded = ageLabel.padEnd(SESSION_AGE_PAD);
-  return rich ? theme.muted(padded) : padded;
+  return rich ? theme.muted(ageLabel) : ageLabel;
 }
 
 /** Formats a model cell for table output. */
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
-  const label = sanitizeTerminalText(model ?? "unknown").padEnd(SESSION_MODEL_PAD);
+  const label = sanitizeTerminalText(model ?? "unknown");
   return rich ? theme.info(label) : label;
 }
 

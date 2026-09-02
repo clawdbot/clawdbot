@@ -1,10 +1,12 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
 import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
+import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
@@ -23,7 +25,6 @@ import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-ou
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
-import { withRecentHistoryImageNotes } from "./history-media.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
@@ -129,7 +130,7 @@ export async function runCliFallbackCandidate(
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
   turn.replyOperation?.bindToolAuthorityRoute(toolAuthorityRoute);
   const result = await params.timing.measure("cli_run", () =>
-    withLocalSessionPlacementTurnAdmission(
+    withLocalSessionPlacementTurnSettlement(
       {
         sessionId: turn.followupRun.run.sessionId,
         sessionKey: turn.sessionKey,
@@ -317,7 +318,7 @@ export async function runCliFallbackCandidate(
             cwd: turn.followupRun.run.cwd,
             config: params.runtimeConfig,
             toolOverrides: turn.followupRun.run.toolOverrides,
-            prompt: withRecentHistoryImageNotes(turn.commandBody, params.currentTurnImages),
+            prompt: turn.commandBody,
             transcriptPrompt: turn.transcriptCommandBody,
             media: turn.followupRun.media,
             suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
@@ -333,6 +334,17 @@ export async function runCliFallbackCandidate(
             currentInboundEventKind: turn.followupRun.currentInboundEventKind,
             currentInboundContext: turn.followupRun.currentInboundContext,
             inputProvenance: turn.followupRun.run.inputProvenance,
+            // Candidate zero is the primary attempt; later candidates are
+            // fallbacks. Carry the runner-owned fact instead of inferring from
+            // this shared dispatch path, or primary CLI runs lose delegation.
+            ...buildCliMcpDelegationCapabilityBinding(
+              resolveDelegationCapability({
+                fallbackActive: params.isFallbackRetry,
+                inputProvenance: turn.followupRun.run.inputProvenance,
+                disableTools: turn.opts?.disableTools,
+                toolsAllow: turn.opts?.toolsAllow,
+              }),
+            ),
             modelProvider: params.provider,
             modelHasVision,
             modelContextWindow: selectedModelEntry?.contextWindow,
@@ -400,6 +412,7 @@ export async function runCliFallbackCandidate(
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
             skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
+            skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             disableTools: turn.opts?.disableTools,
             toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
               turn.followupRun,

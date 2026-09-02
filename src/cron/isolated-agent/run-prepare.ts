@@ -242,6 +242,7 @@ export async function prepareCronRunContext(params: {
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
     sourceSessionKey,
+    skillLibrarySelections: input.job.skillLibrarySelections,
     agentId,
     nowMs: now,
     forceNew: usesDetachedRunSession,
@@ -564,6 +565,7 @@ export async function prepareCronRunContext(params: {
       config: cfgWithAgentDefaults,
       agentId,
       existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
+      librarySelections: cronSession.sessionEntry.skillLibrarySelections,
       isFastTestEnv: params.isFastTestEnv,
     });
     await persistCronSkillsSnapshotIfChanged({
@@ -594,6 +596,9 @@ export async function prepareCronRunContext(params: {
       cfg: cfgWithAgentDefaults,
       provider,
       modelId: model,
+      ...(provider === resolvedModelSelection.provider && resolvedModelSelection.configuredProfileId
+        ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
+        : {}),
       harnessRuntime: effectiveAgentRuntime,
       agentDir,
       cronSession,

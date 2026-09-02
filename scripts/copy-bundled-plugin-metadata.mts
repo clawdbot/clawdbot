@@ -6,6 +6,7 @@ import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./lib/bundled-plugin-build-entries.mjs";
+import { ensureRepoNodeModulesLink } from "./lib/local-check-runtime.mts";
 import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
@@ -307,6 +308,15 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       continue;
     }
 
+    const distNodeModules = path.join(distPluginDir, "node_modules");
+    // Metadata cleanup must never traverse a previous source-dependency link.
+    if (
+      hasExternalLocalDist &&
+      fs.lstatSync(distNodeModules, { throwIfNoEntry: false })?.isSymbolicLink()
+    ) {
+      fs.unlinkSync(distNodeModules);
+    }
+
     const isManifestlessSupportPackage =
       !fs.existsSync(manifestPath) &&
       isManifestlessBundledRuntimeSupportPackage({
@@ -365,6 +375,9 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     }
 
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    if (hasExternalLocalDist) {
+      ensureRepoNodeModulesLink(path.join(pluginDir, "node_modules"), { cwd: distPluginDir });
+    }
   }
 
   if (!fs.existsSync(distExtensionsRoot)) {

@@ -83,6 +83,20 @@ function ensureMemoryHostDir(dir: string): string {
 
 export { ensureMemoryHostDir as ensureDir };
 
+// File discovery skips non-regular entries. Keep the same rule when a listed
+// file changes before its index entry is built, or one path can abort the sync.
+async function statEnumerableMemoryFile(absPath: string): Promise<fsSync.Stats | null> {
+  try {
+    const stat = await fs.lstat(absPath);
+    return stat.isFile() ? stat : null;
+  } catch (error) {
+    if (isFileMissingError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
   return trimmed.replace(/\\/g, "/");
@@ -215,20 +229,11 @@ export async function listMemoryFiles(
     shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
 
   const addMarkdownFile = async (absPath: string) => {
-    try {
-      const stat = await statRegularFile(absPath);
-      if (stat.missing) {
-        return;
-      }
-      if (!absPath.endsWith(".md")) {
-        return;
-      }
-      result.push(absPath);
-    } catch (error) {
-      if (!isFileMissingError(error)) {
-        throw error;
-      }
+    const stat = await statEnumerableMemoryFile(absPath);
+    if (!stat || !absPath.endsWith(".md")) {
+      return;
     }
+    result.push(absPath);
   };
 
   const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
@@ -308,11 +313,10 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  const regularFile = await statRegularFile(absPath);
-  if (regularFile.missing) {
+  const stat = await statEnumerableMemoryFile(absPath);
+  if (!stat) {
     return null;
   }
-  const stat = regularFile.stat;
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);

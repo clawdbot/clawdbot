@@ -15,6 +15,7 @@ import type {
 import type { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import type { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -977,33 +978,50 @@ describe("worker inference provider runtime", () => {
     expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
   });
 
-  it("records usage before rejecting a dangling streamed tool call", async () => {
-    const runtime = setup();
-    const terminal = finalMessage();
-    terminal.content = terminal.content.slice(0, 1);
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({ type: "done", reason: "stop", message: terminal });
-      return stream;
-    });
-    const usageEvents: unknown[] = [];
-    const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
-      if (event.type === "model.usage" && event.sessionId === SESSION_ID) {
-        usageEvents.push(event);
+  it.each([
+    { name: "token usage", tokens: true, cost: 0.0033, billed: false },
+    { name: "positive cost-only", tokens: false, cost: 0.25, billed: false },
+    { name: "billed zero", tokens: false, cost: 0, billed: true },
+    { name: "empty snapshot", tokens: false, cost: undefined, billed: false },
+  ])(
+    "accounts for $name before rejecting a dangling streamed tool call",
+    async ({ tokens, cost, billed }) => {
+      const runtime = setup();
+      const terminal = finalMessage();
+      terminal.usage = structuredClone(tokens ? usage : makeZeroUsageSnapshot());
+      terminal.usage.cost.total = cost ?? 0;
+      if (billed) {
+        terminal.usage.cost.totalOrigin = "provider-billed";
       }
-    });
+      terminal.content = terminal.content.slice(0, 1);
+      runtime.stream.mockImplementation(() => {
+        const stream = createAssistantMessageEventStream();
+        const partial = finalMessage();
+        stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+        stream.push({ type: "done", reason: "stop", message: terminal });
+        return stream;
+      });
+      const usageEvents: unknown[] = [];
+      const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
+        if (event.type === "model.usage" && event.sessionId === SESSION_ID) {
+          usageEvents.push(event);
+        }
+      });
 
-    await expect(
-      runtime.executor(params(request(), vi.fn())).finally(unsubscribe),
-    ).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-    expect(usageEvents).toHaveLength(1);
-  });
+      await expect(
+        runtime.executor(params(request(), vi.fn())).finally(unsubscribe),
+      ).resolves.toMatchObject({
+        type: "error",
+        reason: "provider-error",
+      });
+      const expectedEvents = cost === undefined ? [] : [expect.objectContaining({ costUsd: cost })];
+      expect(usageEvents).toEqual(expectedEvents);
+      if (cost !== undefined && !tokens) {
+        expect(usageEvents[0]).not.toHaveProperty("context.used");
+      }
+    },
+  );
 
   it("rejects unknown, unapproved, and profile-qualified refs", async () => {
     const runtime = setup();

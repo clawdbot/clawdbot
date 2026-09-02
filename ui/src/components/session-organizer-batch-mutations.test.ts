@@ -123,7 +123,11 @@ function createHarness(
   const groupsDelete = vi.fn(async () => "completed" as const);
   const scope = {
     epoch: 1,
-    context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
+    context: {
+      agents: { state: { agentsList: null } },
+      theme: { refresh: refreshTheme },
+      placementStartup: { pause: vi.fn() },
+    },
     gateway: { snapshot },
     sessions: {
       patch,

@@ -17,6 +17,7 @@ const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(cleanup.splice(0).map((run) => run()));
+  vi.useRealTimers();
 });
 
 describe("worker desktop observer tokens", () => {
@@ -146,6 +147,31 @@ async function expectUnauthorizedObserver(url: string): Promise<void> {
 }
 
 describe.runIf(process.platform !== "win32")("worker desktop observer proxy", () => {
+  it("keeps an idle observer alive without adding bytes to RFB and retires on owner close", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const harness = await createProxyHarness({ control: true });
+    const pings: Buffer[] = [];
+    const onDesktopData = vi.fn();
+    harness.ws.on("ping", (data) => pings.push(data));
+    harness.desktopPeer.on("data", onDesktopData);
+
+    vi.advanceTimersByTime(25_000);
+    await expect.poll(() => pings.length).toBe(1);
+    vi.advanceTimersByTime(25_000);
+    await expect.poll(() => pings.length).toBe(2);
+    expect(onDesktopData).not.toHaveBeenCalled();
+
+    const closed = new Promise<number>((resolve) => {
+      harness.ws.once("close", resolve);
+    });
+    harness.closeObserver(1012, "desktop tunnel closed");
+    await expect(closed).resolves.toBe(1012);
+    expect(harness.release).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(25_000);
+    expect(pings).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("clears the credential-bearing token timer when the token is consumed", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");

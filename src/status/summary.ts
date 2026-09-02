@@ -6,7 +6,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
-import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
@@ -25,6 +25,7 @@ import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -226,9 +227,16 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
+  // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
+  const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
   const buildSessionRows = async (candidates: SessionEntrySummary[]) =>
     Promise.all(
-      candidates.map(async ({ sessionKey: key, entry }) => {
+      candidates.map(async (candidate) => {
+        const cached = sessionRows.get(candidate);
+        if (cached) {
+          return { ...cached, flags: [...cached.flags] };
+        }
+        const { sessionKey: key, entry } = candidate;
         const agentId = parseAgentSessionKey(key)?.agentId;
         const updatedAt = entry.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
@@ -265,14 +273,22 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           model,
           defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
         });
+        const runtimeMatchesConfiguredModel =
+          selectedModelComparisonLabel != null &&
+          configuredSessionModelComparisonLabel != null &&
+          areRuntimeModelRefsEquivalent(
+            selectedModelComparisonLabel,
+            configuredSessionModelComparisonLabel,
+            { config: cfg },
+          );
+        const contextModelProvider = runtimeMatchesConfiguredModel
+          ? configuredForSession.provider
+          : lookupModel.provider;
         const modelSelectionDiffers =
           selectedModelComparisonLabel != null &&
           configuredSessionModelComparisonLabel != null &&
           selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
-          !areRuntimeModelRefsEquivalent(
-            selectedModelComparisonLabel,
-            configuredSessionModelComparisonLabel,
-          ) &&
+          !runtimeMatchesConfiguredModel &&
           (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
         // Session rows show the live selected model and warn for user-pinned
         // differences as well as runtime fallback selections (#96126).
@@ -302,6 +318,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
             authoredContextTokens: resolveAuthoredModelContextTokens({
               cfg,
               provider: lookupModel.provider,
+              modelProvider: contextModelProvider,
               model: lookupModelId,
             }),
           }) ?? null;
@@ -316,7 +333,7 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           contextTokens && contextTokens > 0 && freshTotal !== undefined
             ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
             : null;
-        return {
+        const row = {
           agentId,
           key,
           kind: classifySessionKey(key, entry),
@@ -351,6 +368,8 @@ async function prepareSessionStatusDetails(cfg: OpenClawConfig, now: number) {
           contextTokens,
           flags: buildFlags(entry),
         } satisfies SessionStatus;
+        sessionRows.set(candidate, row);
+        return row;
       }),
     );
 
@@ -393,36 +412,41 @@ export async function getStatusSummary(
   const agentList = listGatewayAgentsBasic(cfg);
   const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
     const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
-    const heartbeatSession = resolveHeartbeatSessionKey(
-      cfg,
-      agent.id,
-      summary.session === undefined ? undefined : { session: summary.session },
-    );
-    // Status must not create, register, or migrate an absent session database.
-    const entry = loadExactSessionEntryReadOnly({
-      agentId: agent.id,
-      storePath: heartbeatSession.storePath,
-      sessionKey: heartbeatSession.sessionKey,
-    })?.entry;
-    const route = deliveryContextFromSession(entry);
-    const heartbeat = {
-      ...cfg.agents?.defaults?.heartbeat,
-      ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-    };
-    // Owner status uses the runner's synchronous stage-1 decision.
-    // The shared probe requires positive direct proof before reporting ready.
-    const hasDeliveryRoute =
-      summary.target === "last"
-        ? Boolean(route?.channel && route.to)
-        : summary.target === "owner"
-          ? hasResolvableHeartbeatOwnerRoute({ cfg, agentId: agent.id, entry, heartbeat })
-          : true;
+    let waitingForRoute = false;
+    if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
+      const heartbeatSession = resolveHeartbeatSessionKey(
+        cfg,
+        agent.id,
+        summary.session === undefined ? undefined : { session: summary.session },
+      );
+      // Only these enabled targets consume the session route. Keep the probe
+      // read-only so status cannot create, register, or migrate an absent store.
+      const entry = loadExactSessionEntryReadOnly({
+        agentId: agent.id,
+        storePath: heartbeatSession.storePath,
+        sessionKey: heartbeatSession.sessionKey,
+      })?.entry;
+      const route = deliveryContextFromSession(entry);
+      // Owner status uses the runner's synchronous stage-1 decision.
+      waitingForRoute =
+        summary.target === "last"
+          ? !(route?.channel && route.to)
+          : !hasResolvableHeartbeatOwnerRoute({
+              cfg,
+              agentId: agent.id,
+              entry,
+              heartbeat: {
+                ...cfg.agents?.defaults?.heartbeat,
+                ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
+              },
+            });
+    }
     return {
       agentId: agent.id,
       enabled: summary.enabled,
       every: summary.every,
       everyMs: summary.everyMs,
-      waitingForRoute: summary.enabled && !hasDeliveryRoute,
+      waitingForRoute,
     } satisfies HeartbeatStatus;
   });
   const channelSummary = needsChannelPlugins
@@ -434,8 +458,18 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const mainSessionKey = resolveSystemMainSessionKey(cfg);
-  const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  // Fleet status reads every main queue without selecting an ambient execution owner.
+  // Global session scope shares one queue, so include it only once.
+  const mainSessionKeys = new Set(
+    agentList.agents.map(({ id: agentId }) =>
+      resolveCanonicalMainSessionKey({
+        agentId,
+        mainKey: cfg.session?.mainKey,
+        sessionScope: cfg.session?.scope,
+      }),
+    ),
+  );
+  const queuedSystemEvents = [...mainSessionKeys].flatMap(peekSystemEvents);
   const taskMaintenanceModule = await taskRegistryMaintenanceModuleLoader.load();
   // Status may overlap a live Gateway, so task inspection must not initialize
   // the writable process registry or its schema-owning shared-state handle.
@@ -458,22 +492,22 @@ export async function getStatusSummary(
 
   const sessionDetails = includeSensitive ? await prepareSessionStatusDetails(cfg, now) : undefined;
 
-  const sessionStores = readStatusSessionStores(cfg, agentList.agents);
+  const sessionStores = readStatusSessionStores(
+    cfg,
+    agentList.agents,
+    includeSensitive ? RECENT_SESSION_LIMIT : 0,
+  );
   const byAgent = await Promise.all(
-    sessionStores.byAgent.map(async ({ agent, path, sessions }) => ({
+    sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
       path: includeSensitive ? path : "[redacted]",
-      count: sessions.length,
-      recent: sessionDetails
-        ? await sessionDetails.buildSessionRows(
-            selectRecentSessionCandidates(sessions, RECENT_SESSION_LIMIT),
-          )
-        : [],
+      count,
+      recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
     })),
   );
   const recent = sessionDetails
     ? await sessionDetails.buildSessionRows(
-        selectRecentSessionCandidates(sessionStores.sessions, RECENT_SESSION_LIMIT),
+        selectRecentSessionCandidates(sessionStores.recent, RECENT_SESSION_LIMIT),
       )
     : [];
   const hostDesktopStatus =
@@ -500,6 +534,7 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
     degradedSecretOwners: listActiveDegradedSecretOwners().map(
       ({ ownerKind, ownerId, state, degradationState, paths: ownerPaths, reason }) => {
         const redactedReason: string = redactSecretDegradationReason(reason);
@@ -523,7 +558,7 @@ export async function getStatusSummary(
     ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),
     sessions: {
       paths: includeSensitive ? sessionStores.paths : [],
-      count: sessionStores.sessions.length,
+      count: sessionStores.count,
       defaults: sessionDetails?.defaults ?? { model: null, contextTokens: null },
       recent,
       byAgent,

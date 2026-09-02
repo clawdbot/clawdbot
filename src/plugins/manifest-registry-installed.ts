@@ -85,17 +85,13 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
+    // Only bundledDist changes runtime selection; legacy absence and build stamps hash alike.
     plugins: index.plugins.map(
       ({ doctorContractFile: _doctorContractFile, packageBuild, ...plugin }) => ({
         ...plugin,
-        ...(packageBuild
-          ? {
-              packageBuild:
-                packageBuild.bundledDist === undefined
-                  ? {}
-                  : { bundledDist: packageBuild.bundledDist },
-            }
-          : {}),
+        ...(packageBuild?.bundledDist === undefined
+          ? {}
+          : { packageBuild: { bundledDist: packageBuild.bundledDist } }),
       }),
     ),
   });

@@ -713,12 +713,22 @@ body {
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
-  /* App chrome behaves like native controls: dragging across labels, tiles,
-     and navigation must not create accidental text selections. Text-entry
-     surfaces and document-like content opt back in below or in route CSS. */
-  user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Keep page text and document links selectable, including anchors with button
+   roles; suppress accidental drag selections on controls and navigation. */
+button,
+select,
+summary,
+[role="button"]:not(a),
+[role="tab"],
+.btn,
+.settings-row--toggle,
+.sidebar,
+.settings-sidebar {
+  user-select: none;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -1064,10 +1074,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
 .skeleton-line {
   height: 14px;
   border-radius: var(--radius-sm);
-}
-
-.skeleton-line--short {
-  width: 40%;
 }
 
 .skeleton-line--medium {

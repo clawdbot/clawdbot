@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import OpenAI, { AzureOpenAI } from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
+import { projectRequestImageHistory } from "../internal/request-image-history.js";
 import { codeModeToolSurfaceObserver } from "../provider-options.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
@@ -191,7 +192,6 @@ async function postOpenAIResponsesCompaction(params: {
   const response = await params.client.post<unknown>("/responses/compact", {
     ...buildOpenAISdkRequestOptions(params.model, params.options?.signal, {
       timeoutMs: params.options?.timeoutMs,
-      maxRetries: params.options?.maxRetries,
     }),
     body: { model: params.request.model, input: compactInput },
   });
@@ -352,7 +352,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             );
             assertCodeModeResponsesToolSurface(params, visibleToolNames, allowedHostedToolTypes);
           }
-          return params;
+          return projectRequestImageHistory(params, "responses");
         };
         const params = await buildRequest("checkpoint");
         if (compactRequest) {
@@ -416,7 +416,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const requestOptions = buildOpenAISdkRequestOptions(model, firstEvent.signal, {
           stream: config.streamRequest,
           timeoutMs: options?.timeoutMs,
-          maxRetries: options?.maxRetries,
         });
         const websocketSignal = combineWebSocketTimeoutSignal(
           firstEvent.signal,

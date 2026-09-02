@@ -1,4 +1,5 @@
 // Tracks image attachments that belong to the current reply turn.
+import { readRuntimeImageHistory, withRuntimeImageHistory } from "@openclaw/media-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,7 +22,6 @@ import {
   hasInboundHistoryMedia,
   resolveAgentTurnAttachments,
 } from "./agent-turn-attachments.js";
-import type { RecentInboundHistoryImage } from "./history-media.js";
 
 type CurrentImageAttachment = MediaAttachment & { path: string };
 
@@ -39,8 +39,6 @@ export type CurrentTurnImages = {
   unresolvedSourceIndexes?: number[];
   /** Admission-owned slot-to-media identity used by later runtime adapters. */
   mediaImageLayout?: MediaImageLayout;
-  /** Images this turn inherited from room history, carried with the provenance they need. */
-  historyImages?: RecentInboundHistoryImage[];
 };
 
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
@@ -140,13 +138,9 @@ export async function resolveCurrentTurnImages(params: {
   const undescribedImageAttachments = currentImageAttachments.filter(
     (attachment) => !describedImageIndexes.has(attachment.index),
   );
-  // A room that kept media on a gated message answers the turn that finally asks
-  // about it - but only a turn carrying no images of its own. Passed-in images
-  // and file-extracted pages are already in `entries`, and this turn's own
-  // attachments are resolved below; either one outranks retained history, so
-  // history is requested only in their absence.
-  const hasCurrentTurnImages = entries.length > 0 || undescribedImageAttachments.length > 0;
-  const includeRecentHistoryImages = !hasCurrentTurnImages && hasInboundHistoryMedia(params.ctx);
+  // Prepared image slots outrank history; the shared resolver owns precedence
+  // for current attachments, including failed reads and described images.
+  const includeRecentHistoryImages = entries.length === 0 && hasInboundHistoryMedia(params.ctx);
   if (undescribedImageAttachments.length === 0 && !includeRecentHistoryImages) {
     return resolveMergedTurnImages(entries);
   }
@@ -160,11 +154,11 @@ export async function resolveCurrentTurnImages(params: {
       includeAttachmentIndexes: true,
     });
     const images = resolved.attachments.map(
-      (attachment): ImageContent => ({
-        type: "image",
-        data: attachment.data,
-        mimeType: attachment.mediaType,
-      }),
+      (attachment): ImageContent =>
+        withRuntimeImageHistory(
+          { type: "image", data: attachment.data, mimeType: attachment.mediaType },
+          readRuntimeImageHistory(attachment),
+        ),
     );
     const resolvedIndexes = resolved.attachmentIndexes ?? [];
     if (images.length < undescribedImageAttachments.length) {
@@ -199,16 +193,9 @@ export async function resolveCurrentTurnImages(params: {
       }
     }
     const merged = resolveMergedTurnImages(entries);
-    // Without provenance an inherited image reads as this turn's own attachment.
-    // The images travel intact so later carriers can identify and renumber them;
-    // rendering here would freeze positions that a collected batch has to redo.
-    const withHistory =
-      resolved.recentHistoryImages.length > 0
-        ? Object.assign(merged, { historyImages: resolved.recentHistoryImages })
-        : merged;
     return unresolvedSourceIndexes.length > 0
-      ? Object.assign(withHistory, { unresolvedSourceIndexes })
-      : withHistory;
+      ? Object.assign(merged, { unresolvedSourceIndexes })
+      : merged;
   } catch (error) {
     logVerbose(
       `agent-runner: media attachment image resolution failed, proceeding without native images: ${formatErrorMessage(error)}`,

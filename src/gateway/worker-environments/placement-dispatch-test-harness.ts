@@ -30,9 +30,15 @@ import {
 export function createHarness(
   placementStore: PlacementStore,
   options: {
+    runReclaimPreparation?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runReclaimPreparation"];
     runReclaimBarrier?: Parameters<
       typeof createWorkerPlacementDispatchService
     >[0]["runReclaimBarrier"];
+    runFailedReclaimBarrier?: Parameters<
+      typeof createWorkerPlacementDispatchService
+    >[0]["runFailedReclaimBarrier"];
     failAt?: DispatchStage;
     destroyFails?: boolean;
     destroyFailureCount?: number;
@@ -57,6 +63,7 @@ export function createHarness(
     terminalizedReclaimError?: Error;
     environmentGeneration?: number;
     failMoveAfterBegin?: boolean;
+    runMoveBarrier?: Parameters<typeof createWorkerPlacementDispatchService>[0]["runMoveBarrier"];
     recoveryBarrierError?: Error;
     prepareAcceptedWorkspacePublication?: Parameters<
       typeof createWorkerPlacementDispatchService
@@ -103,6 +110,8 @@ export function createHarness(
       placementStore.beginWorkspaceReconciliation(owner, journal),
     abortWorkspaceReconciliation: (owner, abortOptions) =>
       placementStore.abortWorkspaceReconciliation(owner, abortOptions),
+    getWorkspaceReconciliationPlacement: (owner) =>
+      placementStore.getWorkspaceReconciliationPlacement(owner),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
@@ -116,13 +125,6 @@ export function createHarness(
     closeWorkerTurnToolState: (claim) => placementStore.closeWorkerTurnToolState(claim),
     beginPlacementMove: (params) => {
       const begun = placementStore.beginPlacementMove(params);
-      if (!begun.joined) {
-        log.push("placement:draining");
-      }
-      return begun;
-    },
-    preparePlacementMove: async (params, prepareNew) => {
-      const begun = await placementStore.preparePlacementMove(params, prepareNew);
       if (!begun.joined) {
         log.push("placement:draining");
       }
@@ -393,6 +395,8 @@ export function createHarness(
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
+    runReclaimPreparation:
+      options.runReclaimPreparation ?? (async ({ run, authorize }) => await run(authorize)),
     runnerAvailability: createWorkerPlacementRunnerAvailabilityReader({
       environments,
       hasCurrentDeviceRunner: () => options.deviceRunnerAvailable === true,
@@ -422,20 +426,22 @@ export function createHarness(
       fail("activation");
       return activate();
     },
-    runMoveBarrier: async ({ authorize, begin }) => {
-      authorize?.();
-      const begun = await begin(async (runId) => {
-        if (options.beforeMoveBegin) {
-          await options.beforeMoveBegin({ runId });
-          authorize?.();
+    runMoveBarrier:
+      options.runMoveBarrier ??
+      (async ({ authorize, begin }) => {
+        authorize?.();
+        const begun = await begin(async (runId) => {
+          if (options.beforeMoveBegin) {
+            await options.beforeMoveBegin({ runId });
+            authorize?.();
+          }
+        });
+        options.afterMoveBegin?.();
+        if (options.failMoveAfterBegin) {
+          throw new Error("move barrier interrupted");
         }
-      });
-      options.afterMoveBegin?.();
-      if (options.failMoveAfterBegin) {
-        throw new Error("move barrier interrupted");
-      }
-      return begun;
-    },
+        return begun;
+      }),
     resolveMoveDestination: async (_identity, target) =>
       target.kind === "gateway"
         ? undefined
@@ -472,15 +478,17 @@ export function createHarness(
               : await reclaim(options.workspacePath ?? "/gateway/workspace", placement, authorize);
           },
         })),
-    runFailedReclaimBarrier: async ({ sessionId, sessionKey, authorize, reclaim }) =>
-      await runExclusiveSessionLifecycleMutation({
-        scope: options.workspacePath ?? "/gateway/workspace",
-        identities: [sessionId, sessionKey],
-        run: async () => {
-          authorize?.();
-          return await reclaim(authorize);
-        },
-      }),
+    runFailedReclaimBarrier:
+      options.runFailedReclaimBarrier ??
+      (async ({ sessionId, sessionKey, authorize, reclaim }) =>
+        await runExclusiveSessionLifecycleMutation({
+          scope: options.workspacePath ?? "/gateway/workspace",
+          identities: [sessionId, sessionKey],
+          run: async () => {
+            authorize?.();
+            return await reclaim(authorize);
+          },
+        })),
     resolveWorkspacePath: async () => {
       fail("workspace");
       return options.workspacePath ?? "/gateway/workspace";

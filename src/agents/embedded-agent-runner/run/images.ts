@@ -1,4 +1,5 @@
 import path from "node:path";
+import { readRuntimeImageHistory, withRuntimeImageHistory } from "@openclaw/media-core";
 import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -47,6 +48,7 @@ import {
   type MediaImageLayout,
   readPersistedImageBlockFactIndexes,
   readPersistedMediaImageLayout,
+  resolveMediaImageLayout,
 } from "./prompt-image-metadata.js";
 
 export { hasHydratableMediaImages } from "./images.media-refs.js";
@@ -105,7 +107,10 @@ async function sanitizeImageEntriesWithLog(
     const result = await sanitizeImageBlocks([entry.image], label, imageSanitization);
     const image = result.images[0];
     if (image) {
-      sanitized.push({ image, factIndex: entry.factIndex });
+      sanitized.push({
+        image: withRuntimeImageHistory(image, readRuntimeImageHistory(entry.image)),
+        factIndex: entry.factIndex,
+      });
     }
     dropped += result.dropped;
     if (result.dropped > 0 && entry.factIndex !== null) {
@@ -327,51 +332,22 @@ export async function detectAndLoadPromptImages(params: {
   const media = normalizeMediaFacts(
     (message ? readPersistedMediaFacts(message) : undefined) ?? params.media,
   );
-  const mediaImageLayout =
+  const declaredMediaImageLayout =
     (message ? readPersistedMediaImageLayout(message) : undefined) ?? params.mediaImageLayout;
-  const suppressed = new Set([
-    ...(mediaImageLayout?.suppressedFactIndexes ?? []),
-    ...media.flatMap((fact, index) => (fact.hydrationSuppressed === true ? [index] : [])),
-  ]);
-  const imageFactIndexes = media.flatMap((fact, factIndex) =>
-    isImageMediaFact(fact) && !suppressed.has(factIndex) ? [factIndex] : [],
-  );
+  const mediaImageLayout = resolveMediaImageLayout({
+    media,
+    imageOrder: params.imageOrder,
+    mediaImageLayout: declaredMediaImageLayout,
+    inlineImageCount: params.existingImages?.length ?? 0,
+  });
+  const suppressed = new Set(mediaImageLayout.suppressedFactIndexes);
   const refs = collectMediaImageRefs(media);
   const refsByFact = new Map(refs.flatMap((ref) => (ref ? [[ref.factIndex, ref] as const] : [])));
-  const inferredSlots = (() => {
-    if (params.imageOrder?.length === imageFactIndexes.length) {
-      return params.imageOrder.map((kind, index) => ({
-        kind,
-        factIndex: imageFactIndexes[index],
-      }));
-    }
-    if (params.imageOrder?.length) {
-      const pending = [...imageFactIndexes];
-      return [
-        ...params.imageOrder.map((kind) => ({
-          kind,
-          ...(kind === "offloaded" && pending.length ? { factIndex: pending.shift() } : {}),
-        })),
-        ...pending.map((factIndex) => ({ kind: "offloaded" as const, factIndex })),
-      ];
-    }
-    return imageFactIndexes.map((factIndex, imageIndex) => ({
-      factIndex,
-      kind:
-        !media[factIndex]?.path &&
-        !media[factIndex]?.url &&
-        imageIndex < (params.existingImages?.length ?? 0)
-          ? ("inline" as const)
-          : ("offloaded" as const),
-    }));
-  })();
-  const slots = mediaImageLayout?.slots.length
-    ? mediaImageLayout.slots.filter(
-        (slot) => slot.factIndex === undefined || !suppressed.has(slot.factIndex),
-      )
-    : inferredSlots;
-  const layoutInlineIndexes = (mediaImageLayout?.slots ?? slots).flatMap((slot) =>
-    slot.kind === "inline" ? [slot.factIndex ?? null] : [],
+  const slots = mediaImageLayout.slots.filter(
+    (slot) => slot.factIndex === undefined || !suppressed.has(slot.factIndex),
+  );
+  const layoutInlineIndexes = (declaredMediaImageLayout?.slots ?? mediaImageLayout.slots).flatMap(
+    (slot) => (slot.kind === "inline" ? [slot.factIndex ?? null] : []),
   );
   const existingIndexes =
     (message ? readPersistedImageBlockFactIndexes(message) : undefined) ??
@@ -601,13 +577,15 @@ async function materializePromptMediaMessages(
     const resolvedMedia = runtimeMedia ?? readPersistedMediaFacts(message) ?? [];
     const runtimeImageOrder = readRuntimePromptImageOrder(message);
     const mediaImageLayout = readPersistedMediaImageLayout(message);
-    if (!resolvedMedia.length) {
-      continue;
-    }
     const content = Array.isArray(message.content)
       ? message.content
       : [{ type: "text" as const, text: message.content }];
     const existingImages = content.filter((block): block is ImageContent => block.type === "image");
+    // Accepted steering can carry retained inline images without current-turn
+    // media facts. It still needs the selected model's image preparation.
+    if (!resolvedMedia.length && !existingImages.some(readRuntimeImageHistory)) {
+      continue;
+    }
     const result = await detectAndLoadPromptImages({
       prompt: "",
       media: resolvedMedia,

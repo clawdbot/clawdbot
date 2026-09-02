@@ -64,6 +64,7 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
   ]),
   keyboardShortcutSection("panels", [
     keyboardShortcutEntry("terminalPanel", KEYBOARD_SHORTCUT_COMBOS.terminalPanel),
+    keyboardShortcutEntry("homePanel", KEYBOARD_SHORTCUT_COMBOS.homePanel),
     keyboardShortcutEntry("workspaceFiles", KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
   ]),
   keyboardShortcutSection("sidebar", [

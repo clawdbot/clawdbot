@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { BILLING_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import * as autoFallback from "./agent-runner-auto-fallback.js";
@@ -146,7 +146,7 @@ describe("executeAgentTurn: compaction events", () => {
       .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
         params.onExecutionPhase?.({ phase: "model_call_started" });
         return {
-          payloads: [{ text: BILLING_ERROR_USER_MESSAGE, isError: true }],
+          payloads: [{ text: formatBillingErrorMessage(), isError: true }],
           meta: { error: { kind: "billing", message: "billing unavailable" } },
         };
       });
@@ -198,7 +198,7 @@ describe("executeAgentTurn: compaction events", () => {
     state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       params.onExecutionPhase?.({ phase: "process_spawned" });
       return {
-        payloads: [{ text: BILLING_ERROR_USER_MESSAGE, isError: true }],
+        payloads: [{ text: formatBillingErrorMessage(), isError: true }],
         meta: { error: { kind: "billing", message: "billing unavailable" } },
       };
     });
