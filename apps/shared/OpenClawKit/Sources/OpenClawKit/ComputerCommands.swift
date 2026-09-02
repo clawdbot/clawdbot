@@ -281,7 +281,7 @@ public struct OpenClawComputerEscalation: Codable, Sendable, Equatable {
     }
 }
 
-/// Result of a `computer.act` input action.
+/// Canonical result of a `computer.act` action.
 public struct OpenClawComputerActResult: Codable, Sendable, Equatable {
     public var ok: Bool
     public var effect: OpenClawComputerActionEffect?

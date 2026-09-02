@@ -660,12 +660,10 @@ struct MacNodeRuntimeTests {
         #expect(received?.action == .leftClick)
         #expect(received?.x == 12)
         let payloadJSON = try #require(response.payloadJSON)
-        let payload = try #require(
-            JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)) as? [String: Any])
-        #expect(payload.keys.sorted() == ["ok"])
-        #expect(payload["ok"] as? Bool == true)
         let result = try JSONDecoder().decode(OpenClawComputerActResult.self, from: Data(payloadJSON.utf8))
         #expect(result.ok == true)
+        let object = try #require(JSONSerialization.jsonObject(with: Data(payloadJSON.utf8)) as? [String: Any])
+        #expect(object.keys.sorted() == ["ok"])
     }
 
     @Test func `provider selection owns both snapshot and action without cross-provider fallback`() async throws {

@@ -271,7 +271,7 @@ struct ComputerInputGeometryTests {
         #expect(holdParams.durationMs == 2000)
     }
 
-    @Test func `successful input result encodes the canonical envelope`() throws {
+    @Test func `input result encoding uses the canonical success envelope`() throws {
         let data = try JSONEncoder().encode(OpenClawComputerActResult(ok: true))
         let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
