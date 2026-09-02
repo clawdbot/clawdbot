@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveVitestCliEntry } from "../../scripts/run-vitest.mts";
+import { resolveVitestCliEntry } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { createPatternFileHelper } from "../helpers/pattern-file.js";
 import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
@@ -102,6 +102,13 @@ describe("CLI runtime admission", () => {
     ["custom config", ["--config", "custom.config.ts"]],
     ["list command", ["list"]],
     ["help", ["--help"]],
+    ["equals help", ["--help=true"]],
+    ["short help group", ["-uh"]],
+    ["version only", ["--version=true"]],
+    ["list tags", ["--listTags"]],
+    ["clear cache", ["--clearCache"]],
+    ["native invalid scalar", ["--passWithNoTests", "--passWithNoTests"]],
+    ["native unknown option", ["--unknownOption"]],
   ])("leaves direct $0 selection without runtime preparation", async (_name, args) => {
     const root = tempDirs.make("plugin-build-direct-");
     const preload = path.join(root, "preload.mjs");
@@ -142,6 +149,21 @@ syncBuiltinESMExports();\n`,
       "direct watch",
       "scripts/run-vitest.mts",
       ["watch", "--config=test/vitest/vitest.extension-qa.config.ts"],
+    ],
+    [
+      "config short control",
+      "scripts/run-vitest.mts",
+      ["run", "-c", "test/vitest/vitest.extension-qa.config.ts"],
+    ],
+    [
+      "config empty long",
+      "scripts/run-vitest.mts",
+      ["run", "--config=", "test/vitest/vitest.extension-qa.config.ts"],
+    ],
+    [
+      "config empty short",
+      "scripts/run-vitest.mts",
+      ["run", "-c=", "test/vitest/vitest.extension-qa.config.ts"],
     ],
     ["root config", "scripts/run-vitest.mts", ["run", "--config", "vitest.config.ts"]],
     [
@@ -443,6 +465,36 @@ describe("test-projects build admission", () => {
       }
     }
   });
+
+  it.each([
+    { args: ["--help=true"], prepare: false },
+    { args: ["-uh"], prepare: false },
+    { args: ["--help", "--help"], prepare: false },
+    { args: ["--help", "false"], prepare: true },
+    { args: ["--no-help"], prepare: true },
+    { args: ["--version"], prepare: true },
+    { args: ["--watch=false"], prepare: true },
+    { args: ["--listTags"], prepare: false },
+    { args: ["--clearCache"], prepare: false },
+    { args: ["--mergeReports", "reports"], prepare: false },
+    { args: ["--unknownOption"], prepare: false },
+    { args: ["--passWithNoTests", "--passWithNoTests"], prepare: false },
+    { args: ["--help=true"], target: "test/vitest/vitest.ui-e2e.config.ts", prepare: false },
+    { args: ["--help=true"], target: e2eTarget, prepare: false },
+    { args: ["--configLoader=", "runner"], prepare: true },
+    { args: ["--isolate=", "false"], prepare: true },
+  ])(
+    "admits preparation from native controls only: $args",
+    async ({ args, prepare, target = lifecycle }) => {
+      commands.prepare.mockResolvedValue(0);
+      await start([target, "--", ...args]);
+      await terminal.promise;
+      expect(commands.reader).toHaveBeenCalledOnce();
+      expect(commands.prepare).toHaveBeenCalledTimes(prepare ? 1 : 0);
+      expect(commands.prepareE2e).not.toHaveBeenCalled();
+      expect(Boolean(commands.reader.mock.calls[0]![0].workerRun)).toBe(prepare);
+    },
+  );
 
   it.each([false, true])(
     "holds every reader until preparation completes (parallel=%s)",
