@@ -639,6 +639,7 @@ export function resolveMemoryDreamingWorkspaceStatuses(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspaceStatus[] {
+  const hasConfiguredAgent = listAgentIds(cfg).length > 0;
   const primaryWorkspaceDir = options.primaryWorkspaceDir?.trim();
   const primaryAgentId = primaryWorkspaceDir
     ? normalizeOptionalLowercaseString(options.primaryAgentId ?? resolveDefaultAgentId(cfg))
@@ -653,6 +654,7 @@ export function resolveMemoryDreamingWorkspaceStatuses(
     const workspaceIdentity = resolveWorkspaceStateIdentity(workspace.workspaceDir).workspacePath;
     for (const agentId of workspace.agentIds) {
       const isUnconfiguredRuntimePrimary =
+        hasConfiguredAgent &&
         agentId === "main" &&
         agentId === primaryAgentId &&
         workspaceIdentity === primaryWorkspace &&

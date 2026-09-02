@@ -360,13 +360,19 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
-  it("does not synthesize a default workspace for an explicitly empty roster", () => {
-    const cfg = {
-      agents: { entries: {} },
-    } as unknown as OpenClawConfig;
+  it.each([
+    ["entries", { agents: { entries: {} } }],
+    ["list", { agents: { list: [] } }],
+  ])("does not synthesize a default workspace for an explicitly empty %s roster", (_, cfg) => {
+    const primaryWorkspace = {
+      primaryAgentId: "main",
+      primaryWorkspaceDir: "/workspace/main",
+    };
 
     expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([]);
     expect(resolveMemoryConfiguredWorkspaces(cfg)).toEqual([]);
+    expect(resolveMemoryDreamingWorkspaces(cfg, primaryWorkspace)).toEqual([]);
+    expect(isMemoryDreamingEnabledForWorkspaceAgent(cfg, "main", "/workspace/main")).toBe(false);
   });
 
   it("dedupes configured workspace symlink aliases across agents", async () => {
