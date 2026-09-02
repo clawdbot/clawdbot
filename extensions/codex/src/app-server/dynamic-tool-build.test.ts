@@ -2784,9 +2784,9 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe(false);
   });
 
-  it.each([false, true])(
-    "applies inbound TTS to a final dynamic message only for audio input %s",
-    async (currentInboundAudio) => {
+  it.each(["text", "initial audio", "accepted audio steering"])(
+    "applies inbound TTS to a final dynamic message for %s",
+    async (input) => {
       const workspaceDir = path.join(tempDir, "workspace");
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
       const synthesize = vi.fn(async (_request: { text: string }) => ({
@@ -2838,7 +2838,9 @@ describe("Codex app-server dynamic tool build", () => {
         // Match Gateway config ownership so earlier tool construction cannot supply TTS policy.
         setRuntimeConfigSnapshot(params.config, params.config);
         params.messageChannel = "whatsapp";
-        params.currentInboundAudio = currentInboundAudio;
+        params.currentInboundAudio = input === "initial audio";
+        const replyOperation = { acceptedSteeredInboundAudio: false };
+        params.replyOperation = replyOperation as EmbeddedRunAttemptParams["replyOperation"];
         params.sourceReplyDeliveryMode = "message_tool_only";
         setOpenClawCodingToolsFactoryForTests((options) =>
           createOpenClawCodingTools(options).filter((tool) => tool.name === "message"),
@@ -2846,6 +2848,8 @@ describe("Codex app-server dynamic tool build", () => {
         const tools = await buildDynamicToolsForTest(params, workspaceDir, {
           sandbox: null as never,
         });
+        // Accepted steering must reach tools that were already constructed.
+        replyOperation.acceptedSteeredInboundAudio = input === "accepted audio steering";
         const bridge = createCodexDynamicToolBridge({
           tools,
           signal: new AbortController().signal,
@@ -2866,10 +2870,11 @@ describe("Codex app-server dynamic tool build", () => {
           },
         });
 
+        const expectsVoice = input !== "text";
         expect(result.success, JSON.stringify(result.contentItems)).toBe(true);
-        expect(synthesize).toHaveBeenCalledTimes(currentInboundAudio ? 1 : 0);
-        expect(sendMedia).toHaveBeenCalledTimes(currentInboundAudio ? 1 : 0);
-        if (currentInboundAudio) {
+        expect(synthesize).toHaveBeenCalledTimes(expectsVoice ? 1 : 0);
+        expect(sendMedia).toHaveBeenCalledTimes(expectsVoice ? 1 : 0);
+        if (expectsVoice) {
           expect(sendMedia).toHaveBeenCalledWith(expect.objectContaining({ audioAsVoice: true }));
         } else {
           expect(sendText).toHaveBeenCalledOnce();
