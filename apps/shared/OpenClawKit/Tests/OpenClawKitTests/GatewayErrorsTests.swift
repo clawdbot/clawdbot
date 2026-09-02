@@ -121,6 +121,8 @@ struct GatewayErrorsTests {
         #expect(problem.kind == .legacyIdentityConflict)
         #expect(problem.pauseReconnect == true)
         #expect(problem.retryable == false)
+        #expect(problem.actionLabel == "Reconcile identities")
+        #expect(problem.message.contains("This Mac"))
         #expect(problem.docsURL?.absoluteString == "https://docs.openclaw.ai/platforms/macos")
         #expect(problem.titlePresentation.localizationKey == "Conflicting device identities")
         #expect(DeviceIdentityConflictError.unpack(wrapped) == conflict)

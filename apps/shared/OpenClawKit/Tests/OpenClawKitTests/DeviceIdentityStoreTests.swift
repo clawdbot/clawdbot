@@ -847,6 +847,50 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `archive failure rolls back the canonical row and does not report success`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let firstMaterial = DeviceIdentityStore.generateMaterial()
+        let secondMaterial = DeviceIdentityStore.generateMaterial()
+        let first = try fixture.source("first", contents: Self.rawIdentityJSON(firstMaterial.identity))
+        let second = try fixture.source("second", contents: Self.rawIdentityJSON(secondMaterial.identity))
+        let selectedFingerprint = DeviceIdentityConflictError.redactedFingerprint(
+            deviceId: firstMaterial.identity.deviceId)
+        let unselectedDir = second.identityURL.deletingLastPathComponent()
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: unselectedDir.path)
+        }
+
+        do {
+            _ = try fixture.load(
+                sources: [first, second],
+                afterLegacyCommit: {
+                    try FileManager.default.setAttributes(
+                        [.posixPermissions: 0o555],
+                        ofItemAtPath: unselectedDir.path)
+                },
+                reconciliation: .select(fingerprint: selectedFingerprint))
+            Issue.record("Expected archive failure to throw")
+        } catch let error as NSError {
+            #expect(error.localizedDescription.lowercased().contains("archive"))
+        }
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: unselectedDir.path)
+
+        #expect(try Self.deviceIdentityCount(fixture.databaseURL) == 0)
+        do {
+            _ = try fixture.load(sources: [first, second])
+            Issue.record("Expected remaining conflict to throw")
+        } catch let error as DeviceIdentityConflictError {
+            #expect(error.candidates.count == 2)
+        }
+        #expect(try Self.deviceIdentityCount(fixture.databaseURL) == 0)
+    }
+
+    @Test
     func `unknown reconciliation fingerprint preserves every divergent source`() throws {
         let fixture = DeviceIdentityMigrationFixture()
         let firstMaterial = DeviceIdentityStore.generateMaterial()
@@ -1282,7 +1326,7 @@ extension DeviceIdentityStoreTests {
 
     fileprivate static func deviceIdentityCount(_ databaseURL: URL) throws -> Int {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else { return 0 }
-        return Int(try self.scalarInt(databaseURL, "SELECT COUNT(*) FROM device_identities"))
+        return try Int(self.scalarInt(databaseURL, "SELECT COUNT(*) FROM device_identities"))
     }
 
     fileprivate static func legacyIdentitySource(

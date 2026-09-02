@@ -270,17 +270,27 @@ enum DeviceIdentitySQLiteStore {
                 throw DeviceIdentityStore.storageError(
                     "Committed SQLite identity changed before legacy cleanup; native claim preserved")
             }
+        }
+        do {
+            try self.archiveClaimedLegacyIdentities(resolved.archiveAfterCommit)
+        } catch {
+            // A leftover native claim plus a canonical row would make the next load
+            // report success. Delete the row before restore so retry stays fail-closed.
+            try self.abortReconciliationAfterArchiveFailure(
+                database: database,
+                destinationStateDirURL: destinationStateDirURL,
+                profile: profile,
+                authoritative: authoritative,
+                leftoverClaims: resolved.archiveAfterCommit,
+                archiveError: error)
+        }
+        if !resolved.working.isEmpty {
             try self.relocateLegacyAuthIfNeeded(
                 claims: resolved.working,
                 destinationStateDirURL: destinationStateDirURL,
                 profile: profile,
                 deviceId: authoritative.identity.deviceId)
             try self.removeClaimedLegacyIdentities(resolved.working)
-        }
-        do {
-            try self.archiveClaimedLegacyIdentities(resolved.archiveAfterCommit)
-        } catch {
-            try? self.restoreClaimedLegacyIdentities(resolved.archiveAfterCommit)
         }
         return authoritative.identity
     }
@@ -526,6 +536,56 @@ enum DeviceIdentitySQLiteStore {
         guard try statement.step() == .done, database.changes == 1 else {
             throw DeviceIdentityStore.storageError("SQLite did not insert the device identity")
         }
+    }
+
+    private static func deleteIdentity(_ database: OpenClawNativeStateSQLite, key: String) throws {
+        let statement = try database.prepare("DELETE FROM device_identities WHERE identity_key = ?")
+        try statement.bindText(key, at: 1)
+        guard try statement.step() == .done, database.changes == 1 else {
+            throw DeviceIdentityStore.storageError("SQLite did not delete the device identity")
+        }
+    }
+
+    private static func abortReconciliationAfterArchiveFailure(
+        database: OpenClawNativeStateSQLite,
+        destinationStateDirURL: URL,
+        profile: GatewayDeviceIdentityProfile,
+        authoritative: DeviceIdentityMaterial,
+        leftoverClaims: [LegacyClaim],
+        archiveError: Error) throws -> Never
+    {
+        var rollbackError: String?
+        do {
+            try database.withImmediateTransaction {
+                guard let current = try self.readIdentity(
+                    database,
+                    key: profile.rawValue,
+                    stateDirectoryURL: destinationStateDirURL),
+                    current == authoritative
+                else {
+                    throw DeviceIdentityStore.storageError(
+                        "Committed SQLite identity changed before archive rollback; native claim preserved")
+                }
+                try self.deleteIdentity(database, key: profile.rawValue)
+            }
+        } catch {
+            rollbackError = error.localizedDescription
+        }
+        do {
+            try self.restoreClaimedLegacyIdentities(leftoverClaims)
+        } catch let restoreError {
+            throw DeviceIdentityStore.storageError(
+                "Could not archive conflicting device identities: \(archiveError.localizedDescription); "
+                    + (rollbackError.map { "identity rollback failed: \($0); " } ?? "")
+                    + "claim restoration failed: \(restoreError.localizedDescription)")
+        }
+        if let rollbackError {
+            throw DeviceIdentityStore.storageError(
+                "Could not archive conflicting device identities: \(archiveError.localizedDescription); "
+                    + "identity rollback failed: \(rollbackError)")
+        }
+        throw DeviceIdentityStore.storageError(
+            "Could not archive conflicting device identities; all sources preserved")
     }
 
     private static func claimLegacyIdentity(

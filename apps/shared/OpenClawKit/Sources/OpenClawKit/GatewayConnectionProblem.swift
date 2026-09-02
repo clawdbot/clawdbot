@@ -800,6 +800,7 @@ extension GatewayConnectionProblemMapper {
     private static func legacyIdentityConflictProblem(_ conflict: DeviceIdentityConflictError)
         -> GatewayConnectionProblem
     {
+        #if os(macOS)
         GatewayConnectionProblem(
             kind: .legacyIdentityConflict,
             owner: .unknown,
@@ -811,6 +812,21 @@ extension GatewayConnectionProblemMapper {
             retryable: false,
             pauseReconnect: true,
             technicalDetails: conflict.localizedDescription)
+        #else
+        // Recovery is Mac-app-owned. iOS can observe the same store conflict but
+        // must not advertise a reconcile action or macOS recovery docs it cannot run.
+        GatewayConnectionProblem(
+            kind: .legacyIdentityConflict,
+            owner: .unknown,
+            title: "Conflicting device identities",
+            message: "Preserved device identities have different keys. This app cannot "
+                + "reconcile them, so connection is paused.",
+            actionLabel: nil,
+            docsURL: nil,
+            retryable: false,
+            pauseReconnect: true,
+            technicalDetails: conflict.localizedDescription)
+        #endif
     }
 
     private static func mapTransportError(_ error: Error) -> GatewayConnectionProblem? {
