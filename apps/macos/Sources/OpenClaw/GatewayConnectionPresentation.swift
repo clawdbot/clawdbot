@@ -10,11 +10,7 @@ struct GatewayCompatibilityIssue: Equatable {
         guard let rejection = error as? GatewayConnectAuthError else { return nil }
         let minimum = GATEWAY_MIN_PROTOCOL_VERSION
         let maximum = GATEWAY_PROTOCOL_VERSION
-        // Published protocol-3 gateways (including v2026.4.26) only send
-        // INVALID_REQUEST + expectedProtocol, without the newer detail code.
-        let legacyMismatch = rejection.detailCode == "INVALID_REQUEST" &&
-            rejection.expectedProtocol.map { $0 < minimum || $0 > maximum } == true
-        guard rejection.detail == .protocolMismatch || legacyMismatch else { return nil }
+        guard rejection.isProtocolMismatch(supportedProtocols: minimum...maximum) else { return nil }
         let normalized = GatewayConnectAuthError(
             message: rejection.message,
             detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,

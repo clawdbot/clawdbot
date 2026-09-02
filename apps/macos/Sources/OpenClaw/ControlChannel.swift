@@ -344,7 +344,7 @@ final class ControlChannel {
             // Present once per route failure. A unique claim also retires queued alerts
             // after a route switch or successful connection with the same later issue.
             DispatchQueue.main.async { [weak self] in
-                guard self?.compatibilityAlerts.presentation == presentation else { return }
+                guard self?.compatibilityAlerts.presentation?.id == presentation.id else { return }
                 let alert = NSAlert()
                 alert.messageText = issue.problem.title
                 alert.informativeText = issue.message
