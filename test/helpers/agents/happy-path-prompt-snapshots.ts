@@ -29,6 +29,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../../src/plugins/runtime.js";
+import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import {
@@ -1025,24 +1026,28 @@ function renderReadme(scenarios: PromptScenario[]): string {
 
 /** Build all Codex happy-path prompt snapshot files without writing them. */
 export async function createHappyPathPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
-  const codexApi = await loadCodexPromptSnapshotApi();
-  const scenarios = await createScenarios(codexApi);
-  const files = [
-    {
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
-      content: renderReadme(scenarios),
-    },
-    ...scenarios.map((scenario) => ({
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
-      content: renderScenarioSnapshot(codexApi, scenario),
-    })),
-    ...scenarios.map((scenario) => ({
-      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
-      content: stableJson(scenario.dynamicTools),
-    })),
-  ];
-  return files.map((file) => ({
-    path: file.path,
-    content: file.content.endsWith("\n") ? file.content : `${file.content}\n`,
-  }));
+  // Plugin-policy hashing reads machine state from the process state dir.
+  // Pin a fresh one so snapshot generation never reads the host's live database.
+  return withStateDirEnv("openclaw-prompt-snapshot-", async () => {
+    const codexApi = await loadCodexPromptSnapshotApi();
+    const scenarios = await createScenarios(codexApi);
+    const files = [
+      {
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
+        content: renderReadme(scenarios),
+      },
+      ...scenarios.map((scenario) => ({
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
+        content: renderScenarioSnapshot(codexApi, scenario),
+      })),
+      ...scenarios.map((scenario) => ({
+        path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
+        content: stableJson(scenario.dynamicTools),
+      })),
+    ];
+    return files.map((file) => ({
+      path: file.path,
+      content: file.content.endsWith("\n") ? file.content : `${file.content}\n`,
+    }));
+  });
 }

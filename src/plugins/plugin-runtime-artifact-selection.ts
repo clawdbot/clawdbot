@@ -1,16 +1,77 @@
 /** Selects built plugin artifacts without importing active runtime state. */
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import {
   isTypeScriptPackageEntry,
   listBuiltRuntimeEntryCandidates,
 } from "./package-entrypoints.js";
-import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import { getPackageManifestMetadata } from "./package-manifest.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
 import { getPluginCacheRoot } from "./plugin-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
-function rewriteBundledRuntimeArtifactRelativePath(relativePath: string): string {
-  return relativePath.replace(/\.[^.]+$/u, ".js");
+export type PluginRuntimeArtifactPreference = "source" | "bundled" | "all";
+
+/** Built hosts default only checkout plugins to compiled execution, not installed packages. */
+export function resolvePluginRuntimeArtifactPreference(
+  preferBuiltPluginArtifacts?: boolean,
+): PluginRuntimeArtifactPreference {
+  if (preferBuiltPluginArtifacts !== undefined) {
+    return preferBuiltPluginArtifacts ? "all" : "source";
+  }
+  return /\.[cm]?js$/.test(new URL(import.meta.url).pathname) ? "bundled" : "source";
+}
+
+export function prefersBuiltPluginArtifacts(
+  preference: PluginRuntimeArtifactPreference,
+  origin: PluginOrigin,
+): boolean {
+  return preference === "all" || (preference === "bundled" && origin === "bundled");
+}
+
+function resolveBundledArtifactRelativePath(
+  rootDir: string,
+  relativeSource: string,
+): string | null {
+  const file = readPluginCacheFile({
+    rootDir,
+    relativePath: "package.json",
+    rejectHardlinks: false,
+  });
+  const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
+  const metadata =
+    parsed?.ok && isRecord(parsed.value) ? getPackageManifestMetadata(parsed.value) : undefined;
+  const entries = [
+    ...(metadata?.runtimeExtensions?.length
+      ? metadata.runtimeExtensions
+      : (metadata?.extensions ?? [])),
+    metadata?.runtimeSetupEntry ?? metadata?.setupEntry,
+  ].filter((entry): entry is string => typeof entry === "string");
+  const sourceStem = relativeSource.replace(/\.[^.]+$/u, "");
+  const declared = entries.find(
+    (entry) => path.normalize(entry).replace(/\.[^.]+$/u, "") === sourceStem,
+  );
+  if (declared) {
+    return /\.[cm]?js$/.test(declared) ? declared : null;
+  }
+  const extensions = new Set(entries.map((entry) => path.extname(entry)));
+  const extension = extensions.size === 1 ? [...extensions][0] : undefined;
+  // Emitted metadata owns the format: Docker's unified ESM build can override
+  // the standalone CJS preference. Never probe a stale sibling extension.
+  if (
+    !extension ||
+    ![".js", ".mjs", ".cjs"].includes(extension) ||
+    entries.some((entry) => path.normalize(entry).startsWith(`dist${path.sep}`))
+  ) {
+    return null;
+  }
+  return relativeSource.replace(/\.[^.]+$/u, extension);
 }
 
 function resolvePackageLocalDistRuntimeArtifact(params: {
@@ -59,7 +120,6 @@ function resolvePreferredBundledRootArtifactFromCanonicalPaths(params: {
   if (relativeSource === "" || relativeSource.startsWith("..") || path.isAbsolute(relativeSource)) {
     return { source, rootDir };
   }
-  const artifactRelativePath = rewriteBundledRuntimeArtifactRelativePath(relativeSource);
   // Source-external packaging can replace the flat root build while leaving its
   // staging wrapper behind, so only bundled artifacts may fall back to dist-runtime.
   for (const artifactRootName of sourceExternal ? ["dist"] : ["dist-runtime", "dist"]) {
@@ -69,6 +129,10 @@ function resolvePreferredBundledRootArtifactFromCanonicalPaths(params: {
       "extensions",
       path.basename(rootDir),
     );
+    const artifactRelativePath = resolveBundledArtifactRelativePath(artifactRoot, relativeSource);
+    if (!artifactRelativePath) {
+      continue;
+    }
     const artifactSource = path.join(artifactRoot, artifactRelativePath);
     if (pluginCacheExistsSync(artifactSource)) {
       return {
@@ -111,11 +175,12 @@ export function resolvePreferredBuiltRuntimeArtifact(params: {
   rootDir: string;
   origin: PluginOrigin;
   preferBuiltPluginArtifacts: boolean;
+  sourcePreferred?: boolean;
   packageManifest?: OpenClawPackageManifest;
 }): { source: string; rootDir: string } {
   // The stateful resolver canonicalizes both paths before memo-key construction.
   const { rootDir, source } = params;
-  if (!params.preferBuiltPluginArtifacts) {
+  if (!params.preferBuiltPluginArtifacts || params.sourcePreferred) {
     return { source, rootDir };
   }
   if (params.origin !== "bundled") {

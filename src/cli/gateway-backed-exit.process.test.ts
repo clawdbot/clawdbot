@@ -19,6 +19,7 @@ import {
 import { getFreePort } from "../test-utils/ports.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
+  prepareGatewayCliFixture,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
   snapshotDirectoryContents,
@@ -43,19 +44,11 @@ describe("gateway-backed CLI process exit", () => {
     { status: "error" as const, text: "provider failed", exitCode: 1 },
   ])("exits $exitCode after an agent turn reports $status", async ({ status, text, exitCode }) => {
     const root = tempDirs.make(`openclaw-agent-turn-${status}-`);
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
     const gateway = await startAgentTurnGateway({ status, text });
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        gateway: {
-          mode: "remote",
-          remote: { url: gateway.url, token: gateway.token },
-        },
-      }),
-    );
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+      mode: "remote",
+      remote: { url: gateway.url, token: gateway.token },
+    });
 
     const result = await runIsolatedGatewayCli({
       args: ["agent", "--agent", "main", "--message", "ping", "--json"],
@@ -80,15 +73,12 @@ describe("gateway-backed CLI process exit", () => {
     "validates a $label nodes timeout before opening a Gateway connection",
     async ({ timeout, valid }) => {
       const root = tempDirs.make("openclaw-nodes-timeout-");
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
       const token = "test-token";
       const gateway = await startNodePairingGateway(token);
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
-      );
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "remote",
+        remote: { url: gateway.url, token },
+      });
 
       const result = await runIsolatedGatewayCli({
         args: ["nodes", "list", "--timeout", timeout, "--json"],
@@ -116,17 +106,12 @@ describe("gateway-backed CLI process exit", () => {
 
   it("dispatches node pairing mutations without opening the writable state database", async () => {
     const root = tempDirs.make("openclaw-node-pairing-cli-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
     const token = "test-token";
     const gateway = await startNodePairingGateway(token);
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        gateway: { mode: "remote", remote: { url: gateway.url, token } },
-      }),
-    );
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+      mode: "remote",
+      remote: { url: gateway.url, token },
+    });
 
     const result = await runIsolatedGatewayCli({
       args: ["nodes", "approve", "request-1", "--json"],
@@ -145,21 +130,18 @@ describe("gateway-backed CLI process exit", () => {
 
   it("uses existing device auth without persisting a hello-issued token or coordinator state", async () => {
     const root = tempDirs.make("openclaw-node-pairing-stored-auth-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
     const storedToken = "stored-device-token";
     const gateway = await startNodePairingGateway(storedToken, "issued-device-token");
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+      mode: "remote",
+      remote: { url: gateway.url },
+    });
     const stateEnv = {
       ...process.env,
       HOME: root,
       OPENCLAW_HOME: root,
       OPENCLAW_STATE_DIR: stateDir,
     };
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url } } }),
-    );
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
     storeOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
@@ -195,15 +177,12 @@ describe("gateway-backed CLI process exit", () => {
 
   it("calls a reachable Gateway with explicit auth without creating shared state", async () => {
     const root = tempDirs.make("openclaw-gateway-call-explicit-auth-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
     const token = "configured-token";
     const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
-    );
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+      mode: "remote",
+      remote: { url: gateway.url, token },
+    });
     expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
 
     const result = await runIsolatedGatewayCli({
@@ -222,21 +201,18 @@ describe("gateway-backed CLI process exit", () => {
 
   it("calls a reachable Gateway with stored auth without changing shared state", async () => {
     const root = tempDirs.make("openclaw-gateway-call-stored-auth-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
     const storedToken = "stored-device-token";
     const gateway = await startGatewayStabilityRpcServer(storedToken, "issued-device-token");
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+      mode: "remote",
+      remote: { url: gateway.url },
+    });
     const stateEnv = {
       ...process.env,
       HOME: root,
       OPENCLAW_HOME: root,
       OPENCLAW_STATE_DIR: stateDir,
     };
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url } } }),
-    );
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
     storeOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
@@ -278,21 +254,18 @@ describe("gateway-backed CLI process exit", () => {
     "requires a reachable status RPC without changing $label shared state",
     async ({ label, seeded }) => {
       const root = tempDirs.make(`openclaw-gateway-status-${label}-`);
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
       const token = "configured-token";
       const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "remote",
+        remote: { url: gateway.url, token },
+      });
       const stateEnv = {
         ...process.env,
         HOME: root,
         OPENCLAW_HOME: root,
         OPENCLAW_STATE_DIR: stateDir,
       };
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
-      );
       if (seeded) {
         const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
         storeOriginDeviceToken({
@@ -339,17 +312,14 @@ describe("gateway-backed CLI process exit", () => {
     "runs gateway status through one OpenClaw entry process",
     async () => {
       const root = tempDirs.make("openclaw-gateway-status-entry-process-");
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
       const pidLogPath = path.join(root, "entry-pids");
       const preloadPath = path.join(root, "track-entry-pid.mjs");
       const token = "configured-token";
       const gateway = await startGatewayStabilityRpcServer(token, "issued-device-token");
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { mode: "remote", remote: { url: gateway.url, token } } }),
-      );
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "remote",
+        remote: { url: gateway.url, token },
+      });
       await fs.writeFile(
         preloadPath,
         [
@@ -405,15 +375,13 @@ describe("gateway-backed CLI process exit", () => {
     "reports a socat-owned port through the gateway status entry process",
     async () => {
       const root = tempDirs.make("openclaw-gateway-status-socat-");
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
       const listenerPath = path.join(root, "socat-listener.mjs");
       const port = await getFreePort();
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } } }),
-      );
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "none" },
+      });
       await fs.writeFile(
         listenerPath,
         [
@@ -607,19 +575,11 @@ describe("gateway-backed CLI process exit", () => {
 
   it("rejects invalid remote config before a node pairing mutation without opening state", async () => {
     const root = tempDirs.make("openclaw-node-pairing-invalid-config-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
     const gateway = await startNodePairingGateway("test-token");
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        gateway: {
-          mode: "remtoe",
-          remote: { url: gateway.url, token: "test-token" },
-        },
-      }),
-    );
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+      mode: "remtoe",
+      remote: { url: gateway.url, token: "test-token" },
+    });
 
     const result = await runIsolatedGatewayCli({
       args: ["nodes", "approve", "request-1", "--json"],
@@ -825,10 +785,7 @@ describe("gateway-backed CLI process exit", () => {
     { label: "positive", timeout: "10000", valid: true },
   ])("validates a $label channels capabilities timeout", async ({ timeout, valid }) => {
     const root = tempDirs.make("openclaw-capabilities-timeout-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, { mode: "local" });
 
     const result = await runIsolatedGatewayCli({
       args: [

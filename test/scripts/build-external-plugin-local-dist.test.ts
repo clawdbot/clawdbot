@@ -15,9 +15,13 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
+import { resetPluginCache } from "../../src/plugins/plugin-cache.js";
+import { resolvePluginRuntimeArtifact } from "../../src/plugins/plugin-runtime-artifact-resolution.js";
+import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(resetPluginCache);
 
 describe("external plugin local dist build", () => {
   it("keeps excluded plugin graphs isolated and their runtime metadata loadable", async () => {
@@ -73,13 +77,28 @@ describe("external plugin local dist build", () => {
     });
     copyBundledPluginMetadata({ repoRoot, env: {} });
     expect(fs.readdirSync(path.join(repoRoot, "dist"))).toEqual(["extensions"]);
-    for (const { id, runtimeFormat } of plugins) {
+    for (const { id, runtimeFormat, bundledDist } of plugins) {
       const pluginRoot = path.join(repoRoot, "dist/extensions", id);
       const metadata = JSON.parse(fs.readFileSync(path.join(pluginRoot, "package.json"), "utf8"));
       const extension = runtimeFormat === "cjs" ? ".cjs" : ".js";
       expect(metadata.openclaw.extensions).toEqual([`./index${extension}`]);
       expect(metadata.openclaw.setupEntry).toBe(`./setup-entry${extension}`);
       expect(fs.existsSync(path.join(repoRoot, "extensions", id, "dist"))).toBe(false);
+      fs.writeFileSync(
+        path.join(pluginRoot, runtimeFormat === "cjs" ? "index.js" : "index.cjs"),
+        'throw new Error("stale format must not execute");\n',
+      );
+      const selected = resolvePluginRuntimeArtifact({
+        pluginId: id,
+        entryKind: "runtime",
+        source: path.join(repoRoot, "extensions", id, "index.ts"),
+        rootDir: path.join(repoRoot, "extensions", id),
+        origin: "bundled",
+        preferBuiltPluginArtifacts: true,
+        packageManifest: { build: { bundledDist } },
+        registry: createEmptyPluginRegistry(),
+      });
+      expect(selected.source).toBe(path.join(pluginRoot, `index${extension}`));
       const probe = spawnSync(
         process.execPath,
         [

@@ -209,6 +209,10 @@ const EXCLUDED_CASES: readonly CornerCase[] = [
 
 const ALL_CASES = [...CORNER_CASES, ...ROUND_CASES, ...EXCLUDED_CASES];
 
+// CSSOM can serialize the same circular shape as round or superellipse(1).
+// https://drafts.csswg.org/css-borders-4/#valdef-corner-shape-value-round
+const CIRCULAR_SHAPE = expect.stringMatching(/^(?:round|superellipse\(1\))$/);
+
 // The radius tokens themselves, read at :root exactly like
 // collectMcpAppStyleVariables() in mcp-app-theme.ts reads them for embedded
 // MCP apps. They must stay canonical/unscaled even under the superelliptical
@@ -338,11 +342,11 @@ describeCornerShape("Control UI corner curvature", () => {
         ]),
         ...ROUND_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "round" },
+          { radius: corner.superelliptical, shape: CIRCULAR_SHAPE },
         ]),
         ...EXCLUDED_CASES.map((corner) => [
           corner.selector,
-          { radius: corner.superelliptical, shape: "round" },
+          { radius: corner.superelliptical, shape: CIRCULAR_SHAPE },
         ]),
       ]),
     );
@@ -353,7 +357,10 @@ describeCornerShape("Control UI corner curvature", () => {
 
     expect(probe).toEqual(
       Object.fromEntries(
-        ALL_CASES.map((corner) => [corner.selector, { radius: corner.circular, shape: "round" }]),
+        ALL_CASES.map((corner) => [
+          corner.selector,
+          { radius: corner.circular, shape: CIRCULAR_SHAPE },
+        ]),
       ),
     );
   });

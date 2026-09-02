@@ -1458,6 +1458,12 @@ describe("slackPlugin outbound", () => {
 
   it.each([
     {
+      name: "current",
+      replyToIsExplicit: true,
+      replyToCurrent: true,
+      expectedReplyToId: "1712345678.123456",
+    },
+    {
       name: "inherited",
       replyToIsExplicit: false,
       expectedReplyToId: "1712345678.123456",
@@ -1466,7 +1472,7 @@ describe("slackPlugin outbound", () => {
     { name: "unknown", replyToIsExplicit: undefined, expectedReplyToId: "1712345688.654321" },
   ])(
     "routes $name child replies to $expectedReplyToId",
-    ({ replyToIsExplicit, expectedReplyToId }) => {
+    ({ replyToIsExplicit, replyToCurrent, expectedReplyToId }) => {
       const resolveReplyTransport = slackPlugin.threading?.resolveReplyTransport;
       if (!resolveReplyTransport) {
         throw new Error("slack threading.resolveReplyTransport unavailable");
@@ -1478,6 +1484,7 @@ describe("slackPlugin outbound", () => {
           replyToId: "1712345688.654321",
           threadId: "1712345678.123456",
           replyToIsExplicit,
+          replyToCurrent,
         }),
       ).toEqual({ replyToId: expectedReplyToId, threadId: null });
     },

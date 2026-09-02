@@ -204,10 +204,6 @@ async function getConfigSnapshot(
       ...(measure ? { measure } : {}),
     });
   }
-  // Tests often mutate config fixtures; caching can make those flaky.
-  if (process.env.VITEST === "true") {
-    return readConfigFileSnapshot(measure ? { measure } : undefined);
-  }
   if (!configSnapshotPromise) {
     const pendingSnapshot = readConfigFileSnapshot(measure ? { measure } : undefined);
     configSnapshotPromise = pendingSnapshot;

@@ -231,6 +231,7 @@ describe("requester settle wake product flow", () => {
       label: params.runId,
       runtime: "subagent",
       sandbox: "inherit",
+      expectsCompletionMessage: true,
       options: {
         agentSessionKey: MAIN_REQUESTER_SESSION_KEY,
         requesterTurnRunId: params.requesterTurnRunId,

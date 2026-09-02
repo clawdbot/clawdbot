@@ -48,22 +48,25 @@ final class StatusMenuSummaries: NSObject {
     func refresh(onUpdate: @escaping @MainActor () -> Void) {
         self.updateHandler = onUpdate
         self.nodes.start()
-        self.cron.start()
+        self.cron.start(.statusMenu)
         guard self.refreshTask == nil else { return }
 
         self.refreshTask = Task { [weak self] in
-            guard let self else { return }
-            async let jobs: Void = self.refreshAutomations()
-            async let devices: Void = self.refreshDevices()
+            guard let self, !Task.isCancelled else { return }
             async let usage: Void = self.refreshUsage()
             async let cost: Void = self.refreshCost()
-            _ = await (jobs, devices, usage, cost)
+            _ = await (usage, cost)
+            guard !Task.isCancelled else { return }
             self.refreshTask = nil
         }
     }
 
     func menuDidClose() {
         self.updateHandler = nil
+        self.nodes.stop()
+        self.cron.stop(.statusMenu)
+        self.refreshTask?.cancel()
+        self.refreshTask = nil
         self.usageRetry?.cancel()
         self.usageRetry = nil
         self.usageRetryAttempts = 0
@@ -259,20 +262,8 @@ final class StatusMenuSummaries: NSObject {
         return false
     }
 
-    private func refreshAutomations() async {
-        guard self.isConnected else { return }
-        await self.cron.refreshJobs()
-        self.updateHandler?()
-    }
-
-    private func refreshDevices() async {
-        guard self.isConnected else { return }
-        await self.nodes.refresh()
-        self.updateHandler?()
-    }
-
     private func refreshUsage() async {
-        guard self.isConnected,
+        guard !Task.isCancelled, self.isConnected,
               self.usageUpdatedAt.map({ Date().timeIntervalSince($0) >= 30 }) ?? true
         else { return }
 
@@ -325,14 +316,17 @@ final class StatusMenuSummaries: NSObject {
     }
 
     private func refreshCost() async {
-        guard self.isConnected,
+        guard !Task.isCancelled, self.isConnected,
               self.costUpdatedAt.map({ Date().timeIntervalSince($0) >= 45 }) ?? true
         else { return }
 
         do {
-            self.cachedCost = try await CostUsageLoader.loadSummary()
+            let summary = try await CostUsageLoader.loadSummary()
+            guard !Task.isCancelled else { return }
+            self.cachedCost = summary
             self.costError = nil
         } catch {
+            guard !Task.isCancelled else { return }
             self.cachedCost = nil
             let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             self.costError = message.isEmpty
