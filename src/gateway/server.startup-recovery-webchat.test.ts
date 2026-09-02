@@ -4,6 +4,7 @@ import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-ss
 import { createDeferred } from "../../test/helpers/promise.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../agents/main-session-recovery/main-session-recovery-admission.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
+import { getFollowupQueueDepth } from "../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import {
   appendTranscriptMessage,
@@ -203,7 +204,7 @@ it(
       await vi.waitFor(() => {
         const queue = getExistingFollowupQueue(sessionKey);
         expect(queue?.inFlight).toHaveLength(1);
-        expect(queue?.items).toHaveLength(1);
+        expect(getFollowupQueueDepth(sessionKey)).toBe(1);
       });
       replacementOwner = await beginSessionWorkAdmission({
         scope: storePath,

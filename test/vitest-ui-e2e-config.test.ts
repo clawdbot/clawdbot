@@ -360,7 +360,9 @@ describe("Control UI E2E resource ownership", () => {
     },
   );
 
-  it("owns the complete inventory once and shards the project union without losing QA Lab or real-Gateway siblings", () => {
+  it("owns the complete inventory once and shards the project union without losing QA Lab or real-Gateway siblings", async () => {
+    const { uiE2ePrivateServerTestFiles, uiE2eSerialTestFiles } =
+      await import("./vitest/vitest.ui-e2e.config.ts");
     const result = probeOwnership();
     const inventory = fs
       .globSync(["ui/src/**/*.e2e.test.ts", qaLabFile], { cwd: repoRoot })
@@ -369,22 +371,14 @@ describe("Control UI E2E resource ownership", () => {
     expect(result.setupError).toBeUndefined();
     expect(result.rootWorkers).toBeGreaterThan(0);
     expect(result.rootWorkers).toBeLessThanOrEqual(2);
-    expect(
-      Object.fromEntries(
-        ["ui-e2e-bundled", "ui-e2e-standalone", "ui-e2e-serial", "ui-e2e-serial-standalone"].map(
-          (name) => [name, result.files.filter((entry) => entry.project === name).length],
-        ),
-      ),
-    ).toEqual({
-      "ui-e2e-bundled": inventory.length - 30,
-      "ui-e2e-standalone": 3,
-      "ui-e2e-serial": 7,
-      "ui-e2e-serial-standalone": 20,
-    });
     for (const entry of result.files) {
-      const serial = entry.project.startsWith("ui-e2e-serial");
+      const serial = uiE2eSerialTestFiles.includes(entry.file);
+      expect(entry.project.startsWith("ui-e2e-serial")).toBe(serial);
       expect(entry.phase).toBe(serial ? 1 : 0);
       expect(entry.workers).toBe(serial ? 1 : result.rootWorkers);
+      if (uiE2ePrivateServerTestFiles.includes(entry.file)) {
+        expect(entry.project).toBe("ui-e2e-serial-standalone");
+      }
     }
     expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: true }]);
     expect(result.shards.flat().toSorted()).toEqual(inventory);
