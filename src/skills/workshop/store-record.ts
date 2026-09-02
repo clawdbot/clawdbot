@@ -1,3 +1,4 @@
+import { codePointCountExceeds } from "@openclaw/normalization-core/code-points";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { z } from "zod";
@@ -85,7 +86,7 @@ const skillProposalEvaluationSchema = z.looseObject({
   correlationId: z
     .string()
     .min(1)
-    .refine((value) => Array.from(value).length <= 256)
+    .refine((value) => !codePointCountExceeds(value, 256))
     .optional(),
   targetTreeSha256: sha256Schema.optional(),
   outcomes: z.array(skillProposalEvaluationOutcomeSchema).max(64),

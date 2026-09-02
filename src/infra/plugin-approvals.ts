@@ -1,5 +1,9 @@
 // Defines plugin approval request/resolution payloads and actions.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  codePointCountExceeds,
+  countCodePoints,
+  sliceCodePoints,
+} from "@openclaw/normalization-core/code-points";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
@@ -95,23 +99,12 @@ export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
 
 /** Caps reviewer-only plugin detail by Unicode code point without splitting surrogate pairs. */
 export function truncatePluginApprovalDetail(value: string): string {
-  if (value.length <= PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) {
+  if (!codePointCountExceeds(value, PLUGIN_APPROVAL_DETAIL_MAX_LENGTH)) {
     return value;
   }
   const contentLimit =
-    PLUGIN_APPROVAL_DETAIL_MAX_LENGTH - Array.from(PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX).length;
-  let codePointCount = 0;
-  let contentCodeUnitLength = 0;
-  for (const char of value) {
-    codePointCount += 1;
-    if (codePointCount <= contentLimit) {
-      contentCodeUnitLength += char.length;
-    }
-    if (codePointCount > PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) {
-      return `${truncateUtf16Safe(value, contentCodeUnitLength)}${PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX}`;
-    }
-  }
-  return value;
+    PLUGIN_APPROVAL_DETAIL_MAX_LENGTH - countCodePoints(PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX);
+  return `${sliceCodePoints(value, 0, contentLimit)}${PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX}`;
 }
 
 /** Clamp a plugin approval timeout to the supported runtime bounds. */

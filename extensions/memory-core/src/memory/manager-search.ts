@@ -14,6 +14,7 @@ import {
   normalizeStringEntriesLower,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { countCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
 
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
@@ -370,7 +371,7 @@ function planKeywordSearch(params: {
   const matchTerms: string[] = [];
   const substringTerms: string[] = [];
   for (const token of tokens) {
-    const isShort = Array.from(token).length < 3;
+    const isShort = countCodePoints(token) < 3;
     if (isShort && (params.includeAllShortTrigramTerms || SHORT_CJK_TRIGRAM_RE.test(token))) {
       substringTerms.push(token);
       continue;

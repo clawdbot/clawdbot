@@ -1,5 +1,6 @@
 // QA Lab Slack invalid-blocks fallback fixture.
 import { randomUUID } from "node:crypto";
+import { countCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   SLACK_QA_INVALID_TABLE_DATA_ROW_COUNT,
   SLACK_QA_INVALID_TABLE_CAPTION,
@@ -34,7 +35,7 @@ export function buildSlackInvalidBlocksTableProbe() {
     ...dataRows.map((row) => row.join("\t")),
   ].join("\n");
   const cellCharacterCount = [...SLACK_QA_INVALID_TABLE_HEADERS, ...dataRows.flat()].reduce(
-    (total, value) => total + Array.from(value).length,
+    (total, value) => total + countCodePoints(value),
     0,
   );
   return {

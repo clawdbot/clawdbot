@@ -1,4 +1,5 @@
 // Progress-draft status text normalization for reasoning, preamble, and commentary lanes.
+import { codePointCountExceeds } from "@openclaw/normalization-core/code-points";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
@@ -108,7 +109,7 @@ export function formatReasoningProgressDisplayLine(text: string, maxChars: numbe
   if (!formatted) {
     return "";
   }
-  if (Array.from(formatted).length <= maxChars) {
+  if (!codePointCountExceeds(formatted, maxChars)) {
     return formatted;
   }
   const italic = formatted.match(/^_(.*)_$/u);

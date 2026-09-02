@@ -1,5 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Channel streaming config normalization and progress-draft formatting helpers.
+import {
+  codePointCountExceeds,
+  countCodePoints,
+  sliceCodePoints,
+} from "@openclaw/normalization-core/code-points";
 import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -969,10 +974,6 @@ export function resolveChannelProgressDraftMaxLineChars(
   return configured && configured > 0 ? configured : defaultValue;
 }
 
-function sliceCodePoints(value: string, start: number, end?: number): string {
-  return Array.from(value).slice(start, end).join("");
-}
-
 function compactProgressLineDetail(detail: string, maxChars: number): string {
   const chars = Array.from(detail);
   if (chars.length <= maxChars) {
@@ -1016,7 +1017,7 @@ function repairCompactedProgressMarkdown(value: string): string {
 
 function compactChannelProgressDraftNarration(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  if (Array.from(normalized).length <= PROGRESS_DRAFT_NARRATION_MAX_CHARS) {
+  if (!codePointCountExceeds(normalized, PROGRESS_DRAFT_NARRATION_MAX_CHARS)) {
     return normalized;
   }
   return compactPlainProgressLine(normalized, PROGRESS_DRAFT_NARRATION_MAX_CHARS);
@@ -1045,7 +1046,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
   }
 
   const compactWithPrefix = (prefix: string, detail: string): string | undefined => {
-    const prefixChars = Array.from(prefix).length;
+    const prefixChars = countCodePoints(prefix);
     const detailLimit = maxChars - prefixChars;
     if (detailLimit < 8) {
       return undefined;

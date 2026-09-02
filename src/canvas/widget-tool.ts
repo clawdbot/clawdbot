@@ -1,5 +1,6 @@
 /** Agent-facing inline chat widget tool. */
 import { createHash } from "node:crypto";
+import { sliceCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
@@ -230,7 +231,7 @@ function generatedWidgetIdentity(title: string, preferredName: string) {
 
 function boardWidgetTitle(title: string): string | undefined {
   const normalized = title.trim();
-  return normalized ? Array.from(normalized).slice(0, 80).join("") : undefined;
+  return normalized ? sliceCodePoints(normalized, 0, 80) : undefined;
 }
 
 function resolveRetentionScope(options: ShowWidgetToolOptions): string {

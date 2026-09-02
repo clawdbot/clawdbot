@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readlinkSync, realpathSync, rmdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { countCodePoints } from "@openclaw/normalization-core/code-points";
 import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -70,7 +71,7 @@ function shouldProbeUnicodeCaseVariants(left: string, right: string): boolean {
   // Keep dotted-I expansions distinct even on filesystems that collapse them.
   // That existing isolation contract avoids locale-sensitive owner aliasing.
   return !(
-    Array.from(left).length !== Array.from(right).length &&
+    countCodePoints(left) !== countCodePoints(right) &&
     lowercaseEquivalent &&
     !uppercaseEquivalent
   );

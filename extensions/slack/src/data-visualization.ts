@@ -6,6 +6,7 @@ import {
   type MessagePresentationChartBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { codePointCountExceeds } from "openclaw/plugin-sdk/text-utility-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationChartFallbackText } from "./presentation-fallback.js";
 
@@ -48,7 +49,7 @@ export function hasSlackDataVisualizationBlock(blocks?: readonly unknown[]): boo
 
 function isStringWithin(value: unknown, maxLength: number): value is string {
   return (
-    typeof value === "string" && value.trim().length > 0 && Array.from(value).length <= maxLength
+    typeof value === "string" && value.trim().length > 0 && !codePointCountExceeds(value, maxLength)
   );
 }
 

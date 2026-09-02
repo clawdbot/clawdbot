@@ -1,6 +1,6 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { countCodePoints, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   LINE_FLEX_BUBBLE_MAX_BYTES,
   LINE_FLEX_CAROUSEL_MAX_BYTES,
@@ -26,7 +26,7 @@ function truncateLineActionText(text: string, limit: number): string {
   let result = "";
   let count = 0;
   for (const { segment } of graphemeSegmenter.segment(text)) {
-    const codePointCount = Array.from(segment).length;
+    const codePointCount = countCodePoints(segment);
     if (count + codePointCount > limit) {
       break;
     }
