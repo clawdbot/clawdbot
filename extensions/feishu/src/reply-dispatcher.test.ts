@@ -2734,6 +2734,34 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to post mode when over-limit streaming content was never accepted", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-post" });
+    const { options } = createDispatcherHarness();
+    const text = Array.from(
+      { length: 6 },
+      (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+    ).join("\n\n");
+    const delivery = await options.deliver({ text }, { kind: "final" });
+    requireStreamingInstance(0).closeWithResult.mockRejectedValueOnce(
+      new FeishuStreamingFinalizationError(new Error("final update failed"), {
+        visibleReplySent: false,
+        messageId: "om-empty-stream",
+      }),
+    );
+
+    await expect(options.onIdle?.()).rejects.toThrow("final update failed");
+    await expect(delivery?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        content: text,
+        messageIds: ["om-post"],
+        visibleReplySent: true,
+      },
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
   it("does not repeat an earlier static fallback when a later fallback fails", async () => {
     sendStructuredCardFeishuMock
       .mockResolvedValueOnce({ messageId: "om-first-static" })
@@ -4392,6 +4420,62 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       streamingInstances.push = origPush;
       nowSpy.mockRestore();
     }
+  });
+
+  describe("table-limit routing", () => {
+    function makeTableText(count: number): string {
+      return Array.from(
+        { length: count },
+        (_, i) => `| a${i} | b${i} |\n| - | - |\n| 1 | 2 |`,
+      ).join("\n\n");
+    }
+
+    function setupDispatcher() {
+      const result = createFeishuReplyDispatcher({
+        cfg: {} as never,
+        agentId: "agent",
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        chatId: "oc_chat",
+        sendTarget: "oc_chat",
+      });
+      return toTypingDispatcherOptions(result);
+    }
+
+    it("routes 5 markdown tables to static card when streaming is off", async () => {
+      useNonStreamingAutoAccount();
+      const options = setupDispatcher();
+      const text = makeTableText(5);
+      await options.deliver({ text }, { kind: "final" });
+
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to post mode for 6 markdown tables when streaming is off", async () => {
+      useNonStreamingAutoAccount();
+      const options = setupDispatcher();
+      const text = makeTableText(6);
+      await options.deliver({ text }, { kind: "final" });
+
+      expect(sendMessageFeishuMock).toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("falls back to post mode for 6 tables with explicit renderMode=card", async () => {
+      resolveFeishuAccountMock.mockReturnValue({
+        accountId: "main",
+        appId: "app_id",
+        appSecret: "app_secret",
+        domain: "feishu",
+        config: { renderMode: "card", streaming: { mode: "off" } },
+      });
+      const options = setupDispatcher();
+      const text = makeTableText(6);
+      await options.deliver({ text }, { kind: "final" });
+
+      expect(sendMessageFeishuMock).toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
