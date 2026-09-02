@@ -830,6 +830,65 @@ describe("buildGatewayReloadPlan", () => {
 
   it.each([
     {
+      name: "plugin restart",
+      config: { plugins: { entries: { canvas: { enabled: true } } } },
+      paths: ["plugins.entries.canvas"],
+      kind: "restart",
+      channels: [],
+    },
+    {
+      name: "plugin hot",
+      config: { browser: { profiles: { qa: { cdpUrl: "http://127.0.0.1:9222" } } } },
+      paths: ["browser.profiles"],
+      kind: "hot",
+      channels: [],
+    },
+    {
+      name: "plugin none",
+      config: codexEntryConfig({ codexPlugins: { enabled: true } }),
+      paths: ["plugins.entries.codex.config.codexPlugins"],
+      kind: "none",
+      channels: [],
+    },
+    {
+      name: "channel hot",
+      config: { channels: { telegram: { enabled: true } } },
+      paths: ["channels.telegram"],
+      kind: "hot",
+      channels: ["telegram"],
+    },
+    {
+      name: "channel noop",
+      config: { channels: { whatsapp: { replyToMode: "all" } } },
+      paths: ["channels.whatsapp.replyToMode"],
+      kind: "none",
+      channels: [],
+    },
+  ] as const)(
+    "preserves registered $name boundaries through parent creation and removal",
+    ({ config, paths, kind, channels }) => {
+      for (const [previous, next] of [
+        [{}, config],
+        [config, {}],
+      ] as const) {
+        const changedPaths = diffGatewayReloadPaths(
+          previous,
+          next,
+          listConfigReloadRefinementPrefixes(),
+        );
+        const plan = buildGatewayReloadPlan(changedPaths);
+
+        expect(changedPaths).toEqual(paths);
+        expect(changedPaths.map((path) => resolveConfigReloadMetadata(path).kind)).toEqual([kind]);
+        expect(plan.restartGateway).toBe(kind === "restart");
+        expect(plan.restartChannels).toEqual(new Set(channels));
+        expect(plan.noopPaths).toEqual(kind === "none" ? paths : []);
+      }
+    },
+  );
+
+  it.each([
+    {
       name: "creates config on first install",
       previous: {},
       next: codexEntryConfig({ codexPlugins: { enabled: true } }),
