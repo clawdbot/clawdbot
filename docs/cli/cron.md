@@ -83,7 +83,8 @@ In addition to positional schedules, `automations add|create` and
   `--stream-match <regex>`, `--stream-batch-ms <n>`, and
   `--stream-max-batch-bytes <n>` to configure the source and batching.
 
-`--tz`, `--exact`, and `--stagger` apply only to cron schedules. See
+`--tz` applies to cron schedules and offset-less `--at` timestamps, while
+`--exact` and `--stagger` apply only to cron schedules. See
 [Automations](/automation/cron-jobs#schedule-types) for stream lifecycle,
 batching limits, and trigger details.
 
