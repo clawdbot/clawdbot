@@ -365,6 +365,9 @@ export async function handleNextcloudTalkInbound(params: {
       messageId: message.messageId,
       senderId,
     });
+    if (!rawBody) {
+      return;
+    }
   } else if (message.attachmentIssue) {
     authorizedMediaUnavailable = true;
     logNextcloudTalkMediaNonOutcome({

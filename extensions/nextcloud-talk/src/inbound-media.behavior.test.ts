@@ -637,6 +637,56 @@ describe("nextcloud-talk inbound media behavior", () => {
     },
   );
 
+  it.each([
+    { label: "omitted", mediaAllowFrom: undefined },
+    { label: "empty", mediaAllowFrom: [] },
+    { label: "explicit nonmatch", mediaAllowFrom: ["other-user"] },
+  ])(
+    "drops attachment-only media when the media allowlist is $label",
+    async ({ mediaAllowFrom }) => {
+      const coreRuntime = createPluginRuntimeMock();
+      setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+      createChannelPairingControllerMock.mockReturnValue({
+        readStoreForDmPolicy: vi.fn(async () => []),
+        issueChallenge: vi.fn(),
+      });
+      const runtime = createRuntimeEnv();
+
+      await handleNextcloudTalkInbound({
+        message: createMessage({
+          text: "",
+          attachment: {
+            fileId: "9001",
+            name: "receipt.pdf",
+            mimeType: "application/pdf",
+            declaredSizeBytes: 24_576,
+            shareUrl: "https://cloud.example.com/s/redacted-share-token",
+            hideDownload: false,
+          },
+        }),
+        account: createAccount({
+          config: {
+            dmPolicy: "allowlist",
+            allowFrom: ["user-1"],
+            mediaAllowFrom,
+            groupPolicy: "allowlist",
+            groupAllowFrom: [],
+          },
+        }),
+        config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+        runtime,
+      });
+
+      expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith(
+        "nextcloud-talk: inbound media non-outcome reason=media_sender_not_allowlisted account=default message=msg-1 sender=user-1",
+      );
+      expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
+      expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects hide-download media before fetching", async () => {
     const coreRuntime = createPluginRuntimeMock();
     setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
