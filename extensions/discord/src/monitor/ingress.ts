@@ -1,5 +1,5 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
-import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
+import { GatewayDispatchEvents } from "discord-api-types/v10";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
@@ -8,12 +8,22 @@ import {
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
 import { mapGatewayDispatchData } from "../internal/gateway-dispatch.js";
 import { getDiscordRuntime } from "../runtime.js";
+import type { DiscordGuildEntryResolved } from "./allow-list.js";
+import {
+  createDiscordStaleAmbientPendingDisposition,
+  readDiscordIngressPendingRow,
+  resolveDiscordIngressChannelKind,
+  type DiscordGatewayMessage,
+  type DiscordIngressChannelKind,
+  type DiscordIngressThreadBindingLookup,
+} from "./ingress-stale-policy.js";
 import type { DiscordMessageEvent } from "./listeners.js";
 
 const DISCORD_INGRESS_PAYLOAD_VERSION = 1;
@@ -22,7 +32,8 @@ const DISCORD_INGRESS_DRAIN_INTERVAL_MS = 1_000;
 type DiscordIngressPayload = {
   version: 1;
   receivedAt: number;
-  rawMessage: APIMessage;
+  rawMessage: DiscordGatewayMessage;
+  channelKind?: DiscordIngressChannelKind;
 };
 
 type DiscordIngressBody = Omit<DiscordIngressPayload, "version">;
@@ -37,7 +48,7 @@ type DiscordIngressDispatch = (
 ) => Promise<DiscordIngressDispatchResult | void> | DiscordIngressDispatchResult | void;
 
 type DiscordIngressMonitor = {
-  accept: (rawMessage: APIMessage) => Promise<void>;
+  accept: (rawMessage: DiscordGatewayMessage) => Promise<void>;
   start: () => void;
   stop: () => Promise<void>;
 };
@@ -64,22 +75,16 @@ function decodeDiscordIngressPayload(
   payload: DiscordIngressPayload,
   claimedId: string,
 ): { version: unknown; body: DiscordIngressBody } {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new DiscordIngressPayloadError("Discord ingress payload must be an object");
-  }
-  const candidate = payload as Partial<DiscordIngressPayload>;
-  try {
-    inspectDiscordMessage(candidate.rawMessage);
-  } catch (error) {
-    throw new DiscordIngressPayloadError(`Discord ingress payload ${claimedId} is invalid`, {
-      cause: error,
-    });
+  const row = readDiscordIngressPendingRow(payload);
+  if (!row) {
+    throw new DiscordIngressPayloadError(`Discord ingress payload ${claimedId} is invalid`);
   }
   return {
-    version: candidate.version,
+    version: (payload as Partial<DiscordIngressPayload>).version,
     body: {
-      receivedAt: candidate.receivedAt as number,
-      rawMessage: candidate.rawMessage as APIMessage,
+      receivedAt: row.payloadReceivedAt as number,
+      rawMessage: row.rawMessage,
+      ...(row.channelKind ? { channelKind: row.channelKind } : {}),
     },
   };
 }
@@ -103,7 +108,13 @@ export function createDiscordIngressMonitor(params: {
   client: Client;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: DiscordIngressDispatch;
+  botUserId?: string;
+  cfg?: OpenClawConfig;
+  discordConfig?: DiscordAccountConfig | null;
+  guildEntries?: Record<string, DiscordGuildEntryResolved>;
+  threadBindings?: DiscordIngressThreadBindingLookup;
   queue?: ChannelIngressQueue<DiscordIngressPayload>;
+  now?: () => number;
 }): DiscordIngressMonitor {
   const queue =
     params.queue ??
@@ -111,15 +122,19 @@ export function createDiscordIngressMonitor(params: {
       accountId: params.accountId,
     });
   const monitor = createChannelIngressMonitor<
-    APIMessage,
+    DiscordGatewayMessage,
     DiscordIngressBody,
     DiscordIngressPayload
   >({
     queue,
+    now: params.now,
     inspect: inspectDiscordMessage,
     payload: {
       version: DISCORD_INGRESS_PAYLOAD_VERSION,
-      serialize: (rawMessage, { receivedAt }) => ({ receivedAt, rawMessage }),
+      serialize: (rawMessage, { receivedAt }) => {
+        const channelKind = resolveDiscordIngressChannelKind(rawMessage.channel_type);
+        return { receivedAt, rawMessage, ...(channelKind ? { channelKind } : {}) };
+      },
       deserialize: (body) => body.rawMessage,
       encode: ({ body }) => ({ version: DISCORD_INGRESS_PAYLOAD_VERSION, ...body }),
       decode: (payload, { claim }) => decodeDiscordIngressPayload(payload, claim.id),
@@ -148,6 +163,7 @@ export function createDiscordIngressMonitor(params: {
     },
     appendRetryDelaysMs: [0],
     drain: {
+      resolvePendingDisposition: createDiscordStaleAmbientPendingDisposition(params),
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
         deadLetterMinAgeMs: 0,

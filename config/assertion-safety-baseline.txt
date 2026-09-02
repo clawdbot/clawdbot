@@ -369,7 +369,7 @@ extensions/discord/src/monitor/gateway-metadata.ts	6
 extensions/discord/src/monitor/gateway-plugin.ts	6
 extensions/discord/src/monitor/gateway-supervisor.ts	1
 extensions/discord/src/monitor/inbound-job.ts	1
-extensions/discord/src/monitor/ingress.ts	6
+extensions/discord/src/monitor/ingress.ts	5
 extensions/discord/src/monitor/listeners.ts	1
 extensions/discord/src/monitor/message-channel-info.ts	3
 extensions/discord/src/monitor/message-dispatcher.ts	5

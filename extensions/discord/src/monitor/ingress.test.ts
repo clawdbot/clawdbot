@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { APIMessage } from "discord-api-types/v10";
+import { ChannelType, type APIMessage } from "discord-api-types/v10";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -13,13 +13,25 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
 
+type DiscordTestMessage = APIMessage & { channel_type?: number; guild_id?: string };
+
 type DiscordIngressPayload = {
   version: 1;
   receivedAt: number;
-  rawMessage: APIMessage;
+  rawMessage: DiscordTestMessage;
+  channelKind?: "non-thread" | "thread";
 };
 
-function createRawMessage(id: string, channelId = "channel-1"): APIMessage {
+const FROZEN_NOW = Date.parse("2026-08-20T03:00:00.000Z");
+const STALE_AT = FROZEN_NOW - 16 * 60 * 1_000;
+const BOT_USER_ID = "bot-1";
+const GUILD_ID = "guild-1";
+
+function createRawMessage(
+  id: string,
+  channelId = "channel-1",
+  overrides: Partial<DiscordTestMessage> = {},
+): DiscordTestMessage {
   return {
     id,
     channel_id: channelId,
@@ -41,6 +53,7 @@ function createRawMessage(id: string, channelId = "channel-1"): APIMessage {
     pinned: false,
     type: 0,
     tts: false,
+    ...overrides,
   } as unknown as APIMessage;
 }
 
@@ -50,6 +63,22 @@ function runtime(): Pick<RuntimeEnv, "error" | "log"> {
 
 function payloadFor(rawMessage: APIMessage): DiscordIngressPayload {
   return { version: 1, receivedAt: Date.now(), rawMessage };
+}
+
+function createPolicyMonitor(params: {
+  queue: ChannelIngressQueue<DiscordIngressPayload>;
+  dispatch: Parameters<typeof createDiscordIngressMonitor>[0]["dispatch"];
+}) {
+  return createDiscordIngressMonitor({
+    accountId: "default",
+    client: {} as never,
+    runtime: runtime(),
+    queue: params.queue,
+    now: () => FROZEN_NOW,
+    botUserId: BOT_USER_ID,
+    guildEntries: { [GUILD_ID]: {} },
+    dispatch: params.dispatch,
+  });
 }
 
 async function withQueue<T>(
@@ -266,6 +295,139 @@ describe("Discord durable ingress", () => {
           const verdict = await queue.enqueue("1005", payloadFor(rawMessage));
           expect(verdict.kind).toBe("failed");
         });
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it.each([
+    { channelType: ChannelType.GuildText, expected: "non-thread" },
+    { channelType: ChannelType.PublicThread, expected: "thread" },
+  ])("persists channel kind $expected at durable admission", async ({ channelType, expected }) => {
+    await withQueue(async (queue) => {
+      const monitor = createPolicyMonitor({ queue, dispatch: vi.fn() });
+      try {
+        await monitor.accept(
+          createRawMessage("kind", "channel-1", {
+            guild_id: GUILD_ID,
+            channel_type: channelType,
+          }),
+        );
+        expect(await queue.listPending({ limit: "all" })).toMatchObject([
+          { id: "kind", payload: { channelKind: expected } },
+        ]);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("fences stale ambient backlog before claim and keeps the disposition across restart", async () => {
+    await withQueue(async (queue) => {
+      const rawMessage = createRawMessage("stale", "channel-1", {
+        guild_id: GUILD_ID,
+        channel_type: ChannelType.GuildText,
+        timestamp: new Date(STALE_AT).toISOString(),
+      });
+      await queue.enqueue(
+        "stale",
+        {
+          version: 1,
+          receivedAt: STALE_AT,
+          rawMessage,
+          channelKind: "non-thread",
+        },
+        { laneKey: "channel:channel-1", receivedAt: STALE_AT },
+      );
+      const firstDispatch = vi.fn();
+      const first = createPolicyMonitor({ queue, dispatch: firstDispatch });
+      first.start();
+      await vi.waitFor(async () => {
+        expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+          { id: "stale", reason: "stale-ambient-backlog" },
+        ]);
+      });
+      await first.stop();
+
+      const replayDispatch = vi.fn();
+      const replay = createPolicyMonitor({ queue, dispatch: replayDispatch });
+      replay.start();
+      try {
+        await replay.stop();
+        expect(firstDispatch).not.toHaveBeenCalled();
+        expect(replayDispatch).not.toHaveBeenCalled();
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      } finally {
+        await replay.stop();
+      }
+    });
+  });
+
+  it.each([
+    {
+      name: "current ambient work",
+      receivedAt: FROZEN_NOW,
+      rawMessage: createRawMessage("current", "channel-1", {
+        guild_id: GUILD_ID,
+        channel_type: ChannelType.GuildText,
+        timestamp: new Date(FROZEN_NOW).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+    },
+    {
+      name: "direct work",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("direct", "channel-1", {
+        channel_type: ChannelType.DM,
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+    },
+    {
+      name: "explicitly mentioned work",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("mentioned", "channel-1", {
+        guild_id: GUILD_ID,
+        channel_type: ChannelType.GuildText,
+        mentions: [
+          {
+            id: BOT_USER_ID,
+            username: "openclaw",
+            global_name: null,
+            discriminator: "0",
+            avatar: null,
+          },
+        ],
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "non-thread" as const,
+    },
+    {
+      name: "thread work",
+      receivedAt: STALE_AT,
+      rawMessage: createRawMessage("thread", "channel-1", {
+        guild_id: GUILD_ID,
+        channel_type: ChannelType.PublicThread,
+        timestamp: new Date(STALE_AT).toISOString(),
+      }),
+      channelKind: "thread" as const,
+    },
+  ])("keeps $name claimable", async ({ receivedAt, rawMessage, channelKind }) => {
+    await withQueue(async (queue) => {
+      await queue.enqueue(
+        rawMessage.id,
+        { version: 1, receivedAt, rawMessage, channelKind },
+        { laneKey: `channel:${rawMessage.channel_id}`, receivedAt },
+      );
+      const dispatch = vi.fn(async (_event, lifecycle: DiscordIngressLifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const monitor = createPolicyMonitor({ queue, dispatch });
+      monitor.start();
+      try {
+        await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
       } finally {
         await monitor.stop();
       }
