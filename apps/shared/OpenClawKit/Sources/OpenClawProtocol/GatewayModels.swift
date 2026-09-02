@@ -2235,10 +2235,10 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let invocablecommands: [String]?
-    public let requirednodecommand: RequiredNodeCommand?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
+    public let requirednodecommand: RequiredNodeCommand?
 
     public init(
         id: String,
@@ -2256,10 +2256,10 @@ public struct EnvironmentSummary: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         invocablecommands: [String]? = nil,
-        requirednodecommand: RequiredNodeCommand? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
-        worker: WorkerEnvironmentMetadata? = nil)
+        worker: WorkerEnvironmentMetadata? = nil,
+        requirednodecommand: RequiredNodeCommand? = nil)
     {
         self.id = id
         self.type = type
@@ -2276,10 +2276,10 @@ public struct EnvironmentSummary: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.invocablecommands = invocablecommands
-        self.requirednodecommand = requirednodecommand
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
+        self.requirednodecommand = requirednodecommand
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2298,10 +2298,10 @@ public struct EnvironmentSummary: Codable, Sendable {
         case trust
         case capabilities
         case invocablecommands = "invocableCommands"
-        case requirednodecommand = "requiredNodeCommand"
         case desktop
         case issues
         case worker
+        case requirednodecommand = "requiredNodeCommand"
     }
 }
 

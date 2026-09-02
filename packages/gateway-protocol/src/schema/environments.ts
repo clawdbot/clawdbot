@@ -99,8 +99,8 @@ export const WorkerEnvironmentMetadataSchema = closedObject({
   ),
 });
 
-function createEnvironmentSummarySchema(options?: { requiredNodeCommand?: boolean }) {
-  return closedObject({
+function createEnvironmentSummaryProperties() {
+  return {
     id: NonEmptyString,
     type: NonEmptyString,
     label: Type.Optional(NonEmptyString),
@@ -121,18 +121,20 @@ function createEnvironmentSummarySchema(options?: { requiredNodeCommand?: boolea
         uniqueItems: true,
       }),
     ),
-    ...(options?.requiredNodeCommand
-      ? { requiredNodeCommand: Type.Optional(RequiredNodeCommandSchema) }
-      : {}),
     desktop: Type.Optional(Type.Boolean()),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
-  });
+  };
+}
+
+function createEnvironmentSummarySchema() {
+  return closedObject(createEnvironmentSummaryProperties());
 }
 
 /** Public environment summary shown in listings and status responses. */
-export const EnvironmentSummarySchema = createEnvironmentSummarySchema({
-  requiredNodeCommand: true,
+export const EnvironmentSummarySchema = closedObject({
+  ...createEnvironmentSummaryProperties(),
+  requiredNodeCommand: Type.Optional(RequiredNodeCommandSchema),
 });
 
 /** Optional runtime scope for listing known environments. */
