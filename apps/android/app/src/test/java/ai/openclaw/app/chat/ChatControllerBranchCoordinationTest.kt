@@ -16,7 +16,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -80,6 +82,7 @@ class ChatControllerBranchCoordinationTest {
   private suspend fun enqueue(
     text: String = "queued",
     sessionKey: String = "main",
+    nowMs: Long = System.currentTimeMillis(),
   ): ChatOutboxItem =
     (
       outbox.enqueue(
@@ -87,7 +90,7 @@ class ChatControllerBranchCoordinationTest {
         sessionKey = sessionKey,
         text = text,
         thinkingLevel = "off",
-        nowMs = System.currentTimeMillis(),
+        nowMs = nowMs,
         ownerAgentId = "main",
       ) as ChatOutboxEnqueueResult.Queued
     ).item
@@ -468,14 +471,26 @@ class ChatControllerBranchCoordinationTest {
   fun cancellingRewindDoesNotStrandTheDurableMutationLease() =
     runTest {
       val gateway = ScriptedGateway(json)
+      val refreshStarted = CompletableDeferred<Job>()
+      val releaseRefresh = CompletableDeferred<String>()
+      gateway.respond("chat.history") {
+        refreshStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseRefresh.await()
+      }
+      gateway.respond("health") { error("health unavailable") }
       val rewindStarted = CompletableDeferred<Unit>()
       gateway.respond("sessions.rewind") {
         rewindStarted.complete(Unit)
         CompletableDeferred<Unit>().await()
         "{}"
       }
-      val controller = controller(gateway)
+      val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+      runCurrent()
       controller.awaitOutboxRestore()
+      controller.handleGatewayEvent("health", null)
+      runCurrent()
+      controller.refresh()
+      val refreshJob = refreshStarted.await()
       val rewind = async { controller.rewindSessionAtEntryResult("main", "entry-a") }
       rewindStarted.await()
 
@@ -492,6 +507,18 @@ class ChatControllerBranchCoordinationTest {
       val state = outbox.branchState("gateway-a", ChatOutboxScope("main", "main"))
       assertTrue(state?.needsReconciliation == true)
       assertNull(state?.switchPendingSinceMs)
+      releaseRefresh.complete(historyResponse("stale-session", listOf(ReplayHistoryMessage("assistant", "stale", 1))))
+      refreshJob.join()
+      runCurrent()
+      assertEquals("Cancellation must happen before the rewind's history refresh", 1, gateway.callCount("chat.history"))
+      assertTrue(controller.messages.value.isEmpty())
+      assertTrue(outbox.load("gateway-a").isEmpty())
+      assertTrue(controller.healthOk.value)
+
+      controller.handleGatewayEvent("tick", null)
+      runCurrent()
+      assertEquals("Cancelled rewind must not strand Refresh's health check", 1, gateway.callCount("health"))
+      assertFalse(controller.healthOk.value)
     }
 
   @Test
@@ -622,6 +649,123 @@ class ChatControllerBranchCoordinationTest {
 
   @Test
   fun dispatchGateSamePathAdvanceSendsOnce() = runTest { verifyDeferredBranchDispatch(DispatchGateLane.VisibleBacklog, branchSwitch = false) }
+
+  @Test
+  fun refreshHealthFailureSurvivesOutboxHistorySupersession() = runTest { verifyRefreshHealthAfterOutboxSupersession(healthAvailable = false) }
+
+  @Test
+  fun refreshHealthSuccessSurvivesOutboxHistorySupersession() = runTest { verifyRefreshHealthAfterOutboxSupersession(healthAvailable = true) }
+
+  private suspend fun TestScope.verifyRefreshHealthAfterOutboxSupersession(healthAvailable: Boolean) {
+    val key = "agent:main:refresh-proof"
+    val gateway = ScriptedGateway(json)
+    val healthy = AtomicBoolean(true)
+    val historyRequests = AtomicInteger()
+    val refreshStarted = CompletableDeferred<Job>()
+    val releaseRefresh = CompletableDeferred<Unit>()
+    val branchesStarted = CompletableDeferred<Job>()
+    val releaseBranches = CompletableDeferred<Unit>()
+    val sent = AtomicReference<JsonObject?>(null)
+    gateway.respond("health") {
+      check(healthy.get()) { "health unavailable; history transport remains connected" }
+      "{}"
+    }
+    gateway.respond("chat.history") {
+      val request = historyRequests.incrementAndGet()
+      val messages = mutableListOf(ReplayHistoryMessage("assistant", "A", 1, entryId = "A"))
+      if (request > 2) messages += ReplayHistoryMessage("assistant", "A2", 2, entryId = "A2")
+      sent.get()?.let { params ->
+        val id = params.getValue("idempotencyKey").jsonPrimitive.content
+        messages += ReplayHistoryMessage("user", "during refresh", 3, idempotencyKey = "$id:user", entryId = "input")
+        messages += ReplayHistoryMessage("assistant", "delivered", 4, entryId = "reply")
+      }
+      val response = historyResponse("refresh-proof", messages)
+      if (request == 2) {
+        refreshStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseRefresh.await()
+      }
+      response
+    }
+    gateway.respond("sessions.branches.list") {
+      if (historyRequests.get() > 1) {
+        branchesStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseBranches.await()
+      }
+      val leaf =
+        if (sent.get() != null) {
+          "reply"
+        } else if (historyRequests.get() > 2) {
+          "A2"
+        } else {
+          "A"
+        }
+      """{"branches":[{"leafEntryId":"$leaf","headline":"Current","messageCount":1,"active":true}]}"""
+    }
+    gateway.respond("chat.send") { paramsJson ->
+      val params = json.parseToJsonElement(requireNotNull(paramsJson)).jsonObject
+      sent.set(params)
+      val id = params.getValue("idempotencyKey").jsonPrimitive.content
+      """{"runId":"$id","status":"started"}"""
+    }
+    val controller = controller(gateway, StandardTestDispatcher(testScheduler))
+    runCurrent()
+    controller.awaitOutboxRestore()
+    controller.load(key)
+    awaitBranchProgress {
+      controller.healthOk.value && controller.sessionBranches.value
+        .singleOrNull()
+        ?.leafEntryId == "A"
+    }
+    val healthRequestsBeforeRefresh = gateway.callCount("health")
+    healthy.set(healthAvailable)
+    controller.refresh()
+    awaitBranchProgress { refreshStarted.isCompleted }
+
+    val attachment = OutgoingAttachment("image", "image/png", "proof.png", "AQIDBA==")
+    assertTrue(controller.sendMessageAwaitAcceptance("during refresh", "off", listOf(attachment)))
+    awaitBranchProgress { branchesStarted.isCompleted }
+    val admitted = outbox.load("gateway-a").single()
+    assertEquals(ChatOutboxStatus.Queued, admitted.status)
+    assertEquals(listOf("A", "A2"), controller.messages.value.map { it.content.single().text })
+
+    releaseRefresh.complete(Unit)
+    runCurrent()
+    assertEquals("Newer history must survive the late explicit refresh", listOf("A", "A2"), controller.messages.value.map { it.content.single().text })
+    assertEquals("No dispatch before authoritative branch evidence", 0, gateway.callCount("chat.send"))
+    assertEquals(admitted, outbox.load("gateway-a").single())
+    assertTrue(byteArrayOf(1, 2, 3, 4).contentEquals(outbox.loadAttachments(admitted.id).single().bytes))
+
+    releaseBranches.complete(Unit)
+    refreshStarted.await().join()
+    branchesStarted.await().join()
+    runCurrent()
+    assertEquals("Refresh must force health even when outbox reconciliation supplied history", healthRequestsBeforeRefresh + 1, gateway.callCount("health"))
+    assertEquals(healthAvailable, controller.healthOk.value)
+    if (healthAvailable) {
+      awaitBranchProgress {
+        outbox.load("gateway-a").isEmpty() && controller.messages.value
+          .lastOrNull()
+          ?.content
+          ?.singleOrNull()
+          ?.text == "delivered"
+      }
+      assertEquals(1, gateway.callCount("chat.send"))
+      val params = requireNotNull(sent.get())
+      assertEquals(admitted.id, params.getValue("idempotencyKey").jsonPrimitive.content)
+      assertEquals(key, params.getValue("sessionKey").jsonPrimitive.content)
+      assertEquals("during refresh", params.getValue("message").jsonPrimitive.content)
+      assertEquals(
+        attachment.base64,
+        params
+          .getValue("attachments")
+          .jsonArray
+          .single()
+          .jsonObject
+          .getValue("content")
+          .jsonPrimitive.content,
+      )
+    }
+  }
 
   private enum class DispatchGateLane { Refresh, RemoteEvent, Reconnect, VisibleBacklog, BackgroundBacklog }
 
@@ -1283,6 +1427,263 @@ class ChatControllerBranchCoordinationTest {
         releaseConfirmation.complete(Unit)
       }
       awaitBranchProgress { outbox.load("gateway-a").isEmpty() }
+    }
+
+  @Test
+  fun confirmedHistoryRetiresAcceptedHeadBeforeHealthCompletes() =
+    runTest {
+      val key = "agent:main:health-retirement"
+      val gateway = ScriptedGateway(json)
+      val historyRequests = AtomicInteger()
+      val healthRequests = AtomicInteger()
+      val healthy = AtomicBoolean(true)
+      val refreshStarted = CompletableDeferred<Job>()
+      val reconciliationStarted = CompletableDeferred<Job>()
+      val releaseRefresh = CompletableDeferred<Unit>()
+      val healthStarted = CompletableDeferred<Job>()
+      val releaseHealth = CompletableDeferred<Unit>()
+      gateway.respondChatSend("started")
+      gateway.respond("chat.history") {
+        val messages = mutableListOf(ReplayHistoryMessage("assistant", "before", 1, entryId = "before"))
+        gateway.calls.filter { it.method == "chat.send" }.forEachIndexed { index, call ->
+          val params = json.parseToJsonElement(requireNotNull(call.paramsJson)).jsonObject
+          val id = params.getValue("idempotencyKey").jsonPrimitive.content
+          messages +=
+            ReplayHistoryMessage(
+              "user",
+              params.getValue("message").jsonPrimitive.content,
+              2L + index * 2,
+              idempotencyKey = "$id:user",
+              entryId = "$id-input",
+            )
+          messages += ReplayHistoryMessage("assistant", "confirmed", 3L + index * 2, entryId = "$id-reply")
+        }
+        val historyRequest = historyRequests.incrementAndGet()
+        if (historyRequest == 2) {
+          refreshStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseRefresh.await()
+        } else if (historyRequest == 3) {
+          reconciliationStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        }
+        historyResponse("health-retirement", messages)
+      }
+      gateway.respond("sessions.branches.list") {
+        val leaf = gateway.lastRunId?.let { "$it-reply" } ?: "before"
+        """{"branches":[{"leafEntryId":"$leaf","headline":"Current","messageCount":1,"active":true}]}"""
+      }
+      gateway.respond("health") {
+        if (healthRequests.incrementAndGet() == 2) {
+          healthStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseHealth.await()
+        }
+        check(healthy.get()) { "health unavailable; history transport remains connected" }
+        "{}"
+      }
+      val controller = controller(gateway)
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+      controller.awaitOutboxRestore()
+      controller.load(key)
+      awaitBranchProgress { controller.healthOk.value && ownerJob.children.none() }
+      assertTrue(controller.sendMessageAwaitAcceptance("head", "off", emptyList()))
+      val head = outbox.load("gateway-a").single()
+      assertEquals(ChatOutboxStatus.Accepted, head.status)
+
+      healthy.set(false)
+      controller.refresh()
+      val refreshJob = refreshStarted.await()
+      assertTrue(controller.sendMessageAwaitAcceptance("successor", "off", emptyList()))
+      val healthJob = healthStarted.await()
+      val successor = outbox.load("gateway-a").single { it.id != head.id }
+      try {
+        releaseRefresh.complete(Unit)
+        refreshJob.join()
+        assertEquals(listOf("before", "head", "confirmed"), controller.messages.value.map { it.content.single().text })
+        assertFalse(
+          "Canonical history must retire the accepted Room row before the health response",
+          outbox.load("gateway-a").any { it.id == head.id },
+        )
+        assertEquals(listOf(successor.id), controller.outboxItems.value.map { it.id })
+        assertEquals(ChatOutboxStatus.Queued, successor.status)
+        assertEquals("The successor still waits for branch reconciliation", 1, gateway.callCount("chat.send"))
+
+        releaseHealth.complete(Unit)
+        healthJob.join()
+        reconciliationStarted.await().join()
+        assertFalse(controller.healthOk.value)
+        assertEquals(ChatOutboxStatus.Queued, outbox.load("gateway-a").single().status)
+        assertEquals(1, gateway.callCount("chat.send"))
+
+        healthy.set(true)
+        controller.refresh()
+        awaitBranchProgress { outbox.load("gateway-a").isEmpty() && controller.outboxItems.value.isEmpty() }
+        val sentIds =
+          gateway.calls.filter { it.method == "chat.send" }.map {
+            json
+              .parseToJsonElement(requireNotNull(it.paramsJson))
+              .jsonObject
+              .getValue("idempotencyKey")
+              .jsonPrimitive
+              .content
+          }
+        assertEquals(listOf(head.id, successor.id), sentIds)
+        assertEquals(listOf("before", "head", "confirmed", "successor", "confirmed"), controller.messages.value.map { it.content.single().text })
+      } finally {
+        releaseRefresh.complete(Unit)
+        releaseHealth.complete(Unit)
+        healthJob.join()
+      }
+    }
+
+  @Test
+  fun terminalCancellingWatchdogAfterHistoryRetirementResumesQueuedSuccessor() =
+    runBlocking {
+      val key = "agent:main:watchdog-retirement"
+      val branchScope = ChatOutboxScope(key, "main")
+      val initialState = requireNotNull(outbox.branchState("gateway-a", branchScope))
+      assertTrue(outbox.recordTranscriptTip("gateway-a", branchScope, "before", initialState))
+      val now = System.currentTimeMillis()
+      val head = enqueue("accepted before restart", key, now)
+      assertEquals(1, outbox.claimForSendingIfAttempt(head.id, head.attemptVersion, 0, null))
+      assertEquals(1, outbox.updateStatusIfAttempt(head.id, head.attemptVersion, ChatOutboxStatus.Accepted, 0, null, ChatOutboxStatus.Sending))
+      val successor = enqueue("queued successor", key, now + 1)
+      val remoteRunId = "newer-remote-run"
+      val gateway = ScriptedGateway(json)
+      val historyRequests = AtomicInteger()
+      val orphanRequests = AtomicInteger()
+      val firstOrphanJob = AtomicReference<Job?>(null)
+      val firstOrphanSettled = CompletableDeferred<Unit>()
+      val canonicalRequests = AtomicInteger()
+      val canonicalAvailable = AtomicBoolean(false)
+      val holdNextHistory = AtomicBoolean(false)
+      val refreshStarted = CompletableDeferred<Job>()
+      val releaseRefresh = CompletableDeferred<Unit>()
+      val watchdogStarted = CompletableDeferred<Job>()
+      val terminalHistoryStarted = CompletableDeferred<Job>()
+      val healthRequests = AtomicInteger()
+      val healthStarted = CompletableDeferred<Job>()
+      val releaseHealth = CompletableDeferred<Unit>()
+      val before = listOf(ReplayHistoryMessage("assistant", "before", 1, entryId = "before"))
+      gateway.respondChatSend("started")
+      gateway.respond("chat.history") {
+        val request = historyRequests.incrementAndGet()
+        if (holdNextHistory.compareAndSet(true, false)) {
+          refreshStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseRefresh.await()
+          historyResponse("watchdog-retirement", before, inFlightRun = remoteRunId to "working")
+        } else if (!canonicalAvailable.get()) {
+          if (request != 1) {
+            if (orphanRequests.incrementAndGet() == 1) firstOrphanJob.set(currentCoroutineContext()[Job])
+            throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "history temporarily unavailable"))
+          }
+          // An acknowledged pending input can precede canonical placement. The newest
+          // remote run owns the snapshot; this process has no ownership of the older row.
+          historyResponse("watchdog-retirement", before, inFlightRun = remoteRunId to "working")
+        } else {
+          when (canonicalRequests.incrementAndGet()) {
+            1 -> watchdogStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+            2 -> terminalHistoryStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+          }
+          val messages =
+            before +
+              listOf(
+                ReplayHistoryMessage("user", head.text, 2, idempotencyKey = "${head.id}:user", entryId = "head-input"),
+                ReplayHistoryMessage("assistant", "head completed", 3, entryId = "head-reply"),
+                ReplayHistoryMessage("user", "remote input", 4, idempotencyKey = "$remoteRunId:user", entryId = "remote-input"),
+                ReplayHistoryMessage("assistant", "remote completed", 5, entryId = "remote-reply"),
+              ) +
+              if (gateway.lastRunId == null) {
+                emptyList()
+              } else {
+                listOf(
+                  ReplayHistoryMessage("user", successor.text, 6, idempotencyKey = "${successor.id}:user", entryId = "successor-input"),
+                  ReplayHistoryMessage("assistant", "successor completed", 7, entryId = "successor-reply"),
+                )
+              }
+          historyResponse("watchdog-retirement", messages)
+        }
+      }
+      gateway.respond("sessions.branches.list") {
+        val leaf =
+          when {
+            gateway.lastRunId != null -> "successor-reply"
+            canonicalAvailable.get() -> "remote-reply"
+            else -> "before"
+          }
+        """{"branches":[{"leafEntryId":"$leaf","headline":"Current","messageCount":1,"active":true}]}"""
+      }
+      gateway.respond("health") {
+        if (healthRequests.incrementAndGet() == 2) {
+          healthStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+          releaseHealth.await()
+        }
+        "{}"
+      }
+      // Drive the existing watchdog deadline explicitly; Room I/O must not make
+      // runTest skip that deadline while the restart fixture is still settling.
+      val scheduler = TestCoroutineScheduler()
+      val observedOutbox =
+        object : ChatCommandOutbox by outbox {
+          override suspend fun load(gatewayId: String): List<ChatOutboxItem> {
+            val rows = outbox.load(gatewayId)
+            if (orphanRequests.get() == 1 && currentCoroutineContext()[Job] === firstOrphanJob.get()) {
+              firstOrphanSettled.complete(Unit)
+            }
+            return rows
+          }
+        }
+      val controller = controller(gateway, StandardTestDispatcher(scheduler), commandOutbox = observedOutbox)
+      val ownerJob = requireNotNull(controllerScopes.last().coroutineContext[Job])
+
+      suspend fun awaitControllerProgress(condition: suspend () -> Boolean) {
+        awaitBranchProgress {
+          scheduler.runCurrent()
+          condition()
+        }
+      }
+      try {
+        controller.load(key)
+        awaitControllerProgress { controller.healthOk.value && firstOrphanSettled.isCompleted }
+        scheduler.advanceTimeBy(750)
+        awaitControllerProgress { orphanRequests.get() >= 2 && ownerJob.children.count() == 1 }
+        assertEquals(1, controller.pendingRunCount.value)
+        assertEquals(listOf(head.id, successor.id), outbox.load("gateway-a").map { it.id })
+        assertEquals(0, gateway.callCount("chat.send"))
+
+        holdNextHistory.set(true)
+        controller.refresh()
+        awaitControllerProgress { refreshStarted.isCompleted }
+        canonicalAvailable.set(true)
+        scheduler.advanceTimeBy(120_000 - scheduler.currentTime)
+        awaitControllerProgress { healthStarted.isCompleted }
+        assertTrue(controller.healthOk.value)
+        assertEquals(listOf(successor.id), outbox.load("gateway-a").map { it.id })
+        assertEquals(listOf(successor.id), controller.outboxItems.value.map { it.id })
+        assertEquals(0, gateway.callCount("chat.send"))
+
+        controller.handleGatewayEvent("chat", chatTerminalPayload(key, remoteRunId, seq = 1, assistantText = "remote completed"))
+        awaitControllerProgress { terminalHistoryStarted.isCompleted && terminalHistoryStarted.await().isCompleted && watchdogStarted.await().isCompleted }
+        assertEquals(0, controller.pendingRunCount.value)
+        releaseRefresh.complete(Unit)
+        awaitControllerProgress { refreshStarted.await().isCompleted }
+        releaseHealth.complete(Unit)
+        awaitControllerProgress { healthStarted.await().isCompleted && (gateway.callCount("chat.send") > 0 || ownerJob.children.none()) }
+
+        val sentIds =
+          gateway.calls.filter { it.method == "chat.send" }.map {
+            json
+              .parseToJsonElement(requireNotNull(it.paramsJson))
+              .jsonObject
+              .getValue("idempotencyKey")
+              .jsonPrimitive
+              .content
+          }
+        assertEquals("Confirmed delivery must release its successor after a terminal ends the watchdog", listOf(successor.id), sentIds)
+        awaitControllerProgress { outbox.load("gateway-a").isEmpty() && controller.outboxItems.value.isEmpty() }
+      } finally {
+        releaseRefresh.complete(Unit)
+        releaseHealth.complete(Unit)
+        scheduler.runCurrent()
+      }
     }
 
   @Test

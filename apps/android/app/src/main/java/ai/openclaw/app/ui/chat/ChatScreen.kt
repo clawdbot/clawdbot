@@ -3144,7 +3144,7 @@ private fun ChatInputPill(
           textStyle = draftStyle.copy(color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
-          maxLines = 4,
+          maxLines = 6,
           modifier =
             Modifier
               .fillMaxWidth()

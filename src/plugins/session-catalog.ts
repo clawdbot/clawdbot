@@ -64,6 +64,8 @@ export type SessionCatalogStartTerminalProviderParams = {
   initialMessage?: string;
   /** Present only when the caller selected a catalog host backed by this node. */
   nodeId?: string;
+  /** Selected local catalog source; node ownership is carried by nodeId. */
+  hostId?: string;
 };
 
 export type SessionCatalogTerminalPlan =

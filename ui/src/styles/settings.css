@@ -567,6 +567,14 @@ wa-switch.settings-toggle {
   text-align: center;
 }
 
+/* Time inputs hold HH:MM; the shared 340px text width would stretch the paired
+   quiet-hours window into two bars. */
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > input[type="time"].settings-input {
+  width: auto;
+}
+
 /* ── Secret input (inset reveal toggle; no trailing button) ── */
 
 /* Stacked rows (config form arrays/maps) give the control full width; the

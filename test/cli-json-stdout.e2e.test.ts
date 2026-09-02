@@ -231,6 +231,112 @@ describe("cli json stdout contract", () => {
     },
   );
 
+  it.each(["probe", "diagnostics"])(
+    "keeps the CLI alive until stalled channel capability %s reports its timeout",
+    async (stage) => {
+      await withTempHome(
+        async (tempHome) => {
+          const pluginDir = path.join(tempHome, "capability-plugin");
+          const workspace = path.join(tempHome, "workspace");
+          await fs.mkdir(pluginDir);
+          await fs.mkdir(workspace);
+          const id = "capability-fixture";
+          const meta = {
+            id,
+            label: "Capability fixture",
+            selectionLabel: "Capability fixture",
+            docsPath: "/channels/test",
+            blurb: "Synthetic channel",
+          };
+          const schema = {
+            type: "object",
+            additionalProperties: false,
+            properties: { enabled: { type: "boolean" } },
+          };
+          await fs.writeFile(
+            path.join(pluginDir, "package.json"),
+            JSON.stringify({
+              name: id,
+              version: "1.0.0",
+              type: "module",
+              openclaw: {
+                extensions: ["./index.js"],
+                setupEntry: "./index.js",
+                channel: meta,
+              },
+            }),
+          );
+          await fs.writeFile(
+            path.join(pluginDir, "openclaw.plugin.json"),
+            JSON.stringify({
+              id,
+              channels: [id],
+              configSchema: { type: "object", additionalProperties: false, properties: {} },
+              channelConfigs: { [id]: { schema } },
+            }),
+          );
+          await fs.writeFile(
+            path.join(pluginDir, "index.js"),
+            `export const plugin = {
+              id: ${JSON.stringify(id)}, meta: ${JSON.stringify(meta)},
+              capabilities: { chatTypes: ["direct"] },
+              configSchema: { schema: ${JSON.stringify(schema)} },
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({ accountId: "default", enabled: true }),
+                isConfigured: () => true, isEnabled: () => true,
+              },
+              status: {
+                async probeAccount() { return ${stage === "probe" ? "new Promise(() => {})" : "{ ok: true }"}; },
+                async buildCapabilitiesDiagnostics() { return ${stage === "diagnostics" ? "new Promise(() => {})" : "{ lines: [] }"}; },
+              },
+            };
+            export default { id: plugin.id, register(api) { api.registerChannel({ plugin }); } };`,
+          );
+          const configPath = path.join(tempHome, "openclaw.json");
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({
+              agents: { defaults: { workspace } },
+              plugins: { load: { paths: [pluginDir] }, entries: { [id]: { enabled: true } } },
+              channels: { [id]: { enabled: true } },
+              logging: { level: "silent", consoleLevel: "silent" },
+            }),
+          );
+
+          const result = runBuiltCli(
+            tempHome,
+            ["channels", "capabilities", "--json", "--timeout", "20"],
+            {
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            },
+            { inheritEnvironment: false },
+          );
+
+          expect(result.status, result.stderr).toBe(0);
+          const [report] = JSON.parse(result.stdout).channels;
+          expect(report.channel).toBe(id);
+          if (stage === "probe") {
+            expect(report.probe).toEqual({
+              ok: false,
+              timedOut: true,
+              error: "probe timed out after 20ms",
+            });
+          } else {
+            expect(report.probe).toEqual({ ok: true });
+            expect(report.diagnostics).toEqual({
+              lines: [{ text: "Diagnostics: timed out after 20ms", tone: "error" }],
+              details: { timedOut: true },
+            });
+          }
+        },
+        { prefix: "openclaw-capabilities-timeout-e2e-" },
+      );
+    },
+  );
+
   it("returns one canonical document for a command that previously failed on stderr only", async () => {
     await withTempHome(
       async (tempHome) => {

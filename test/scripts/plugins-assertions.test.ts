@@ -1553,6 +1553,47 @@ ${command}
     }
   });
 
+  it("allows the pre-marker uninstall contract only for frozen-target validation", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const removedInstallPath = path.join(home, ".openclaw", "extensions", "demo-plugin-tgz");
+
+    try {
+      writeJson(path.join(scratchRoot, "plugins2-uninstalled.json"), { plugins: [] });
+      writeFileSync(
+        path.join(scratchRoot, "plugins2-install-path.txt"),
+        removedInstallPath,
+        "utf8",
+      );
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {},
+      });
+
+      const baseEnv = {
+        ...process.env,
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      };
+      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+        encoding: "utf8",
+        env: baseEnv,
+      });
+      const frozen = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+        encoding: "utf8",
+        env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" },
+      });
+
+      expect(current.status).not.toBe(0);
+      expect(current.stderr).toContain("exact disabled uninstall marker missing");
+      expect(frozen.status).toBe(0);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("rejects unreadable config during plugin uninstall proof", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
     const home = path.join(root, "home");

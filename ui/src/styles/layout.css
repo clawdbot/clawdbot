@@ -3739,7 +3739,11 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-footer-bar__status--restarting,
-.sidebar-footer-bar__status--restarting:hover {
+.sidebar-footer-bar__status--restarting:hover,
+.sidebar-footer-bar__status--suspending,
+.sidebar-footer-bar__status--suspending:hover,
+.sidebar-footer-bar__status--suspended,
+.sidebar-footer-bar__status--suspended:hover {
   background: color-mix(in srgb, var(--warn) 12%, transparent);
   color: var(--warn);
   cursor: default;
@@ -3763,12 +3767,15 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: var(--danger);
 }
 
-.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot,
+.sidebar-footer-bar__status--suspending .sidebar-footer-bar__status-dot,
+.sidebar-footer-bar__status--suspended .sidebar-footer-bar__status-dot {
   background: var(--warn);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot,
+  .sidebar-footer-bar__status--suspending .sidebar-footer-bar__status-dot {
     animation: pulse-subtle 1.2s ease-in-out infinite;
   }
 }

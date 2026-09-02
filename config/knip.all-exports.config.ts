@@ -46,6 +46,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   ),
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
   "src/infra/exec-host.native.test-support.ts!",
+  // The Windows CLI lifetime test launches this isolated probe by path.
+  "test/helpers/openclaw-test-instance.cli.test-support.mjs!",
   // Vitest loads these by configuration or module alias rather than imports.
   "test/setup*.ts!",
   "test/non-isolated-runner.ts!",

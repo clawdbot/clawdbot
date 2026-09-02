@@ -158,58 +158,44 @@ function assertPluginNpmRuntimeBuildExists(plan: PluginNpmRuntimeBuildPlan) {
   assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
 }
 
-function resolvePackagedChannelStateMetadata(
-  metadata: unknown,
-  metadataKey: string,
-  plan: PluginNpmRuntimeBuildPlan,
+/** Map channel probes to the selected build outputs relative to the emitted package.json. */
+export function resolvePluginRuntimeChannelMetadata(
+  channel: unknown,
+  params: { pluginDir: string; runtimeBuildOutputs: string[]; runtimeRoot: "." | "dist" },
 ) {
-  if (
-    !metadata ||
-    !isRecord(metadata) ||
-    typeof metadata.specifier !== "string" ||
-    !metadata.specifier.trim()
-  ) {
-    return metadata;
-  }
-
-  const normalizedSpecifier = normalizePackPath(metadata.specifier);
-  const sourceEntry = normalizedSpecifier.replace(/\.(?:[cm]?[jt]s)$/u, "");
-  const runtimeSpecifier = plan.runtimeBuildOutputs.find((runtimePath) => {
-    const normalizedRuntimePath = normalizePackPath(runtimePath);
-    return (
-      normalizedRuntimePath === normalizedSpecifier ||
-      normalizedRuntimePath.replace(/^dist\//u, "").replace(/\.(?:[cm]?js)$/u, "") === sourceEntry
-    );
-  });
-  if (!runtimeSpecifier) {
-    throw new Error(
-      `channel ${metadataKey} specifier '${metadata.specifier}' has no package-local runtime output for ${plan.pluginDir}`,
-    );
-  }
-
-  // Published plugins omit source files; installed channel probes must load
-  // the exact ESM or CommonJS sidecar emitted by the package runtime build.
-  return {
-    ...metadata,
-    specifier: runtimeSpecifier,
-  };
-}
-
-function resolvePackagedChannelMetadata(plan: PluginNpmRuntimeBuildPlan) {
-  const channel = plan.packageJson.openclaw?.channel;
   if (!isRecord(channel)) {
     return channel;
   }
 
   const packagedChannel: JsonRecord = { ...channel };
   for (const metadataKey of ["configuredState", "persistedAuthState"]) {
-    if (Object.hasOwn(channel, metadataKey)) {
-      packagedChannel[metadataKey] = resolvePackagedChannelStateMetadata(
-        channel[metadataKey],
-        metadataKey,
-        plan,
+    const metadata = channel[metadataKey];
+    if (
+      !Object.hasOwn(channel, metadataKey) ||
+      !isRecord(metadata) ||
+      typeof metadata.specifier !== "string" ||
+      !metadata.specifier.trim()
+    ) {
+      continue;
+    }
+    const normalizedSpecifier = normalizePackPath(metadata.specifier);
+    const sourceEntry = normalizedSpecifier.replace(/\.(?:[cm]?[jt]s)$/u, "");
+    const runtimeSpecifier = params.runtimeBuildOutputs.find((runtimePath) => {
+      const normalizedRuntimePath = normalizePackPath(runtimePath);
+      const relativeRuntimePath = path.posix.relative(params.runtimeRoot, normalizedRuntimePath);
+      return (
+        normalizedRuntimePath === normalizedSpecifier ||
+        relativeRuntimePath.replace(/\.(?:[cm]?js)$/u, "") === sourceEntry
+      );
+    });
+    if (!runtimeSpecifier) {
+      throw new Error(
+        `channel ${metadataKey} specifier '${metadata.specifier}' has no runtime output for ${params.pluginDir}`,
       );
     }
+    // Native Node resolution does not infer .cjs from a stem. Both checkout and
+    // standalone metadata must name the exact sidecar selected by their build.
+    packagedChannel[metadataKey] = { ...metadata, specifier: runtimeSpecifier };
   }
   return packagedChannel;
 }
@@ -885,7 +871,11 @@ export function resolveAugmentedPluginNpmPackageJson(params: PluginPackageParams
   }
   assertPluginNpmRuntimeBuildExists(plan);
 
-  const packagedChannel = resolvePackagedChannelMetadata(plan);
+  const packagedChannel = resolvePluginRuntimeChannelMetadata(plan.packageJson.openclaw?.channel, {
+    pluginDir: plan.pluginDir,
+    runtimeBuildOutputs: plan.runtimeBuildOutputs,
+    runtimeRoot: "dist",
+  });
   const packageJson: PluginPackageJson = {
     ...plan.packageJson,
     files: plan.packageFiles,

@@ -1302,7 +1302,7 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
     explicit_gateway = read_ios_version_metadata(release_version: release_version)[:version]
     if explicit_gateway != gateway_metadata[:version]
       UI.user_error!(
-        "Explicit iOS gateway version #{explicit_gateway} does not match canonical root version #{gateway_metadata[:version]}."
+        "Explicit iOS gateway version #{explicit_gateway} does not match canonical mobile version #{gateway_metadata[:version]}."
       )
     end
   end
@@ -1359,6 +1359,23 @@ def resolve_ios_release_plan!(release_version: nil, app_store_revision: nil, bui
   JSON.parse(stdout)
 rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from iOS release planner: #{e.message}")
+end
+
+def check_mobile_release_versioning!(app_store_revision:)
+  sh(
+    shell_join([
+      "node",
+      "--import",
+      "tsx",
+      File.join(repo_root, "scripts", "android-sync-versioning.ts"),
+      "--check",
+      "--require-mobile-release",
+      "--revision",
+      app_store_revision.to_s,
+      "--root",
+      repo_root
+    ])
+  )
 end
 
 def sync_ios_versioning!(release_version: nil, app_store_revision: nil)
@@ -1885,9 +1902,11 @@ platform :ios do
       if release_plan.fetch("changelogStatus") != "ready"
         UI.user_error!(
           "iOS release notes are not cut for #{release_plan.fetch("appStoreVersion")}. " \
-          "Run `pnpm ios:release:cut`, commit apps/ios/CHANGELOG.md, then rerun the upload."
+          "Run the shared mobile cutter prepare/plan/finalize flow, commit its five outputs, " \
+          "then rerun the upload."
         )
       end
+      check_mobile_release_versioning!(app_store_revision: app_store_revision)
     else
       if release_version.empty?
         UI.user_error!("Missing iOS gateway version. Use explicit --version and --revision for local archive validation.")

@@ -214,7 +214,7 @@ jobs:
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -692,7 +692,7 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 120
     env:
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow

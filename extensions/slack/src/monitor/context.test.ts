@@ -615,6 +615,24 @@ describe("createSlackMonitorContext Agent View state", () => {
     expect(lookup).toHaveBeenCalledTimes(4098);
   });
 
+  it("reads the durable Agent View marker once the app id is learned", async () => {
+    const register = vi.fn();
+    const lookup = vi.fn(async () => ({ experience: "agent", observedAt: 1 }));
+    setSlackRuntime({
+      state: { openKeyedStore: vi.fn(() => ({ register, lookup })) },
+    } as never);
+    const ctx = createTestContext({ apiAppId: "" });
+
+    await expect(ctx.isSlackAgentView()).resolves.toBe(false);
+    expect(lookup).not.toHaveBeenCalled();
+
+    ctx.apiAppId = "A_LEARNED";
+    await expect(ctx.isSlackAgentView()).resolves.toBe(true);
+    expect(lookup).toHaveBeenCalledWith(
+      JSON.stringify(["workspace", "default", "T_EXPECTED", "A_LEARNED"]),
+    );
+  });
+
   it("does not persist Agent View without a stable Slack app identity", async () => {
     const register = vi.fn();
     const lookup = vi.fn();

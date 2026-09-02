@@ -787,6 +787,25 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
     }
 
+    func testExistingSessionRestoresLatestOutput() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "existing-session-latest-output"),
+            additionalArguments: ["--openclaw-long-chat-fixture"])
+        let app = try XCTUnwrap(self.app)
+
+        let latest = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
+        XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
+        self.attachScreenshot(named: "existing-session-latest-output")
+    }
+
     func testChatPresentationInLightAppearance() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
         self.launchApp(

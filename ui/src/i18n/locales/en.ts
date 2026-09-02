@@ -923,6 +923,18 @@ export const en: TranslationMap & {
     readingAttachment: "Reading attachment",
     start: "Start session",
     startInTerminal: "Start in terminal",
+    nativeTerminalHint:
+      "Start the native CLI on the selected machine using its own account and configuration. This does not create an OpenClaw Chat.",
+    chooseNativeHost: "Choose a native CLI host",
+    nativeTerminalPrompt: "Optional initial prompt for the native CLI",
+    terminalNodeFolder: "Existing absolute folder on this node",
+    terminalHostUnavailable:
+      "Native CLI host unavailable. Check that the CLI is installed and the node is connected with its fresh-start command approved, then retry the catalog.",
+    terminalDisabled: "Enable CLI agents and terminals in Gateway settings to start a native CLI.",
+    terminalAttachmentsUnsupported:
+      "Remove attachments before starting a native CLI. Add files from the terminal after it opens.",
+    terminalPlacementUnsupported:
+      "Native CLI sessions use a specific host, not OpenClaw worker placement. Reset this draft and choose a native host.",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
     createOutcomeUnknown:
@@ -1228,7 +1240,7 @@ export const en: TranslationMap & {
     groupByDate: "Date",
     group: "Group",
     ungrouped: "Ungrouped",
-    newGroup: "New group…",
+    newGroup: "New group",
     newGroupPrompt: "New group name",
     newGroupTitle: "New group",
     newGroupCreate: "Create group",
@@ -1243,7 +1255,7 @@ export const en: TranslationMap & {
     moveBackToGroups: "Move back to Groups",
     groupMenu: "Group options for {group}",
     newSessionInGroup: "New session in {group}",
-    groupDefaultsMenu: "New session defaults…",
+    groupDefaultsMenu: "New session defaults",
     groupDefaultsTitle: 'New session defaults for "{group}"',
     groupDefaultsDescription: "Choose where new sessions in this group start.",
     groupDefaultsCwd: "Working directory",
@@ -1255,10 +1267,10 @@ export const en: TranslationMap & {
     groupDefaultsWorktreeHint: "Runs each session in an isolated Git worktree.",
     groupDefaultsFailed: "Could not save the group defaults.",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
-    renameGroupMenu: "Rename group…",
+    renameGroupMenu: "Rename group",
     renameGroupTitle: 'Rename group "{group}"',
     groupNameLabel: "Group name",
-    deleteGroupMenu: "Delete group…",
+    deleteGroupMenu: "Delete group",
     deleteGroupTitle: 'Delete group "{group}"',
     deleteGroupConfirm: "The group is removed. Its sessions move back to the session list.",
     deleteGroupStale: 'Gateway connection replaced before "{group}" was deleted. Try again.',
@@ -4167,6 +4179,8 @@ export const en: TranslationMap & {
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     restarting: "Restarting…",
+    suspending: "Suspending…",
+    suspended: "Suspended",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     settingsChangesUnavailable:
@@ -5021,6 +5035,15 @@ export const en: TranslationMap & {
         stepRetry: "Retry shortly.",
         stepAdmin:
           "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+      },
+      verifiedUserRequired: {
+        title: "Verified identity required",
+        summary:
+          "This Gateway has named roles enabled. Device and setup tokens cannot identify a person.",
+        stepIdentity:
+          "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
+        stepSharedSecret:
+          "For trusted local operator access, use the shared Gateway token or password.",
       },
       authRequired: {
         title: "Auth required",
