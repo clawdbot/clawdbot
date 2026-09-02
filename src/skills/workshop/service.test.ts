@@ -151,11 +151,15 @@ describe("skill workshop proposals", () => {
       description: "Shared Workshop skill",
       content: "# Shared Workshop Skill\n",
     });
+    const firstCachedVersion = getSkillsSnapshotVersion(firstWorkspaceDir);
+    const secondCachedVersion = getSkillsSnapshotVersion(secondWorkspaceDir);
     await applySkillProposal({
       workspaceDir: firstWorkspaceDir,
       env: testEnv,
       proposalId: first.record.id,
     });
+    expect(getSkillsSnapshotVersion(firstWorkspaceDir)).toBeGreaterThan(firstCachedVersion);
+    expect(getSkillsSnapshotVersion(secondWorkspaceDir)).toBeGreaterThan(secondCachedVersion);
 
     await expect(
       proposeCreateSkill({

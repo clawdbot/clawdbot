@@ -312,7 +312,6 @@ export async function applySkillProposalTransition(
           event: eventInput,
           mutation,
           env: input.env,
-          workspaceDir: input.workspaceDir,
         });
         if (!recoveredEvent) {
           throw error;
@@ -328,7 +327,6 @@ export async function applySkillProposalTransition(
           event: eventInput,
           mutation,
           env: input.env,
-          workspaceDir: input.workspaceDir,
         });
         if (!recoveredEvent) {
           throw error;
@@ -337,7 +335,6 @@ export async function applySkillProposalTransition(
       }
 
       bumpSkillsSnapshotVersion({
-        workspaceDir: input.workspaceDir,
         reason: "workshop",
         changedPath: record.target.skillFile,
       });
@@ -595,7 +592,6 @@ async function recoverAfterApplyCommitFailure(params: {
   event: NewSkillProposalEvent;
   mutation: PreparedWorkspaceSkillMutation;
   env?: NodeJS.ProcessEnv;
-  workspaceDir: string;
 }): Promise<SkillProposalEvent | null> {
   const committed = readCommittedSkillProposalTransition({
     record: params.applied,
@@ -621,7 +617,6 @@ async function recoverAfterApplyCommitFailure(params: {
       await restoreWorkspaceSkillMutation(params.mutation);
     } finally {
       bumpSkillsSnapshotVersion({
-        workspaceDir: params.workspaceDir,
         reason: "workshop",
         changedPath: params.expected.target.skillFile,
       });
