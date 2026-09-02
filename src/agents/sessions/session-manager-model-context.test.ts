@@ -121,6 +121,9 @@ it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
       }
       source.appendMessage({ role: "user", content: "latest", timestamp: 5 });
       const expected = source.buildSessionContext();
+      expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
+        expected.messages,
+      );
       const visible = (messages: typeof expected.messages) =>
         messages.map((message) => ({
           role: message.role,
@@ -227,6 +230,11 @@ it.each(["whole", "reset", "compaction", "reset-compaction", "leaf", "opaque"])(
         ]) {
           expect(() =>
             SessionManager.openModelContext(scope, {
+              admission: { ...admission, ...patch } as typeof admission,
+            }),
+          ).toThrow(/Current-turn transcript admission/);
+          expect(() =>
+            SessionManager.readSessionContext(scope, () => [], {
               admission: { ...admission, ...patch } as typeof admission,
             }),
           ).toThrow(/Current-turn transcript admission/);
@@ -348,6 +356,9 @@ it.each([false, true])("keeps model reads non-persisting (incognito=%s)", async 
       storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     };
     expect(SessionManager.openModelContext(scope).buildSessionContext().messages).toEqual([]);
+    expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
+      [],
+    );
     expect(fs.existsSync(scope.storePath)).toBe(false);
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
@@ -400,6 +411,60 @@ it.each([false, true])("keeps model reads non-persisting (incognito=%s)", async 
     }
   });
 });
+
+it.each([false, true])(
+  "closes lazy context without acquiring unread payloads (rejected=%s)",
+  async (rejected) => {
+    await withOpenClawTestState({ label: "context-reader-lifetime" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "lazy-context",
+        sessionKey: "agent:main:lazy-context",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = SessionManager.open(scope);
+      source.appendMessage({ role: "user", content: "first", timestamp: 1 });
+      const marker = "synthetic-unread-context:";
+      source.appendMessage({
+        role: "user",
+        content: marker + "x".repeat(256 * 1024),
+        timestamp: 2,
+      });
+      let retained: Iterator<unknown> | undefined;
+      let unreadPayloads = 0;
+      const parse = JSON.parse;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (typeof text === "string" && text.includes(marker)) {
+          unreadPayloads += 1;
+        }
+        return parse(text, reviver);
+      });
+      try {
+        const read = () =>
+          SessionManager.readSessionContext(scope, (messages) => {
+            retained = messages[Symbol.iterator]();
+            expect(retained.next().value).toMatchObject({ role: "user", content: "first" });
+            if (rejected) {
+              throw new Error("synthetic projection rejection");
+            }
+          });
+        if (rejected) {
+          expect(read).toThrow("synthetic projection rejection");
+        } else {
+          read();
+        }
+        expect(retained?.next()).toEqual({ done: true, value: undefined });
+        expect(unreadPayloads).toBe(0);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(SessionManager.readSessionContext(scope, (messages) => Array.from(messages))).toEqual(
+        source.buildSessionContext().messages,
+      );
+    });
+  },
+);
 
 it("keeps the real result when reset retention replaces a synthetic missing result", async () => {
   await withOpenClawTestState({ label: "model-pairing" }, async (state) => {

@@ -13,7 +13,9 @@ case "${OPENCLAW_MAC_SIGNING_VARIANT:-standard}" in
   elevation-host) runtime_name=elevation ;;
   *) echo "ERROR: Unknown Mac signing variant" >&2; exit 1 ;;
 esac
-STAGE="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-mac-worker.XXXXXX")"
+# Keep provisioning and the completed runtime moves on the destination volume.
+mkdir -p "$(dirname "$DESTINATION")"
+STAGE="$(cd "$(dirname "$DESTINATION")" && mktemp -d "$PWD/.openclaw-mac-worker.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/home" "$STAGE/package"
 

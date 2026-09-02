@@ -30,6 +30,7 @@ import {
 } from "./relay-server.js";
 
 const KEY = "0123456789abcdef".repeat(4);
+const SOURCE = "127.0.0.1";
 
 async function authenticate(
   connection: RawHttpConnection,
@@ -161,6 +162,7 @@ function createWebSocketAuthHarness(
   authenticateExtensionWebSocket({
     ws: socket,
     authority,
+    source: SOURCE,
     resource: "/extension",
     prepareAuthenticated,
     removePreAuthGuard: options.removePreAuthGuard,
@@ -266,16 +268,18 @@ describe("extension relay WebSocket auth v2 frame boundary", () => {
       const activeInvalidated = vi.fn();
       expect(harness.authority.registerAuthenticatedConnection({}, activeInvalidated)).toBe(true);
       for (let index = 0; index < 127; index += 1) {
-        expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(true);
+        expect(harness.authority.registerPendingConnection({}, vi.fn(), `192.0.2.${index}`)).toBe(
+          true,
+        );
       }
-      expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(false);
+      expect(harness.authority.registerPendingConnection({}, vi.fn(), SOURCE)).toBe(false);
 
       await vi.advanceTimersByTimeAsync(10_000);
       expect(harness.close).toHaveBeenCalledWith(4008, "browser relay auth timeout");
       expect(removePreAuthGuard).not.toHaveBeenCalled();
       harness.socket.emit("close");
       expect(removePreAuthGuard).toHaveBeenCalledOnce();
-      expect(harness.authority.registerPendingConnection({}, vi.fn())).toBe(true);
+      expect(harness.authority.registerPendingConnection({}, vi.fn(), SOURCE)).toBe(true);
       expect(activeInvalidated).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -646,7 +650,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
     }
   });
 
-  it("keeps an active extension while pending admission is full and recovers after release", async () => {
+  it("keeps an active extension at the pending source limit and recovers after release", async () => {
     handle = await startExtensionRelayServer({ port: 0, token: KEY, allowLegacyAuth: true });
     const active = await openExtensionSocket(handle, [
       "openclaw-extension-relay",
@@ -663,8 +667,10 @@ describe.sequential("extension relay HTTP auth v2", () => {
     );
     await vi.waitFor(() => expect(handle?.bridge.extensionConnected).toBe(true));
 
-    const pending = await Promise.all(
-      Array.from({ length: 128 }, () =>
+    // Alias equivalence is covered at the authority boundary in auth-v2.test.ts.
+    // Real sockets use the configured loopback address on every platform.
+    const attacker = await Promise.all(
+      Array.from({ length: 32 }, () =>
         openExtensionSocket(handle!, BROWSER_RELAY_EXTENSION_SUBPROTOCOL),
       ),
     );
@@ -684,8 +690,8 @@ describe.sequential("extension relay HTTP auth v2", () => {
     expect(active.readyState).toBe(WebSocket.OPEN);
     expect(handle.bridge.extensionConnected).toBe(true);
 
-    const released = once(pending[0]!, "close");
-    pending[0]!.close();
+    const released = once(attacker[0]!, "close");
+    attacker[0]!.close();
     await released;
     const promoted = await authenticateV2Extension(handle);
     promoted.send(
@@ -701,7 +707,7 @@ describe.sequential("extension relay HTTP auth v2", () => {
 
     promoted.close();
     active.close();
-    for (const socket of pending.slice(1)) {
+    for (const socket of attacker.slice(1)) {
       socket.close();
     }
   }, 30_000);

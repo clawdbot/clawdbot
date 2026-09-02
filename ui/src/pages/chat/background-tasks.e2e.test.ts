@@ -15,6 +15,13 @@ const suite = createControlUiE2eSuite({
 const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-background-tasks");
 const baseTime = Date.now();
 const chatSessionKey = "agent:main:main";
+const taskReviewMarkdown = `## Task Review layout proof
+
+This representative Markdown paragraph is long enough to wrap while the Review side panel is docked and after the operator expands the panel across the browser window.
+
+1. Keep the transcript readable.
+2. Use the available Review width.
+3. Preserve the task context.`;
 
 // Running tasks render a live elapsed label, so comparing raw transcript text makes the
 // assertion fail whenever a second ticks over mid-check. Only the durations may move here.
@@ -131,7 +138,7 @@ suite.define(() => {
                   response: {
                     messages: [
                       {
-                        content: [{ type: "text", text: "Subagent transcript proof." }],
+                        content: [{ type: "text", text: taskReviewMarkdown }],
                         role: "assistant",
                         timestamp: Date.now(),
                       },
@@ -189,8 +196,10 @@ suite.define(() => {
         const listRequests = await gateway.getRequests("tasks.list");
         expect(listRequests.length).toBeGreaterThanOrEqual(2);
         for (const request of listRequests) {
-          expect(request.params).toMatchObject({ sessionKey: "agent:main:main" });
-          expect(request.params).not.toHaveProperty("agentId");
+          expect(request.params).toMatchObject({
+            sessionKey: "agent:main:main",
+            agentId: "main",
+          });
         }
         await page.screenshot({ path: path.join(railFlowDir, "01-rail-open.png"), fullPage: true });
 
@@ -201,7 +210,7 @@ suite.define(() => {
         await openRow.click();
         const detailPanel = page.locator("[data-task-detail-panel]");
         await detailPanel.waitFor({ state: "visible" });
-        await detailPanel.getByText("Subagent transcript proof.").waitFor();
+        await detailPanel.getByRole("heading", { name: "Task Review layout proof" }).waitFor();
         expect(await detailPanel.textContent()).toContain("Map model routing code");
         expect(await detailPanel.textContent()).toContain("Subagent");
         expect(await openRow.getAttribute("aria-current")).toBe("true");
@@ -226,10 +235,29 @@ suite.define(() => {
         });
         expect(page.url()).toBe(chatUrl);
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
+        await page.getByRole("button", { name: "Expand side panel" }).click();
+        await expect
+          .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
+          .toBe("true");
+        const expandedWidths = await detailPanel.evaluate((taskPanel) => {
+          const panel = taskPanel.closest<HTMLElement>(".side-panel__panel");
+          if (!panel) {
+            throw new Error("Task Review panel owner is missing");
+          }
+          return {
+            panel: panel.getBoundingClientRect().width,
+            task: taskPanel.getBoundingClientRect().width,
+          };
+        });
+        expect(expandedWidths.task).toBeCloseTo(expandedWidths.panel, 0);
         await page.screenshot({
-          path: path.join(railFlowDir, "02-task-detail-sidebar.png"),
+          path: path.join(railFlowDir, "02-task-detail-expanded.png"),
           fullPage: true,
         });
+        await page.getByRole("button", { name: "Restore side panel" }).click();
+        await expect
+          .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
+          .toBe("false");
 
         await gateway.emitGatewayEvent("task", {
           action: "upserted",
@@ -273,7 +301,7 @@ suite.define(() => {
           .click();
         await detailPanel.waitFor({ state: "visible" });
         await page.getByText("Background tasks rail proof.").waitFor({ state: "visible" });
-        expect(await mainTranscript.textContent()).not.toContain("Subagent transcript proof.");
+        expect(await mainTranscript.textContent()).not.toContain("Task Review layout proof");
         await page.screenshot({
           path: path.join(railFlowDir, "04-list-remains-with-detail-open.png"),
           fullPage: true,

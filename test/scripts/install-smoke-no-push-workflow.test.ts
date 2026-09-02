@@ -102,6 +102,12 @@ describe("install smoke no-push root image transport", () => {
       default: false,
       type: "boolean",
     });
+    expect(
+      workflow.on?.workflow_call?.inputs?.allow_frozen_target_scenario_omissions,
+    ).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
     expect(workflow.on?.workflow_call?.inputs?.root_image_transport).toBeUndefined();
     expect(workflow.permissions).toEqual({
       actions: "read",
@@ -364,11 +370,27 @@ describe("install smoke no-push root image transport", () => {
       const requireLocal = step(consumer, "Require local root Dockerfile image");
       expect(requireLocal.if, jobName).toBeUndefined();
       expect(requireLocal.run, jobName).toBe('docker image inspect "$IMAGE_REF" >/dev/null');
+
+      const gatewayNetwork = step(consumer, "Run Docker gateway network e2e");
+      expect(gatewayNetwork.env, jobName).toMatchObject({
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS:
+          "${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
+        OPENCLAW_SELECTED_SHA: "${{ needs.preflight.outputs.target_sha }}",
+        OPENCLAW_TOOLING_SHA: "${{ steps.workflow.outputs.sha }}",
+      });
     }
 
     const text = readFileSync(INSTALL_SMOKE_REUSABLE, "utf8");
     expect(text.match(/verify-upload "Root image"/g)).toHaveLength(1);
     expect(text).not.toContain("gh api");
+  });
+
+  it("forwards frozen-target omission authority from the release coordinator", () => {
+    const workflow = readWorkflow(RELEASE_CHECKS);
+    expect(job(workflow, "install_smoke_release_checks").with).toMatchObject({
+      allow_frozen_target_scenario_omissions:
+        "${{ inputs.allow_frozen_target_scenario_omissions }}",
+    });
   });
 
   it("binds independent installer producer-consumer pairs to immutable artifact tuples", () => {

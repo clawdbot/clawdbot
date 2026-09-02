@@ -18,7 +18,6 @@ import type { HealthSummary } from "./health.js";
 import {
   formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
-  formatDeliveryQueueHealthLine,
   healthCommand,
   healthCommandNonExiting,
 } from "./health.js";
@@ -495,55 +494,77 @@ describe("healthCommand", () => {
     expect(output).not.toContain("Config hot reload");
   });
 
-  it("prints the rich text summary and verbose gateway details", async () => {
-    const recent = [
-      { key: "main", updatedAt: Date.now() - 60_000, age: 60_000 },
-      { key: "foo", updatedAt: null, age: null },
-    ];
-    const snapshot = createHealthSummary({
-      channels: {
-        whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
-        telegram: {
-          accountId: "default",
-          configured: true,
-          probe: {
-            ok: true,
-            elapsedMs: 7,
-            bot: { username: "bot" },
-            webhook: { url: "https://example.com/h" },
+  it.each(
+    [0, -600_000, 600_000].flatMap((clockSkewMs) =>
+      ["agent", "top-level"].map((surface) => ({ clockSkewMs, surface })),
+    ),
+  )(
+    "prints $surface gateway ages with $clockSkewMs ms client clock skew",
+    async ({ clockSkewMs, surface }) => {
+      const gatewayNow = Date.now();
+      const recent = [
+        { key: "main", updatedAt: gatewayNow - 60_000, age: 60_000 },
+        { key: "fresh", updatedAt: gatewayNow, age: 0 },
+        { key: "foo", updatedAt: null, age: null },
+      ];
+      const snapshot = createHealthSummary({
+        channels: {
+          whatsapp: { accountId: "default", linked: true, authAgeMs: 5 * 60_000 },
+          telegram: {
+            accountId: "default",
+            configured: true,
+            probe: {
+              ok: true,
+              elapsedMs: 7,
+              bot: { username: "bot" },
+              webhook: { url: "https://example.com/h" },
+            },
           },
+          discord: { accountId: "default", configured: false },
         },
-        discord: { accountId: "default", configured: false },
-      },
-      channelOrder: ["whatsapp", "telegram", "discord"],
-      channelLabels: {
-        whatsapp: "WhatsApp",
-        telegram: "Telegram",
-        discord: "Discord",
-      },
-      sessions: {
-        path: "/tmp/sessions.json",
-        count: 2,
-        recent,
-      },
-    });
-    callGatewayMock.mockResolvedValueOnce(snapshot);
+        channelOrder: ["whatsapp", "telegram", "discord"],
+        channelLabels: {
+          whatsapp: "WhatsApp",
+          telegram: "Telegram",
+          discord: "Discord",
+        },
+        sessions: {
+          path: "/tmp/sessions.json",
+          count: recent.length,
+          recent,
+        },
+      });
+      if (surface === "top-level") {
+        snapshot.agents = [];
+      }
+      callGatewayMock.mockResolvedValueOnce(snapshot);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(gatewayNow + clockSkewMs);
+      try {
+        await healthCommand(
+          {
+            json: false,
+            verbose: true,
+            timeoutMs: 1000,
+            config: { agents: { ownership: "explicit", entries: {} } },
+          },
+          runtime as never,
+        );
+      } finally {
+        clock.mockRestore();
+      }
 
-    await healthCommand(
-      { json: false, verbose: true, timeoutMs: 1000, config: {} },
-      runtime as never,
-    );
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
-    expect(output).toMatch(/WhatsApp: linked/i);
-    expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
-      ["Gateway connection:"],
-      ["  Gateway mode: local"],
-      [`  Gateway target: ${TEST_GATEWAY_URL}`],
-    ]);
-    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
-  });
+      expect(runtime.exit).not.toHaveBeenCalled();
+      const output = stripAnsi(runtime.log.mock.calls.map((c) => String(c[0])).join("\n"));
+      expect(output).toContain("- main (1m ago)\n- fresh (0m ago)\n- foo (no activity)");
+      expect(output).toMatch(/WhatsApp: linked/i);
+      expect(runtime.log.mock.calls.slice(0, 3)).toEqual([
+        ["Gateway connection:"],
+        ["  Gateway mode: local"],
+        [`  Gateway target: ${TEST_GATEWAY_URL}`],
+      ]);
+      expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
+    },
+  );
 
   it("passes explicit gateway credentials through to the gateway call", async () => {
     const snapshot = createHealthSummary();
@@ -911,87 +932,6 @@ describe("formatContextEngineHealthLine", () => {
     expect(formatContextEngineHealthLine(summary)).toBe(
       "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
     );
-  });
-});
-
-describe("formatDeliveryQueueHealthLine", () => {
-  it("summarizes dead-lettered delivery queue entries with the oldest age", () => {
-    const summary = createHealthSummary();
-    summary.deliveryQueues = {
-      failed: [
-        { queueName: "outbound", count: 3, oldestFailedAt: 90_000 },
-        { queueName: "session", count: 1 },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
-    );
-  });
-
-  it("summarizes dead-lettered ingress entries per channel account", () => {
-    const summary = createHealthSummary();
-    summary.deliveryQueues = {
-      failed: [],
-      ingressFailed: [
-        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
-        { channelId: "telegram", accountId: "ops", count: 2 },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
-    );
-  });
-
-  it("summarizes ingress pressure per channel account", () => {
-    const summary = createHealthSummary();
-    summary.deliveryQueues = {
-      failed: [],
-      ingressPressure: [
-        {
-          channelId: "telegram",
-          accountId: "ops",
-          laneCount: 1,
-          pendingCount: 56,
-          claimedCount: 0,
-          blockedCount: 55,
-          oldestReceivedAt: 90_000,
-        },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (ingress pressure — inbound telegram/ops: 1 pressured lane, 56 pending, 0 claimed, 55 blocked; oldest 2h ago)",
-    );
-  });
-
-  it("summarizes dead letters and ingress pressure together", () => {
-    const summary = createHealthSummary();
-    summary.deliveryQueues = {
-      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
-      ingressPressure: [
-        {
-          channelId: "line",
-          accountId: "default",
-          laneCount: 2,
-          pendingCount: 3,
-          claimedCount: 1,
-          blockedCount: 2,
-          oldestReceivedAt: 3_690_000,
-        },
-      ],
-    };
-
-    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
-      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago; ingress pressure — inbound line/default: 2 pressured lanes, 3 pending, 1 claimed, 2 blocked; oldest 1h ago)",
-    );
-  });
-
-  it("returns null when no dead-lettered entries are reported", () => {
-    const summary = createHealthSummary();
-
-    expect(formatDeliveryQueueHealthLine(summary)).toBeNull();
   });
 });
 

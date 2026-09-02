@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 /** Pending exclusive store write plus the promise hooks for its caller. */
@@ -82,42 +83,37 @@ async function drainStoreWriterQueue(queues: StoreWriterQueues, storePath: strin
     await queue.drainPromise;
     return;
   }
-  queue.drainPromise = (async () => {
-    try {
-      while (queue.pending.length > 0) {
-        const task = queue.pending.shift();
-        if (!task) {
-          continue;
-        }
-        let result: unknown;
-        let failed: unknown;
-        let hasFailure = false;
-        try {
-          result = await task.fn();
-        } catch (err) {
-          hasFailure = true;
-          failed = err;
-        }
-        if (hasFailure) {
-          task.reject(failed);
-          continue;
-        }
-        task.resolve(result);
+  const drain = createDeferredCore();
+  // Publish ownership before the first writer can enqueue more work, without
+  // yielding its place to a competing lifecycle admission on an idle lane.
+  queue.drainPromise = drain.promise;
+  try {
+    while (queue.pending.length > 0) {
+      const task = queue.pending.shift();
+      if (!task) {
+        continue;
       }
-    } finally {
-      queue.drainPromise = null;
-      if (queue.pending.length === 0) {
-        queues.delete(storePath);
-      } else {
-        // Late enqueues after the loop drained run in a fresh microtask so this
-        // drainPromise can settle before the next writer batch starts.
-        queueMicrotask(() => {
-          void drainStoreWriterQueue(queues, storePath);
-        });
+      let result: unknown;
+      let failed: unknown;
+      let hasFailure = false;
+      try {
+        result = await task.fn();
+      } catch (err) {
+        hasFailure = true;
+        failed = err;
       }
+      if (hasFailure) {
+        task.reject(failed);
+        continue;
+      }
+      task.resolve(result);
     }
-  })();
-  await queue.drainPromise;
+  } finally {
+    queue.drainPromise = null;
+    // No enqueue can interleave with this synchronous empty-queue cleanup.
+    queues.delete(storePath);
+    drain.resolve();
+  }
 }
 
 /** Runs one store write after prior writes for the same store path have finished. */

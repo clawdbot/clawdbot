@@ -8,8 +8,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardNextResultSchema } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildPluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import type { WizardSession } from "../../wizard/session.js";
+import { createPluginCapabilityConsentPrompter } from "../../wizard/plugin-capability-consent.js";
+import { WizardSession } from "../../wizard/session.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import { systemAgentHandlers } from "./system-agent.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -107,6 +109,175 @@ describe("openclaw.setup provider resolution", () => {
   afterEach(() => {
     vi.resetAllMocks();
     resetCommandQueueStateForTest();
+  });
+
+  it.each([
+    [
+      "openclaw.setup.activate.start",
+      { sessionId: "retained-session", kind: "codex-cli", modelRef: "example/model" },
+    ],
+    ["openclaw.setup.auth.start", { sessionId: "retained-session", authChoice: "github-copilot" }],
+    ["openclaw.setup.prepare.start", { sessionId: "retained-session", authChoice: "ollama" }],
+  ] as const)("does not replace a retained wizard session through %s", async (method, params) => {
+    const { wizardSessions, context } = makeContext();
+    const retained = new WizardSession(async () => {});
+    wizardSessions.set(params.sessionId, retained);
+    await retained.whenSettled();
+    const { calls, respond } = makeRespond();
+
+    await systemAgentHandler(method)({ params, respond, context } as never);
+
+    expect(calls).toEqual([
+      {
+        ok: false,
+        payload: undefined,
+        error: expect.objectContaining({ message: "wizard session already exists" }),
+      },
+    ]);
+    expect(wizardSessions.get(params.sessionId)).toBe(retained);
+    expect(setupInferenceMocks.activateSetupInference).not.toHaveBeenCalled();
+    expect(providerAuthChoiceMocks.applyAuthChoiceLoadedPluginProvider).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false, "true", "cancel"])(
+    "keeps runtime capability consent server-owned through activation (%s)",
+    async (answer) => {
+      const { wizardSessions, context } = makeContext();
+      const sessionId = "runtime-consent";
+      const commit = vi.fn();
+      const review = buildPluginCapabilityConsentReview({
+        pluginId: "test-runtime",
+        manifest: { name: "Test runtime" },
+        config: {},
+        record: { source: "npm", spec: "@example/runtime@1.0.0", integrity: "sha512-fixture" },
+      });
+      setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
+        const acknowledgment = await createPluginCapabilityConsentPrompter(params.prompter, () =>
+          params.signal.throwIfAborted(),
+        )(review);
+        if (!acknowledgment) {
+          return { ok: false, status: "unavailable", error: "Capabilities were not accepted." };
+        }
+        expect(acknowledgment.reviewToken).toBe(review.reviewToken);
+        commit();
+        return {
+          ok: true,
+          modelRef: "example/model",
+          latencyMs: 1,
+          lines: [],
+          gatewayRestartRequired: true,
+        };
+      });
+      const { calls, respond } = makeRespond();
+      await systemAgentHandler("openclaw.setup.activate.start")({
+        params: { sessionId, kind: "codex-cli", modelRef: "example/model" },
+        respond,
+        context,
+      } as never);
+      expect(calls[0]).toMatchObject({
+        ok: true,
+        payload: { sessionId, done: false, status: "running" },
+      });
+      const session = expectDefined(wizardSessions.get(sessionId), "activation wizard session");
+      const note = await callWizardNext(context, { sessionId });
+      expect(note.step).toMatchObject({ type: "note", title: "Plugin capabilities" });
+      expect(JSON.stringify(note)).not.toContain(review.reviewToken);
+      const confirmation = await callWizardNext(context, {
+        sessionId,
+        answer: { stepId: expectDefined(note.step, "capability review").id },
+      });
+      expect(confirmation.step).toMatchObject({ type: "confirm", initialValue: false });
+      expect(commit).not.toHaveBeenCalled();
+      if (answer === "cancel") {
+        await expectDefined(
+          wizardHandlers["wizard.cancel"],
+          "wizard cancel",
+        )({
+          params: { sessionId },
+          respond: () => undefined,
+          context,
+        } as never);
+        await whenAdmittedWizardSessionSettled(session);
+      } else {
+        const done = await callWizardNext(context, {
+          sessionId,
+          answer: {
+            stepId: expectDefined(confirmation.step, "capability decision").id,
+            value: answer,
+          },
+        });
+        expect(done).toMatchObject(
+          answer === true
+            ? {
+                done: true,
+                status: "done",
+                modelActivation: { modelRef: "example/model", gatewayRestartRequired: true },
+              }
+            : { done: true, status: "cancelled" },
+        );
+        if (answer !== true) {
+          expect(done).not.toHaveProperty("modelActivation");
+        }
+      }
+      expect(commit).toHaveBeenCalledTimes(answer === true ? 1 : 0);
+      expect(wizardSessions.has(sessionId)).toBe(false);
+    },
+  );
+
+  it("locks cancellation before an accepted runtime install can start", async () => {
+    const { wizardSessions, context } = makeContext();
+    const sessionId = "runtime-install-lock";
+    let reportLocked = () => {};
+    const locked = new Promise<void>((resolve) => {
+      reportLocked = resolve;
+    });
+    let releaseInstall = () => {};
+    const installReleased = new Promise<void>((resolve) => {
+      releaseInstall = resolve;
+    });
+    setupInferenceMocks.activateSetupInference.mockImplementationOnce(async (params) => {
+      const accepted = await params.prompter.confirm({
+        message: "Install the reviewed runtime?",
+        initialValue: false,
+      });
+      expect(accepted).toBe(true);
+      await params.beforePersistentEffect?.();
+      reportLocked();
+      await installReleased;
+      return { ok: true, modelRef: "example/model", latencyMs: 1, lines: [] };
+    });
+    await systemAgentHandler("openclaw.setup.activate.start")({
+      params: { sessionId, kind: "codex-cli", modelRef: "example/model" },
+      respond: () => undefined,
+      context,
+    } as never);
+    const confirmation = await callWizardNext(context, { sessionId });
+    const terminal = callWizardNext(context, {
+      sessionId,
+      answer: {
+        stepId: expectDefined(confirmation.step, "runtime install confirmation").id,
+        value: true,
+      },
+    });
+    await locked;
+
+    const { calls, respond } = makeRespond();
+    await expectDefined(
+      wizardHandlers["wizard.cancel"],
+      "wizard cancel",
+    )({
+      params: { sessionId },
+      respond,
+      context,
+    } as never);
+    expect(calls).toEqual([
+      { ok: true, payload: { status: "running", error: undefined }, error: undefined },
+    ]);
+    expect(wizardSessions.has(sessionId)).toBe(true);
+
+    releaseInstall();
+    await expect(terminal).resolves.toMatchObject({ done: true, status: "done" });
+    expect(wizardSessions.has(sessionId)).toBe(false);
   });
 
   it.each([

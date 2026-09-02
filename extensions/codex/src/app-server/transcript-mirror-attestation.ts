@@ -64,6 +64,11 @@ export function attachCodexMirrorRunId<T extends AgentMessage>(
   } as T; // SAFETY: AgentMessage variants permit provider metadata at runtime; preserve T.
 }
 
+export function hasCodexMirrorOrigin(message: AgentMessage): boolean {
+  const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
+  return asOptionalRecord(meta)?.[MIRROR_ORIGIN_META_KEY] === CODEX_APP_SERVER_MIRROR_ORIGIN;
+}
+
 export function readCodexMirrorSourceFingerprint(message: AgentMessage): string | undefined {
   const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {

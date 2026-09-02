@@ -30,6 +30,31 @@ it("keeps exactly one byte-identical generated CI owner", () => {
   expect(body).toBe(source);
 });
 
+it("binds read-only checkout authentication only to the workflow repository", () => {
+  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
+    permissions: Record<string, string>;
+    jobs: Record<
+      string,
+      { permissions?: Record<string, string>; steps?: { env?: Record<string, string> }[] }
+    >;
+  };
+  let ownedCheckouts = 0;
+  for (const job of Object.values(workflow.jobs)) {
+    for (const step of job.steps ?? []) {
+      if (!step.env?.CHECKOUT_REPO) {
+        continue;
+      }
+      ownedCheckouts++;
+      const sameRepository = step.env.CHECKOUT_REPO === "${{ github.repository }}";
+      expect(step.env.CHECKOUT_TOKEN).toBe(sameRepository ? "${{ github.token }}" : undefined);
+      if (sameRepository) {
+        expect((job.permissions ?? workflow.permissions).contents).toBe("read");
+      }
+    }
+  }
+  expect(ownedCheckouts).toBeGreaterThan(0);
+});
+
 it.each([false, true])("preserves linked Git metadata (reclaim locks=%s)", async (reclaimLocks) => {
   const invocation = reclaimLocks
     ? 'run_git(os.getcwd(), "fetch", "origin", "fixture", reclaim_locks=True)'

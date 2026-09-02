@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 // Covers restart sentinel persistence, summaries, and messages.
 
 const { mockWarn, mockThrowOpen, mockThrowWrite } = vi.hoisted(() => ({
@@ -821,6 +822,73 @@ describe("restart success continuation", () => {
 });
 
 describe("control-plane update restart sentinel", () => {
+  it.each([
+    { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    { serviceRestartSafe: true, version: "1.0.0", service: "failed" },
+    {
+      serviceRestartSafe: true,
+      version: "1.0.0",
+      buildId: "restored-git-build",
+      service: "healthy",
+    },
+    { serviceRestartSafe: false, reason: "state-migration-started" },
+  ] as const)(
+    "preserves recovery through the typed sentinel round trip ($serviceRestartSafe)",
+    async (recovery) => {
+      await withRestartSentinelStateDir(async () => {
+        await writeRestartSentinel(
+          buildUpdateRestartSentinelPayload({
+            result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
+            meta: {},
+          }),
+        );
+        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual(recovery);
+      });
+    },
+  );
+
+  it.each([true, false])(
+    "keeps package rollback diagnostics out of prior-runtime sentinel recovery (%s)",
+    async (packageRollbackVerified) => {
+      const priorUnsafeRecoverySchema = z.strictObject({
+        serviceRestartSafe: z.literal(false),
+        reason: z.enum([
+          "source-rollback-failed",
+          "state-migration-started",
+          "manager-unavailable",
+          "deps-install-failed",
+          "build-failed",
+          "rollback-checkout-dirty",
+          "runtime-verification-failed",
+        ]),
+      });
+      const recovery = {
+        serviceRestartSafe: false as const,
+        reason: "runtime-verification-failed" as const,
+        packageRollbackVerified,
+      };
+      const payload = buildUpdateRestartSentinelPayload({
+        result: { status: "error", mode: "npm", recovery, steps: [], durationMs: 1 },
+        meta: {},
+      });
+
+      expect(recovery.packageRollbackVerified).toBe(packageRollbackVerified);
+      expect(payload.stats?.recovery).toEqual({
+        serviceRestartSafe: false,
+        reason: "runtime-verification-failed",
+      });
+      expect(priorUnsafeRecoverySchema.safeParse(payload.stats?.recovery).success).toBe(true);
+
+      await withRestartSentinelStateDir(async () => {
+        await writeRestartSentinel(payload);
+        expect((await readRestartSentinel())?.payload.stats?.recovery).toEqual({
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+        });
+      });
+    },
+  );
+
   it("reports a successful same-revision Git run as already current", () => {
     const payload = buildUpdateRestartSentinelPayload({
       result: {

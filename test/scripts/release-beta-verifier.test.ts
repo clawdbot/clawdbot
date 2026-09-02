@@ -3,6 +3,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { crc32 } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -40,17 +41,6 @@ function captureCommandError(run: () => unknown): CommandError {
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }
 
 function createStoredZip(files: Array<{ name: string; bytes: Buffer }>): Buffer {
@@ -368,7 +358,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
 describe("validateClawHubBootstrapEvidence", () => {
   const clawhubToolchainIntegrity =
     "sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ==";
-  const clawhubToolchainSha256 = "9606849698f041afdd2c2600633320f6b7c1e5136d06b98ce16c169c055c0f83";
+  const clawhubToolchainSha256 = "adc9d3613a752dfe00597a8826f45fab82e7651478d16ba1bf5354369157fee9";
   const clawhubToolchainVersion = "0.23.3";
   const releaseSha = "a".repeat(40);
   const workflowSha = "b".repeat(40);

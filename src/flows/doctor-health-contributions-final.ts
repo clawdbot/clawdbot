@@ -390,7 +390,11 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectDevicePairingHealthFindings } =
             await import("../commands/doctor-device-pairing.js");
-          return collectDevicePairingHealthFindings({ cfg: ctx.cfg, healthOk: false });
+          return collectDevicePairingHealthFindings({
+            cfg: ctx.cfg,
+            healthOk: false,
+            env: ctx.env,
+          });
         },
       },
       run: runDevicePairingHealth,

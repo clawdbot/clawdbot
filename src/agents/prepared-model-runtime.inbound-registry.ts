@@ -1,6 +1,4 @@
-import { isMainThread } from "node:worker_threads";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   listRuntimePluginIdsFromRegistry,
   registryMatchesManifestPluginIds,
@@ -13,10 +11,6 @@ import {
   getActivePluginRegistryWorkspaceDir,
   getActivePluginRuntimeSubagentMode,
 } from "../plugins/runtime.js";
-import {
-  logModelCatalogPluginScope,
-  resolveModelCatalogPluginScope,
-} from "./prepared-model-catalog-plugin-scope.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import type {
   PreparedModelRuntimeInput,
@@ -29,37 +23,10 @@ type PreparedInboundRegistryInput = Pick<
   "config" | "env" | "workspaceDir" | "allowGatewaySubagentBinding"
 >;
 
-const workerScopeLog = createSubsystemLogger("agents/prepared-model-runtime.worker-scope");
-
-/**
- * Scope an off-main-thread registry load to model-contributing plugins (openclaw-crb2).
- *
- * Returns `{}` on the main thread so the gateway keeps its existing behaviour exactly, and
- * `{}` again if anything about resolving the scope throws — a scope bug must not become a
- * catalog outage. Both fallbacks restore "load everything", which is slow but correct.
- */
-function resolveWorkerModelCatalogBasePluginIds(
-  metadataSnapshot: PluginMetadataSnapshot,
-): { basePluginIds: string[] } | Record<string, never> {
-  if (isMainThread) {
-    return {};
-  }
-  try {
-    const scope = resolveModelCatalogPluginScope(metadataSnapshot);
-    logModelCatalogPluginScope(scope);
-    return { basePluginIds: scope.pluginIds };
-  } catch (error) {
-    workerScopeLog.warn(
-      `failed to resolve the model-catalog plugin scope; falling back to loading every plugin ` +
-        `(openclaw-crb2): ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return {};
-  }
-}
-
 export type PreparedInboundRegistryLoader = (
   input: PreparedInboundRegistryInput,
   metadataSnapshot: PluginMetadataSnapshot,
+  configuredHarnessRuntimes?: readonly string[],
 ) => PluginRegistry;
 
 function inboundRegistryIdentity(input: PreparedInboundRegistryInput): string {
@@ -93,6 +60,7 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
 export function loadPreparedInboundPluginRegistry(
   input: PreparedInboundRegistryInput,
   metadataSnapshot = prepareOwnedPluginLoadContext(input, input.env ?? process.env, undefined),
+  configuredHarnessRuntimes?: readonly string[],
 ): PluginRegistry {
   const activeRegistry = getActivePluginRegistry();
   // Identity is the generation authority. Manifest equivalence alone could let a
@@ -124,6 +92,7 @@ export function loadPreparedInboundPluginRegistry(
       ...(input.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
       metadataSnapshot,
       preferBuiltPluginArtifacts: true,
+      configuredHarnessRuntimes,
     });
   prepareOwnedPluginLoadContext(input, input.env ?? process.env, registry, metadataSnapshot, true);
   return registry;
@@ -135,13 +104,17 @@ export function createPreparedInboundRegistryLoader(): PreparedInboundRegistryLo
     string,
     { metadataSnapshot: PluginMetadataSnapshot; registry: PluginRegistry }
   >();
-  return (input, metadataSnapshot) => {
+  return (input, metadataSnapshot, configuredHarnessRuntimes) => {
     const key = inboundRegistryIdentity(input);
     const existing = registries.get(key);
     if (existing?.metadataSnapshot === metadataSnapshot) {
       return existing.registry;
     }
-    const registry = loadPreparedInboundPluginRegistry(input, metadataSnapshot);
+    const registry = loadPreparedInboundPluginRegistry(
+      input,
+      metadataSnapshot,
+      configuredHarnessRuntimes,
+    );
     registries.set(key, { metadataSnapshot, registry });
     return registry;
   };
@@ -154,6 +127,8 @@ export function prepareWorkspacePluginRegistries(
   loadInboundRegistry?: PreparedInboundRegistryLoader,
   preferBuiltPluginArtifacts = false,
   reusableGeneration?: PreparedModelRuntimePluginGeneration,
+  getConfiguredHarnessRuntimes?: () => readonly string[],
+  basePluginIds?: readonly string[],
 ): {
   runtimePluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
@@ -163,9 +138,11 @@ export function prepareWorkspacePluginRegistries(
   if (input.readOnly && !input.loadRuntimePlugins && !input.runtimePluginSelections) {
     return {};
   }
+  // Resolve batch facts only for a registry load; read-only and reused registries need no scan.
   const inboundPluginRegistry = input.readOnly
     ? undefined
-    : (reusableGeneration?.inboundPluginRegistry ?? loadInboundRegistry?.(input, metadataSnapshot));
+    : (reusableGeneration?.inboundPluginRegistry ??
+      loadInboundRegistry?.(input, metadataSnapshot, getConfiguredHarnessRuntimes?.()));
   const baseRegistry = reusableGeneration?.pluginRegistry ?? inboundPluginRegistry;
   const runtimePluginRegistry =
     input.runtimePluginSelections || !baseRegistry
@@ -174,17 +151,9 @@ export function prepareWorkspacePluginRegistries(
             ? { basePluginIds: [] }
             : baseRegistry
               ? { basePluginIds: listRuntimePluginIdsFromRegistry(baseRegistry) }
-              : // openclaw-crb2. This bare fallthrough is the defect: with no request scope
-                // and no base registry, resolveAgentRuntimePluginRegistryLoad falls back
-                // to metadataSnapshot.pluginIds — EVERY installed plugin. On the gateway's
-                // main thread that is merely slow. Off the main thread it is dangerous: the
-                // prepared-model-catalog worker spent 44.6s importing 55 plugins with real
-                // side effects, and terminating it mid-import aborts the whole process.
-                //
-                // Gated on !isMainThread rather than on catalogMode deliberately — that is
-                // the exact condition under which the crash occurs, and it means the
-                // gateway's own main-thread behaviour is bit-for-bit unchanged.
-                resolveWorkerModelCatalogBasePluginIds(metadataSnapshot)),
+              : basePluginIds !== undefined
+                ? { basePluginIds }
+                : {}),
           ...(reusableGeneration?.pluginRegistry
             ? { reusableRegistry: reusableGeneration.pluginRegistry }
             : {}),
@@ -195,6 +164,7 @@ export function prepareWorkspacePluginRegistries(
           metadataSnapshot,
           ...(preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
           selections: input.runtimePluginSelections,
+          configuredHarnessRuntimes: getConfiguredHarnessRuntimes?.(),
         })
       : baseRegistry;
   return {

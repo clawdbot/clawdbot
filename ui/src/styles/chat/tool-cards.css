@@ -325,19 +325,7 @@
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
-    animation: chatToolRowTextWave 2.2s ease-in-out infinite;
-  }
-}
-
-/* Gradient is 2x element width with identical end stops, so one full period
-   per cycle wraps seamlessly and the band sweeps left to right. */
-@keyframes chatToolRowTextWave {
-  0% {
-    background-position: 100% 0;
-  }
-
-  100% {
-    background-position: -100% 0;
+    animation: text-shimmer 2.2s ease-in-out infinite;
   }
 }
 

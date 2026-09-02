@@ -1,15 +1,21 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { discoverModels } from "./agent-model-discovery.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  setPreparedModelFullCatalogAuth,
+} from "./prepared-model-runtime-auth.js";
 import type {
   PreparedModelRuntimeAgentFacts,
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { materializeRuntimeCapabilities } from "./prepared-model-runtime.configured-catalog.js";
-import { toStaticCatalogEntry } from "./prepared-model-runtime.configured.js";
+import { modelCatalogEntryKey } from "./prepared-model-runtime.configured-catalog.js";
+import {
+  toStaticCatalogEntry,
+  type PreparedRuntimeCapabilityModel,
+} from "./prepared-model-runtime.configured.js";
 import { buildPreparedPluginModelCatalog } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -18,7 +24,7 @@ import type {
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
-/** Builds the complete prepared catalog, including concrete runtime capabilities. */
+/** Builds complete inventory before generation-specific runtime capability projection. */
 export async function prepareFullCatalogFacts(
   agentFacts: PreparedModelRuntimeAgentFacts,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
@@ -40,23 +46,12 @@ export async function prepareFullCatalogFacts(
         }
       : {}),
   });
-  const discoveredCatalog = await buildPreparedPluginModelCatalog({
+  const modelCatalog = await buildPreparedPluginModelCatalog({
     agentFacts,
     catalogMode,
     modelRegistry: templateModelRegistry,
     pluginGeneration,
   });
-  const modelCatalog = {
-    ...discoveredCatalog,
-    entries: materializeRuntimeCapabilities(
-      discoveredCatalog.entries,
-      agentFacts.runtimeCapabilityModels,
-    ),
-    routeVariants: materializeRuntimeCapabilities(
-      discoveredCatalog.routeVariants,
-      agentFacts.runtimeCapabilityModels,
-    ),
-  };
   const providerStaticModels =
     pluginGeneration.providerStaticModels ??
     (await loadBundledProviderStaticCatalogContextModels({
@@ -66,24 +61,14 @@ export async function prepareFullCatalogFacts(
       ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
       ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     }));
-  const staticModels = new Map<string, ProviderRuntimeModel>();
-  for (const model of [
+  const staticModels = [
     ...agentFacts.configuredRuntimeModels.map((configured) => configured.model),
     ...providerStaticModels,
-  ]) {
-    const modelKey = `${normalizeProviderId(model.provider)}\0${model.id.trim().toLowerCase()}`;
-    if (!staticModels.has(modelKey)) {
-      staticModels.set(modelKey, model);
-    }
-  }
-  const staticEntries = materializeRuntimeCapabilities(
-    [...staticModels.values()].map(toStaticCatalogEntry),
-    agentFacts.runtimeCapabilityModels,
-  );
+  ];
   const providerOutcomes = catalogSource?.providerOutcomes ?? [];
   const completeModelCatalog = {
     ...modelCatalog,
-    staticEntries,
+    staticEntries: dedupeByKey(staticModels, modelCatalogEntryKey).map(toStaticCatalogEntry),
     ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
   };
   if (catalogMode === "live") {
@@ -95,6 +80,57 @@ export async function prepareFullCatalogFacts(
     configuredRuntimeModels: agentFacts.configuredRuntimeModels,
     inlineProviderModels: pluginGeneration.inlineProviderModels,
   };
+}
+
+/** Reprojects retained inventory without carrying capabilities from a retired runtime. */
+export function materializePreparedModelCatalog(
+  snapshot: ModelCatalogSnapshot,
+  runtimeCapabilityModels: readonly PreparedRuntimeCapabilityModel[],
+): ModelCatalogSnapshot {
+  // Preserve inventory reads before capability preparation when the snapshot has accessors.
+  const materialized = { ...snapshot };
+  const sourceEntries = snapshot.entries;
+  const runtimeByKey = new Map(
+    runtimeCapabilityModels.map(({ provider, modelId, model }) => [
+      modelCatalogEntryKey({ provider, id: modelId }),
+      toStaticCatalogEntry(model),
+    ]),
+  );
+  const project = (entries: ModelCatalogSnapshot["entries"]) =>
+    entries.map((entry) => {
+      const runtime = runtimeByKey.get(modelCatalogEntryKey(entry));
+      if (!runtime) {
+        return entry;
+      }
+      const thinkingPolicyProvider = runtime.provider;
+      if (entry.configuredReasoning !== undefined) {
+        return { ...entry, thinkingPolicyProvider };
+      }
+      const params =
+        runtime.params || entry.params ? { ...runtime.params, ...entry.params } : undefined;
+      const compat =
+        runtime.compat || entry.compat ? { ...runtime.compat, ...entry.compat } : undefined;
+      return {
+        ...entry,
+        thinkingPolicyProvider,
+        ...(runtime.reasoning !== undefined ? { reasoning: runtime.reasoning } : {}),
+        ...(params ? { params } : {}),
+        ...(compat ? { compat } : {}),
+      };
+    });
+  materialized.entries = project(sourceEntries);
+  materialized.routeVariants = project(snapshot.routeVariants);
+  if (snapshot.staticEntries) {
+    materialized.staticEntries = project(snapshot.staticEntries);
+  }
+  if (isPreparedModelCatalogFull(snapshot)) {
+    markPreparedModelCatalogFull(materialized);
+  }
+  const auth = getPreparedModelFullCatalogAuth(snapshot);
+  if (auth) {
+    setPreparedModelFullCatalogAuth(materialized, auth);
+  }
+  return materialized;
 }
 
 /** Reports whether a catalog came from the complete prepared-catalog build path. */

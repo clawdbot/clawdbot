@@ -232,6 +232,9 @@ func runCodexExecPrompt(ctx context.Context, req codexPromptRequest) (string, er
 		"--model", req.Model,
 		"-c", fmt.Sprintf("model_reasoning_effort=%q", normalizeThinking(req.Thinking)),
 		"-c", `service_tier="fast"`,
+		// Translation rules are developer instructions, not repo-guided user prose.
+		"-c", fmt.Sprintf("developer_instructions=%q", req.SystemPrompt),
+		"-c", "project_doc_max_bytes=0",
 		"--sandbox", "read-only",
 		"--ignore-rules",
 		"--skip-git-repo-check",
@@ -240,7 +243,7 @@ func runCodexExecPrompt(ctx context.Context, req codexPromptRequest) (string, er
 	}
 	command := exec.CommandContext(ctx, docsCodexExecutable(), args...)
 	configureCodexPromptCommand(command)
-	command.Stdin = strings.NewReader(buildCodexTranslationPrompt(req.SystemPrompt, req.Message))
+	command.Stdin = strings.NewReader(buildCodexTranslationPrompt(req.Message))
 	command.Env = append(os.Environ(), "CODEX_HOME="+codexHome)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -306,9 +309,8 @@ func docsCodexExecutable() string {
 	return "codex"
 }
 
-func buildCodexTranslationPrompt(systemPrompt, message string) string {
-	return strings.TrimSpace(systemPrompt) + "\n\n" +
-		"Translate the exact input below. Return only the translated text, with no tool calls, reasoning, or commentary. Do not wrap the response in an additional code fence; preserve every code fence already present in the input exactly.\n\n" +
+func buildCodexTranslationPrompt(message string) string {
+	return "Translate the exact input below. Return only the translated text, with no tool calls, reasoning, or commentary. Do not wrap the response in an additional code fence; preserve every code fence already present in the input exactly.\n\n" +
 		"<openclaw_docs_i18n_input>\n" +
 		message +
 		"\n</openclaw_docs_i18n_input>\n"

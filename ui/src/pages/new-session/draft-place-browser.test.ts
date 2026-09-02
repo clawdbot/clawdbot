@@ -20,7 +20,7 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
   vi.spyOn(host, "addController").mockImplementation((controller) => controllers.push(controller));
   const client = { request, recoveryScope: "principal-a", recoveryScopeReady: true };
   const hello = {
-    auth: { role: "operator", scopes: ["operator.read"] },
+    auth: { recoveryScope: client.recoveryScope, role: "operator", scopes: ["operator.read"] },
     features: { methods: ["projects.list"] },
   };
   const context = {

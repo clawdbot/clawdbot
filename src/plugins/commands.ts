@@ -7,8 +7,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginCommands, registerPluginCommand } from "./command-registration.js";
 import {
   listRegisteredPluginAgentPromptGuidance,
-  pluginCommands,
-  resolveCompatibilityPluginCommandRegistry,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
 import {
@@ -17,6 +15,7 @@ import {
 } from "./plugin-command-execution.js";
 import { matchRegisteredPluginCommand } from "./plugin-command-matcher.js";
 import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
+import { requireActivePluginRegistry } from "./runtime.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
 export { clearPluginCommands, listRegisteredPluginAgentPromptGuidance, registerPluginCommand };
@@ -26,7 +25,7 @@ export function matchPluginCommand(
   commandBody: string,
   options: { channel?: string } = {},
 ): { command: RegisteredPluginCommand; args?: string } | null {
-  const registry = resolveCompatibilityPluginCommandRegistry();
+  const registry = requireActivePluginRegistry();
   return matchRegisteredPluginCommand({
     commands: listRegisteredPluginCommands(registry),
     commandBody,
@@ -67,7 +66,7 @@ export function executePluginCommand(params: {
 export async function executePluginCommand(
   params: PluginCommandExecutionParams,
 ): Promise<PluginCommandResult> {
-  return await executeRegisteredPluginCommand(resolveCompatibilityPluginCommandRegistry(), params);
+  return await executeRegisteredPluginCommand(requireActivePluginRegistry(), params);
 }
 
 /** List registered plugin commands for help and command discovery. */
@@ -77,7 +76,7 @@ export function listPluginCommands(): Array<{
   pluginId: string;
   acceptsArgs: boolean;
 }> {
-  return Array.from(pluginCommands.values()).map((command) => ({
+  return listRegisteredPluginCommands(requireActivePluginRegistry()).map((command) => ({
     name: command.name,
     description: command.description,
     pluginId: command.pluginId,

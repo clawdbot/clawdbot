@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -625,6 +626,29 @@ describe("installed plugin index", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    { channelEnabled: false, expected: false },
+    { channelEnabled: true, expected: true },
+  ])(
+    "resolves channels.<id>.enabled=$channelEnabled through the record's channel ids when they differ from the plugin id",
+    ({ channelEnabled, expected }) => {
+      // The rich fixture's plugin id is `demo` while it owns `channels.demo-chat`.
+      const fixture = createRichPluginFixture({ id: "demo" });
+      const index = loadInstalledPluginIndex({
+        candidates: [fixture.candidate],
+        config: {},
+        env: hermeticEnv(),
+      });
+
+      expect(
+        isInstalledPluginEnabled(index, "demo", {
+          channels: { "demo-chat": { enabled: channelEnabled } },
+          plugins: { entries: { demo: { enabled: true } } },
+        } as OpenClawConfig),
+      ).toBe(expected);
+    },
+  );
 
   it("records explicit install records separately from package install intent", () => {
     const fixture = createRichPluginFixture({ installOwner: "demo" });

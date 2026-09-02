@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { containerRpcRequest } from "./client-container.js";
+import { containerCheck, containerRpcRequest } from "./client-container.js";
 
 type StartedServer = { baseUrl: string; close: () => Promise<void> };
 
@@ -41,6 +41,35 @@ async function startServer(handler: http.RequestListener): Promise<StartedServer
 }
 
 describe("signal REST real-server deadline", () => {
+  it.each([{ bytes: [0xff] }, { bytes: [0xc3] }])(
+    "rejects malformed UTF-8 bytes $bytes before JSON parsing",
+    async ({ bytes }) => {
+      const server = await startServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          Buffer.concat([Buffer.from('{"versions":["'), Buffer.from(bytes), Buffer.from('"]}')]),
+        );
+      });
+
+      await expect(
+        containerRpcRequest("version", undefined, { baseUrl: server.baseUrl }),
+      ).rejects.toBeInstanceOf(TypeError);
+    },
+  );
+
+  it("uses only the status when the unused health response is malformed UTF-8", async () => {
+    const server = await startServer((_req, res) => {
+      res.writeHead(200);
+      res.end(Buffer.from([0xff]));
+    });
+
+    await expect(containerCheck(server.baseUrl)).resolves.toEqual({
+      ok: true,
+      status: 200,
+      error: null,
+    });
+  });
+
   it("aborts a slow-drip body that never idles, at the request deadline", async () => {
     // Drip a byte every 50ms: below the 300ms idle guard, so only the total request
     // deadline can stop it. This is the exact slow-drip case the fix bounds.

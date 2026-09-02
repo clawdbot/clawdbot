@@ -1,17 +1,9 @@
 // Plugin-provided node.invoke policy adapter.
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
-import { sanitizeApprovalScope } from "../infra/approval-scope.js";
-import {
-  sanitizeExecApprovalDisplayText,
-  sanitizeExecApprovalWarningText,
-} from "../infra/exec-approval-text-sanitize.js";
-import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
-import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -22,24 +14,18 @@ import type {
 } from "../plugins/types.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
+import {
+  consumeNodeInvokePlacementGrant,
+  type NodeInvokePlacementGrantAuthorization,
+} from "./node-invoke-placement-grant.js";
+import { createPluginNodeInvokeApprovalRuntime } from "./node-invoke-plugin-approval.js";
 import { invokeNodeWithReadinessRetry } from "./node-invoke-readiness.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
-import { runApprovalRequestDeliveries } from "./server-methods/approval-request-delivery.js";
-import {
-  bindApprovalRequesterMetadata,
-  buildRequestedApprovalEvent,
-  handlePendingApprovalRequest,
-} from "./server-methods/approval-shared.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
 // Plugin node.invoke policies are the last gateway-side guard before a
 // plugin-declared dangerous node command reaches the node transport.
-function sanitizeOptionalMeta(value?: string | null): string | null {
-  const normalized = normalizeOptionalString(value);
-  return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
-}
-
 function parseScopes(client: GatewayClient | null): string[] {
   return Array.isArray(client?.connect?.scopes)
     ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
@@ -55,34 +41,6 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   } catch {
     return payload;
   }
-}
-
-function normalizeRouteThreadId(value: unknown): string | number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return normalizeOptionalString(value) ?? null;
-}
-
-function resolveNodeInvokeTurnSourceFields(
-  turnSource:
-    | {
-        channel?: unknown;
-        to?: unknown;
-        accountId?: unknown;
-        threadId?: unknown;
-      }
-    | undefined,
-): Pick<
-  PluginApprovalRequestPayload,
-  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
-> {
-  return {
-    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
-    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
-    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
-    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
-  };
 }
 
 // Dangerous commands must have an explicit policy. Without this check, a plugin
@@ -114,143 +72,12 @@ function validateRiskClassification(
   return { level: value.level, family };
 }
 
-function createApprovalRuntime(params: {
-  context: GatewayRequestContext;
-  client: GatewayClient | null;
-  pluginId: string;
-  turnSource: Parameters<typeof resolveNodeInvokeTurnSourceFields>[0];
-  callerIdentity?: AgentRuntimeIdentity;
-  isCurrent: () => boolean;
-}): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
-  const manager = params.context.pluginApprovalManager;
-  if (!manager) {
-    return undefined;
-  }
-  return {
-    async request(input) {
-      const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
-      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
-      const callerIdentity = params.callerIdentity;
-      const invocationSessionKey =
-        params.client?.internal?.pluginRuntimeOwnerId === params.pluginId
-          ? params.client.internal.nodeInvokeApprovalSessionKey
-          : undefined;
-      if (!params.isCurrent()) {
-        throw new Error("agent runtime approval authority is no longer active");
-      }
-      const request: PluginApprovalRequestPayload = {
-        pluginId: params.pluginId,
-        // Same creation-boundary sanitize as the RPC ingress: this record
-        // feeds the identical broadcast/forwarder/push paths. Normalize first
-        // so a whitespace-only title still fails closed at register (escaping
-        // the whitespace would make an unrenderable prompt look renderable).
-        title: truncateUtf16Safe(
-          sanitizeExecApprovalDisplayText(normalizeOptionalString(input.title) ?? ""),
-          80,
-        ),
-        description: truncateUtf16Safe(
-          sanitizeExecApprovalWarningText(normalizeOptionalString(input.description) ?? ""),
-          256,
-        ),
-        scope: input.scope ? sanitizeApprovalScope(input.scope) : null,
-        severity: input.severity ?? "warning",
-        ...(input.allowedDecisions === undefined
-          ? {}
-          : {
-              allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
-                allowedDecisions: input.allowedDecisions,
-              }),
-            }),
-        // toolName/agentId are interpolated into channel approval text; only
-        // host-minted runtime identity values skip the display escape.
-        toolName: sanitizeOptionalMeta(input.toolName),
-        toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
-        agentId: callerIdentity?.agentId ?? sanitizeOptionalMeta(input.agentId),
-        sessionKey:
-          callerIdentity?.sessionKey ??
-          invocationSessionKey ??
-          normalizeOptionalString(input.sessionKey) ??
-          null,
-        runId: callerIdentity?.operationalRunInstance.runId ?? null,
-        turnSourceChannel: turnSource.turnSourceChannel,
-        turnSourceTo: turnSource.turnSourceTo,
-        turnSourceAccountId: turnSource.turnSourceAccountId,
-        turnSourceThreadId: turnSource.turnSourceThreadId,
-      };
-      const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
-      if (callerIdentity) {
-        record.agentRuntimeDelegatedAuthority = callerIdentity.delegatedAuthority;
-        if (callerIdentity.executionIdentity) {
-          record.executionIdentityToken = callerIdentity.executionIdentity;
-        }
-      }
-      bindApprovalRequesterMetadata({ record, client: params.client });
-      const respond: RespondFn = () => {};
-      // Register directly: persistence and presentation-validation failures
-      // must throw so the plugin policy fails closed before any request
-      // routing. The RPC storage-unavailable respond path does not apply to
-      // this runtime-internal caller.
-      const decisionPromise = manager.register(record, timeoutMs);
-      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
-      const forwardRequest = params.context.forwardPluginApprovalRequest;
-      const iosPushRequest = params.context.pluginApprovalIosPushDelivery?.handleRequested?.bind(
-        params.context.pluginApprovalIosPushDelivery,
-      );
-      await handlePendingApprovalRequest({
-        manager,
-        record,
-        decisionPromise,
-        respond,
-        context: params.context,
-        // The carried connection is turn/invoke provenance, never this
-        // approval's presenter: policy approvals are minted here, not requested
-        // by the client, so the connection stays eligible as a reviewer. A
-        // sole-reviewer operator would otherwise be excluded from delivery and
-        // the request auto-denied as no-route.
-        requestEventName: "plugin.approval.requested",
-        requestEvent,
-        twoPhase: false,
-        approvalKind: "plugin",
-        deliverRequest: () =>
-          runApprovalRequestDeliveries({
-            context: params.context,
-            record,
-            forward: forwardRequest
-              ? [
-                  () => forwardRequest(requestEvent),
-                  "plugin approvals: forward node policy request failed",
-                ]
-              : undefined,
-            iosPush: iosPushRequest
-              ? [
-                  (isTargetVisible) => iosPushRequest(requestEvent, { isTargetVisible }),
-                  "plugin approvals: iOS push node policy request failed",
-                ]
-              : undefined,
-          }),
-        afterDecision: async (decision) => {
-          if (decision === null) {
-            await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
-          }
-        },
-        afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
-      });
-      let decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
-      if (!params.isCurrent()) {
-        return { id: record.id, decision: null };
-      }
-      // This return hands execution authority to the plugin policy. Claim a
-      // one-shot decision here so observation or retry cannot replay it.
-      if (
-        decision === "allow-once" &&
-        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
-      ) {
-        return { id: record.id, decision: null };
-      }
-      decision = manager.projectDecisionIfActive(record.id, decision);
-      return { id: record.id, decision };
-    },
-  };
+function resolveStandingApprovalScope(value: unknown): string | undefined {
+  const approval = asOptionalRecord(value);
+  const scope = normalizeOptionalString(approval?.scope);
+  return approval?.kind === "placement" && scope && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(scope)
+    ? scope
+    : undefined;
 }
 
 /** Host-owned dispatch binding; private endpoints supply a separately probed capability declaration. */
@@ -387,9 +214,11 @@ export async function applyPluginNodeInvokePolicy(params: {
       };
     }
   }
+  const approvalScope = resolveStandingApprovalScope(entry.policy.standingApproval);
 
   let nodeCommandDispatched = false;
   let nodeGateDecisionRecorded = false;
+  const standingGrantAuthorization: NodeInvokePlacementGrantAuthorization = {};
   const pluginRecord = registry?.plugins.find((record) => record.id === entry.pluginId);
   const policy = entry.policy;
   const isPluginCurrent = () =>
@@ -564,14 +393,33 @@ export async function applyPluginNodeInvokePolicy(params: {
         } catch {
           return false;
         }
-        return (
+        const current =
           isPluginCurrent() &&
           params.privateTransport?.isCurrent() !== false &&
           (params.nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
           isCallerRuntimeAuthorityActive() &&
           params.isApprovalAuthorityActive?.() !== false &&
-          resolveCommandAuthorization().ok
-        );
+          resolveCommandAuthorization().ok;
+        if (!current) {
+          return false;
+        }
+        const grantOutcome = consumeNodeInvokePlacementGrant({
+          runtime: params.context.placementStandingGrants,
+          authorization: standingGrantAuthorization,
+        });
+        if (grantOutcome === "rejected") {
+          return false;
+        }
+        if (grantOutcome === "consumed") {
+          recordNodeDecision({
+            pluginId: entry.pluginId,
+            outcome: "allowed",
+            coverageState: "enforced",
+            reasonCode: "node_placement_standing_grant_consumed",
+            summary: "A placement-scoped standing grant authorized the node transport dispatch.",
+          });
+        }
+        return true;
       },
       onDispatchReady: (invokeId: string) => {
         // Only the registry knows that the transport send succeeded. Preserve
@@ -688,11 +536,19 @@ export async function applyPluginNodeInvokePolicy(params: {
           }
         : null,
       ...(risk ? { risk } : {}),
-      approvals: createApprovalRuntime({
+      approvals: createPluginNodeInvokeApprovalRuntime({
         context: params.context,
         client: params.client,
         callerIdentity,
         pluginId: entry.pluginId,
+        command: params.command,
+        ...(approvalScope ? { approvalScope } : {}),
+        nodeSession: params.nodeSession,
+        risk,
+        standingGrantAuthorization,
+        ...(scope?.nodePlacementGrantAuthority
+          ? { placementGrantAuthority: scope.nodePlacementGrantAuthority }
+          : {}),
         turnSource: trustedTurnSource,
         isCurrent: () =>
           isPluginCurrent() &&

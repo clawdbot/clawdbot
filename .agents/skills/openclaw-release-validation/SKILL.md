@@ -13,10 +13,64 @@ approved in-place update when the tester prefers less setup. Automate only
 preparation, finding triage, and reporting. Let the human drive OpenClaw and
 judge quality.
 
-For a ready gateway, use one editable Markdown worksheet as the entire run
-record. A blocked upgrade has no worksheet or surface-testing phase; its final
-report draft is the only local record. Do not create `run.json`, mission state,
-receipts, or other tracking files.
+For a ready gateway, use one editable Markdown worksheet as the entire
+candidate-validation record. A blocked upgrade has no worksheet or
+surface-testing phase; its final report draft is the only local candidate
+record. A redacted tooling-feedback packet is the one exception: create it only
+when OCM, setup, build, backup, or cleanup tooling fails, and never treat it as
+candidate feedback. Do not create `run.json`, mission state, receipts, or other
+tracking files.
+
+## Check this skill before an interactive workflow
+
+When `RELEASE_VALIDATION_ARTIFACT_PATH` is present, this is the non-interactive
+**Campaign artifact** workflow. Skip this section entirely: do not make a
+network request or prompt for a skill update.
+
+For **Validate release** and **Update campaign**, before the introduction or
+checklist, resolve this loaded skill's directory from the available skill
+catalog and run:
+
+```sh
+node <skill-directory>/scripts/check-update.mjs
+```
+
+Read its JSON and show one concise status line with the installed ClawHub
+source and version, the current canonical ClawHub version, and the comparison
+status. Do not show local paths. This check is read-only.
+
+When `status` is `update-available` and `localModifications` is `false`, ask:
+
+```text
+A newer canonical release-validation skill is available. Would you like me to
+upgrade it before validation?
+
+Reply exactly `upgrade release-validation skill` or `continue with current skill`.
+```
+
+When `status` is `update-available` and `localModifications` is `true`, say that
+the installed copy has local modifications and ask:
+
+```text
+A newer canonical release-validation skill is available, but this installed
+copy has local modifications. Upgrading will replace those modifications.
+
+Reply exactly `upgrade release-validation skill and replace local modifications`
+or `continue with current skill`.
+```
+
+Wait for the applicable reply. On either approved upgrade reply, run the
+checker's exact `update.command` arguments from `update.cwd`; do not construct a
+different install command. Rerun the checker and require `status: current`.
+Then stop this run and tell the tester to start a fresh task and invoke the
+skill again, because the current task has already loaded the old instructions.
+Never continue release validation in that task after changing the skill.
+
+On `continue with current skill`, continue normally. For `current`, continue
+without asking. For `ahead-of-latest`, `local-modifications`,
+`different-source`, `untracked`, or `check-failed`, report the installed source
+and version plus the status briefly and continue without offering an automated
+update; the checker could not prove that replacing this copy is safe.
 
 ## Start the run
 
@@ -433,8 +487,11 @@ Report every error immediately, including errors recovered by a retry. OpenClaw
 config migration, update, plugin convergence, startup, and readiness failures
 from the selected test target are eligible **Upgrade findings**. Add them to the
 worksheet only when readiness is later verified. OCM tooling, copying, backup
-plumbing, local build setup, and cleanup failures stay conversational and never
-enter the worksheet or GitHub output.
+plumbing, local build setup, and cleanup failures never enter the worksheet,
+candidate finding drafts, campaign report, hidden payload, or Discord summary
+details. On the first such failure, read and apply
+[the tooling-feedback packet procedure](references/tooling-feedback.md). A
+tooling-only blocker is not an Upgrade finding.
 
 As soon as an eligible upgrade finding is concrete, run the related-issue
 investigation from section 6 and queue its private draft. Do this before manual
@@ -444,10 +501,11 @@ Complete this step only when test-target readiness is either verified or blocked
 with a concrete terminal finding. Do not continue to testing while the upgrade
 or gateway readiness is unresolved.
 
-If readiness is **blocked**, this is a terminal upgrade-validation result: mark
-the optional diagnostics, worksheet, and surface-testing checklist items as
-skipped. Do not create, open, mention, or ask the tester to use a worksheet;
-there is no running gateway to test. State plainly:
+If candidate-owned readiness is **blocked**, this is a terminal
+upgrade-validation result: mark the optional diagnostics, worksheet, and
+surface-testing checklist items as skipped. Do not create, open, mention, or
+ask the tester to use a worksheet; there is no running gateway to test. State
+plainly:
 
 ```text
 Upgrade blocked — the selected test gateway never became ready, so manual surface testing cannot begin.
@@ -455,6 +513,10 @@ Reply exactly `finish validation` to prepare a reviewable report of this upgrade
 ```
 
 Then wait for final feedback or `finish validation`.
+
+If tooling blocked preparation before candidate-owned readiness could be
+evaluated, follow the tooling-feedback procedure instead. Do not use the
+Upgrade finding prompt above or prepare candidate feedback.
 
 ## 4. Optional local diagnostics capture
 
@@ -736,10 +798,41 @@ diagnostics-otel --force`. If the fixture is destroyed, remove only its
    rollback or offline state restoration. Remove the run-owned isolated main
    checkout after no build command is using it. Never remove a shared or
    in-use runtime. Remove the run-owned collector in all cases.
-6. Complete or refresh every finding draft using the final sanitized evidence.
+6. When a tooling packet exists or cleanup fails, read and apply
+   [the tooling-feedback packet procedure](references/tooling-feedback.md),
+   including its closeout rules. If no tooling failure occurred, do not create
+   a packet.
+7. A completed candidate evaluation requires a candidate-owned readiness
+   failure or at least one tester-authored surface result. Without either, say
+   `Candidate not evaluated — no tester-authored result`, assign no candidate
+   terminal result, and stop after cleanup without creating a candidate report,
+   posting batch, hidden payload, or Discord summary. Otherwise assign exactly
+   one terminal result using this precedence, and write its
+   exact label to the worksheet when one exists, the tooling packet when one
+   exists, the visible campaign-report draft when one is warranted, and the
+   final Discord summary when one is warranted:
+
+   - **Candidate failed** — the candidate had any functional or readiness
+     failure.
+   - **Candidate passed, but cleanup failed** — candidate readiness and tested
+     behavior passed, but fixture destruction, source restoration, runtime or
+     collector removal, plugin cleanup, or approved rollback did not complete.
+     Record the failure details only in the tooling packet.
+   - **Candidate passed with presentation warnings** — candidate behavior and
+     cleanup passed, but the tester reported at least one non-blocking visual,
+     wording, output-format, or other presentation/polish warning. Keep those
+     warnings in candidate feedback.
+   - **Fully clean completion** — candidate behavior passed, cleanup completed,
+     and the tester reported no candidate warning or problem finding.
+
+   Candidate failure takes precedence over cleanup failure; cleanup failure
+   takes precedence over presentation warnings. Do not use a fifth terminal
+   label or collapse these labels into pass/fail.
+
+8. Complete or refresh every finding draft using the final sanitized evidence.
    For an eligible upgrade finding, run the same related-issue investigation
    now if it was not already done before manual testing.
-7. Synthesize one final campaign-report draft from the stable train, current
+9. Synthesize one final campaign-report draft from the stable train, current
    beta tag and commit, exact tested main SHA, source version/commit, eligible
    upgrade findings, tester feedback, promotion vote, and only surfaces with
    non-empty Testing notes. Link each planned finding draft by its local action
@@ -751,6 +844,7 @@ diagnostics-otel --force`. If the fixture is destroyed, remove only its
    - Release train: <stable train>
    - Current beta: <beta tag> (<beta commit>)
    - Tested main commit: <full SHA>
+   - Terminal result: <exact terminal result label>
 
    ## Test environment
 
@@ -763,23 +857,23 @@ diagnostics-otel --force`. If the fixture is destroyed, remove only its
    Omit any unavailable value; do not add substitute device facts. The profile
    is brief diagnostic context, not an upgrade finding or surface result.
 
-8. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
-   notes, setup details, and cleanup details from the comment. Keep the
-   allow-listed **Test environment** values from the preceding step.
-9. Read and apply the [structured report contract](references/structured-report.md).
-   Write the proposed root report beside the finding drafts. Open the root
-   report plus every **Create issue** and **Comment on existing issue** draft
-   together and say:
+10. Remove local paths, gateway names, secrets, user identifiers, raw logs, OCM
+    notes, setup details, and cleanup details from the comment. Keep the
+    allow-listed **Test environment** values from the preceding step.
+11. Read and apply the [structured report contract](references/structured-report.md).
+    Write the proposed root report beside the finding drafts. Open the root
+    report plus every **Create issue** and **Comment on existing issue** draft
+    together and say:
 
-   ```text
-   I opened every proposed GitHub post for review. Nothing has been sent.
-   Reply exactly `approve validation posts` to publish this batch, or tell me what to change.
-   ```
+    ```text
+    I opened every proposed GitHub post for review. Nothing has been sent.
+    Reply exactly `approve validation posts` to publish this batch, or tell me what to change.
+    ```
 
-   On edits, revise and reopen the same files. Never write to GitHub from
-   `finish validation` alone.
+    On edits, revise and reopen the same files. Never write to GitHub from
+    `finish validation` alone.
 
-10. On `approve validation posts`, re-read and privacy-check every approved
+12. On `approve validation posts`, re-read and privacy-check every approved
     file. Publish each **Create issue** draft with
     `release-validation-finding`, and each corroboration draft to its selected
     open issue. Read every write back. A **Found but fixed** record produces no
@@ -788,20 +882,23 @@ diagnostics-otel --force`. If the fixture is destroyed, remove only its
     update this GitHub user's one campaign report comment. This mechanical URL
     insertion needs no second approval; do not otherwise rewrite approved prose.
     Return the root comment URL and every finding URL.
-11. Give the tester this concise copy-ready Discord summary, populated only from
+13. Give the tester this concise copy-ready Discord summary, populated only from
     the same release-facing worksheet evidence and final comment:
 
     ```md
     **Release validation — <stable-train> / <current-beta>**
     Tested main: <full SHA>
+    Result: <exact terminal result label>
     Tested: <surfaces with non-empty Testing notes, or "No manual surface testing completed">
     Key findings: <concise release findings, or "None reported">
     Recommendation: <yes / no>
     Details: <GitHub comment URL>
     ```
 
-    Keep it to these six lines. Exclude source gateway details, local paths,
-    OCM/setup information, cleanup, credentials, and untested surface guidance.
+    Keep it to these seven lines. Exclude source gateway details, local paths,
+    OCM/setup information, cleanup details, credentials, and untested surface
+    guidance. The generic terminal result may name cleanup failure, but no
+    tooling detail may appear.
     This is a copy/paste handoff for the tester; do not post it automatically.
 
 The skill collects release feedback; it does not make the go/no-go decision.

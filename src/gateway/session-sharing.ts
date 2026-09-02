@@ -71,6 +71,7 @@ const AGENT_RUN_START_METHODS = new Set([
   "sessions.send",
   "sessions.steer",
   "talk.client.create",
+  "talk.client.toolCall",
   "talk.session.create",
   "tools.invoke",
   "wake",

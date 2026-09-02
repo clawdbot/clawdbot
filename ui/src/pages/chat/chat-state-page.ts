@@ -148,7 +148,7 @@ export function createPageState(
     sessions: context.sessions,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
-    initialUserMessage: context.initialUserMessage,
+    chatSubmissions: context.chatSubmissions,
     settings,
     password: "",
     onboarding: false,

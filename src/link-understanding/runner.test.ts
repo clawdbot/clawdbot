@@ -107,12 +107,14 @@ describe("runLinkUnderstanding", () => {
   });
 
   it("fetches links through the SSRF guard before passing content to CLI stdin", async () => {
+    const controller = new AbortController();
     const release = mockGuardedFetch("page body", "https://example.com/final");
     mockCommand("summarized page");
 
     const result = await runLinkUnderstanding({
       cfg: cfg({ type: "cli", command: "summarize", args: ["--source", "{{LinkUrl}}"] }),
       ctx: ctx("see https://example.com/page"),
+      signal: controller.signal,
     });
 
     expect(result.outputs).toEqual(["summarized page"]);
@@ -121,6 +123,7 @@ describe("runLinkUnderstanding", () => {
         auditContext: "link-understanding",
         mode: "strict",
         url: "https://example.com/page",
+        signal: controller.signal,
       }),
     );
     expect(runCommandWithTimeout).toHaveBeenCalledWith(["summarize", "--source"], {
@@ -129,6 +132,8 @@ describe("runLinkUnderstanding", () => {
         OPENCLAW_LINK_URL: "https://example.com/page",
       },
       input: "page body",
+      signal: controller.signal,
+      killProcessTree: true,
       timeoutMs: 30000,
     });
     expect(release).toHaveBeenCalledOnce();
@@ -268,5 +273,120 @@ describe("runLinkUnderstanding", () => {
         url: "https://example.com/page",
       }),
     );
+  });
+
+  it("skips pre-aborted work without changing inbound context", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const context = ctx("see https://example.com/page");
+    const original = { ...context };
+
+    await expect(
+      applyLinkUnderstanding({
+        ctx: context,
+        cfg: cfg({ type: "cli", command: "summarize" }),
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({ urls: ["https://example.com/page"], outputs: [] });
+
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(context).toEqual(original);
+  });
+
+  it("passes the signal to each CLI entry during ordinary fallback", async () => {
+    const controller = new AbortController();
+    mockGuardedFetch("page body", "https://example.com/final");
+    mockCommand("");
+    mockCommand("second summary");
+
+    const result = await runLinkUnderstanding({
+      cfg: {
+        tools: {
+          links: {
+            models: [{ command: "summarize-a" }, { command: "summarize-b" }],
+          },
+        },
+      },
+      ctx: ctx("see https://example.com/page"),
+      signal: controller.signal,
+    });
+
+    expect(result.outputs).toEqual(["second summary"]);
+    for (const [index, command] of ["summarize-a", "summarize-b"].entries()) {
+      expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
+        index + 1,
+        [command],
+        expect.objectContaining({ signal: controller.signal }),
+      );
+    }
+  });
+
+  it.each([
+    { outcome: "successful exit", code: 0, stdout: "late summary", termination: "exit" },
+    { outcome: "failed exit", code: 1, stdout: "", termination: "exit" },
+    { outcome: "signal termination", code: null, stdout: "", termination: "signal" },
+  ])("cancellation overrides $outcome without fallback or context changes", async (result) => {
+    const controller = new AbortController();
+    const reason = new Error("reply canceled");
+    mockGuardedFetch("first body", "https://example.com/first");
+    mocks.runCommandWithTimeout.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      return { ...result, killed: false, signal: null, stderr: "" };
+    });
+    const context = ctx("see https://example.com/first and https://example.com/second");
+    const original = { ...context };
+
+    await expect(
+      applyLinkUnderstanding({
+        cfg: {
+          tools: {
+            links: {
+              models: [{ command: "summarize-a" }, { command: "summarize-b" }],
+            },
+          },
+        },
+        ctx: context,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError", cause: reason });
+
+    expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
+    expect(runCommandWithTimeout).toHaveBeenCalledOnce();
+    expect(context).toEqual(original);
+  });
+
+  it("rethrows a guarded fetch AbortError without starting the CLI", async () => {
+    const abortError = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(abortError);
+
+    await expect(
+      runLinkUnderstanding({
+        cfg: cfg({ type: "cli", command: "summarize" }),
+        ctx: ctx("see https://example.com/page"),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toBe(abortError);
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+
+  it("gives caller cancellation precedence over an ordinary fetch error", async () => {
+    const controller = new AbortController();
+    const reason = new Error("reply canceled");
+    mocks.fetchWithSsrFGuard.mockImplementationOnce(async () => {
+      controller.abort(reason);
+      throw new Error("connect ECONNREFUSED");
+    });
+
+    await expect(
+      runLinkUnderstanding({
+        cfg: cfg({ type: "cli", command: "summarize" }),
+        ctx: ctx("see https://example.com/page"),
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError", cause: reason });
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 });

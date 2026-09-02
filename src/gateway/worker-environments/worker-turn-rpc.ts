@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { Value } from "typebox/value";
+import {
+  WorkerGitHubPublishParamsSchema,
+  WorkerPortalParamsSchema,
+  WorkerSessionsSendParamsSchema,
+  WorkerSessionsSpawnParamsSchema,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerGitHubPublishParams,
   WorkerConnectParams,
@@ -19,6 +26,10 @@ import type {
   WorkerInferenceStartParams,
   WorkerInferenceStartResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WorkerSkillWorkshopParamsSchema,
+  type WorkerSkillWorkshopParams,
+} from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import type { WorkerSessionToolName } from "../../worker/tool-authority.js";
@@ -111,6 +122,12 @@ type WorkerTurnRpcOptions = {
   executeComputer?: WorkerComputerExecutor;
   executeSessionTool?: (
     params:
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "skill_workshop";
+          request: WorkerSkillWorkshopParams;
+          signal?: AbortSignal;
+        }
       | {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_spawn";
@@ -427,6 +444,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     identity: WorkerConnectionIdentity,
     toolName: WorkerSessionToolName,
     request:
+      | WorkerSkillWorkshopParams
       | WorkerSessionsSpawnParams
       | WorkerSessionsSendParams
       | WorkerGitHubPublishParams
@@ -442,15 +460,18 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       return { ok: false, reason: "gateway-unavailable" };
     }
     const operation =
-      toolName === "sessions_spawn" && "task" in request
+      toolName === "skill_workshop" && Value.Check(WorkerSkillWorkshopParamsSchema, request)
         ? { toolName, request }
-        : toolName === "sessions_send" && "sessionKey" in request
+        : toolName === "sessions_spawn" && Value.Check(WorkerSessionsSpawnParamsSchema, request)
           ? { toolName, request }
-          : toolName === "portal" && "action" in request
+          : toolName === "sessions_send" && Value.Check(WorkerSessionsSendParamsSchema, request)
             ? { toolName, request }
-            : toolName === "github_publish"
+            : toolName === "portal" && Value.Check(WorkerPortalParamsSchema, request)
               ? { toolName, request }
-              : undefined;
+              : toolName === "github_publish" &&
+                  Value.Check(WorkerGitHubPublishParamsSchema, request)
+                ? { toolName, request }
+                : undefined;
     if (!operation) {
       return { ok: false, closeReason: "invalid-frame" };
     }

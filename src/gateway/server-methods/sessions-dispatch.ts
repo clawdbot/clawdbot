@@ -167,11 +167,7 @@ async function validateDispatchExecutionMode(params: {
     return false;
   }
   const environmentService = params.context.workerEnvironmentService;
-  if (
-    (params.executionMode === "worker-turn" && !environmentService?.supportsExecutionMode) ||
-    environmentService?.supportsExecutionMode?.(params.target.profileId, params.executionMode) ===
-      true
-  ) {
+  if (environmentService?.supportsExecutionMode(params.target.profileId, params.executionMode)) {
     return true;
   }
   respondInvalidWorkerSession(

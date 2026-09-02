@@ -1,48 +1,86 @@
 // Verifies shell environment key metadata used by config IO.
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createGeneratedPluginTempRoot,
+  installGeneratedPluginTempRootCleanup,
+  writeJson,
+} from "../plugins/generated-plugin-test-helpers.js";
+import { createConfigIO } from "./io.js";
 
-const listKnownChannelEnvVarNames = vi.hoisted(() => vi.fn(() => ["DISCORD_BOT_TOKEN"]));
-const listKnownProviderAuthEnvVarNames = vi.hoisted(() => vi.fn(() => ["OPENAI_API_KEY"]));
+const loadShellEnvFallback = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/shell-env.js").loadShellEnvFallback>(),
+);
 
-vi.mock("../secrets/channel-env-vars.js", () => ({
-  listKnownChannelEnvVarNames,
+vi.mock("../infra/shell-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/shell-env.js")>()),
+  loadShellEnvFallback,
 }));
 
-vi.mock("../secrets/provider-env-vars.js", () => ({
-  listKnownProviderAuthEnvVarNames,
-  resolveProviderAuthLookupMaps: () => ({
-    aliasMap: {},
-    envCandidateMap: {},
-    authEvidenceMap: {},
-  }),
-}));
+installGeneratedPluginTempRootCleanup();
 
 describe("config io shell env expected keys", () => {
-  it("includes provider and channel env vars from manifest-driven plugin metadata", async () => {
-    listKnownProviderAuthEnvVarNames.mockReturnValueOnce([
-      "OPENAI_API_KEY",
-      "ARCEEAI_API_KEY",
-      "FIREWORKS_ALT_API_KEY",
-    ]);
-    listKnownChannelEnvVarNames.mockReturnValueOnce([
-      "DISCORD_BOT_TOKEN",
-      "SLACK_BOT_TOKEN",
-      "SLACK_APP_TOKEN",
-    ]);
-
-    vi.resetModules();
-    const { resolveShellEnvExpectedKeys } = await import("./shell-env-expected-keys.js");
-
-    const expectedKeys = resolveShellEnvExpectedKeys({} as NodeJS.ProcessEnv);
-    expect(expectedKeys).toEqual([
-      "OPENAI_API_KEY",
-      "ARCEEAI_API_KEY",
-      "FIREWORKS_ALT_API_KEY",
-      "DISCORD_BOT_TOKEN",
-      "SLACK_BOT_TOKEN",
-      "SLACK_APP_TOKEN",
-      "OPENCLAW_GATEWAY_TOKEN",
-      "OPENCLAW_GATEWAY_PASSWORD",
-    ]);
+  beforeEach(() => {
+    loadShellEnvFallback.mockClear();
   });
+
+  it.each(["loadConfig", "readBestEffortConfig"] as const)(
+    "%s includes env keys from a configured plugin without executing its runtime",
+    async (read) => {
+      const home = createGeneratedPluginTempRoot("openclaw-shell-env-metadata-");
+      const pluginDir = path.join(home, "configured-plugin");
+      const configPath = path.join(home, "state", "openclaw.json");
+      writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+        id: "shell-fixture",
+        providers: ["shell-fixture"],
+        channels: ["shell-fixture"],
+        channelConfigs: { "shell-fixture": { schema: { type: "object" } } },
+        setup: {
+          requiresRuntime: false,
+          providers: [{ id: "shell-fixture", envVars: ["SHELL_FIXTURE_PROVIDER_KEY"] }],
+        },
+        configSchema: { type: "object", properties: {} },
+      });
+      writeJson(path.join(pluginDir, "package.json"), {
+        name: "shell-fixture",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./index.js"],
+          channel: {
+            id: "shell-fixture",
+            configuredState: {
+              env: {
+                allOf: ["SHELL_FIXTURE_CHANNEL_KEY"],
+                anyOf: ["SHELL_FIXTURE_PROVIDER_KEY"],
+              },
+            },
+          },
+        },
+      });
+      fs.writeFileSync(path.join(pluginDir, "index.js"), 'throw new Error("metadata only");\n');
+      writeJson(configPath, {
+        env: { shellEnv: { enabled: true } },
+        plugins: { allow: ["shell-fixture"], load: { paths: [pluginDir] } },
+      });
+      const env = {
+        HOME: home,
+        OPENCLAW_STATE_DIR: path.dirname(configPath),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(home, "empty-bundled"),
+      };
+      fs.mkdirSync(env.OPENCLAW_BUNDLED_PLUGINS_DIR);
+
+      await createConfigIO({ configPath, env, homedir: () => home, observe: false })[read]();
+
+      expect(loadShellEnvFallback).toHaveBeenCalledOnce();
+      const { expectedKeys } = loadShellEnvFallback.mock.calls[0]![0];
+      expect(expectedKeys.filter((key) => key.startsWith("SHELL_FIXTURE_"))).toEqual([
+        "SHELL_FIXTURE_PROVIDER_KEY",
+        "SHELL_FIXTURE_CHANNEL_KEY",
+      ]);
+      expect(expectedKeys).toEqual(
+        expect.arrayContaining(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]),
+      );
+    },
+  );
 });

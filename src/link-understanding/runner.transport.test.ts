@@ -1,8 +1,13 @@
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { killPidIfAlive, waitForPidFile, waitForPidToExit } from "../test-utils/process-tree.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
+import { applyLinkUnderstanding } from "./apply.js";
 import { runLinkUnderstanding } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
@@ -46,7 +51,9 @@ vi.mock("../process/exec.js", async () => {
   const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
   return {
     ...actual,
-    runCommandWithTimeout: mocks.runCommandWithTimeout,
+    runCommandWithTimeout: mocks.runCommandWithTimeout.mockImplementation(
+      actual.runCommandWithTimeout,
+    ),
   };
 });
 
@@ -73,6 +80,40 @@ async function within<T>(promise: Promise<T>, timeoutMs: number, message: string
     }
   }
 }
+
+async function withServer(handler: RequestListener, run: (base: string) => Promise<void>) {
+  const sockets = new Set<Socket>();
+  const server = createServer(handler);
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    await run(`http://loopback.test:${(server.address() as AddressInfo).port}`);
+  } finally {
+    for (const socket of sockets) {
+      socket.destroy();
+    }
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+function config(args: string[], timeoutSeconds = 10): OpenClawConfig {
+  return {
+    tools: {
+      links: { models: [{ command: process.execPath, args, timeoutSeconds: 10 }], timeoutSeconds },
+    },
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("runLinkUnderstanding transport cleanup", () => {
   it("cancels a non-OK response body before releasing its guarded transport", async () => {
@@ -126,5 +167,138 @@ describe("runLinkUnderstanding transport cleanup", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
+  });
+});
+
+it("cancels a streaming response and preserves the unmodified inbound context", async () => {
+  const requestStarted = deferred();
+  const socketClosed = deferred();
+  const requests: string[] = [];
+  await withServer(
+    (req, res) => {
+      requests.push(req.url ?? "");
+      req.socket.once("close", socketClosed.resolve);
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("partial page");
+      requestStarted.resolve();
+    },
+    async (base) => {
+      const controller = new AbortController();
+      const ctx: MsgContext = { Body: `${base}/first ${base}/second` };
+      const original = { ...ctx };
+      const result = applyLinkUnderstanding({
+        cfg: config(["-e", "throw new Error('processor must not start')"]),
+        ctx,
+        signal: controller.signal,
+      });
+      const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+      await requestStarted.promise;
+      controller.abort(new Error("operator stopped the reply"));
+      await rejected;
+      await socketClosed.promise;
+      expect(ctx).toEqual(original);
+      expect(requests).toEqual(["/first"]);
+    },
+  );
+});
+
+it("skips a timed-out streaming link and processes the next link", async () => {
+  await withServer(
+    (req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      if (req.url === "/slow") {
+        res.write("unfinished");
+      } else {
+        res.end("complete page");
+      }
+    },
+    async (base) => {
+      const ctx: MsgContext = { Body: `${base}/slow ${base}/good` };
+      const result = await applyLinkUnderstanding({
+        cfg: config(["-e", "process.stdin.pipe(process.stdout)"], 0.5),
+        ctx,
+        signal: new AbortController().signal,
+      });
+      expect(result.outputs).toEqual(["complete page"]);
+      expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
+    },
+  );
+});
+
+it("fetches only bare URLs from messages that also contain titled markdown links", async () => {
+  const requests: string[] = [];
+  await withServer(
+    (req, res) => {
+      const requestPath = req.url ?? "";
+      requests.push(requestPath);
+      res.end(requestPath);
+    },
+    async (base) => {
+      const firstBare = `${base}/bare-one`;
+      const secondBare = `${base}/bare-two`;
+      const ctx: MsgContext = {
+        Body: [
+          `[quoted](${base}/quoted "Docs")`,
+          `[parenthesized](${base}/parenthesized (Docs))`,
+          `[escaped](${base}/escaped "A \\"quoted\\" title")`,
+          firstBare,
+          `[angle](<${base}/angle> 'Docs')`,
+          secondBare,
+        ].join(" "),
+      };
+
+      const result = await applyLinkUnderstanding({
+        cfg: config(["-e", "process.stdin.pipe(process.stdout)"]),
+        ctx,
+      });
+
+      expect(requests).toEqual(["/bare-one", "/bare-two"]);
+      expect(result).toEqual({
+        urls: [firstBare, secondBare],
+        outputs: ["/bare-one", "/bare-two"],
+      });
+      expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
+    },
+  );
+});
+
+it("stops processor descendants after caller cancellation", async () => {
+  await withTempDir("openclaw-link-cancel-", async (dir) => {
+    const pidPath = path.join(dir, "worker.pid");
+    const workerSource = "setInterval(() => {}, 1000); process.send('ready')";
+    const wrapperSource = [
+      "const { spawn } = require('node:child_process')",
+      "const { writeFileSync } = require('node:fs')",
+      `const worker = spawn(process.execPath, ['-e', ${JSON.stringify(workerSource)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] })`,
+      `worker.once('message', () => writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)))`,
+      "process.stdin.resume()",
+    ].join(";");
+    await withServer(
+      (_req, res) => res.end("page body"),
+      async (base) => {
+        const controller = new AbortController();
+        const ctx: MsgContext = { Body: `${base}/page` };
+        const original = { ...ctx };
+        let workerPid: number | undefined;
+        const result = applyLinkUnderstanding({
+          cfg: config(["-e", wrapperSource]),
+          ctx,
+          signal: controller.signal,
+        });
+        const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
+        try {
+          workerPid = await waitForPidFile(pidPath);
+          expect(isPidAlive(workerPid)).toBe(true);
+          controller.abort();
+          await rejected;
+          expect(ctx).toEqual(original);
+          expect(await waitForPidToExit(workerPid, 500)).toBe(true);
+        } finally {
+          controller.abort();
+          killPidIfAlive(workerPid);
+          await rejected;
+        }
+      },
+    );
   });
 });

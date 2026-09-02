@@ -76,6 +76,8 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
     };
     const runSessionSqlite = async () => await runDoctorSessionSqlite(sessionSqliteOptions);
+    const reconcileHardlink = (filePath: string) =>
+      reconcileDoctorSessionSqlitePublication(sessionSqliteOptions, filePath);
     const report = isDestructiveDoctorSessionSqliteMode(sessionSqliteMode)
       ? await withDoctorSqliteMaintenanceLock({
           env: process.env,
@@ -83,12 +85,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
           ...(options.sessionSqliteStore
             ? { protectedPaths: resolveExplicitSessionSqliteMaintenancePaths(options) }
             : {}),
-          ...(sessionSqliteMode === "import" || sessionSqliteMode === "restore"
-            ? {
-                reconcileHardlink: (filePath: string) =>
-                  reconcileDoctorSessionSqlitePublication(sessionSqliteOptions, filePath),
-              }
-            : {}),
+          ...(sessionSqliteMode !== "compact" ? { reconcileHardlink } : {}),
           run: runSessionSqlite,
         })
       : await runSessionSqlite();

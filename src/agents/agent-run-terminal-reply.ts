@@ -7,15 +7,12 @@ const AGENT_RUN_TERMINAL_REPLY_MAX_CHARS = 4_096;
 export type AgentRunTerminalReplySnapshot =
   | { disposition: "visible"; text: string }
   | { disposition: "silent" }
-  | { disposition: "empty" };
+  | { disposition: "empty"; code?: "message-tool-not-called" };
 
 function isMessageToolNotCalledTerminalReply(
   reply: AgentRunTerminalReplySnapshot | undefined,
 ): boolean {
-  return (
-    reply?.disposition === "empty" &&
-    (reply as { code?: unknown }).code === "message-tool-not-called"
-  );
+  return reply?.disposition === "empty" && reply.code === "message-tool-not-called";
 }
 
 /** Sanitizes and caps producer-owned text before it enters lifecycle or durable state. */
@@ -56,8 +53,7 @@ export function normalizeAgentRunTerminalReplySnapshot(
   }
   if (disposition === "empty") {
     if ((value as { code?: unknown }).code === "message-tool-not-called") {
-      const reply = { disposition, code: "message-tool-not-called" } as const;
-      return reply;
+      return { disposition, code: "message-tool-not-called" };
     }
     return { disposition };
   }
