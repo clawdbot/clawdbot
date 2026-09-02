@@ -1862,6 +1862,13 @@ describe("state migrations", () => {
     const repaired = await runLegacyStateMigrations({ detected, config: cfg, env });
     expect(repaired.warnings).toStrictEqual([]);
     expect(repaired.changes).toContain("doctor-only plugin state migrated");
+    expect(
+      repaired.stepReceipts.find((receipt) => receipt.id === "plugin-doctor-state"),
+    ).toMatchObject({
+      source: [{ kind: "owner", id: "plugin:memory-core:memory-core-doctor-only-test" }],
+      target: [{ kind: "owner", id: "plugin:memory-core:doctor-state" }],
+      outcome: "completed",
+    });
     expect(detectLegacyState).toHaveBeenCalledTimes(2);
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });

@@ -208,6 +208,21 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   refusal?: { code: string; message: string };
 };
 
+export type LegacyStateMigrationCandidate = {
+  root: string;
+  version: string;
+  artifact:
+    | {
+        outcome: "bound";
+        owner: "staged-candidate";
+        digest: string;
+      }
+    | {
+        outcome: "deferred";
+        refusal: { code: string; message: string };
+      };
+};
+
 export type LegacyStateMigrationPlan = {
   schemaVersion: typeof LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION;
   mutationAllowed: false;
@@ -215,10 +230,7 @@ export type LegacyStateMigrationPlan = {
   warnings: string[];
   refusal?: { code: string; message: string };
   mode: LegacyStateMigrationMode;
-  candidate: {
-    root: string;
-    version: string;
-  };
+  candidate: LegacyStateMigrationCandidate;
   snapshot: {
     homeDir: string;
     configPath: string;
@@ -227,5 +239,5 @@ export type LegacyStateMigrationPlan = {
     stateDigest?: string;
   };
   steps: LegacyStateMigrationStepPlan[];
-  planIntegrity: string;
+  planDigest: string;
 };

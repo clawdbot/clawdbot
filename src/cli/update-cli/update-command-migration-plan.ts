@@ -132,6 +132,14 @@ export async function updateMigrationPlanCommand(
     candidate: {
       root,
       version: version ?? "unknown",
+      artifact: {
+        outcome: "deferred",
+        refusal: {
+          code: "candidate-artifact-digest-required",
+          message:
+            "Candidate artifact content identity must be supplied by the staged-candidate owner.",
+        },
+      },
     },
     snapshot: {
       homeDir: requiredValue(opts.snapshotHome, "--snapshot-home"),

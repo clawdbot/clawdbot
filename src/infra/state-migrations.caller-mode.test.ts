@@ -17,12 +17,27 @@ import {
   readLegacyMigrationReceipt,
   resolveLegacyMigrationSourceKey,
 } from "./state-migrations.receipts.js";
-import type { LegacyStateMigrationStepReceipt } from "./state-migrations.types.js";
+import type {
+  LegacyStateMigrationCandidate,
+  LegacyStateMigrationStepReceipt,
+} from "./state-migrations.types.js";
 
 const tempDirs = createTrackedTempDirs();
 
 function sha256(value: string | Buffer): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function boundCandidate(root: string, version = "test"): LegacyStateMigrationCandidate {
+  return {
+    root,
+    version,
+    artifact: {
+      outcome: "bound",
+      owner: "staged-candidate",
+      digest: `sha256:${"a".repeat(64)}`,
+    },
+  };
 }
 
 function writeLegacyDoctorSources(
@@ -102,10 +117,7 @@ describe("legacy state migration caller mode", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       cfg: fixture.cfg,
       mode: "doctor",
-      candidate: {
-        root: path.join(fixture.root, "candidate"),
-        version: "2026.9.2-candidate",
-      },
+      candidate: boundCandidate(path.join(fixture.root, "candidate"), "2026.9.2-candidate"),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -125,6 +137,11 @@ describe("legacy state migration caller mode", () => {
       candidate: {
         root: path.resolve(fixture.root, "candidate"),
         version: "2026.9.2-candidate",
+        artifact: {
+          outcome: "bound",
+          owner: "staged-candidate",
+          digest: `sha256:${"a".repeat(64)}`,
+        },
       },
       snapshot: {
         homeDir: fixture.homeDir,
@@ -134,7 +151,7 @@ describe("legacy state migration caller mode", () => {
         stateDigest: "sha256:copied-state",
       },
     });
-    expect(plan.planIntegrity).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    expect(plan.planDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(plan.steps.find((step) => step.id === "exec-approvals")).toMatchObject({
       source: [{ kind: "path", path: execPath }],
       target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) }],
@@ -178,7 +195,7 @@ describe("legacy state migration caller mode", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       cfg,
       mode: "automatic",
-      candidate: { root: fixture.root, version: "test" },
+      candidate: boundCandidate(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -198,6 +215,62 @@ describe("legacy state migration caller mode", () => {
     });
     expect(plan.steps.find((step) => step.id === "exec-approvals")).toBeUndefined();
     expect(plan.steps.find((step) => step.id === "tui-last-session")).toBeUndefined();
+
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+    expect(result.mode).toBe("automatic");
+    expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
+      plan.steps.map((step) => step.id),
+    );
+    expect(result.stepReceipts.find((receipt) => receipt.id === "shared-auth-store")).toMatchObject(
+      {
+        outcome: "skipped",
+        changes: [],
+        warnings: [],
+      },
+    );
+  });
+
+  it("refuses an invalid staged-candidate artifact digest", async () => {
+    const fixture = await makeFixture();
+    const candidate: LegacyStateMigrationCandidate = {
+      root: fixture.root,
+      version: "test",
+      artifact: {
+        outcome: "bound",
+        owner: "staged-candidate",
+        digest: "sha256:not-a-digest",
+      },
+    };
+
+    const plan = await planLegacyStateMigrationsReadOnly({
+      cfg: {},
+      mode: "doctor",
+      candidate,
+      snapshot: {
+        homeDir: fixture.homeDir,
+        configPath: fixture.configPath,
+        configDigest: sha256(fixture.configBytes),
+        stateDir: fixture.stateDir,
+        stateDigest: "sha256:copied-state",
+      },
+      env: fixture.env,
+    });
+
+    expect(plan).toMatchObject({
+      outcome: "refused",
+      refusal: { code: "candidate-artifact-digest-invalid" },
+      candidate: {
+        artifact: {
+          outcome: "deferred",
+          refusal: { code: "candidate-artifact-digest-invalid" },
+        },
+      },
+    });
   });
 
   it("returns a closed refusal when read-only detection cannot produce a safe plan", async () => {
@@ -206,7 +279,7 @@ describe("legacy state migration caller mode", () => {
     const plan = await planLegacyStateMigrationsReadOnly({
       cfg: fixture.cfg,
       mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
+      candidate: boundCandidate(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -232,10 +305,27 @@ describe("legacy state migration caller mode", () => {
     const { execPath, tuiPath } = writeLegacyDoctorSources(fixture.stateDir, {
       terminal: { sessionKey: "agent:main:tui:execute", updatedAt: 100 },
     });
+    const deviceAuthPath = path.join(fixture.stateDir, "identity", "device-auth.json");
+    fs.mkdirSync(path.dirname(deviceAuthPath), { recursive: true });
+    fs.writeFileSync(
+      deviceAuthPath,
+      `${JSON.stringify({
+        version: 1,
+        deviceId: "candidate-device",
+        tokens: {
+          operator: {
+            token: "candidate-token",
+            role: "operator",
+            scopes: ["operator.read"],
+            updatedAtMs: 10,
+          },
+        },
+      })}\n`,
+    );
     const plan = await planLegacyStateMigrationsReadOnly({
       cfg: {},
       mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
+      candidate: boundCandidate(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -258,6 +348,21 @@ describe("legacy state migration caller mode", () => {
     expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
       plan.steps.map((step) => step.id),
     );
+    expect(plan.steps.map((step) => step.phase)).toEqual(
+      [...plan.steps]
+        .toSorted((left, right) =>
+          left.phase === right.phase ? 0 : left.phase === "shared" ? -1 : 1,
+        )
+        .map((step) => step.phase),
+    );
+    expect(plan.steps.findIndex((step) => step.id === "device-auth")).toBeLessThan(
+      plan.steps.findIndex((step) => step.id === "tui-last-session"),
+    );
+    expect(result.stepReceipts.find((receipt) => receipt.id === "device-auth")).toMatchObject({
+      source: [{ kind: "path", path: deviceAuthPath }],
+      outcome: "completed",
+      warnings: [],
+    });
     expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
       source: [{ kind: "path", path: execPath }],
       outcome: "completed",

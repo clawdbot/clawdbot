@@ -13,6 +13,8 @@ import {
 
 export type PreparedLegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome">;
 
+const SHA256_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
+
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
 }
@@ -144,9 +146,25 @@ export function createLegacyStateMigrationPlan(params: {
   warnings?: readonly string[];
   refusal?: { code: string; message: string };
 }): LegacyStateMigrationPlan {
+  // Only the staged-candidate owner can verify package, dependency, and bundled-plugin
+  // bytes. Root and version remain diagnostic when that owner has not bound a digest.
+  const artifact =
+    params.candidate.artifact.outcome === "bound" &&
+    SHA256_DIGEST_PATTERN.test(params.candidate.artifact.digest)
+      ? { ...params.candidate.artifact }
+      : params.candidate.artifact.outcome === "bound"
+        ? {
+            outcome: "deferred" as const,
+            refusal: {
+              code: "candidate-artifact-digest-invalid",
+              message: "The staged-candidate owner supplied an invalid artifact SHA-256 digest.",
+            },
+          }
+        : { ...params.candidate.artifact, refusal: { ...params.candidate.artifact.refusal } };
   const candidate = {
     root: path.resolve(params.candidate.root),
     version: params.candidate.version,
+    artifact,
   };
   const snapshot = {
     homeDir: path.resolve(params.snapshot.homeDir),
@@ -174,6 +192,8 @@ export function createLegacyStateMigrationPlan(params: {
     };
   });
   const warnings = [...(params.warnings ?? [])];
+  const candidateRefusal =
+    candidate.artifact.outcome === "deferred" ? candidate.artifact.refusal : undefined;
   const refusal =
     params.refusal ??
     (warnings.length > 0
@@ -181,7 +201,7 @@ export function createLegacyStateMigrationPlan(params: {
           code: "migration-planning-warning",
           message: warnings.join("\n"),
         }
-      : undefined);
+      : candidateRefusal);
   const plan = {
     schemaVersion: LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION,
     mutationAllowed: false as const,
@@ -193,14 +213,14 @@ export function createLegacyStateMigrationPlan(params: {
     snapshot,
     steps,
   };
-  return { ...plan, planIntegrity: digest(plan) };
+  return { ...plan, planDigest: digest(plan) };
 }
 
 export function refuseLegacyStateMigrationPlan(
   plan: LegacyStateMigrationPlan,
   refusal: { code: string; message: string },
 ): LegacyStateMigrationPlan {
-  const { planIntegrity: _planIntegrity, ...unsignedPlan } = plan;
+  const { planDigest: _planDigest, ...unsignedPlan } = plan;
   const warnings = unsignedPlan.warnings.includes(refusal.message)
     ? unsignedPlan.warnings
     : [...unsignedPlan.warnings, refusal.message];

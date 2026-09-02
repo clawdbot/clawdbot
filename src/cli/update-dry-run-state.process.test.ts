@@ -172,7 +172,7 @@ describe("update process state", () => {
     expect(snapshotDatabaseArtifacts(await snapshotTree(root))).toEqual(databaseArtifactsBefore);
   });
 
-  it("plans Doctor migrations against a copied snapshot without creating state", async () => {
+  it("describes Doctor migrations but refuses without staged candidate identity", async () => {
     const root = tempDirs.make("openclaw-update-migration-plan-");
     const configPath = path.join(root, "config", "openclaw.json");
     const stateDir = path.join(root, "state");
@@ -204,16 +204,31 @@ describe("update process state", () => {
     ]);
 
     expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(1);
     const plan = JSON.parse(result.stdout) as {
       mutationAllowed: boolean;
-      candidate: { root: string; version: string };
+      outcome: string;
+      refusal: { code: string };
+      candidate: {
+        root: string;
+        version: string;
+        artifact: { outcome: string; refusal: { code: string } };
+      };
       snapshot: { configDigest: string; stateDigest: string };
       steps: Array<{ id: string; outcome: string }>;
     };
     expect(plan).toMatchObject({
       mutationAllowed: false,
-      candidate: { root: path.resolve("."), version: expect.any(String) },
+      outcome: "refused",
+      refusal: { code: "candidate-artifact-digest-required" },
+      candidate: {
+        root: path.resolve("."),
+        version: expect.any(String),
+        artifact: {
+          outcome: "deferred",
+          refusal: { code: "candidate-artifact-digest-required" },
+        },
+      },
       snapshot: {
         configDigest: `sha256:${await sha256File(configPath)}`,
         stateDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),

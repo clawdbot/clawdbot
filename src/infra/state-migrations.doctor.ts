@@ -1063,6 +1063,9 @@ function buildLegacyStateMigrationSteps(
         id: `plugin:${plan.pluginId}:${plan.migration.id}`,
       })),
       detected.pluginPlans?.hasLegacy === true,
+      [...new Set((detected.pluginPlans?.plans ?? []).map((plan) => plan.pluginId))].map(
+        (pluginId) => ({ kind: "owner" as const, id: `plugin:${pluginId}:doctor-state` }),
+      ),
     ],
     sessions: [
       pathEndpoints(detected.sessions.legacyDir, detected.sessions.legacyStorePath),
@@ -1125,7 +1128,7 @@ function buildLegacyStateMigrationSteps(
   });
 
   const managedWorktreePrelude: LegacyStateMigrationStep[] = [
-    finalStep("managed-worktrees", () => {
+    sharedStep("managed-worktrees", () => {
       const stateEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
       const discardedWorktrees =
         isDoctor && detected.worktrees.hasLegacy ? discardLegacyRegistryWorktrees(stateEnv) : 0;
@@ -1182,8 +1185,8 @@ function buildLegacyStateMigrationSteps(
   ];
 
   const eagerStateSteps: LegacyStateMigrationStep[] = [
-    ownerStep("device-auth", detected.deviceAuth, migrateLegacyDeviceAuth),
-    finalStep(
+    ownerStep("device-auth", detected.deviceAuth, migrateLegacyDeviceAuth, "shared"),
+    sharedStep(
       "device-identity",
       () =>
         migrateLegacyDeviceIdentity({
@@ -1195,7 +1198,7 @@ function buildLegacyStateMigrationSteps(
         }),
       true,
     ),
-    finalStep(
+    sharedStep(
       "meeting-transcripts",
       () =>
         migrateLegacyMeetingTranscripts({
@@ -1453,6 +1456,7 @@ function refusedStepReceipt(
 async function runLegacyStateMigrationSteps(
   steps: readonly LegacyStateMigrationStep[],
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void,
+  shouldRun?: (step: LegacyStateMigrationStep) => boolean,
 ): Promise<{
   sources: MigrationMessages[];
   sharedSources: MigrationMessages[];
@@ -1473,6 +1477,17 @@ async function runLegacyStateMigrationSteps(
   // Later owners require the SQLite commit and verified source archive of
   // every preceding owner; migration planning must never run steps in parallel.
   for (const step of steps) {
+    if (shouldRun && !shouldRun(step) && step.requiredness === "not-required") {
+      const receipt: LegacyStateMigrationStepReceipt = {
+        ...migrationStepPlan(step),
+        outcome: "skipped",
+        changes: [],
+        warnings: [],
+      };
+      receipts.push(receipt);
+      onStepReceipt?.(receipt);
+      continue;
+    }
     let result: MigrationMessages;
     try {
       result = await step.run();
@@ -1798,13 +1813,12 @@ export async function autoMigrateLegacyState(params: {
   ) {
     // SQLite key migration and Doctor's standalone ACP repair can have no file preview.
     // Preserve their convergence even when the other detectors have no work.
-    const alwaysRunMigrations = await runLegacyStateMigrationSteps(
-      remainingMigrationSteps.filter(
-        (step) => step.id === "legacy-main-session-keys" || step.id === "acp-session-metadata",
-      ),
+    const fastPathMigrations = await runLegacyStateMigrationSteps(
+      remainingMigrationSteps,
       params.onStepReceipt,
+      (step) => step.id === "legacy-main-session-keys" || step.id === "acp-session-metadata",
     );
-    const alwaysRunSources = alwaysRunMigrations.sources;
+    const alwaysRunSources = fastPathMigrations.sources;
     const completedSources = [
       ...initialMigrationSources,
       ...alwaysRunSources,
@@ -1835,7 +1849,7 @@ export async function autoMigrateLegacyState(params: {
       skipped: false,
       changes,
       warnings,
-      stepReceipts: [...eagerMigrations.receipts, ...alwaysRunMigrations.receipts],
+      stepReceipts: [...eagerMigrations.receipts, ...fastPathMigrations.receipts],
       ...(notices.length > 0 ? { notices } : {}),
     };
   }
