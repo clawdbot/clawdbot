@@ -8,8 +8,8 @@ import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 export { stripInternalRuntimeScaffolding };
 
 // A tag name ends at whitespace, `/`, or `>`; `<user@example.com>` is prose, not markup.
-// A URL scheme plus `/` is not a tag — otherwise `<https://…|label>` is deleted as HTML.
-const HTML_TAG_RE = /<\/?(?!(?:https?|mailto):\/)[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
+// Autolink schemes (`https://`, `http://`, `mailto:`) are not tags, including `<scheme:…|label>`.
+const HTML_TAG_RE = /<\/?(?!(?:https?:\/\/|mailto:))[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
 const MAY_CONTAIN_MARKDOWN_CODE_RE = /[`~]|\t| {4}/;
 const CODE_ESCAPE = "\u0000e";
 const CODE_PLACEHOLDER = "\u0000p";

@@ -101,6 +101,12 @@ describe("formatGoogleChatText", () => {
     expect(formatGoogleChatText("<https://example.com/a.pdf|User Manual>")).toBe(
       "<https://example.com/a.pdf｜User Manual>",
     );
+    expect(formatGoogleChatText("<mailto:support@example.com|Contact Support>")).toBe(
+      "<mailto:support@example.com｜Contact Support>",
+    );
+    expect(formatGoogleChatText("<mailto:a/b@example.com|Contact Support>")).toBe(
+      "<mailto:a/b@example.com｜Contact Support>",
+    );
   });
 
   it("does not reinterpret a literal bullet as a Google Chat list", () => {

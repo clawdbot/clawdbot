@@ -254,6 +254,12 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("See <http://example.com/a.pdf|User Manual> now")).toBe(
       "See <http://example.com/a.pdf|User Manual> now",
     );
+    expect(sanitizeForPlainText("<mailto:support@example.com|Contact Support>")).toBe(
+      "<mailto:support@example.com|Contact Support>",
+    );
+    expect(sanitizeForPlainText("<mailto:a/b@example.com|Contact Support>")).toBe(
+      "<mailto:a/b@example.com|Contact Support>",
+    );
   });
 
   it("preserves angle-addr email addresses", () => {
