@@ -111,6 +111,22 @@ describe("sessionsCleanupCommand", () => {
     });
   });
 
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])(
+    "keeps an %s explicit store local instead of delegating default cleanup to the gateway",
+    async (_label, store) => {
+      const { runtime } = makeRuntime();
+      await sessionsCleanupCommand({ store, enforce: true }, runtime);
+
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.resolveSessionStoreTargetsOrExit).toHaveBeenCalledWith(
+        expect.objectContaining({ opts: expect.objectContaining({ store }) }),
+      );
+    },
+  );
+
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
     mocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
     mocks.runSessionsCleanup.mockResolvedValue({
