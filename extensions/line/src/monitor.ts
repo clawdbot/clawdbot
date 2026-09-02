@@ -57,7 +57,6 @@ interface MonitorLineProviderOptions {
   runtime: RuntimeEnv;
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   abortSignal?: AbortSignal;
-  webhookUrl?: string;
   webhookPath?: string;
   statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }

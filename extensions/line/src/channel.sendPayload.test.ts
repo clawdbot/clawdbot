@@ -685,6 +685,29 @@ describe("line outbound sendPayload", () => {
     ).toBe(5000);
   });
 
+  it("plans with a configured limit below the platform cap, per account", () => {
+    // A cap-only assertion cannot tell this seam apart from one that ignores the
+    // config and returns the constant, which is the whole point of reading it.
+    const cfg = {
+      channels: { line: { textChunkLimit: 4000, accounts: { work: { textChunkLimit: 900 } } } },
+    } as OpenClawConfig;
+
+    expect(
+      lineOutboundAdapter.resolveEffectiveTextChunkLimit?.({
+        cfg,
+        accountId: "work",
+        fallbackLimit: 5000,
+      }),
+    ).toBe(900);
+    expect(
+      lineOutboundAdapter.resolveEffectiveTextChunkLimit?.({
+        cfg,
+        accountId: "other",
+        fallbackLimit: 5000,
+      }),
+    ).toBe(4000);
+  });
+
   it("uses configured text chunk limit for payloads", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
