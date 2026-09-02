@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
+  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -55,6 +56,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   11: STATE_V6_ADDITIVE_TABLES,
   12: STATE_V6_ADDITIVE_TABLES,
   13: LAZY_ADDITIVE_STATE_TABLES,
+  14: LAZY_ADDITIVE_STATE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -111,6 +113,7 @@ export function assertOpenClawStateDatabaseOwner(
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
   options: { pathname: string },
+  readTable?: SqliteTableContractReader,
 ): void {
   const userVersion = readSqliteUserVersion(database);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
@@ -143,6 +146,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
     options.pathname,
     OPENCLAW_STATE_SCHEMA_SQL,
     OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+    readTable,
   );
 }
 
@@ -251,6 +255,11 @@ export const openClawStateMigrationAssertions = new Map([
     (database: DatabaseSync, options: { pathname: string }) =>
       assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 13 }),
   ],
+  [
+    14,
+    (database: DatabaseSync, options: { pathname: string }) =>
+      assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 14 }),
+  ],
 ]);
 
 export function markCurrentStateSchemaVersion(
@@ -305,5 +314,28 @@ export function migrateCronCreatorNamespaces(db: DatabaseSync, previousVersion: 
      WHERE json_valid(job_json)
        AND json_extract(job_json, '$.createdActor.type') = 'human';
   `);
+  return true;
+}
+
+/** Keep opaque plugin targets independent of agent identity without rewriting binding records. */
+export function migrateConversationBindingTargets(
+  db: DatabaseSync,
+  previousVersion: number,
+): boolean {
+  if (previousVersion >= 15) {
+    return false;
+  }
+  const columns = ["target_agent_id", "target_session_id"].filter((column) =>
+    tableHasColumn(db, "current_conversation_bindings", column),
+  );
+  if (columns.length === 0) {
+    return false;
+  }
+  // The caller owns one transaction through index recreation and version publication.
+  // Unknown schema dependencies must fail and roll back, never be dropped to force migration.
+  db.exec("DROP INDEX IF EXISTS idx_current_conversation_bindings_target;");
+  for (const column of columns) {
+    db.exec(`ALTER TABLE current_conversation_bindings DROP COLUMN ${column};`);
+  }
   return true;
 }

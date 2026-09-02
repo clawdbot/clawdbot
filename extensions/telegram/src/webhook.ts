@@ -29,7 +29,10 @@ import {
   createFixedWindowRateLimiter,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  readJsonBodyWithLimit,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { mergeTelegramAccountConfig } from "./account-config.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -42,6 +45,7 @@ import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const TELEGRAM_WEBHOOK_TEXT_TYPE = "text/plain; charset=utf-8";
 const TELEGRAM_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
 const TELEGRAM_WEBHOOK_ACCEPTED_VALUE = "durable";
 const TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS = 500;
@@ -472,7 +476,7 @@ export async function startTelegramWebhook(opts: {
       if (res.headersSent || res.writableEnded) {
         return;
       }
-      res.writeHead(statusCode, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(statusCode, { "Content-Type": TELEGRAM_WEBHOOK_TEXT_TYPE });
       res.end(text);
     };
 
@@ -514,14 +518,16 @@ export async function startTelegramWebhook(opts: {
         maxBytes: TELEGRAM_WEBHOOK_MAX_BODY_BYTES,
         timeoutMs: TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS,
         emptyObjectOnEmpty: false,
+        // Defer destruction so the rejections below reach Telegram before the close.
+        destroyOnLimit: false,
       });
       if (!body.ok) {
         if (body.code === "PAYLOAD_TOO_LARGE") {
-          respondText(413, body.error);
+          await sendHttpRequestRejection(req, res, 413, body.error, TELEGRAM_WEBHOOK_TEXT_TYPE);
           return;
         }
         if (body.code === "REQUEST_BODY_TIMEOUT") {
-          respondText(408, body.error);
+          await sendHttpRequestRejection(req, res, 408, body.error, TELEGRAM_WEBHOOK_TEXT_TYPE);
           return;
         }
         if (body.code === "CONNECTION_CLOSED") {

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Extension relay bridge: CDP target synthesis and extension command routing.
 import { describe, expect, it, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
@@ -422,13 +423,17 @@ describe("ExtensionRelayBridge", () => {
           }),
         );
         // Resolve the old promise, then replace its owner before its continuation.
-        if (lifecycle === "closed client") {
-          cdp.onClose();
-        }
+        const closing = lifecycle === "closed client" ? cdp.onClose() : undefined;
         if (lifecycle === "replaced extension") {
           sendHello(wireExtension(bridge).handlers, []);
         }
         await flush();
+        if (closing) {
+          const detach = socket.frames().find((frame) => frame.type === "detach");
+          expect(detach).toBeDefined();
+          extension.onMessage(JSON.stringify({ type: "result", seq: detach?.seq, result: {} }));
+          await closing;
+        }
         expect(socket.frames().filter((frame) => frame.type === "attach")).toEqual([]);
         if (lifecycle === "active") {
           expect(client.frames().map((frame) => frame.method ?? frame.id)).toEqual([
@@ -671,6 +676,36 @@ describe("ExtensionRelayBridge", () => {
     );
     await flush();
 
+    const rootEvent = client.frames().find((frame) => frame.method === "Target.attachedToTarget");
+    const root = asOptionalRecord(rootEvent?.params)?.sessionId;
+    expect(typeof root).toBe("string");
+    cdp.onMessage(
+      JSON.stringify({
+        id: 10,
+        sessionId: root,
+        method: "Target.setAutoAttach",
+        params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+      }),
+    );
+    await flush();
+    handlers.onMessage(
+      JSON.stringify({
+        type: "cdpEvent",
+        tabId: 1,
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "child-abc",
+          targetInfo: { targetId: "child-target", type: "iframe" },
+          waitingForDebugger: false,
+        },
+      }),
+    );
+    const childEvent = client
+      .frames()
+      .findLast((frame) => frame.method === "Target.attachedToTarget");
+    const child = asOptionalRecord(childEvent?.params)?.sessionId;
+    expect(typeof child).toBe("string");
+    expect(child).not.toBe(root);
     // Extension reports a child (iframe) session for tab 1.
     handlers.onMessage(
       JSON.stringify({
@@ -689,7 +724,7 @@ describe("ExtensionRelayBridge", () => {
 
     // A command addressed to the now-stale child session must not route to a
     // reused tab; it should surface a clean "session not found" error.
-    cdp.onMessage(JSON.stringify({ id: 2, sessionId: "child-abc", method: "Page.reload" }));
+    cdp.onMessage(JSON.stringify({ id: 2, sessionId: child, method: "Page.reload" }));
     await flush();
     const response = client.frames().find((frame) => frame.id === 2);
     expect(response?.error).toBeTruthy();

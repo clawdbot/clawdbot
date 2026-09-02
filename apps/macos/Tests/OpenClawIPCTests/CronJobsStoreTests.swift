@@ -27,8 +27,8 @@ private actor CronGatewayRequestLog {
         self.endpointLookups
     }
 
-    func request(jobId: String, occurrence: Int = 0) -> CronGatewayRequest? {
-        let matches = self.requests.filter { $0.method == "cron.runs" && $0.jobId == jobId }
+    func request(method: String, jobId: String?, occurrence: Int = 0) -> CronGatewayRequest? {
+        let matches = self.requests.filter { $0.method == method && $0.jobId == jobId }
         guard matches.indices.contains(occurrence) else { return nil }
         return matches[occurrence]
     }
@@ -61,7 +61,12 @@ private final class CronGatewayFixture: @unchecked Sendable {
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
 
-    init(recoveryEligible: Bool = false, initialRunsFailure: (any Error & Sendable)? = nil) {
+    init(
+        recoveryEligible: Bool = false,
+        initialRunsFailure: (any Error & Sendable)? = nil,
+        holdJobList: Bool = false,
+        onRequestRecorded: (@Sendable () -> Void)? = nil)
+    {
         let requests = CronGatewayRequestLog()
         self.requests = requests
         self.session = GatewayTestWebSocketSession(taskFactory: {
@@ -70,6 +75,7 @@ private final class CronGatewayFixture: @unchecked Sendable {
                       let request = Self.decodeRequest(message)
                 else { return }
                 await requests.append(request)
+                onRequestRecorded?()
                 guard request.method != "cron.runs" else {
                     if let initialRunsFailure,
                        await requests.requestCount(method: "cron.runs") == 1
@@ -83,6 +89,7 @@ private final class CronGatewayFixture: @unchecked Sendable {
                 case "cron.status":
                     payload = #"{"enabled":true,"storePath":"/tmp/cron-tests","jobs":2}"#
                 case "cron.list":
+                    if holdJobList { return }
                     payload = await requests.jobsResponse()
                 case "cron.remove":
                     if let jobId = request.jobId {
@@ -133,18 +140,19 @@ private final class CronGatewayFixture: @unchecked Sendable {
     }
 
     func waitForRequest(
-        jobId: String,
+        method: String = "cron.runs",
+        jobId: String? = nil,
         occurrence: Int = 0,
         timeout: Duration = .seconds(2)) async -> CronGatewayRequest?
     {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
-            if let request = await self.requests.request(jobId: jobId, occurrence: occurrence) {
+            if let request = await self.requests.request(method: method, jobId: jobId, occurrence: occurrence) {
                 return request
             }
             try? await Task.sleep(for: .milliseconds(2))
         }
-        return await self.requests.request(jobId: jobId, occurrence: occurrence)
+        return await self.requests.request(method: method, jobId: jobId, occurrence: occurrence)
     }
 
     func respond(
@@ -163,6 +171,13 @@ private final class CronGatewayFixture: @unchecked Sendable {
         let socket = try await self.readySocket()
         let response = #"{"type":"res","id":"\#(request.id)","ok":false,"# +
             #""error":{"code":"INVALID_REQUEST","message":"\#(message)"}}"#
+        socket.emitReceiveSuccessOnce(.data(Data(response.utf8)))
+    }
+
+    func respondWithJobs(to request: CronGatewayRequest) async throws {
+        let socket = try await self.readySocket()
+        let payload = await self.requests.jobsResponse()
+        let response = #"{"type":"res","id":"\#(request.id)","ok":true,"payload":\#(payload)}"#
         socket.emitReceiveSuccessOnce(.data(Data(response.utf8)))
     }
 
@@ -189,6 +204,51 @@ private final class CronGatewayFixture: @unchecked Sendable {
 @Suite(.serialized)
 @MainActor
 struct CronJobsStoreTests {
+    @Test(arguments: [false, true])
+    func `stopping the pane rejects a late job list completion`(succeeds: Bool) async throws {
+        let (arrivals, signal) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let fixture = CronGatewayFixture(holdJobList: true, onRequestRecorded: { signal.yield(()) })
+        let store = CronJobsStore(gateway: fixture.gateway)
+        let refresh = Task {
+            defer { signal.finish() }
+            await store.refreshJobs()
+        }
+        func cleanup() async {
+            store.stop()
+            refresh.cancel()
+            signal.finish()
+            await refresh.value
+            await fixture.gateway.shutdown()
+        }
+        do {
+            var recorded: CronGatewayRequest?
+            for await _ in arrivals {
+                recorded = await fixture.requests.request(method: "cron.list", jobId: nil)
+                if recorded != nil { break }
+            }
+            let pending = try #require(recorded, "refresh ended before cron.list arrived")
+            // A buffered request can outlive its refresh; stop must still precede completion.
+            try #require(store.isLoadingJobs)
+            store.stop()
+            store.lastError = "current pane error"
+            if succeeds {
+                try await fixture.respondWithJobs(to: pending)
+            } else {
+                try await fixture.fail(pending, message: "stopped pane failure")
+            }
+            await refresh.value
+
+            #expect(store.lastError == "current pane error")
+            #expect(store.jobs.isEmpty)
+            #expect(store.schedulerEnabled == nil)
+            #expect(!store.isLoadingJobs)
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
+
     @Test func `selecting another job sends its history request while the previous request is pending`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)

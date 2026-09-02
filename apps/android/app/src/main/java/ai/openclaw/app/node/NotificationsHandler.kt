@@ -88,14 +88,24 @@ class NotificationsHandler private constructor(
     // command contract rather than Android-specific PendingIntent labels.
     val action =
       when (actionRaw) {
-        "open" -> NotificationActionKind.Open
-        "dismiss" -> NotificationActionKind.Dismiss
-        "reply" -> NotificationActionKind.Reply
-        else ->
+        "open" -> {
+          NotificationActionKind.Open
+        }
+
+        "dismiss" -> {
+          NotificationActionKind.Dismiss
+        }
+
+        "reply" -> {
+          NotificationActionKind.Reply
+        }
+
+        else -> {
           return GatewaySession.InvokeResult.error(
             code = "INVALID_REQUEST",
             message = "INVALID_REQUEST: action must be open|dismiss|reply",
           )
+        }
       }
     val replyText = readString(params, "replyText")
     if (action == NotificationActionKind.Reply && replyText.isNullOrBlank()) {

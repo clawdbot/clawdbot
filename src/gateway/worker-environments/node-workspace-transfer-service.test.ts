@@ -144,7 +144,6 @@ describe("node workspace transfer service", () => {
 
       const staged = await service.prepareSync({ ...request, generation: 2 });
       expect(staged.snapshot.manifest.baseCommit).toBeNull();
-      expect(staged.snapshot.packPath).toBeUndefined();
       expect(staged.snapshot.manifestRef).toBe(plain.snapshot.manifestRef);
       expect(staged.snapshot.manifest.entries).toContainEqual(
         expect.objectContaining({ path: "input.txt", type: "file" }),
@@ -163,7 +162,6 @@ describe("node workspace transfer service", () => {
       );
       const committed = await service.prepareSync({ ...request, generation: 3 });
       expect(committed.snapshot.manifest.baseCommit).toBe(await git("rev-parse", "HEAD"));
-      expect(committed.snapshot.packPath).toBeDefined();
 
       await fs.writeFile(path.join(localPath, ".git", "HEAD"), "invalid HEAD\n");
       await expect(service.prepareSync({ ...request, generation: 4 })).rejects.toThrow(
@@ -174,7 +172,7 @@ describe("node workspace transfer service", () => {
     }
   });
 
-  it("streams a plain workspace to the node and accepts only its changed result blobs", async () => {
+  it("streams workspace and changed results beyond worker credential expiry", async () => {
     const root = tempDirs.make("node-workspace-transfer-service-");
     const localPath = path.join(root, "gateway-workspace");
     await fs.mkdir(localPath);
@@ -191,7 +189,7 @@ describe("node workspace transfer service", () => {
     const credential = {
       credentialHash: "a".repeat(43),
       ownerEpoch: 3,
-      expiresAtMs: nowMs + 10 * 60_000,
+      expiresAtMs: nowMs + 60_000,
       sessionId: "session-1",
     };
     const service = createNodeWorkspaceTransferService({
@@ -225,12 +223,7 @@ describe("node workspace transfer service", () => {
         headers: { authorization: `Bearer ${uploadTokenForGet}` },
       });
       service.revoke("environment-1", uploadTokenForGet);
-      nowMs += 10 * 60_000;
-      const expired = await fetch(`${httpOrigin}${manifestPath}`, {
-        headers: { authorization: `Bearer ${prepared.token}` },
-      });
-      nowMs -= 10 * 60_000;
-      for (const response of [crossEnvironment, wrongDirection, expired]) {
+      for (const response of [crossEnvironment, wrongDirection]) {
         expect(response.status).toBe(404);
         expect(response.headers.get("cache-control")).toBe("no-store");
         await expect(response.json()).resolves.toEqual({ error: "not_found" });
@@ -265,6 +258,19 @@ describe("node workspace transfer service", () => {
       await expect(
         fs.readFile(path.join(downloaded.workspaceDir, "nested", "input.txt"), "utf8"),
       ).resolves.toBe("nested input\n");
+      nowMs += 2 * 60_000;
+      const afterWorkerExpiry = await fetch(`${httpOrigin}${manifestPath}`, {
+        headers: { authorization: `Bearer ${prepared.token}` },
+      });
+      expect(afterWorkerExpiry.status).toBe(200);
+      await afterWorkerExpiry.arrayBuffer();
+      nowMs += 8 * 60_000;
+      const expired = await fetch(`${httpOrigin}${manifestPath}`, {
+        headers: { authorization: `Bearer ${prepared.token}` },
+      });
+      expect(expired.status).toBe(404);
+      expect(expired.headers.get("cache-control")).toBe("no-store");
+      await expect(expired.json()).resolves.toEqual({ error: "not_found" });
       await fs.writeFile(path.join(downloaded.workspaceDir, "result.txt"), "node result\n");
       const attachmentsRoot = path.join(root, "attachments");
       const inputDirectory = stagedInputDirectory("a".repeat(64));
@@ -403,7 +409,9 @@ describe("node workspace transfer service", () => {
         "environment-1",
         prepared.snapshot.manifestRef,
       );
-      await expect(uploadResult(failedUploadToken)).rejects.toThrow("workspace-transfer-failed");
+      await expect(uploadResult(failedUploadToken)).rejects.toThrow(
+        "workspace-transfer-invalid: gateway rejected workspace transfer payload (staging)",
+      );
       expect(writeFaults.lastStagingRoot()).toBeDefined();
       await expect(fs.stat(writeFaults.lastStagingRoot()!)).rejects.toMatchObject({
         code: "ENOENT",

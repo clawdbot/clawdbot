@@ -220,4 +220,25 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
       }),
     ).toBe(false);
   });
+
+  it.each([
+    { version: "2026.4.28", fresh: false },
+    { version: "2026.4.29-beta.1", fresh: false },
+    { version: "2026.4.29", fresh: true },
+    { version: "2026.9.1", fresh: true },
+    { version: "unknown", fresh: false },
+    { version: undefined, fresh: false },
+  ])("selects the downgrade config writer for $version", ({ version, fresh }) => {
+    expect(
+      shouldResumePostCoreUpdateInFreshProcess({
+        result: {
+          ...unchangedGitResult,
+          mode: "npm",
+          before: { version: "2026.9.3-beta.1" },
+          after: { version },
+        },
+        downgradeRisk: true,
+      }),
+    ).toBe(fresh);
+  });
 });

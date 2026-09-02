@@ -1,13 +1,18 @@
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
-  it.each(["chat", "new"])(
-    "keeps independent model and effort controls within the %s composer",
-    async (route) => {
+  it.each(
+    ["chat", "new"].flatMap((route) =>
+      [false, true].map((tooltipOpen) => ({ route, tooltipOpen })),
+    ),
+  )(
+    "keeps independent model and effort controls within the $route composer (tooltip open: $tooltipOpen)",
+    async ({ route, tooltipOpen }) => {
       await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
         const longName =
           "Long catalog display name for a model with a very large context window and detailed reasoning capabilities";
@@ -54,7 +59,7 @@ suite.define(() => {
               },
               sessions: [
                 {
-                  key: "main",
+                  key: "agent:main:main",
                   kind: "direct",
                   model: "gpt-5.6-luna",
                   modelProvider: "openai",
@@ -129,10 +134,13 @@ suite.define(() => {
           await expect
             .poll(() => model.evaluate((node) => node === document.activeElement))
             .toBe(true);
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactRoot
+            ? createControlUiE2eArtifactDir("chat-model-controls", artifactRoot)
+            : undefined;
           if (artifactDir && [320, 393, 560, 1280].includes(width)) {
             await page.screenshot({
-              path: `${artifactDir}/${route}-model-effort-${width}.png`,
+              path: `${artifactDir}/${route}-model-effort-${width}-tooltip-${tooltipOpen}.png`,
               animations: "disabled",
             });
           }
@@ -162,7 +170,7 @@ suite.define(() => {
         await expect.poll(needleAngle).toBe(-120);
         if (route === "chat") {
           expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-            key: "main",
+            key: "agent:main:main",
             thinkingLevel: "low",
           });
         }
@@ -173,7 +181,27 @@ suite.define(() => {
         await slider.press("End");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
         expect(await needleAngle()).toBe(120);
+        // The pointer can remain over the changing effort label during slider input.
+        // Establish whether the hover hint or the picker owns this Escape.
+        await slider.hover();
+        const openTooltips = page.locator("openclaw-tooltip[open]");
+        await expect.poll(() => openTooltips.count()).toBe(0);
+        expect(await slider.evaluate((node) => node === document.activeElement)).toBe(true);
+        if (tooltipOpen) {
+          await effort.hover();
+          await expect.poll(() => openTooltips.count()).toBe(1);
+          await expect
+            .poll(() => openTooltips.locator(".tooltip-content").textContent())
+            .toBe("High");
+          await page.keyboard.press("Escape");
+          await expect.poll(() => openTooltips.count()).toBe(0);
+          expect(await slider.isVisible()).toBe(true);
+          expect(await slider.inputValue()).toBe("1");
+          expect(await effort.getAttribute("data-chat-thinking-value")).toBe("high");
+          expect(await slider.evaluate((node) => node === document.activeElement)).toBe(true);
+        }
         await page.keyboard.press("Escape");
+        await expect.poll(() => slider.isVisible()).toBe(false);
         await expect
           .poll(() => effort.evaluate((node) => node === document.activeElement))
           .toBe(true);
@@ -209,10 +237,13 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+          const artifactDir = artifactRoot
+            ? createControlUiE2eArtifactDir("chat-model-controls", artifactRoot)
+            : undefined;
           if (artifactDir) {
             await page.screenshot({
-              path: `${artifactDir}/chat-model-effort-split.png`,
+              path: `${artifactDir}/chat-model-effort-split-tooltip-${tooltipOpen}.png`,
               animations: "disabled",
             });
           }
@@ -225,7 +256,10 @@ suite.define(() => {
             .poll(async () =>
               (await gateway.getRequests("sessions.patch")).map(({ params }) => params),
             )
-            .toContainEqual({ key: "main", model: "openai/speed-only" });
+            .toContainEqual({
+              key: "agent:main:main",
+              model: "openai/speed-only",
+            });
         } else {
           await expect.poll(() => effort.count()).toBe(1);
           await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Standard");
@@ -259,7 +293,7 @@ suite.define(() => {
               },
               sessions: [
                 {
-                  key: "main",
+                  key: "agent:main:main",
                   kind: "direct",
                   model: "basic",
                   modelProvider: provider,
@@ -298,7 +332,7 @@ suite.define(() => {
         expect(await composer.locator("[data-chat-thinking-slider]").count()).toBe(0);
         await composer.getByRole("switch", { name: /Fast responses/ }).click();
         expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-          key: "main",
+          key: "agent:main:main",
           fastMode: true,
         });
         await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Fast");
@@ -306,7 +340,10 @@ suite.define(() => {
         await expect
           .poll(() => effort.evaluate((node) => node === document.activeElement))
           .toBe(true);
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+        const artifactDir = artifactRoot
+          ? createControlUiE2eArtifactDir("chat-model-controls", artifactRoot)
+          : undefined;
         if (artifactDir) {
           await page.screenshot({
             path: `${artifactDir}/chat-speed-only-320.png`,

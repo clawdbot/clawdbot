@@ -7,7 +7,7 @@ import {
   MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
 } from "./run/idle-timeout-breaker.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
-import { createUsageAccumulator } from "./usage-accumulator.js";
+import { createUsageAccumulator, toNormalizedUsage } from "./usage-accumulator.js";
 
 function makeAttempt(
   preflightRecovery?: EmbeddedRunAttemptResult["preflightRecovery"],
@@ -129,6 +129,62 @@ describe("normalizeEmbeddedRunAttempt", () => {
       throw new Error(`expected complete, got ${result?.action ?? "no result"}`);
     }
     expect(result.result.meta.agentMeta?.credentialSource).toEqual({ kind: "profile" });
+  });
+
+  it.each([undefined, 0.125])(
+    "keeps attempt cost %s authoritative over a synthetic assistant zero-cost placeholder",
+    async (total) => {
+      const attempt = makeAttempt();
+      attempt.attemptUsage = {
+        input: 300_000,
+        output: 200,
+        ...(total !== undefined ? { cost: { total } } : {}),
+      };
+      const assistant = {
+        ...makeCliUsageAssistant("stop"),
+        api: "openai-chatgpt-responses",
+        usage: {
+          input: 150_000,
+          output: 100,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 150_100,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      };
+      attempt.lastAssistant = assistant as never;
+      attempt.currentAttemptAssistant = assistant as never;
+      const input = makeNormalizationInput(attempt, makePromptState());
+
+      await normalizeEmbeddedRunAttempt(input);
+
+      expect(toNormalizedUsage(input.usageAccumulator)).toMatchObject({
+        input: 300_000,
+        output: 200,
+      });
+      expect(toNormalizedUsage(input.usageAccumulator)?.cost).toEqual(
+        total !== undefined ? { total } : undefined,
+      );
+    },
+  );
+
+  it("keeps exact attempt context usage for a tool-only turn", async () => {
+    const attempt = makeAttempt();
+    attempt.attemptUsage = {
+      input: 521,
+      output: 197,
+      total: 21_966,
+      contextUsage: { state: "available", promptTokens: 21_769, totalTokens: 21_966 },
+    };
+
+    const result = await normalizeEmbeddedRunAttempt(
+      makeNormalizationInput(attempt, makePromptState()),
+    );
+
+    expect(result).toMatchObject({
+      action: "proceed",
+      lastRunPromptUsage: attempt.attemptUsage,
+    });
   });
 
   it("waits for pending user-turn persistence before deriving retry suppression", async () => {

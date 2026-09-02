@@ -122,13 +122,13 @@ export async function exportTrajectoryCommand(
   if (resolvedOpts.agent !== undefined && !requestedAgent) {
     throwTrajectoryExportError("--agent must not be blank");
   }
-  let targetAgentId = resolveAgentIdFromSessionKey(sessionKey);
-  if (requestedAgent) {
-    try {
-      targetAgentId = resolveConfiguredAgentId(getRuntimeConfig(), requestedAgent);
-    } catch (error) {
-      throwTrajectoryExportError(formatErrorMessage(error));
-    }
+  let targetAgentId: string;
+  try {
+    targetAgentId = requestedAgent
+      ? resolveConfiguredAgentId(getRuntimeConfig(), requestedAgent)
+      : resolveAgentIdFromSessionKey(sessionKey);
+  } catch (error) {
+    throwTrajectoryExportError(formatErrorMessage(error));
   }
   let storePath = resolvedOpts.store
     ? resolveSessionStorePathCore(resolvedOpts.store, { agentId: targetAgentId })
@@ -138,7 +138,7 @@ export async function exportTrajectoryCommand(
       storePath = resolveExplicitSessionStorePath({
         storePath,
         inputStorePath: resolvedOpts.store,
-        agentId: targetAgentId ?? "main",
+        agentId: targetAgentId,
       });
     } catch (error) {
       throwTrajectoryExportError(formatErrorMessage(error));

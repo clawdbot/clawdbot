@@ -583,7 +583,6 @@ jobs:
           OPENCLAW_NPM_TELEGRAM_RTT_CHECKS: ${{ inputs.rtt_scenario }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           OPENCLAW_QA_SUITE_PROGRESS: "1"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           INPUT_SCENARIO: ${{ inputs.scenario }}
@@ -781,6 +780,24 @@ jobs:
           fi
 
           pnpm test:docker:npm-telegram-live
+
+      - name: Summarize Telegram attempt
+        if: always()
+        env:
+          ADVISORY: ${{ inputs.advisory }}
+          LANE_OUTCOME: ${{ steps.run_lane.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Package Telegram attempt"
+            echo
+            echo "- Telegram attempt: ${LANE_OUTCOME}"
+            echo "- Advisory: ${ADVISORY}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$ADVISORY" == "true" && "$LANE_OUTCOME" != "success" ]]; then
+            echo "::warning::Package Telegram attempt: ${LANE_OUTCOME}; release testing is best effort."
+          fi
 
       - name: Upload npm Telegram E2E artifacts
         if: always()

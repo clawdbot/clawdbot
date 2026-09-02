@@ -17,24 +17,10 @@ enum WatchApprovalReadbackCandidate<Prompt, PersistedReadback> {
 enum WatchChatPresentation {
     private static let previewItemLimit = 5
 
-    private struct MetadataEnvelope: Decodable {
-        struct Metadata: Decodable {
-            var id: String?
-        }
-
-        var metadata: Metadata?
-        var messageToolMirror: [String: String]?
-
-        enum CodingKeys: String, CodingKey {
-            case metadata = "__openclaw"
-            case messageToolMirror = "openclawMessageToolMirror"
-        }
-    }
-
     private struct MessageEntry {
         var message: OpenClawChatMessage
         var text: String
-        var serverID: String?
+        var runID: String?
         var isMessageToolMirror: Bool
     }
 
@@ -42,37 +28,57 @@ enum WatchChatPresentation {
         from rawMessages: [OpenClawKit.AnyCodable],
         runID: String,
         submittedText: String,
-        submittedAtMs: Int64) -> String?
+        submittedAtMs: Int64,
+        inputConsumptions: [OpenClawChatHistoryPayload.InputConsumption]? = nil) -> String?
     {
         let entries = rawMessages.compactMap(Self.decodeMessage)
         if let directReply = entries.last(where: {
-            Self.isTerminalAssistant($0) && $0.message.idempotencyKey == runID
+            Self.isTerminalAssistant($0) && ($0.runID ?? $0.message.idempotencyKey) == runID
         }) {
             return directReply.text
         }
 
+        let consumedEventID = inputConsumptions?.first { $0.runId == runID }?.consumedByEventId
         let userIdempotencyKey = "\(runID):user"
-        let exactUserIndex = entries.lastIndex(where: {
-            $0.message.role.lowercased() == "user" &&
-                $0.message.idempotencyKey == userIdempotencyKey
+        var userIndex = entries.lastIndex(where: { entry in
+            guard entry.message.role.lowercased() == "user" else { return false }
+            if let consumedEventID {
+                return entry.message.transcriptMessageID == consumedEventID
+            }
+            return entry.message.idempotencyKey == userIdempotencyKey
         })
-        let queuedUserIndex = entries.lastIndex(where: { entry in
-            guard entry.message.role.lowercased() == "user",
-                  let timestampMs = Self.timestampMs(entry.message.timestamp),
-                  timestampMs >= submittedAtMs
-            else { return false }
-            return entry.text.contains(submittedText)
-        })
-        guard let userIndex = exactUserIndex ?? queuedUserIndex else { return nil }
-        return entries[(userIndex + 1)...].first(where: Self.isTerminalAssistant)?.text
+        if userIndex == nil, consumedEventID == nil, inputConsumptions == nil {
+            // Older gateways lack receipts; repeated prompts must not become guessed ownership.
+            let candidates = entries.indices.filter { index in
+                let entry = entries[index]
+                guard entry.message.role.lowercased() == "user",
+                      let timestampMs = Self.timestampMs(entry.message.timestamp),
+                      timestampMs >= submittedAtMs
+                else { return false }
+                return entry.text.contains(submittedText)
+            }
+            guard candidates.count == 1 else { return nil }
+            userIndex = candidates.first
+        }
+        guard let userIndex else { return nil }
+        for entry in entries.dropFirst(userIndex + 1) {
+            // Attachment-only user rows still bound the turn even when previews hide them.
+            guard entry.message.role.lowercased() != "user" else { return nil }
+            // A collected input may execute under a fresh run ID; only its receipt permits that.
+            if consumedEventID == nil, let candidateRunID = entry.runID, candidateRunID != runID {
+                return nil
+            }
+            if Self.isTerminalAssistant(entry) { return entry.text }
+        }
+        return nil
     }
 
     nonisolated static func makeItems(
         from rawMessages: [OpenClawKit.AnyCodable]) -> [OpenClawWatchChatItem]
     {
         var occurrences: [String: Int] = [:]
-        let identified = rawMessages.compactMap(Self.decodeMessage).map { entry in
-            let baseID = entry.serverID.map { "\(entry.message.role)-\($0)" }
+        let identified = rawMessages.compactMap(Self.decodeMessage).filter { !$0.text.isEmpty }.map { entry in
+            let baseID = entry.message.transcriptMessageID.map { "\(entry.message.role)-\($0)" }
                 ?? Self.fallbackKey(entry)
             occurrences[baseID, default: 0] += 1
             return (entry, "\(baseID)-\(occurrences[baseID]!)")
@@ -87,7 +93,7 @@ enum WatchChatPresentation {
     }
 
     private nonisolated static func isTerminalAssistant(_ entry: MessageEntry) -> Bool {
-        guard entry.message.role.lowercased() == "assistant" else { return false }
+        guard entry.message.role.lowercased() == "assistant", !entry.text.isEmpty else { return false }
         if entry.isMessageToolMirror { return true }
         guard let stopReason = entry.message.stopReason?.lowercased() else { return false }
         // Progress rows are not final replies; the later assistant row owns completion.
@@ -100,13 +106,12 @@ enum WatchChatPresentation {
         else { return nil }
         let text = ChatMessageVisibleText.visibleText(in: message)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        let metadata = try? JSONDecoder().decode(MetadataEnvelope.self, from: data)
+        let fields = raw.dictionaryValue
         return MessageEntry(
             message: message,
             text: text,
-            serverID: metadata?.metadata?.id,
-            isMessageToolMirror: metadata?.messageToolMirror != nil)
+            runID: fields?["__openclaw"]?.dictionaryValue?["runId"]?.stringValue,
+            isMessageToolMirror: fields?["openclawMessageToolMirror"]?.dictionaryValue != nil)
     }
 
     private nonisolated static func fallbackKey(_ entry: MessageEntry) -> String {
@@ -141,8 +146,7 @@ final class WatchMessageOutbox {
         case dropMissingFields
         case dropMissingTarget
         case deduped(messageID: String)
-        case queue(messageID: String)
-        case forward
+        case queue(event: WatchAppCommandEvent)
     }
 
     // Keep the shipped chat key so upgrades retain messages already queued by the Watch.
@@ -180,7 +184,6 @@ final class WatchMessageOutbox {
 
     func ingest(
         _ event: WatchAppCommandEvent,
-        isAvailable: Bool,
         gatewayStableID: String?) -> Decision
     {
         let messageID = event.commandId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -188,23 +191,30 @@ final class WatchMessageOutbox {
         if messageID.isEmpty || text.isEmpty {
             return .dropMissingFields
         }
-        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !owner.isEmpty else { return .dropMissingTarget }
+        guard let owner = GatewayStableIdentifier.exact(gatewayStableID) else { return .dropMissingTarget }
         if self.seenMessageIDs.contains(messageID) {
+            // Pending replay resumes the admitted payload; only delivered or foreign work is deduped.
+            if let pending = self.queuedMessages.first(where: {
+                $0.event.commandId == messageID && GatewayStableIdentifier.matches($0.gatewayStableID, owner)
+            }) {
+                return .queue(event: pending.event)
+            }
             return .deduped(messageID: messageID)
         }
         // Persist before network delivery; iOS may suspend a background callback at any await.
+        let queuedEvent = self.message(event, taggedFor: owner)
         self.queuedMessages.append(
-            QueuedMessage(gatewayStableID: owner, event: self.message(event, taggedFor: owner)))
+            QueuedMessage(gatewayStableID: owner, event: queuedEvent))
         self.rebuildSeenMessageIDs()
         self.persistQueue()
-        return isAvailable ? .forward : .queue(messageID: messageID)
+        return .queue(event: queuedEvent)
     }
 
     func recordPromptRoute(promptID: String?, gatewayStableID: String?) {
         let promptID = promptID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let gatewayStableID = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !promptID.isEmpty, promptID != "unknown", !gatewayStableID.isEmpty else { return }
+        guard !promptID.isEmpty, promptID != "unknown",
+              let gatewayStableID = GatewayStableIdentifier.exact(gatewayStableID)
+        else { return }
         self.promptRoutes.removeAll { $0.promptID == promptID }
         self.promptRoutes.append(PromptRoute(promptID: promptID, gatewayStableID: gatewayStableID))
         if self.promptRoutes.count > Self.maxPromptRoutes {
@@ -219,39 +229,32 @@ final class WatchMessageOutbox {
         return self.promptRoutes.last { $0.promptID == promptID }?.gatewayStableID
     }
 
-    func nextQueuedMessage(isAvailable: Bool, gatewayStableID: String?) -> WatchAppCommandEvent? {
-        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard isAvailable, !owner.isEmpty else { return nil }
+    func nextQueuedMessage(
+        isAvailable: Bool,
+        gatewayStableID: String?,
+        excludingMessageIDs: Set<String> = []) -> WatchAppCommandEvent?
+    {
+        guard isAvailable, let owner = GatewayStableIdentifier.exact(gatewayStableID) else { return nil }
         // Replies are time-sensitive; a retrying chat must not strand them behind it.
-        if let reply = self.queuedMessages.first(where: {
-            $0.gatewayStableID == owner && self.kind(of: $0.event) == .quickReply
-        }) {
-            return reply.event
+        var oldest: WatchAppCommandEvent?
+        for queued in self.queuedMessages where
+            GatewayStableIdentifier.matches(queued.gatewayStableID, owner) &&
+            !excludingMessageIDs.contains(queued.event.commandId)
+        {
+            if self.kind(of: queued.event) == .quickReply { return queued.event }
+            if oldest == nil { oldest = queued.event }
         }
-        return self.queuedMessages.first { $0.gatewayStableID == owner }?.event
+        return oldest
     }
 
     func removeQueuedMessage(messageID: String, gatewayStableID: String?) {
         let messageID = messageID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !messageID.isEmpty, !owner.isEmpty else { return }
+        guard !messageID.isEmpty, let owner = GatewayStableIdentifier.exact(gatewayStableID) else { return }
         guard let index = self.queuedMessages.firstIndex(where: {
-            $0.gatewayStableID == owner && $0.event.commandId == messageID
+            GatewayStableIdentifier.matches($0.gatewayStableID, owner) && $0.event.commandId == messageID
         }) else { return }
         self.queuedMessages.remove(at: index)
         self.rememberRecentMessageID(messageID)
-        self.persistQueue()
-    }
-
-    func requeueFront(_ event: WatchAppCommandEvent, gatewayStableID: String?) {
-        let messageID = event.commandId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let owner = gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !messageID.isEmpty, !owner.isEmpty else { return }
-        self.queuedMessages.removeAll { $0.event.commandId == messageID }
-        self.queuedMessages.insert(
-            QueuedMessage(gatewayStableID: owner, event: self.message(event, taggedFor: owner)),
-            at: 0)
-        self.rebuildSeenMessageIDs()
         self.persistQueue()
     }
 
@@ -276,10 +279,9 @@ final class WatchMessageOutbox {
 
         var seenSet = Set<String>()
         self.queuedMessages = persisted.compactMap { queued in
-            let owner = queued.gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
             let messageID = queued.event.commandId.trimmingCharacters(in: .whitespacesAndNewlines)
             let text = queued.event.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !owner.isEmpty,
+            guard let owner = GatewayStableIdentifier.exact(queued.gatewayStableID),
                   !messageID.isEmpty,
                   !text.isEmpty,
                   !self.recentMessageIDs.contains(messageID),
@@ -321,8 +323,9 @@ final class WatchMessageOutbox {
 
         for rawRoute in metadata.promptRoutes {
             let promptID = rawRoute.promptID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let gatewayStableID = rawRoute.gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !promptID.isEmpty, promptID != "unknown", !gatewayStableID.isEmpty else { continue }
+            guard !promptID.isEmpty, promptID != "unknown",
+                  let gatewayStableID = GatewayStableIdentifier.exact(rawRoute.gatewayStableID)
+            else { continue }
             self.promptRoutes.removeAll { $0.promptID == promptID }
             self.promptRoutes.append(PromptRoute(promptID: promptID, gatewayStableID: gatewayStableID))
         }

@@ -8,11 +8,11 @@ import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Frame } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
 import {
   disposeAllSessionMcpRuntimes,
   getOrCreateSessionMcpRuntime,
-} from "../../../src/agents/agent-bundle-mcp-runtime.js";
+} from "../../../src/agents/agent-bundle-mcp-manager-api.js";
+import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
 import {
   clearConfigCache,
@@ -56,7 +56,10 @@ const describeConformance = chromiumAvailable || !allowMissingChromium ? describ
 const authValue = "test";
 const sessionKey = "agent:main:mcp-app-conformance";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/mcp-app-request-lifetime");
+const proofDir = path.resolve(
+  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() || ".artifacts/control-ui-e2e",
+  "mcp-app-request-lifetime",
+);
 const proofOptions = { proofDir, captureUiProof };
 const recordHost = recordMcpAppHost.bind(undefined, proofOptions);
 

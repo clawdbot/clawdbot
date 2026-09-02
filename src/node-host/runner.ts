@@ -43,6 +43,8 @@ type NodeHostRunOptions = {
   stopAfterFirstConnect?: boolean;
   /** Host worker sessions for this process even when durable node config is disabled. */
   forceWorkerRuns?: boolean;
+  /** Disposable cloud host: computer control stays on the private environment carrier. */
+  ephemeral?: boolean;
   /** Optional WebSocket context path (e.g. "/openclaw-gw"). */
   gatewayContextPath?: string;
   nodeId?: string;
@@ -193,13 +195,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     enableAgentRuns: true,
     enableWorkerRuns: true,
     forceWorkerRuns: opts.forceWorkerRuns,
+    ephemeral: opts.ephemeral,
     installedAppsSharingEnabled: config.installedAppsSharing,
   });
-  if (preparedRuntime.workerHostingDisabledReason) {
-    writeStderrLine(
-      `node host worker hosting disabled: ${preparedRuntime.workerHostingDisabledReason}`,
-    );
-  }
   const { token, password } = opts.gatewayBootstrapToken
     ? {}
     : await resolveNodeHostGatewayCredentials({

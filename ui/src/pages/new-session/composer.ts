@@ -91,6 +91,7 @@ export type NewSessionComposerOptions = {
   onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
+  onBackgroundSubmit?: () => void;
 };
 
 function submitNewSession(options: NewSessionComposerOptions) {
@@ -281,16 +282,21 @@ export class NewSessionComposerTextareaController {
    * Writing the final insertion directly grows the box before the next render
    * commits that same value into the page-owned draft.
    */
-  insertTranscript(transcript: string): string | null {
+  insertTranscript(transcript: string, late?: true): string | null {
     const target = this.textarea;
     if (!target) {
       return null;
     }
-    const selection = this.capturedSelection ?? {
-      start: target.value.length,
-      end: target.value.length,
-      value: target.value,
-    };
+    const captured = this.capturedSelection;
+    // Delayed finals must not replace edits made after Stop unlocked this draft.
+    const selection =
+      captured && (!late || captured.value === target.value)
+        ? captured
+        : {
+            start: late ? target.selectionStart : target.value.length,
+            end: late ? target.selectionEnd : target.value.length,
+            value: target.value,
+          };
     this.capturedSelection = null;
     const insertion = insertComposerDictation(
       selection.value,
@@ -409,10 +415,23 @@ function handleComposerKeydown(
   ) {
     return;
   }
-  if (event.key !== "Enter" || event.shiftKey) {
+  if (event.key !== "Enter") {
     return;
   }
-  if (options.requiresModifier && !event.metaKey && !event.ctrlKey) {
+  const hasSubmitModifier = event.metaKey || event.ctrlKey;
+  const isBackgroundShortcut = options.requiresModifier
+    ? hasSubmitModifier && event.shiftKey
+    : hasSubmitModifier && !event.shiftKey;
+  if (!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit) {
+    if (options.canSubmit || options.submitDisabledReason !== undefined) {
+      event.preventDefault();
+      resetSkillMenuState(options.textareaController.skillMenuState);
+      resetSlashMenuState(options.textareaController.slashMenuState);
+      options.onBackgroundSubmit();
+    }
+    return;
+  }
+  if (event.shiftKey || (options.requiresModifier && !hasSubmitModifier)) {
     return;
   }
   // A reasoned gate still consumes the press: the submission flow records the
@@ -512,6 +531,13 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     ? getActiveSkillMenuOptionLabel(skillMenuState)
     : getActiveSlashMenuOptionLabel(slashMenuState);
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
+  const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
+  const backgroundShortcut = options.requiresModifier
+    ? "Control+Shift+Enter Meta+Shift+Enter"
+    : "Control+Enter Meta+Enter";
+  const keyShortcuts = options.onBackgroundSubmit
+    ? `${ordinaryShortcut} ${backgroundShortcut}`
+    : ordinaryShortcut;
   return html`
     <div
       class="agent-chat__composer-shell new-session-page__composer"
@@ -549,6 +575,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               ?readonly=${options.dictationActive}
               placeholder=${animatedPlaceholder}
               aria-label=${messagePlaceholder}
+              aria-keyshortcuts=${keyShortcuts}
               .value=${visibleMessage}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}

@@ -201,8 +201,13 @@ export async function withSystemdDefinitionMutation<T>(
   env: GatewayServiceEnv,
   environment: GatewayServiceEnv,
   run: (mutation: SystemdDefinitionMutation) => Promise<T>,
+  options?: { timeoutMs?: number },
 ): Promise<T> {
-  let initial = await inspect(env, environment);
+  const deadlineAt =
+    options?.timeoutMs && options.timeoutMs > 0 ? Date.now() + options.timeoutMs : undefined;
+  const remainingTimeoutMs = () =>
+    deadlineAt === undefined ? undefined : Math.max(1, deadlineAt - Date.now());
+  let initial = await inspect(env, environment, remainingTimeoutMs());
   assertServiceDefinitionWritable(initial.capability);
   const { unit, generated } = resolveMutationTargets(env, environment);
   // Group-writable umasks must not create directories that inspect() would reject.
@@ -216,7 +221,7 @@ export async function withSystemdDefinitionMutation<T>(
     .toSorted();
   const execute = async (): Promise<T> => {
     const refresh = async (unchanged = false, firstUnitPublication = false) => {
-      const current = await inspect(env, environment);
+      const current = await inspect(env, environment, remainingTimeoutMs());
       assertServiceDefinitionWritable(current.capability);
       const expected = new Map(initial.fingerprint);
       // LoadUnit can reveal shared defaults only after the first base publication.
@@ -286,7 +291,7 @@ export async function withSystemdDefinitionMutation<T>(
       if (published === undefined) {
         return;
       }
-      const current = await inspect(env, environment);
+      const current = await inspect(env, environment, remainingTimeoutMs());
       // A refreshed global snapshot never grants ownership of another artifact's edit.
       if (current.capability.kind !== "writable" || current.fingerprint.get(file) !== published) {
         return;
@@ -304,13 +309,21 @@ export async function withSystemdDefinitionMutation<T>(
     };
     return await run({ snapshots: initial.snapshots, publish, restore });
   };
-  const lockOptions = {
-    stale: 60_000,
-    retries: { retries: 100, factor: 1, minTimeout: 50, maxTimeout: 100 },
+  const lockOptions = () => {
+    const timeoutMs = remainingTimeoutMs();
+    return {
+      stale: 60_000,
+      retries: {
+        retries: timeoutMs === undefined ? 100 : Math.max(0, Math.ceil(timeoutMs / 50) - 1),
+        factor: 1,
+        minTimeout: 50,
+        maxTimeout: 100,
+      },
+    };
   };
   const acquire = async (index: number): Promise<T> =>
     index === targets.length
       ? execute()
-      : withFileLock(targets[index]!, lockOptions, () => acquire(index + 1));
+      : withFileLock(targets[index]!, lockOptions(), () => acquire(index + 1));
   return await acquire(0);
 }

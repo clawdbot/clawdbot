@@ -11,11 +11,13 @@ import type {
   CodexTurnStartParams,
   CodexUserInput,
 } from "./protocol.js";
-import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
+import {
+  readCodexSupportedReasoningEfforts,
+  resolveCodexAppServerReasoningEffort,
+} from "./reasoning-effort.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
-  resolveReasoningEffort,
 } from "./thread-model-selection.js";
 import { buildCodexUserInput } from "./user-input.js";
 
@@ -79,13 +81,29 @@ export function buildTurnStartParams(
         agentDir: params.agentDir,
         config: params.config,
       });
+  const collaborationMode = modelSelection
+    ? buildTurnCollaborationMode(params, {
+        model: modelSelection.model,
+        turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
+        skillsCollaborationInstructions: options.skillsCollaborationInstructions,
+        memoryCollaborationInstructions: options.memoryCollaborationInstructions,
+      })
+    : undefined;
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  const additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
+  let additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
     ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
     : undefined;
+  if (params.permissionChange?.notice) {
+    // Application context is a developer message in Codex 0.151.0 and also
+    // reaches native-preserved threads without overriding their turn settings.
+    additionalContext = {
+      ...additionalContext,
+      openclaw_permission_change: { kind: "application", value: params.permissionChange.notice },
+    };
+  }
   return {
     threadId: options.threadId,
     // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
@@ -123,26 +141,13 @@ export function buildTurnStartParams(
       : options.clearInheritedServiceTier
         ? { serviceTier: null }
         : {}),
-    ...(modelSelection
+    ...(collaborationMode
       ? {
-          effort: resolveReasoningEffort(
-            params.thinkLevel,
-            modelSelection.model,
-            readCodexSupportedReasoningEfforts(params.model?.compat),
-          ),
+          effort: collaborationMode.settings.reasoning_effort,
+          collaborationMode,
         }
       : {}),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
-    ...(modelSelection
-      ? {
-          collaborationMode: buildTurnCollaborationMode(params, {
-            model: modelSelection.model,
-            turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
-            skillsCollaborationInstructions: options.skillsCollaborationInstructions,
-            memoryCollaborationInstructions: options.memoryCollaborationInstructions,
-          }),
-        }
-      : {}),
   };
 }
 
@@ -162,11 +167,11 @@ export function buildTurnCollaborationMode(
     mode: "default",
     settings: {
       model,
-      reasoning_effort: resolveReasoningEffort(
-        params.thinkLevel,
-        model,
-        readCodexSupportedReasoningEfforts(params.model?.compat),
-      ),
+      reasoning_effort: resolveCodexAppServerReasoningEffort({
+        thinkLevel: params.thinkLevel,
+        modelId: model,
+        supportedReasoningEfforts: readCodexSupportedReasoningEfforts(params.model?.compat),
+      }),
       developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };

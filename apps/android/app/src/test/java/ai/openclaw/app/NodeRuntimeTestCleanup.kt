@@ -61,7 +61,7 @@ private suspend fun closeRuntime(runtime: NodeRuntime) {
   }
 }
 
-private fun drainWithMainLooper(block: suspend () -> Unit) {
+internal fun drainWithMainLooper(block: suspend () -> Unit) {
   val mainLooper = Looper.getMainLooper()
   val shadowLooper = shadowOf(mainLooper) as ShadowPausedLooper
   val handler = Handler(mainLooper)

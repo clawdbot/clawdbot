@@ -1,11 +1,11 @@
 package ai.openclaw.app.chat
 
-import androidx.room.Dao
-import androidx.room.Entity
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
-import androidx.room.Query
-import androidx.room.withTransaction
+import androidx.room3.Dao
+import androidx.room3.Entity
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
+import androidx.room3.withWriteTransaction
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -115,6 +115,7 @@ internal data class CachedSessionEntity(
   val agentId: String,
   val sessionKey: String,
   val displayName: String?,
+  val color: String?,
   val updatedAtMs: Long?,
   val status: String?,
   val startedAt: Long?,
@@ -307,6 +308,7 @@ class RoomChatTranscriptCache internal constructor(
         updatedAtMs = row.updatedAtMs,
         ownerAgentId = agent,
         displayName = row.displayName,
+        color = row.color,
         status = row.status,
         startedAt = row.startedAt,
         endedAt = row.endedAt,
@@ -381,7 +383,7 @@ class RoomChatTranscriptCache internal constructor(
     val agent = scopedAgentId(agentId) ?: return
     val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       val initialSessions = sessions.take(MAX_CACHED_SESSIONS)
       val needsRetainedRow = retainedKey != null && initialSessions.none { it.key == retainedKey }
       val retainedEntry = if (needsRetainedRow) sessions.firstOrNull { it.key == retainedKey } else null
@@ -393,6 +395,7 @@ class RoomChatTranscriptCache internal constructor(
               agentId = agent,
               sessionKey = entry.key,
               displayName = entry.displayName,
+              color = entry.color,
               updatedAtMs = entry.updatedAtMs,
               status = entry.status,
               startedAt = entry.startedAt,
@@ -414,6 +417,7 @@ class RoomChatTranscriptCache internal constructor(
             agentId = agent,
             sessionKey = session.key,
             displayName = session.displayName,
+            color = session.color,
             updatedAtMs = session.updatedAtMs,
             status = session.status,
             startedAt = session.startedAt,
@@ -451,9 +455,11 @@ class RoomChatTranscriptCache internal constructor(
           val content =
             message.content.mapNotNull { part ->
               when {
-                part.type == "text" && !part.text.isNullOrBlank() ->
+                part.type == "text" && !part.text.isNullOrBlank() -> {
                   CachedMessageContent(type = "text", text = part.text)
-                part.type == "image" && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank() ->
+                }
+
+                part.type == "image" && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank() -> {
                   CachedMessageContent(
                     type = "image",
                     mimeType = part.mimeType,
@@ -466,7 +472,9 @@ class RoomChatTranscriptCache internal constructor(
                     height = part.height,
                     sizeBytes = part.sizeBytes,
                   )
-                part.type == "audio" || part.type == "video" || part.type == "file" ->
+                }
+
+                part.type == "audio" || part.type == "video" || part.type == "file" -> {
                   CachedMessageContent(
                     type = part.type,
                     mimeType = part.mimeType,
@@ -481,7 +489,11 @@ class RoomChatTranscriptCache internal constructor(
                     durationMs = part.durationMs,
                     playback = part.playback,
                   )
-                else -> null
+                }
+
+                else -> {
+                  null
+                }
               }
             }
           if (content.isEmpty() && message.provenance == null && message.transcriptMarker == null) return@mapNotNull null
@@ -518,7 +530,7 @@ class RoomChatTranscriptCache internal constructor(
           )
         }
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteTranscript(gateway, agent, key)
       dao.insertMessages(rows)
       // A transcript may arrive for a session missing from the cached list (e.g. deep session
@@ -534,6 +546,7 @@ class RoomChatTranscriptCache internal constructor(
               agentId = agent,
               sessionKey = key,
               displayName = null,
+              color = null,
               updatedAtMs = null,
               status = null,
               startedAt = null,
@@ -555,7 +568,7 @@ class RoomChatTranscriptCache internal constructor(
   override suspend fun clearGateway(gatewayId: String) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteMessages(gateway)
       dao.deleteSessionsForGateway(gateway)
       dao.deleteGatewayOwner(gateway)
@@ -571,7 +584,7 @@ class RoomChatTranscriptCache internal constructor(
     val agent = scopedAgentId(agentId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val dao = database.dao()
-    database.withTransaction {
+    database.withWriteTransaction {
       dao.deleteSessionRow(gateway, agent, key)
       dao.deleteTranscript(gateway, agent, key)
     }

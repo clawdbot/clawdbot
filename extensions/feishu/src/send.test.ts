@@ -90,8 +90,7 @@ describe("getMessageFeishu", () => {
       receipt: {
         primaryPlatformMessageId: messageId,
         platformMessageIds: [messageId],
-        parts: [{ platformMessageId: messageId, kind: "text", index: 0, raw, threadId: chatId }],
-        threadId: chatId,
+        parts: [{ platformMessageId: messageId, kind: "text", index: 0, raw }],
         sentAt: result.receipt.sentAt,
         raw: [raw],
       },

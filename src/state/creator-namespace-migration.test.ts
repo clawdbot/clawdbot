@@ -11,6 +11,7 @@ import {
   openOpenClawAgentDatabase,
   withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -150,7 +151,9 @@ describe("creator namespace upgrades", () => {
         PRAGMA user_version = 13; UPDATE schema_meta SET schema_version = 13;`);
       closeOpenClawStateDatabaseForTest();
       const reopened = openOpenClawStateDatabase({ env: state.env });
-      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(14);
+      expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
         createdActor: {
           type: "human",

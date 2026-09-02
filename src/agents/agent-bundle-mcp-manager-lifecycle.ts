@@ -1,4 +1,5 @@
 /** Session MCP runtime manager lifecycle: maps, idle sweep, dispose, advertised catalog. */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { logWarn } from "../logger.js";
 import {
   DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS,
@@ -13,6 +14,10 @@ import type {
   RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
+
+// Gateway shutdown preparation and CLI command imports load this before turns.
+// The process-owned sweep must not retain its first requesting turn.
+const runInMcpManagerContext = AsyncLocalStorage.snapshot();
 
 type ManagerCreateInFlight = {
   promise: Promise<SessionMcpRuntime>;
@@ -115,6 +120,7 @@ export type SessionMcpRuntimeManagerLifecycle = {
   ensureIdleSweepTimer: () => void;
   clearIdleSweepTimer: () => void;
   disposeRuntimeKeyNow: (runtimeKey: string) => Promise<void>;
+  disposeRuntimeKeys: (runtimeKeys: Iterable<string>) => Promise<void>;
   disposeManagedSession: (
     sessionId: string,
     opts?: { preserveRequiredRetirement?: boolean },
@@ -278,7 +284,9 @@ export function createSessionMcpRuntimeManagerLifecycle(
     if (!store.enableIdleSweepTimer || store.idleSweepIntervalMs <= 0 || store.idleSweepTimer) {
       return;
     }
-    store.idleSweepTimer = setInterval(queueIdleSweep, store.idleSweepIntervalMs);
+    store.idleSweepTimer = runInMcpManagerContext(() =>
+      setInterval(queueIdleSweep, store.idleSweepIntervalMs),
+    );
     store.idleSweepTimer.unref?.();
   };
 
@@ -292,16 +300,29 @@ export function createSessionMcpRuntimeManagerLifecycle(
 
   const disposeRuntimeKeyNow = async (runtimeKey: string): Promise<void> => {
     const inFlight = store.createInFlight.get(runtimeKey);
+    const runtime = store.runtimesBySessionId.get(runtimeKey);
+    // Revoke publication before yielding. The captured producer disposes its own
+    // late result, while a newly admitted replacement keeps its maps and claim.
     store.createInFlight.delete(runtimeKey);
-    let runtime = store.runtimesBySessionId.get(runtimeKey);
-    if (!runtime && inFlight) {
-      runtime = await inFlight.promise.catch(() => undefined);
-    }
     store.runtimesBySessionId.delete(runtimeKey);
     store.connectionMetaByRuntimeKey.delete(runtimeKey);
-    if (runtime) {
-      await runtime.dispose();
+    try {
+      await runtime?.dispose();
+    } finally {
+      await inFlight?.promise.catch(() => undefined);
     }
+  };
+
+  const disposeRuntimeKeys = async (runtimeKeys: Iterable<string>): Promise<void> => {
+    // Keep requester chains owned until teardown runs; clearing them early lets
+    // replacement installs overlap the resolve/install work being drained.
+    await Promise.allSettled(
+      [...runtimeKeys].map((runtimeKey) =>
+        runtimeKey.startsWith("{")
+          ? runExclusiveOnRuntimeKey(runtimeKey, () => disposeRuntimeKeyNow(runtimeKey))
+          : disposeRuntimeKeyNow(runtimeKey),
+      ),
+    );
   };
 
   const disposeManagedSession = async (
@@ -324,15 +345,8 @@ export function createSessionMcpRuntimeManagerLifecycle(
         runtimeKeys.add(runtimeKey);
       }
     }
-    // Serialize disposal with in-flight requester work for composite keys.
-    await Promise.allSettled(
-      [...runtimeKeys].map((runtimeKey) =>
-        runtimeKey.startsWith("{")
-          ? runExclusiveOnRuntimeKey(runtimeKey, () => disposeRuntimeKeyNow(runtimeKey))
-          : disposeRuntimeKeyNow(runtimeKey),
-      ),
-    );
     forgetSessionKeysForSessionId(sessionId);
+    await disposeRuntimeKeys(runtimeKeys);
   };
 
   const rememberAdvertisedScopedCatalog = (
@@ -421,6 +435,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
     ensureIdleSweepTimer,
     clearIdleSweepTimer,
     disposeRuntimeKeyNow,
+    disposeRuntimeKeys,
     disposeManagedSession,
     rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog,

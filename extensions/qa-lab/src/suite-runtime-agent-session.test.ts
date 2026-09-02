@@ -866,6 +866,35 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
+  it("reports current-source delivery facts from runtime-only tool result details", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-current-source-");
+    const sessionKey = "agent:qa:current-source";
+    const sessionId = "session-current-source";
+    await seedQaSession({ tempRoot, sessionKey, sessionId });
+    await appendQaTranscriptMessage({
+      tempRoot,
+      sessionKey,
+      sessionId,
+      message: {
+        role: "toolResult",
+        toolCallId: "message-1",
+        toolName: "message",
+        content: [{ type: "text", text: '{"ok":true}' }],
+        details: {
+          sourceReplyRoute: "current-source",
+          receipt: { threadId: "thread-1" },
+        },
+        isError: false,
+      },
+    });
+
+    await expect(
+      readSessionTranscriptSummary({ gateway: { tempRoot } } as never, sessionKey),
+    ).resolves.toMatchObject({
+      currentSourceToolDeliveries: [{ toolName: "message", threadId: "thread-1" }],
+    });
+  });
+
   it("scopes transcript evidence after an event cursor", async () => {
     const tempRoot = await makeTempDir("qa-session-transcript-cursor-");
     const sessionKey = "agent:qa:cursor";

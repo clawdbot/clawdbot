@@ -230,6 +230,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       runId: "skill-workshop-review:prompt-parity",
     });
     const snapshots = [];
+    let reviewReadOutcomes: PromiseSettledResult<unknown>[] = [];
     for (const review of [false, true]) {
       const session = review ? reviewSession : foregroundSession;
       resetEmbeddedAttemptHarness();
@@ -238,6 +239,19 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         contextEngine: createContextEngineBootstrapAndAssemble(),
         sessionKey: session.sessionKey,
         tempPaths,
+        sessionPrompt: async () => {
+          if (!review) {
+            return;
+          }
+          const sessionOptions = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
+            customTools: AnyAgentTool[];
+          };
+          const read = sessionOptions.customTools.find((tool) => tool.name === "read");
+          if (!read) {
+            throw new Error("expected the review read tool");
+          }
+          reviewReadOutcomes = await Promise.allSettled([read.execute("call", {})]);
+        },
         attemptOverrides: {
           disableTools: false,
           disableMessageTool: false,
@@ -282,15 +296,18 @@ describe("runEmbeddedAttempt skill policy projections", () => {
           tools: collectPromptCacheTools(tools),
         }).snapshot,
       );
-      if (review) {
-        await expect(
-          tools.find((tool) => tool.name === "read")?.execute("call", {}),
-        ).rejects.toThrow(
-          "Unavailable during skill review. Use skill_workshop or finish with NOTHING_TO_LEARN.",
-        );
-      }
     }
 
+    expect(reviewReadOutcomes).toMatchObject([
+      {
+        status: "rejected",
+        reason: {
+          message:
+            "Unavailable during skill review. Use skill_workshop or finish with NOTHING_TO_LEARN.",
+        },
+      },
+    ]);
+    expect(execute).not.toHaveBeenCalled();
     expect(snapshots[1]?.systemPromptDigest).toBe(snapshots[0]?.systemPromptDigest);
     expect(snapshots[1]?.toolDigest).toBe(snapshots[0]?.toolDigest);
     expect(await fs.readFile(transcriptFile)).toEqual(beforeTranscript);

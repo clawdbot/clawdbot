@@ -26,6 +26,7 @@ function mockAdapterIo() {
     getFailure: () => null,
     stop: heartbeatStop,
     throwIfFailed: vi.fn(),
+    whenFailed: new Promise<Error>(() => {}),
   });
   const identity = vi
     .spyOn(discordQaScenarioSupport.testing, "getCurrentDiscordUser")

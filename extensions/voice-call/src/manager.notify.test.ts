@@ -427,15 +427,18 @@ describe("CallManager notify and mapping", () => {
     expect(provider.playTtsCalls).toHaveLength(0);
 
     const first = manager.speakInitialMessage("call-uuid");
-    await provider.playTtsStartedPromise;
-    expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
+    const playbacks = [first];
+    try {
+      await provider.playTtsStartedPromise;
+      expect(provider.playTtsStarted).toHaveBeenCalledTimes(1);
 
-    const second = manager.speakInitialMessage("call-uuid");
-    await waitForPlaybackDispatch();
-    expect(provider.playTtsCalls).toHaveLength(1);
-
-    provider.releaseCurrentPlayback();
-    await Promise.all([first, second]);
+      playbacks.push(manager.speakInitialMessage("call-uuid"));
+      await waitForPlaybackDispatch();
+      expect(provider.playTtsCalls).toHaveLength(1);
+    } finally {
+      provider.releaseCurrentPlayback();
+      await Promise.all(playbacks);
+    }
 
     const call = requireCall(manager, callId);
     expect(call.metadata).not.toHaveProperty("initialMessage");

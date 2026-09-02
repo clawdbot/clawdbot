@@ -291,7 +291,7 @@ describe("models-config runtime source snapshot", () => {
     };
     const providers = enforceSourceManagedProviderSecrets({
       providers: runtimeConfig.models!.providers!,
-      sourceProviders: sourceConfig.models!.providers,
+      sourceConfigForSecrets: sourceConfig,
     })!;
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expect(providers.moonshot?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
@@ -521,7 +521,7 @@ describe("models-config runtime source snapshot", () => {
 
     const providers = enforceSourceManagedProviderSecrets({
       providers: runtimeConfig.models!.providers!,
-      sourceProviders,
+      sourceConfigForSecrets: { models: { providers: sourceProviders } },
     });
 
     expect(providers?.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret

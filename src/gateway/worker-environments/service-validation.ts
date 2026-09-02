@@ -38,15 +38,16 @@ export function requireInheritedWorkerProfileAuthorization(
   }
 }
 
-export function requireProviderProvisionTimeoutMs(
+export function requireProviderOperationTimeoutMs(
+  operation: "provision" | "destroy",
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs === undefined) {
     return undefined;
   }
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_TIMEOUT_MS) {
-    throw new WorkerProviderError(
-      `Worker provider provision timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
+    throw new Error(
+      `Worker provider ${operation} timeout must be an integer from 1 through ${MAX_TIMER_TIMEOUT_MS}ms`,
     );
   }
   return timeoutMs;
@@ -135,6 +136,20 @@ export function resolveWorkerLeaseTransportError(
     );
   }
   return undefined;
+}
+
+export function requireWorkerAllocation(
+  value: unknown,
+): Awaited<ReturnType<WorkerProvider["resolveAllocation"]>> {
+  if (
+    !isRecord(value) ||
+    typeof value.leaseId !== "string" ||
+    !value.leaseId.trim() ||
+    typeof value.sharedHost !== "boolean"
+  ) {
+    throw new Error("Worker provider returned an invalid allocation identity");
+  }
+  return { leaseId: value.leaseId.trim(), sharedHost: value.sharedHost };
 }
 
 export function requireWorkerLease(value: unknown): WorkerLease {

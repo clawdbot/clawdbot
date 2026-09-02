@@ -326,13 +326,14 @@ process.stdin.on("end", () => process.exit(0));
       };
       const snapshots = scenarios[mode];
       let inspection = 0;
-      const readSnapshot = async (
-        inspectionDeadline: number,
-      ): Promise<PosixProcess[] | undefined> => {
+      const readSnapshot = async (inspectionDeadline: number): Promise<PosixProcess[]> => {
         const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
         if (rows === "deadline") {
           await delay(Math.max(1, inspectionDeadline - Date.now()));
-          return undefined;
+          throw new processSnapshot.ProcessInspectionError("deadline");
+        }
+        if (!rows) {
+          throw new processSnapshot.ProcessInspectionError("unavailable");
         }
         return rows;
       };

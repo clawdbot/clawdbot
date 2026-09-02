@@ -1,5 +1,15 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
 export function serializeReleaseArtifact(payload: unknown): string;
+export function normalizeReleaseCoveragePolicy(input: ReleaseRecord): "npm-beta-v1" | undefined;
+export function validateReleaseCoveragePolicyBinding(
+  plan: ReleaseRecord | undefined,
+  validationInputs?: ReleaseRecord,
+): void;
+export function normalizeReleaseTelegramWaiver(input: ReleaseRecord): string;
+export function validateReleaseTelegramWaiverBinding(
+  plan: ReleaseRecord | undefined,
+  validationInputs?: ReleaseRecord,
+): void;
 
 export interface ReleaseRecord {
   [key: string]: unknown;

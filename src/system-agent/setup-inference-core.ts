@@ -5,11 +5,12 @@ import type {
 } from "../agents/auth-profiles/store.js";
 import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
   detectInferenceBackends,
   InferenceBackendKind,
 } from "../commands/onboard-inference.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { enablePluginInConfig } from "../plugins/enable.js";
 import type {
@@ -23,7 +24,6 @@ import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { loadAuthoredSetupConfig } from "./onboarding-welcome.js";
 import type { probeLocalCommand } from "./probes.js";
 import type {
   SetupInferenceAuthOption,
@@ -199,8 +199,16 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Lock the caller's cancellation boundary before the first durable setup effect. */
+  beforePersistentEffect?: () => void | Promise<void>;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
+  /** Gateway callers await application only after releasing the setup queue and lane. */
+  onRuntimeApplication?: (
+    application: ReturnType<
+      typeof import("../config/runtime-write-application.js").createRuntimeConfigWriteApplication
+    >,
+  ) => void;
   deps?: ActivateSetupInferenceDeps;
 };
 
@@ -256,8 +264,6 @@ export type ActivateSetupInferenceDeps = {
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
-  refreshPreparedModelRuntimeSnapshots?: typeof import("../agents/prepared-model-runtime.js").refreshPreparedModelRuntimeSnapshots;
-  ensurePluginRegistryLoaded?: typeof import("../plugins/runtime/runtime-registry-loader.js").ensurePluginRegistryLoaded;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   enablePluginInConfig?: typeof enablePluginInConfig;
@@ -287,6 +293,8 @@ export type ActivateSetupInferenceDeps = {
 };
 
 export type DetectSetupInferenceDeps = {
+  /** Supplies prepared setup choices before native or provider discovery starts. */
+  onPartial?: (detection: SetupInferenceDetection) => void;
   detectInferenceBackends?: typeof detectInferenceBackends;
   probeLocalCommand?: typeof probeLocalCommand;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
@@ -356,16 +364,12 @@ export function resolveCandidatePresentation(
   };
 }
 
-export async function resolveSetupInferenceWorkspace(params: {
-  configExists: boolean;
-  configValid: boolean;
-}): Promise<{ workspace: string; hasAuthoredSetup: boolean }> {
-  const { authoredConfig, hasAuthoredSetup } = await loadAuthoredSetupConfig(params);
-  const { DEFAULT_WORKSPACE } = await import("../commands/onboard-helpers.js");
-  return {
-    workspace: resolveUserPath(
-      authoredConfig?.agents?.defaults?.workspace?.trim() || DEFAULT_WORKSPACE,
-    ),
-    hasAuthoredSetup,
-  };
+export function resolveSetupInferenceWorkspace(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig" | "config">,
+): string {
+  const config =
+    snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : undefined;
+  return resolveUserPath(
+    config?.agents?.defaults?.workspace?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+  );
 }

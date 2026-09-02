@@ -26,6 +26,8 @@ describe("Control UI service worker cache versioning", () => {
         "https://control.example/openclaw/chat/main/session?mode=compact#latest",
       ),
     ];
+    staleClients[0]?.navigate.mockRejectedValueOnce(new Error("document suspended"));
+    staleClients[1]?.navigate.mockImplementationOnce(() => new Promise(() => {}));
     const excludedClients = [
       client("settings", "https://control.example/openclaw/settings/appearance"),
       client("chat-sibling", "https://control.example/openclaw/chatty"),
@@ -42,6 +44,7 @@ describe("Control UI service worker cache versioning", () => {
       put: vi.fn(async (request: Request) => {
         reloadMarkers.add(request.url);
       }),
+      delete: vi.fn(async (request: Request) => reloadMarkers.delete(request.url)),
     };
     const clients = {
       claim: vi.fn(async () => undefined),
@@ -126,7 +129,8 @@ describe("Control UI service worker cache versioning", () => {
       },
     });
     await activationPromise;
-    for (const staleClient of staleClients) {
+    expect(staleClients[0]?.navigate).toHaveBeenCalledTimes(2);
+    for (const staleClient of staleClients.slice(1)) {
       expect(staleClient.postMessage).toHaveBeenCalledTimes(2);
       expect(staleClient.navigate).toHaveBeenCalledOnce();
     }
@@ -176,6 +180,54 @@ describe("Control UI service worker cache versioning", () => {
     });
 
     await expect(activationPromise).resolves.toBeUndefined();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("announces an activated replacement to a responsive stale document", async () => {
+    const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
+    const listeners = new Map<string, Array<(event: ActivateEventStub) => void>>();
+    const postMessage = vi.fn((_message: unknown, ports: MessagePort[]) => {
+      ports[0]?.postMessage({ version: "old-build" });
+    });
+    const navigate = vi.fn();
+    const context = vm.createContext({
+      URL,
+      MessageChannel,
+      caches: { delete: vi.fn(), keys: vi.fn(async () => []) },
+      clearTimeout,
+      fetch: vi.fn(),
+      setTimeout,
+      self: {
+        addEventListener(type: string, listener: (event: ActivateEventStub) => void) {
+          listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+        },
+        clients: {
+          claim: vi.fn(async () => undefined),
+          matchAll: vi.fn(async () => [
+            {
+              id: "stale-chat",
+              url: "https://control.example/chat/main/session",
+              postMessage,
+              navigate,
+            },
+          ]),
+        },
+        location: { href: "https://control.example/sw.js?v=new-build" },
+        registration: { scope: "https://control.example/", showNotification: vi.fn() },
+        skipWaiting: vi.fn(),
+      },
+    });
+    new vm.Script(serviceWorkerSource, { filename: "ui/public/sw.js" }).runInContext(context);
+    let activationPromise: Promise<unknown> | undefined;
+
+    listeners.get("activate")?.[0]?.({
+      waitUntil(promise: Promise<unknown>) {
+        activationPromise = promise;
+      },
+    });
+
+    await expect(activationPromise).resolves.toBeUndefined();
+    expect(postMessage.mock.lastCall?.[0]).toEqual({ type: "sw-updated", version: "new-build" });
     expect(navigate).not.toHaveBeenCalled();
   });
 });
@@ -289,6 +341,16 @@ describe("Control UI service worker notification scope", () => {
       nestedScope,
       [`${nestedScope}chat?session=42#latest`],
       { target: "chat?session=42#latest", navigatedUrl: `${nestedScope}chat?session=42#latest` },
+    ),
+    notificationScenario(
+      "opens a scope-relative approval route with its Gateway handoff fragment",
+      nestedScope,
+      [],
+      {
+        target: "approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
+        openedUrl:
+          "https://control.example/openclaw/approve/exec%3A1#gatewayUrl=wss%3A%2F%2Fgateway.example",
+      },
     ),
     notificationScenario(
       "prefers a later exact explicit route over an unrelated nested app tab",
@@ -510,6 +572,27 @@ describe("Control UI service worker notification scope", () => {
     },
   );
 
+  it("preserves a quiet shared tag for approval terminal replacements", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, []);
+    const tag = "openclaw-approval-exec:replacement";
+
+    const requested = await worker.dispatchPush({
+      title: "OpenClaw approval requested",
+      body: "Open OpenClaw to review this request.",
+      tag,
+      renotify: false,
+    });
+    const terminal = await worker.dispatchPush({
+      title: "OpenClaw approval updated",
+      body: "This approval is no longer pending.",
+      tag,
+      renotify: false,
+    });
+
+    expect(requested.options).toMatchObject({ tag, renotify: false });
+    expect(terminal.options).toMatchObject({ tag, renotify: false });
+  });
+
   it.each([
     {
       name: "root",
@@ -626,6 +709,8 @@ type NotificationClickScenario = {
 type ServiceWorkerPushPayload = {
   title: string;
   body: string;
+  renotify?: boolean;
+  tag?: string;
   url?: string;
 };
 
@@ -634,6 +719,7 @@ type ServiceWorkerNotificationOptions = {
   icon: string;
   badge: string;
   tag: string;
+  renotify: boolean;
   data: { url: string; explicitUrl: boolean };
 };
 

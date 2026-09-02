@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   validateWorkerGitHubPublishParams,
+  validateWorkerComputerParams,
   validateWorkerPortalParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
@@ -36,6 +37,7 @@ import {
   WorkerTranscriptCommitRequestFrameSchema,
   type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerComputerParams } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
 import {
   type WorkerInferenceCancelRequestFrame,
   WorkerInferenceCancelRequestFrameSchema,
@@ -130,6 +132,7 @@ type InferencePlan =
   | "process-poll"
   | "process-kill"
   | "session-tool"
+  | "computer"
   | "hold"
   | "fence"
   | "error"
@@ -159,6 +162,8 @@ type FakeGatewayOptions = {
   liveFailure?: "capacity-exceeded";
   heartbeatFailure?: "credential-expired";
   heartbeatIntervalMs?: number;
+  computerSnapshot?: string;
+  computerCleanupFailure?: boolean;
 };
 
 function assistantMessage(
@@ -209,6 +214,7 @@ class FakeWorkerGateway {
   readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
   readonly githubPublishRequests: WorkerGitHubPublishParams[] = [];
   readonly portalRequests: WorkerPortalParams[] = [];
+  readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
 
   waitForInferenceStart(): Promise<void> {
@@ -284,6 +290,45 @@ class FakeWorkerGateway {
       return;
     }
     if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+      if (parsed.method === "worker.computer" && validateWorkerComputerParams(parsed.params)) {
+        this.computerRequests.push(parsed.params);
+        const closing = parsed.params.command === "computer.act";
+        this.applicationOrder.push(closing ? "computer:close" : "computer:snapshot");
+        this.send(
+          socket,
+          this.options.computerCleanupFailure && closing
+            ? {
+                type: "res",
+                id: parsed.id,
+                ok: false,
+                error: {
+                  code: "UNAVAILABLE",
+                  message: "fixture desktop cleanup failed",
+                  details: { reason: "gateway-unavailable" },
+                },
+              }
+            : {
+                type: "res",
+                id: parsed.id,
+                ok: true,
+                payload: {
+                  resultJson: JSON.stringify(
+                    closing
+                      ? { ok: true }
+                      : {
+                          format: "png",
+                          base64: this.options.computerSnapshot,
+                          width: 512,
+                          height: 512,
+                          displayFrameId: "worker-frame",
+                          screenIndex: 0,
+                        },
+                  ),
+                },
+              },
+        );
+        return;
+      }
       const sessionToolMethod =
         parsed.method === "worker.sessions.spawn" &&
         validateWorkerSessionsSpawnParams(parsed.params)
@@ -604,6 +649,14 @@ class FakeWorkerGateway {
     }
     if (plan === "session-tool") {
       this.sendSessionToolTurn(socket, frame.params);
+      return;
+    }
+    if (plan === "computer") {
+      this.sendToolCallTurn(socket, frame.params, {
+        toolCallId: "worker-screenshot",
+        toolName: "computer",
+        args: { action: "screenshot" },
+      });
       return;
     }
     if (plan === "burst-text") {
@@ -1111,6 +1164,72 @@ describe("worker runtime", () => {
     });
     expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "keeps desktop images through RPC, transcript, and inference before closing (cleanup failure: %s)",
+    async (computerCleanupFailure) => {
+      const computerSnapshot = createNoisyPngBuffer(512, 512).toString("base64");
+      expect(computerSnapshot.length).toBeGreaterThan(64 * 1024);
+      const { gateway, launch } = await setup({
+        inferencePlans: ["computer", "text"],
+        computerSnapshot,
+        computerCleanupFailure,
+      });
+      launch.assignment.toolAuthority.allowedToolNames = ["computer"];
+      launch.assignment.computer = {
+        nodeId: "worker-desktop",
+        computerUse: {
+          contractVersion: 2,
+          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+          actions: ["screenshot"],
+          targets: ["screen"],
+          deliveryModes: ["foreground"],
+          observations: ["image"],
+          features: { recording: false, agentCursor: false, multiDisplay: false },
+        },
+      };
+
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
+        status: computerCleanupFailure ? "failed" : "completed",
+      });
+
+      expect(gateway.computerRequests.map((request) => request.command)).toEqual([
+        "screen.snapshot",
+        "computer.act",
+      ]);
+      expect(JSON.parse(gateway.computerRequests[1]!.paramsJson)).toMatchObject({
+        action: "__close_execution",
+      });
+      const screenshot = gateway.acceptedTranscriptRequests
+        .flatMap((request) => request.messages)
+        .find((message) => message.role === "toolResult" && message.toolName === "computer");
+      expect(screenshot).toMatchObject({
+        isError: false,
+        content: expect.arrayContaining([expect.objectContaining({ type: "image" })]),
+      });
+      const image = screenshot?.content.find((part) => part.type === "image");
+      expect(image?.type === "image" && image.data.length).toBeGreaterThan(64 * 1024);
+      expect(gateway.inferenceRequests[1]?.context.messages).toContainEqual(screenshot);
+      const computer = gateway.inferenceRequests[0]?.context.tools?.find(
+        (tool) => tool.name === "computer",
+      );
+      expect(computer?.parameters).not.toHaveProperty("properties.node");
+      expect(computer?.parameters).not.toHaveProperty("properties.gatewayToken");
+      expect(gateway.applicationOrder.indexOf("computer:close")).toBeLessThan(
+        gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
+      );
+      if (computerCleanupFailure) {
+        expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+          kind: "lifecycle",
+          payload: {
+            phase: "finishing",
+            stopReason: "error",
+            error: "computer: session desktop cleanup failed",
+          },
+        });
+      }
+    },
+  );
 
   it.each([
     { authority: ["browser"] as const, browser: undefined },

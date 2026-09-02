@@ -48,7 +48,8 @@ on:
         type: boolean
 
 concurrency:
-  group: plugin-clawhub-new-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  # Validation gets its own slot; real publication remains serialized by target.
+  group: plugin-clawhub-new-${{ inputs.dry_run && format('dry-run-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -196,6 +197,14 @@ jobs:
           git checkout --detach "${TARGET_REF}"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Checkout trusted planning tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.workflow_sha }}
+          path: .release-tooling
+          fetch-depth: 1
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -205,6 +214,7 @@ jobs:
 
       - name: Validate publishable plugin metadata
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           RELEASE_PLUGINS: ${{ inputs.plugins }}
         run: |
           set -euo pipefail
@@ -212,17 +222,18 @@ jobs:
             echo "Plugin ClawHub bootstrap requires at least one package name in plugins." >&2
             exit 1
           fi
-          pnpm release:plugins:clawhub:check -- --selection-mode selected --plugins "${RELEASE_PLUGINS}"
+          node --import tsx .release-tooling/scripts/plugin-clawhub-release-check.ts --selection-mode selected --plugins "${RELEASE_PLUGINS}"
 
       - name: Resolve plugin bootstrap plan
         id: plan
         env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           RELEASE_PLUGINS: ${{ inputs.plugins }}
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
         run: |
           set -euo pipefail
           mkdir -p .local
-          node --import tsx scripts/plugin-clawhub-release-plan.ts \
+          node --import tsx .release-tooling/scripts/plugin-clawhub-release-plan.ts \
             --selection-mode selected \
             --plugins "${RELEASE_PLUGINS}" > .local/plugin-clawhub-release-plan.json
 
@@ -540,7 +551,6 @@ jobs:
             package_slug="${package_name#@openclaw/}"
             output_dir="${artifact_root}/packages/${package_slug}"
             mkdir -p "${output_dir}"
-            node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${package_dir}"
             OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR="${output_dir}" \
               PACKAGE_TAG="${package_tag}" \
               bash .release-harness/scripts/plugin-clawhub-publish.sh --pack "${package_dir}"

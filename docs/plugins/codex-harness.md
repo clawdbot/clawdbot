@@ -69,8 +69,9 @@ cleanup of commands that deliberately detach from that ownership.
 With the default `tools.exec.host: "auto"` and no active OpenClaw sandbox,
 Codex also receives `node_exec` for commands on paired nodes. Native shell
 remains on the Codex app-server host and workspace
-(Gateway-local for the default stdio deployment); `node_exec` selects a node by
-name or id, keeps OpenClaw's node approval policy in force, and waits for the
+(Gateway-local for the default stdio deployment); `node_exec` selects the sole
+connected node that supports `system.run`, or requires a name or id when several
+are eligible. It keeps OpenClaw's node approval policy in force and waits for the
 remote command to finish. Remote-node background follow-up is not available. If
 a finite runtime allowlist disables native Code Mode and leaves the turn without
 an execution environment, OpenClaw keeps its policy-filtered `exec` and
@@ -99,8 +100,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.150.1`. The plugin ships and manages
-  `@openai/codex` `0.150.1` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.151.0`. The plugin ships and manages
+  `@openai/codex` `0.151.0` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -199,10 +200,24 @@ capability and `codex.exec-server.stdio.v1` command. If enabling the plugin
 changes an existing node's command surface, reconnect the node, inspect
 `openclaw nodes pending`, and approve the updated pairing with
 `openclaw nodes approve <requestId>`. The persistent command allowlist does not
-replace launch authorization. Ordinarily, a critical allow-once decision
-authorizes exactly one exec-server launch; deny starts no process. Explicitly
-selected session **Full access** can substitute for that prompt only during
-the exact admitted turn and placement, and only when the node's own
+replace launch authorization. The critical prompt offers two approval scopes:
+
+- **Allow once** authorizes one exec-server launch.
+- **Allow always** authorizes later launches only while that exact session
+  placement remains active on the same node, pairing generation, environment,
+  owner epoch, placement generation, command risk, and working directory.
+
+The Gateway keeps the standing placement grant only in its current process and
+revalidates it immediately before every node transport dispatch. Restarting the
+Gateway therefore returns to the normal prompt without migrating or reloading
+approval state. Moving or reclaiming the session, replacing the environment,
+reconnecting under a new pairing, changing the workspace, or reaching the
+30-day maximum lifetime also invalidates reuse. If the Gateway cannot derive
+the exact placement authority, it offers only **Allow once**. Deny starts no
+process.
+
+Explicitly selected session **Full access** can substitute for the prompt only
+during the exact admitted turn and placement, and only when the node's own
 `tools.exec` policy and exec-approvals floors both allow full/off execution.
 Node-local deny always blocks. Local ask or allowlist restrictions require a
 human decision; Full access does not erase them. If a Full launch is refused
@@ -272,8 +287,8 @@ bundled or prepared installation and preserves its provenance in the disposable
 node's isolated state without installing a plugin during enrollment. The Gateway
 checks the cloud node's current pairing and
 effectively invocable command before starting a Codex process. The same
-per-attempt approval or explicitly selected Full access rules apply, including
-the cloud node's local exec policy and approvals floors.
+placement-scoped approval or explicitly selected Full access rules apply,
+including the cloud node's local exec policy and approvals floors.
 
 Codex runs its managed exec-server over the enrolled node's authenticated
 outbound connection without starting an OpenClaw worker child or consuming a
@@ -870,7 +885,11 @@ through OpenClaw.
 
 By default, the plugin starts OpenClaw's managed Codex binary locally with
 stdio transport. Set `appServer.command` only to intentionally run a
-different executable. Codex classifies WebSocket transport as experimental
+different executable. Verified setup accepts a native Codex executable or the
+official `@openai/codex` npm entrypoint, including its installed symlink or
+Windows npm launcher. Arbitrary wrapper scripts cannot be verified because
+their native target is unknown; select the native executable or official npm
+launcher instead. Codex classifies WebSocket transport as experimental
 and unsupported; use it only for non-production testing against an app-server
 already running elsewhere:
 
@@ -1003,6 +1022,10 @@ Common forms:
 - `/codex stop` stops the active turn; `/codex steer <text>` steers it.
 - `/codex model <model>`, `/codex fast [on|off|status]`, and
   `/codex permissions [default|yolo|status]` change per-conversation state.
+  The permissions argument `default` (also `guardian`, `guarded`, or `approve`)
+  selects `guarded`; it does not clear the session permission mode. `yolo`
+  selects full access and requires `operator.admin`, even for an owner sender.
+  Status displays `default` only when no session permission mode is set.
 - `/codex compact` runs the same completion and session-accounting pipeline as
   `/compact`, then reports whether Codex compacted the session and the resulting
   token count. If compaction is skipped or fails, the reply includes the reason.

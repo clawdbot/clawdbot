@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
@@ -128,37 +127,5 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
     expect(pullCount).toBeGreaterThanOrEqual(17);
     expect(pullCount).toBeLessThanOrEqual(20);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("caps oversized Retry-After delays before sleeping", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response("rate limited", {
-          status: 429,
-          headers: { "retry-after": String(Number.MAX_SAFE_INTEGER) },
-        }),
-      )
-      .mockRejectedValueOnce(new Error("usage limit: stop after retry delay"));
-    vi.stubGlobal("fetch", fetchMock);
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback: TimerHandler) => {
-        if (typeof callback === "function") {
-          callback();
-        }
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      });
-
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
-
-    expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });

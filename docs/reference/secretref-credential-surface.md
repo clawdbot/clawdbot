@@ -25,6 +25,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 [//]: # "secretref-supported-list-start"
 
 - `agents.entries.*.memory.search.remote.apiKey`
+- `agents.entries.*.tts.personas.*.providers.*.apiKey`
 - `agents.entries.*.tts.providers.*.apiKey`
 - `channels.buzz.accounts.*.authTag`
 - `channels.buzz.accounts.*.privateKey`
@@ -35,10 +36,12 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `channels.discord.accounts.*.pluralkit.token`
 - `channels.discord.accounts.*.token`
 - `channels.discord.accounts.*.voice.realtime.providers.*.apiKey`
+- `channels.discord.accounts.*.voice.tts.personas.*.providers.*.apiKey`
 - `channels.discord.accounts.*.voice.tts.providers.*.apiKey`
 - `channels.discord.pluralkit.token`
 - `channels.discord.token`
 - `channels.discord.voice.realtime.providers.*.apiKey`
+- `channels.discord.voice.tts.personas.*.providers.*.apiKey`
 - `channels.discord.voice.tts.providers.*.apiKey`
 - `channels.feishu.accounts.*.appSecret`
 - `channels.feishu.accounts.*.encryptKey`
@@ -131,6 +134,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `skills.entries.*.apiKey`
 - `talk.providers.*.apiKey`
 - `talk.realtime.providers.*.apiKey`
+- `tts.personas.*.providers.*.apiKey`
 - `tts.providers.*.apiKey`
 
 ### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)

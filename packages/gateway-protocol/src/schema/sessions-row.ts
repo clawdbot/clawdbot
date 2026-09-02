@@ -66,6 +66,8 @@ export const SessionRowSchema = Type.Object(
     ]),
     label: Type.Optional(Type.String()),
     icon: Type.Optional(Type.String()),
+    /** Named sidebar tint from SESSION_COLOR_IDS; clients map names to theme hues. */
+    color: Type.Optional(Type.String()),
     channelAvatarUrl: Type.Optional(NonEmptyString),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
     displayName: Type.Optional(Type.String()),
@@ -122,6 +124,7 @@ export const SessionRowSchema = Type.Object(
     spawnedWorkspaceDir: Type.Optional(Type.String()),
     spawnedCwd: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
+    permissionModePending: Type.Optional(Type.Boolean()),
     sessionRoot: Type.Optional(Type.String()),
     createdVia: Type.Optional(
       Type.Union([

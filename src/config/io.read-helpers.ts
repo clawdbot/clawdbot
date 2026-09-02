@@ -331,9 +331,11 @@ export function resolveConfigForRead(
   }
   const envWarnings: EnvSubstitutionWarning[] = [];
   const pendingEnvSecretRefs = new Map<string, string>();
+  const resolvedEnvSecretRefs = new Map<string, string>();
   const resolvedConfigRaw = resolveConfigEnvVars(resolvedIncludes, env, {
     onMissing: (warning) => envWarnings.push(warning),
     onPendingEnvSecretRef: (id, configPath) => pendingEnvSecretRefs.set(configPath, id),
+    onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
   });
   return {
     resolvedConfigRaw,
@@ -343,6 +345,7 @@ export function resolveConfigForRead(
       envWarnings,
       pendingEnvSecretRefs,
       coerceConfig(resolvedConfigRaw).secrets?.defaults?.env,
+      resolvedEnvSecretRefs,
     ),
   };
 }

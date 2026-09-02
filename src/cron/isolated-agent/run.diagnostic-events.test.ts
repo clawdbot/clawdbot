@@ -352,7 +352,20 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     });
   });
 
-  it("preserves total-only model usage in cron diagnostics", async () => {
+  it.each([
+    { name: "total-only model usage", usage: { total: 42 }, expectedTotal: 42, cost: undefined },
+    {
+      name: "cost-only positive total",
+      usage: { cost: { total: 0.25 } },
+      expectedTotal: 0,
+      cost: 0.25,
+    },
+    { name: "cost-only zero total", usage: { cost: { total: 0 } }, expectedTotal: 0, cost: 0 },
+  ])("preserves $name in cron diagnostics", async ({ usage, expectedTotal, cost }) => {
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({ estimatedCostUsd: 1.25 }),
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
     const usageEvents: Array<{
       type: string;
       usage?: { input?: number; output?: number; promptTokens?: number; total?: number };
@@ -369,7 +382,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
         payloads: [{ text: "test output" }],
         meta: {
           agentMeta: {
-            usage: { total: 42 },
+            usage,
           },
         },
       },
@@ -389,8 +402,21 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       input: 0,
       output: 0,
       promptTokens: 0,
-      total: 42,
+      total: expectedTotal,
     });
-    expect(usageEvents[0]?.costUsd).toBeUndefined();
+    expect(usageEvents[0]?.costUsd).toBe(cost);
+    if (cost !== undefined) {
+      expect(cronSession.sessionEntry.estimatedCostUsd).toBe(cost);
+      for (const key of [
+        "inputTokens",
+        "outputTokens",
+        "cacheRead",
+        "cacheWrite",
+        "totalTokens",
+      ] as const) {
+        expect(cronSession.sessionEntry[key]).toBeUndefined();
+      }
+      expect(cronSession.sessionEntry.totalTokensFresh).not.toBe(true);
+    }
   });
 });

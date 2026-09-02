@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { DesktopHostConfig } from "../config/types.desktop.js";
-import { classifyRfbSecurity, probeRfbServer } from "../gateway/desktop/rfb-probe.js";
+import { classifyRfbSecurity, connectRfbServer } from "../gateway/desktop/rfb-probe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { NODE_DESKTOP_ATTACH_PATH } from "../shared/node-desktop-stream.js";
 import { parseNodeWorkerDesktopStreamInput } from "../worker/node-desktop-protocol.js";
@@ -113,10 +113,11 @@ async function runNodeDesktopStreamCommand(params: {
     throw new Error("desktop stream target port is invalid");
   }
   void params.emitStatus?.("probing local RFB server\n").catch(() => undefined);
-  const probe = await probeRfbServer({
+  const probe = await connectRfbServer({
     host: "127.0.0.1",
     port: params.target.port,
     timeoutMs: PROBE_TIMEOUT_MS,
+    signal: params.signal,
   });
   if (probe.kind !== "rfb") {
     throw new Error(
@@ -125,31 +126,37 @@ async function runNodeDesktopStreamCommand(params: {
         : "desktop stream loopback RFB server is unavailable",
     );
   }
-  const auth = classifyRfbSecurity(probe.securityTypes);
-  if (auth === "none") {
-    throw new Error("refusing unauthenticated loopback RFB server");
-  }
-  if (auth === "unsupported") {
-    throw new Error("loopback RFB server security is unsupported");
-  }
-  const vncPassword =
-    auth === "vnc-password" ? await readVncPassword(params.passwordFile, params.signal) : undefined;
-  if (params.signal.aborted) {
-    return;
-  }
+  try {
+    const auth = classifyRfbSecurity(probe.securityTypes);
+    if (auth === "none") {
+      throw new Error("refusing unauthenticated loopback RFB server");
+    }
+    if (auth === "unsupported") {
+      throw new Error("loopback RFB server security is unsupported");
+    }
+    const vncPassword =
+      auth === "vnc-password"
+        ? await readVncPassword(params.passwordFile, params.signal)
+        : undefined;
+    if (params.signal.aborted) {
+      return;
+    }
 
-  await runNodeStreamTransport({
-    gatewayUrl: params.gatewayUrl,
-    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
-    gatewayCloudflareAccess: params.gatewayCloudflareAccess,
-    attachPath: params.command.attachPath,
-    expectedAttachPath: NODE_DESKTOP_ATTACH_PATH,
-    port: params.target.port,
-    metadata: { auth, ...(vncPassword ? { vncPassword } : {}) },
-    streamName: "desktop",
-    signal: params.signal,
-    emitStatus: params.emitStatus,
-  });
+    await runNodeStreamTransport({
+      gatewayUrl: params.gatewayUrl,
+      gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+      gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+      attachPath: params.command.attachPath,
+      expectedAttachPath: NODE_DESKTOP_ATTACH_PATH,
+      target: { stream: probe.stream },
+      metadata: { auth, ...(vncPassword ? { vncPassword } : {}) },
+      streamName: "desktop",
+      signal: params.signal,
+      emitStatus: params.emitStatus,
+    });
+  } finally {
+    probe.stream.destroy();
+  }
 }
 
 /** Runs the built-in command against the node-local desktop configuration. */

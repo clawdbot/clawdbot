@@ -5,10 +5,30 @@ import { t } from "../../i18n/index.ts";
 export type { ChatRunStartupPhase } from "../../../../packages/gateway-protocol/src/index.js";
 
 export type ChatRunStartupState =
-  | { state: "status"; runId: string; phase: ChatRunStartupPhase }
+  | { state: "status"; runId: string; phase: ChatRunStartupPhase; seq?: number }
   | { state: "activity"; runId: string };
 
 export type ChatRunStartupStatus = Extract<ChatRunStartupState, { state: "status" }>;
+
+/** Live status and history retain the same agent sequence; chat deltas have a separate counter. */
+export function reconcileChatRunStartup(
+  host: { chatRunId?: string | null; chatRunStartup?: ChatRunStartupState | null },
+  next: ChatRunStartupState,
+): void {
+  if (host.chatRunId !== next.runId) {
+    return;
+  }
+  const current = host.chatRunStartup;
+  if (current?.runId === next.runId && next.state === "status") {
+    if (
+      current.state === "activity" ||
+      (current.seq !== undefined && (next.seq === undefined || next.seq <= current.seq))
+    ) {
+      return;
+    }
+  }
+  host.chatRunStartup = next;
+}
 
 const STARTUP_LABEL_KEYS = {
   preparing_workspace: "chat.startupStatus.preparingWorkspace",

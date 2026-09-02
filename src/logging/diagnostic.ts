@@ -177,7 +177,8 @@ async function recoverStuckSession(
     });
 }
 
-function formatDiagnosticWorkLabel(
+function pushLimitedDiagnosticLabel(
+  labels: string[],
   state: {
     sessionId?: string;
     sessionKey?: string;
@@ -187,22 +188,22 @@ function formatDiagnosticWorkLabel(
     lastActivity: number;
   },
   now: number,
-): string {
+): void {
   const label = state.sessionKey ?? state.sessionId ?? "unknown";
   const ageSeconds = Math.round(Math.max(0, now - state.lastActivity) / 1000);
   const activity = getDiagnosticSessionActivitySnapshot(
     { sessionId: state.sessionId, sessionKey: state.sessionKey },
     now,
   );
+  // Activity lookup reconciles aliases even when the bounded label list is full.
+  if (labels.length >= 5) {
+    return;
+  }
   const workKind = activity.activeWorkKind ? `/${activity.activeWorkKind}` : "";
   const lastProgress = activity.lastProgressReason ? ` last=${activity.lastProgressReason}` : "";
-  return `${label}(${state.state}${workKind},q=${state.queueDepth},age=${ageSeconds}s${lastProgress})`;
-}
-
-function pushLimitedDiagnosticLabel(labels: string[], label: string, limit = 5): void {
-  if (labels.length < limit) {
-    labels.push(label);
-  }
+  labels.push(
+    `${label}(${state.state}${workKind},q=${state.queueDepth},age=${ageSeconds}s${lastProgress})`,
+  );
 }
 
 function resolveDiagnosticQueuedBacklog(state: {
@@ -227,14 +228,14 @@ function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
   for (const state of diagnosticSessionStates.values()) {
     if (state.state === "processing") {
       activeCount += 1;
-      pushLimitedDiagnosticLabel(activeLabels, formatDiagnosticWorkLabel(state, now));
+      pushLimitedDiagnosticLabel(activeLabels, state, now);
     } else if (state.state === "waiting") {
       waitingCount += 1;
-      pushLimitedDiagnosticLabel(waitingLabels, formatDiagnosticWorkLabel(state, now));
+      pushLimitedDiagnosticLabel(waitingLabels, state, now);
     }
     const queuedBacklog = resolveDiagnosticQueuedBacklog(state);
     if (queuedBacklog > 0) {
-      pushLimitedDiagnosticLabel(queuedLabels, formatDiagnosticWorkLabel(state, now));
+      pushLimitedDiagnosticLabel(queuedLabels, state, now);
     }
     queuedCount += queuedBacklog;
   }

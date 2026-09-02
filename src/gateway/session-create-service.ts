@@ -5,12 +5,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   type ErrorShape,
   type SessionVisibility,
   errorShape,
   missingScopeErrorShape,
+  normalizeSessionColorValue,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -48,6 +50,7 @@ import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/sessio
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import {
   buildSessionCreationStamp,
+  inheritSessionCreationPolicy,
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
@@ -109,7 +112,7 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
 
-export function resolveSessionCreateModelSelection(
+function resolveSessionCreateModelSelection(
   cfg: OpenClawConfig,
   agentId: string,
   input: string | { model: string; agentRuntime?: string } | undefined,
@@ -274,6 +277,7 @@ type CreatedGatewaySession = {
 
 type TrustedInitialSessionEntry = {
   agentHarnessId?: NonNullable<SessionEntry["agentHarnessId"]>;
+  color?: string;
   pluginOwnerId?: string;
   providerOverride?: string;
   modelOverride?: string;
@@ -306,6 +310,8 @@ export async function createGatewaySession(params: {
   key?: string;
   agentId?: string;
   label?: string;
+  /** In-process create-only title seed; never populated from public Gateway params. */
+  displayName?: string;
   category?: string;
   model?: string;
   contextWindow?: string;
@@ -369,7 +375,12 @@ export async function createGatewaySession(params: {
   /** Trusted host actor; only system-owned callers may omit operator identity. */
   operatorRoleActor?: GatewayOperatorRoleActor;
   /** Trusted in-process creation provenance; never populated from public Gateway params. */
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor; sandbox?: "required" };
+  creation?: {
+    via: SessionCreatedVia;
+    actor?: SessionCreatedActor;
+    sandbox?: "required";
+    skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
+  };
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
@@ -380,6 +391,9 @@ export async function createGatewaySession(params: {
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: () => void;
 }): Promise<CreateGatewaySessionResult> {
+  // Presentation titles do not claim labels. Bound the snapshot at the shared
+  // creator so every native owner gets the same surrogate-safe storage contract.
+  const displayName = truncateUtf16Safe(params.displayName?.trim() ?? "", 500).trimEnd();
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const projectId = normalizeOptionalString(params.projectId);
@@ -785,6 +799,11 @@ export async function createGatewaySession(params: {
   let createdNewEntry = false;
   let preparedLifecycle: PreparedGatewaySessionLifecycle | undefined;
   let lifecyclePreparationCommitted = false;
+  const holdParentLifecycle =
+    params.creation?.via === "spawn" ||
+    params.emitCommandHooks === true ||
+    params.fork === true ||
+    params.authorizedPluginId !== undefined;
   const spawnToolPolicy =
     params.spawnToolPolicy && canonicalParentSessionKey
       ? {
@@ -799,13 +818,7 @@ export async function createGatewaySession(params: {
   const createChildSession = async (): Promise<GatewaySessionCommitResult> => {
     params.commitGuard?.();
     let currentParentSessionEntry = parentSessionEntry;
-    if (
-      canonicalParentSessionKey &&
-      parentSessionTarget &&
-      (params.emitCommandHooks === true ||
-        params.fork === true ||
-        params.authorizedPluginId !== undefined)
-    ) {
+    if (canonicalParentSessionKey && parentSessionTarget && holdParentLifecycle) {
       const currentParent = loadGatewaySessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
@@ -813,13 +826,14 @@ export async function createGatewaySession(params: {
       const currentParentEntry = currentParent.entry;
       if (
         !currentParentEntry?.sessionId ||
-        currentParentEntry.sessionId !== parentSessionEntry?.sessionId
+        currentParentEntry.sessionId !== parentSessionEntry?.sessionId ||
+        currentParentEntry.lifecycleRevision !== parentSessionEntry?.lifecycleRevision
       ) {
         return {
           ok: false,
           error: errorShape(
             ErrorCodes.INVALID_REQUEST,
-            `Parent session ${parentSessionKey} changed before ${params.fork === true ? "fork" : "/new"}; retry.`,
+            `Parent session ${parentSessionKey} changed before child creation; retry.`,
           ),
         };
       }
@@ -893,10 +907,35 @@ export async function createGatewaySession(params: {
       });
     }
 
+    // The locked parent owns delegated isolation, including signed remote callers whose
+    // transport context carries only agent identity and cannot carry creator authority.
+    const creation =
+      params.creation?.via === "spawn"
+        ? {
+            ...params.creation,
+            ...inheritSessionCreationPolicy(
+              {
+                sandbox: currentParentSessionEntry?.sandbox,
+                createdActor: currentParentSessionEntry?.createdActor,
+              },
+              params.creation.actor,
+            ),
+          }
+        : params.creation;
     const target = creationTarget;
     const currentTargetEntry = loadGatewaySessionEntryReadOnly(target.canonicalKey, {
       agentId: target.agentId,
     }).entry;
+    // Lifecycle custody keeps this owner stable through naming and filesystem preparation.
+    const existingOwnershipError = resolvePluginSessionOwnershipError({
+      action: "adopt",
+      entry: currentTargetEntry,
+      key: target.canonicalKey,
+      pluginOwnerId: params.authorizedPluginId,
+    });
+    if (existingOwnershipError) {
+      return { ok: false, error: existingOwnershipError };
+    }
     if (!currentTargetEntry) {
       const creationError = authorizeGatewaySessionCreation({
         cfg: params.cfg,
@@ -954,15 +993,6 @@ export async function createGatewaySession(params: {
           if (creationError) {
             return { ok: false, error: creationError };
           }
-        }
-        const existingOwnershipError = resolvePluginSessionOwnershipError({
-          action: "adopt",
-          entry: existingEntry,
-          key: target.canonicalKey,
-          pluginOwnerId: params.authorizedPluginId,
-        });
-        if (existingOwnershipError) {
-          return { ok: false, error: existingOwnershipError };
         }
         if (
           isAgentHarnessSessionKey(target.canonicalKey) &&
@@ -1100,6 +1130,7 @@ export async function createGatewaySession(params: {
           storeKey: target.canonicalKey,
           agentId: target.agentId,
           preparedSessionRoot: sessionRoot,
+          preparedAgentRuntime: catalogAgentRuntime,
           // Patch appliers read key presence as caller intent (present = change,
           // null = clear), so omitted create fields must stay absent: a present
           // undefined model trips the selection lock and drops modelFallback,
@@ -1142,6 +1173,11 @@ export async function createGatewaySession(params: {
         const initialAgentHarnessId = params.initialEntry
           ? normalizeOptionalString(params.initialEntry.agentHarnessId)
           : undefined;
+        // Initializers compare their callback snapshot with the stored row during finalization.
+        // Normalize before both so persistence cannot make this creation look like external drift.
+        const initialColor = params.initialEntry?.color
+          ? normalizeSessionColorValue(params.initialEntry.color)
+          : null;
         if (params.initialEntry && !initialAgentHarnessId && !authorizedPluginCreation) {
           return {
             ok: false,
@@ -1170,6 +1206,7 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: InternalSessionEntry = {
           ...patched.entry,
+          ...(createdNewEntry && displayName ? { displayName } : {}),
           // New rows must expose the same canonical delivery shape to callbacks
           // that the SQLite writer persists, or guarded finalization sees its own write as drift.
           ...(existingEntry === undefined && patched.entry.delivery === undefined
@@ -1178,12 +1215,11 @@ export async function createGatewaySession(params: {
           // Stamp provenance only for genuinely new rows: adopting an existing key
           // must not restamp write-once node facts (this direct store write bypasses
           // the merge-level write-once guard), and legacy rows stay "unknown".
-          ...(params.creation && createdNewEntry
+          ...(creation && createdNewEntry
             ? buildSessionCreationStamp({
-                ...params.creation,
+                ...creation,
                 // Delegated isolation survives changes to the creator's current role.
-                sandbox:
-                  params.creation.sandbox ?? resolveCreatorSandbox(params.cfg, params.creation),
+                sandbox: creation.sandbox ?? resolveCreatorSandbox(params.cfg, creation),
               })
             : {}),
           ...(params.visibility && createdNewEntry ? { visibility: params.visibility } : {}),
@@ -1214,6 +1250,7 @@ export async function createGatewaySession(params: {
               }
             : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
+          ...(initialColor ? { color: initialColor } : {}),
           ...(createdNewEntry && params.authorizedPluginId && !params.catalogTarget
             ? { pluginOwnerId: params.authorizedPluginId }
             : {}),
@@ -1465,9 +1502,7 @@ export async function createGatewaySession(params: {
     canonicalParentSessionKey &&
     parentSessionEntry?.sessionId &&
     parentSessionTarget &&
-    (params.emitCommandHooks === true ||
-      params.fork === true ||
-      params.authorizedPluginId !== undefined)
+    holdParentLifecycle
   ) {
     lifecycleTargets.push({
       scope: parentSessionTarget.storePath,

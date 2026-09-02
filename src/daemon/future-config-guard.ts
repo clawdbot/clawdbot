@@ -1,5 +1,4 @@
 /** Prevents daemon write actions when the config belongs to a newer OpenClaw. */
-import { readConfigFileSnapshot } from "../config/config.js";
 import {
   formatFutureConfigActionBlock,
   resolveFutureConfigActionBlock,
@@ -10,6 +9,7 @@ import {
 async function readFutureConfigActionBlock(
   action: string,
 ): Promise<FutureConfigActionBlock | null> {
+  const { readConfigFileSnapshot } = await import("../config/io.runtime.js");
   try {
     const snapshot = await readConfigFileSnapshot();
     return resolveFutureConfigActionBlock({ action, snapshot });

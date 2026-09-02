@@ -48,6 +48,7 @@ const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
 const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
 const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports: Record<string, string[]> = {
+  "diagnostic-flags": ["isDiagnosticFlagEnabled"],
   "secret-input-runtime": [
     "assertPluginCapabilitySecretAvailable",
     "coerceSecretRef",

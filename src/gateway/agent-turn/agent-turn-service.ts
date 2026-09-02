@@ -17,10 +17,10 @@ import { createCronContinuationController } from "../server-methods/agent-cron-c
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
-import { handleChatAbortRequest } from "../server-methods/chat-abort-handler.js";
 import { resolveAgentRunSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -433,7 +433,11 @@ export function createAgentTurnService(
           canonicalSessionKey,
           sessionAgentId,
           mainSessionKey,
-          creation: resolveAgentRunSessionCreation(principal),
+          creation: prepareSkillLibrarySessionCreation(
+            principal,
+            () => context.getRuntimeConfig(),
+            resolveAgentRunSessionCreation(principal),
+          ),
           ...(principal?.authenticatedUserProfile
             ? { requestingOperatorProfileId: principal.authenticatedUserProfile.profileId }
             : {}),
@@ -657,8 +661,6 @@ export function createAgentTurnService(
       typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
         ? Math.max(0, Math.floor(params.timeoutMs))
         : 30_000;
-    // Keep the captured entry across the wait so timeout attribution uses the
-    // same owner snapshot that selected the chat-vs-agent observation source.
     const activeChatEntry = context.chatAbortControllers.get(runId);
     const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
     const queuedResult = () =>
@@ -684,12 +686,9 @@ export function createAgentTurnService(
       return queuedAfterWait;
     }
     if (!snapshot) {
-      const activeRunRegistered = activeChatEntry !== undefined;
       return {
         runId,
         status: "timeout" as const,
-        timeoutPhase: activeRunRegistered ? ("gateway_draining" as const) : ("queue" as const),
-        ...(activeRunRegistered ? {} : { providerStarted: false }),
       };
     }
     return {
@@ -710,9 +709,5 @@ export function createAgentTurnService(
     };
   };
 
-  const abortTurn = async (options: GatewayRequestHandlerOptions): Promise<void> => {
-    await handleChatAbortRequest({ ...options, context, isWebchatConnect });
-  };
-
-  return { startTurn, waitForTurn, abortTurn };
+  return { startTurn, waitForTurn };
 }

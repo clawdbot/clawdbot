@@ -14,7 +14,7 @@ import {
   type Skill,
 } from "./skill-contract.js";
 
-type LoadedLocalSkill = {
+export type LoadedLocalSkill = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
 };
@@ -65,7 +65,7 @@ function readSkillFileSync(params: {
   }
 }
 
-function loadSingleSkillDirectory(params: {
+export function loadSingleSkillDirectory(params: {
   skillDir: string;
   source: string;
   rootRealPath: string;

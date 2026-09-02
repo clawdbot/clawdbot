@@ -193,22 +193,19 @@ function validateAndProjectEntries(values: unknown[]): {
 export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManifest): string {
   const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
   const entries = [
-    ...(manifest.directories ?? [])
-      .filter(
-        (entryPath) =>
-          !isDerivedWorkspacePath(entryPath, isStagedInputPath(entryPath, stagedInputs)),
-      )
-      .map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-        // Phase 1 projects directory permissions away. Keep recomputed
-        // manifests deterministic without creating a new mode contract.
-        mode: 0o700,
-      })),
-    ...manifest.entries.filter(
+    ...(manifest.directories ?? []).map((entryPath) => ({
+      path: entryPath,
+      type: "directory" as const,
+      // Phase 1 projects directory permissions away. Keep recomputed
+      // manifests deterministic without creating a new mode contract.
+      mode: 0o700,
+    })),
+    ...manifest.entries,
+  ]
+    .filter(
       (entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
-    ),
-  ].toSorted(compareManifestPaths);
+    )
+    .toSorted(compareManifestPaths);
   if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
     throw new Error("Worker workspace manifest has too many entries");
   }

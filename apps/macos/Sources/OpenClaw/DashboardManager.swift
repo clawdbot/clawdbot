@@ -15,11 +15,6 @@ enum DashboardRouteProbePurpose: Sendable {
 @MainActor
 @Observable
 final class DashboardManager {
-    static let shared = DashboardManager(
-        websiteDataStore: .default(),
-        automaticGatewayProfileRefreshEnabled:
-        AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
-
     private struct AuxiliaryWindowInstance {
         var target: DashboardGatewayTarget
         var controller: DashboardWindowController
@@ -1180,6 +1175,20 @@ extension DashboardManager {
 }
 
 extension DashboardManager {
+    static let shared: DashboardManager = {
+        #if DEBUG
+        // UI fixtures instantiate shared views; their notifications must not start
+        // live profile/Keychain observers outside the fixture's injected manager.
+        if ProcessInfo.processInfo.isRunningTests {
+            return DashboardManager._testMake()
+        }
+        #endif
+        return DashboardManager(
+            websiteDataStore: .default(),
+            automaticGatewayProfileRefreshEnabled:
+            AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
+    }()
+
     func configure(updater: UpdaterProviding) {
         self.updater = updater
         guard self.automaticGatewayProfileRefreshEnabled else { return }
@@ -1204,7 +1213,7 @@ extension DashboardManager {
             -> GatewayConnection.EndpointSnapshot)? = nil,
         profileEndpointProvider: (@Sendable (String) async throws
             -> GatewayConnection.EndpointSnapshot)? = nil,
-        gatewayEntriesProvider: (@MainActor () async throws -> [DashboardGatewayEntry])? = nil)
+        gatewayEntriesProvider: (@MainActor () async throws -> [DashboardGatewayEntry])? = { [] })
         -> DashboardManager
     {
         let manager = DashboardManager(

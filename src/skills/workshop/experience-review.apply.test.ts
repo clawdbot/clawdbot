@@ -6,10 +6,12 @@ import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js"
 import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { SessionManager } from "../../agents/sessions/index.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import * as agentRunRegistry from "../../infra/agent-run-registry.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import {
   isGatewaySubordinateWorkAdmissionClosed,
@@ -40,8 +42,7 @@ vi.mock("../../agents/run-session-target.js", () => ({
 }));
 vi.mock("../../agents/sessions/index.js", () => ({
   SessionManager: {
-    open: vi.fn(() => ({ getEntries: () => [] })),
-    fromEntries: vi.fn(() => ({})),
+    openModelContext: vi.fn(() => ({})),
   },
 }));
 
@@ -76,6 +77,40 @@ afterEach(async () => {
 });
 
 describe("experience review auto apply", () => {
+  it("records acquisition failure and releases its registered review", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-read-failure-");
+    const registration = vi.spyOn(agentRunRegistry, "registerAgentRunContext");
+    vi.spyOn(SessionManager, "openModelContext").mockImplementationOnce(() => {
+      throw new Error("synthetic acquisition failure");
+    });
+    try {
+      await expect(
+        runSkillExperienceReview(
+          {
+            ctx: {
+              sessionId: "foreground-session",
+              sessionKey: "agent:main:read-failure",
+              workspaceDir,
+              modelProviderId: "openai",
+              modelId: "gpt-test",
+              foregroundPromptContext: foregroundPromptContext(workspaceDir),
+            },
+            config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+          },
+          { getCurrentConfig: () => ({}) },
+        ),
+      ).rejects.toThrow("synthetic acquisition failure");
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(registration).toHaveBeenCalledOnce();
+      expect(getAgentRunContext(registration.mock.calls[0]![0])).toBeUndefined();
+      expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
+        outcome: "failed",
+        error: "Error: synthetic acquisition failure",
+      });
+    } finally {
+      registration.mockRestore();
+    }
+  });
   it("does not occupy the foreground session lane", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-session-lane-");
     const foregroundSessionKey = "agent:main:main";

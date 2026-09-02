@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:http";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   operatorMcpOAuthIdentity,
   requesterMcpOAuthIdentity,
@@ -244,7 +245,14 @@ describe("mcp login OAuth integration", () => {
       const fixture = await startOAuthFixture(oauthPort);
       const redirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`;
       const logs: string[] = [];
-      vi.spyOn(defaultRuntime, "log").mockImplementation((line) => logs.push(String(line)));
+      const authorizationUrl = createDeferred<string>();
+      vi.spyOn(defaultRuntime, "log").mockImplementation((line) => {
+        const text = String(line);
+        logs.push(text);
+        if (text.startsWith(`${fixture.issuer}/authorize`)) {
+          authorizationUrl.resolve(text);
+        }
+      });
       const program = new Command().exitOverride();
       registerMcpCli(program);
       try {
@@ -264,18 +272,19 @@ describe("mcp login OAuth integration", () => {
         );
         logs.length = 0;
 
-        const login = program.parseAsync(["mcp", "login", "fixture"], { from: "user" });
-        await vi.waitFor(() => {
-          expect(logs.some((line) => line.includes("Waiting for the browser"))).toBe(true);
+        // Drive the browser from the published URL, not a polling deadline that
+        // can abandon login while discovery still owns the temporary state.
+        const browser = authorizationUrl.promise.then(async (url) => {
+          const response = await fetch(url);
+          return { status: response.status, body: await response.text() };
         });
-        const authorizationUrl = logs.find((line) =>
-          line.startsWith(`${fixture.issuer}/authorize`),
-        );
-        expect(authorizationUrl).toBeDefined();
-        const browserResponse = await fetch(authorizationUrl!);
+        const [browserResponse] = await Promise.all([
+          browser,
+          program.parseAsync(["mcp", "login", "fixture"], { from: "user" }),
+        ]);
+        expect(logs.some((line) => line.includes("Waiting for the browser"))).toBe(true);
         expect(browserResponse.status).toBe(200);
-        await expect(browserResponse.text()).resolves.toContain("Authorization received");
-        await login;
+        expect(browserResponse.body).toContain("Authorization received");
 
         await expect(
           readMcpOAuthCredentialsStatus(
@@ -289,9 +298,7 @@ describe("mcp login OAuth integration", () => {
           tokenVerifier: expect.any(String),
         });
         expect(logs).toContain('MCP OAuth credentials saved for "fixture".');
-        await vi.waitFor(async () => {
-          await expect(fetch(redirectUrl)).rejects.toThrow();
-        });
+        await expect(fetch(redirectUrl)).rejects.toThrow();
       } finally {
         await fixture.close();
       }

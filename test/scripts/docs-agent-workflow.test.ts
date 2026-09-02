@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -32,9 +32,12 @@ function runGate(runs: WorkflowRun[], options: { event?: string; workflowHeadSha
   const output = join(root, "output");
   mkdirSync(bin);
   writeFileSync(output, "");
+  const owner = join(root, "owner.py");
+  copyFileSync(".github/actions/git-owner/owner.py", owner);
   // Only the gate runs. Git/network and the clock are fixtures; jq executes the real filters.
   const commands = {
-    git: `case "$*" in
+    git: `if [ "$1" = "-C" ]; then shift 2; fi
+case "$*" in
   'fetch --no-tags origin main') ;;
   'rev-parse origin/main'|'rev-parse HEAD') printf '%s\\n' '${mainSha}' ;;
   'rev-parse ${mainSha}^') printf '%s\\n' '${parentSha}' ;;
@@ -56,6 +59,7 @@ esac`,
       PATH: `${bin}:${process.env.PATH}`,
       HOME: root,
       RUNNER_TEMP: root,
+      CI_GIT_OWNER: owner,
       GITHUB_OUTPUT: output,
       GITHUB_REPOSITORY: "openclaw/openclaw",
       GITHUB_RUN_ID: String(currentRun.id),
@@ -79,6 +83,20 @@ function admittedOutput(reviewBase: string) {
 }
 
 describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
+  it("retains both corrected REST selectors and the one-hour review ordering", () => {
+    const source = readFileSync(".github/workflows/docs-agent.yml", "utf8");
+    expect(source.match(/select\(\.id != \$current_run_id\)/gu)).toHaveLength(2);
+    expect(
+      source.match(/select\(\.conclusion != "cancelled" and \.conclusion != "skipped"\)/gu),
+    ).toHaveLength(2);
+    expect(source).not.toContain(".database_id");
+    expect(source).toContain("date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ");
+    expect(source).toContain("select(.created_at >= $one_hour_ago)");
+    expect(source).toContain('| [.id, .status, (.conclusion // ""), .created_at, .head_sha]');
+    expect(source).toContain("select(. != $remote_main)");
+    expect(source).toContain('\' "$runs_json" | head -n 1');
+  });
+
   it("does not let the current REST run throttle itself", () => {
     const result = runGate([currentRun]);
     expect(result.output).toBe(admittedOutput(parentSha));
@@ -88,6 +106,7 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
   it.each([
     ["in progress", "in_progress", null],
     ["completed", "completed", "success"],
+    ["failed", "completed", "failure"],
   ])("throttles another %s run and prints its REST id", (_label, status, conclusion) => {
     const other = { ...currentRun, id: 122, status, conclusion, head_sha: previousSha };
     const result = runGate([currentRun, other]);
@@ -114,14 +133,25 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     expect(result.output).toBe(admittedOutput(previousSha));
   });
 
-  it("ignores skipped runs and uses a prior run outside the hourly window", () => {
+  it.each([
+    ["skipped", currentRun.created_at],
+    ["cancelled", currentRun.created_at],
+    ["cancelled", "2026-08-28T22:29:59Z"],
+  ])("ignores %s history from %s for cadence and review base", (conclusion, createdAt) => {
     const result = runGate([
       currentRun,
-      { ...currentRun, id: 122, status: "completed", conclusion: "skipped", head_sha: parentSha },
+      {
+        ...currentRun,
+        id: 122,
+        created_at: createdAt,
+        status: "completed",
+        conclusion,
+        head_sha: parentSha,
+      },
       {
         ...currentRun,
         id: 121,
-        created_at: "2026-08-28T22:29:59Z",
+        created_at: "2026-08-28T22:29:58Z",
         status: "completed",
         conclusion: "success",
         head_sha: previousSha,

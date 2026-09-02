@@ -158,7 +158,7 @@ export async function isSessionCatalogThreadVisible(params: {
     });
     const instances = new Map();
     planningEntries.captureHostInstances(host, instances);
-    const projected = requestEntries.projectHostCreatedActors(host, instances);
+    const projected = requestEntries.projectHostSessions(host, instances);
     const session = projected.sessions.find(
       (candidate) =>
         candidate.threadId === params.threadId &&

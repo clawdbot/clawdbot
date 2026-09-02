@@ -1,6 +1,6 @@
 import { isRecord } from "../../utils.js";
 import { readCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
-import { isToolAllowedByPolicyName } from "../tool-policy-match.js";
+import { createToolPolicyMatcher } from "../tool-policy-match.js";
 import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
@@ -265,14 +265,14 @@ function capCronJobToolsAllow(params: {
   const requestedToolsAllow = normalizeCronToolsAllow(
     requestedRaw.filter((entry): entry is string => typeof entry === "string"),
   );
-  if (requestedToolsAllow.length === 0) {
-    params.payload.toolsAllow = [];
-    delete params.payload.toolsAllowIsDefault;
-    return;
-  }
   if (requestedToolsAllow.includes("*")) {
     params.payload.toolsAllow = creatorToolNames;
     params.payload.toolsAllowIsDefault = true;
+    return;
+  }
+  if (requestedToolsAllow.length === 0 || creatorToolsAllow.length === 0) {
+    params.payload.toolsAllow = [];
+    delete params.payload.toolsAllowIsDefault;
     return;
   }
 
@@ -284,14 +284,12 @@ function capCronJobToolsAllow(params: {
     { allow: requestedToolsAllow },
     pluginGroups,
   );
+  const matches = createToolPolicyMatcher(requestedPolicy);
   // A creator tool matches under its canonical name or the runtime alias the
   // creating surface presented; the persisted cap always holds canonical names.
   params.payload.toolsAllow = creatorToolsAllow
     .filter(
-      (tool) =>
-        isToolAllowedByPolicyName(tool.name, requestedPolicy) ||
-        (tool.aliasName !== undefined &&
-          isToolAllowedByPolicyName(tool.aliasName, requestedPolicy)),
+      (tool) => matches(tool.name) || (tool.aliasName !== undefined && matches(tool.aliasName)),
     )
     .map((tool) => tool.name);
   delete params.payload.toolsAllowIsDefault;

@@ -5,6 +5,9 @@ import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import { renderSettingsRow, renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+
+registerSettingsEnglish();
 
 const AUTO_VALUE = "__openclaw_observer_auto__";
 

@@ -50,7 +50,7 @@ import {
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
 import type { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
-import { renderChatVoiceError } from "./chat-voice-activity.ts";
+import { renderChatVoiceStatus } from "./chat-voice-activity.ts";
 
 type ChatComposerViewContext = {
   props: ChatComposerProps;
@@ -183,8 +183,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     state.capabilityMenuView = "root";
   }
   const disabledReasonId = paneDomId(props.paneId, "disabled-reason");
-  const voiceError = showComposerInput
-    ? renderChatVoiceError({
+  const composerAlerts = showComposerInput
+    ? renderChatVoiceStatus({
         status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
         detail: props.realtimeTalkDetail,
         onDismissError: props.realtimeTalkCameraError
@@ -192,12 +192,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           : props.onDismissRealtimeTalkError,
       })
     : nothing;
-  const composerAlerts =
-    voiceError !== nothing
-      ? html`<div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
-          ${voiceError}
-        </div>`
-      : nothing;
   const offlineText = props.offline
     ? props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
@@ -207,8 +201,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? {
         text: props.disabledReason,
         tone: props.disabledReasonTone ?? ("danger" as const),
-        icon:
-          (props.disabledReasonTone ?? "danger") === "danger"
+        icon: props.disabledReasonBusy
+          ? html`<span class="btn__spinner" aria-hidden="true"></span>`
+          : (props.disabledReasonTone ?? "danger") === "danger"
             ? icons.alertTriangle
             : icons.shieldQuestion,
       }
@@ -225,6 +220,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             class="agent-chat__composer-status-band"
             role=${primaryComposerStatus.tone === "danger" ? "alert" : "status"}
             aria-live="polite"
+            aria-busy=${props.disabledReasonBusy ? "true" : "false"}
           >
             <span class="agent-chat__composer-status-icon" aria-hidden="true"
               >${primaryComposerStatus.icon}</span
@@ -259,6 +255,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           activeSession?.startedAt,
           activeSession?.endedAt,
           props.progressCardHasActiveRun,
+          props.collapseTaskProgress,
         )}
       </div>`
     : nothing;
@@ -277,6 +274,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     onQueueEditCancel: props.queuedEdit?.onCancel,
     editingId: props.queuedEdit?.editingId ?? null,
     editingText: props.queuedEdit?.editingText,
+    editingSource: props.queuedEdit?.source,
     onQueueRemove: props.onQueueRemove,
   });
   const goalCard = activeSession?.goal
@@ -317,6 +315,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline
               ? "agent-chat__input--offline"
               : ""}${dictation?.active ? " agent-chat__input--dictating" : ""}"
+            aria-busy=${props.disabledReasonBusy ? "true" : "false"}
             @wa-show=${handleChatComposerDropdownShow}
             @wa-after-show=${restorePointerOpenedChatComposerTrigger}
             @openclaw-composer-dismiss-invocations=${() => {

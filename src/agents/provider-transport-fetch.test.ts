@@ -2127,7 +2127,6 @@ describe("buildGuardedModelFetch", () => {
         retryAfter: "Sun Nov 99 99:99:99 9999",
       },
       { title: "keeps short retry-after 429 responses retryable", status: 429, retryAfter: "30" },
-      { title: "leaves short retry-after values untouched", status: 429, retryAfter: "30" },
       { title: "ignores retry-after on non-retryable responses", status: 400, retryAfter: "239" },
     ])("$title", async ({ status, retryAfter }) => {
       fetchWithSsrFGuardMock.mockResolvedValue({

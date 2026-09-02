@@ -1,5 +1,5 @@
 // Coverage for waiting on completion-required async tool tasks.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -23,7 +23,7 @@ function requireCreatedTask(task: TaskRecord | null): TaskRecord {
 }
 
 describe("waitForCompletionRequiredAsyncTasks", () => {
-  beforeEach(() => resetTaskRegistryForTests());
+  beforeAll(() => resetTaskRegistryForTests());
   // Aborted and timed-out waits leave tasks running; release them before the next suite.
   afterEach(() => resetTaskRegistryForTests());
 

@@ -13,7 +13,10 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
-import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
+import type {
+  NodeWorkerLaunchInput,
+  NodeWorkerSupervisorReceipt,
+} from "../../worker/node-supervisor-protocol.js";
 import {
   parseNodeWorkerWorkspaceExecResult,
   type NodeWorkerWorkspaceExecInput,
@@ -28,7 +31,10 @@ import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
-import type { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
+import {
+  measureNodeWorkerLaunchBytes,
+  type createNodeWorkerLaunchAdapter,
+} from "./node-launch-adapter.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
 import {
@@ -279,6 +285,17 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     entry: NodeTunnelEntry,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
   ): { handle: WorkerTurnTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
+    const buildLaunchInput = (
+      plan: NodeWorkerLaunchInput["descriptor"],
+      claim: WorkerSessionTurnClaim,
+    ): NodeWorkerLaunchInput => ({
+      environmentSession: 1,
+      launchId: plan.assignment.turnId,
+      gatewayNamespace,
+      expectedBundleHash: entry.expectedBuild.bundleHash,
+      placementGeneration: claim.placementGeneration,
+      descriptor: plan,
+    });
     const { validateRestoredWorkspace, ...workspaceActions } = createNodeWorkerWorkspaceActions({
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
@@ -293,6 +310,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ...workspaceActions,
       environmentId: entry.environmentId,
       ownerEpoch: entry.ownerEpoch,
+      measureLaunchTurn: (plan, claim) =>
+        measureNodeWorkerLaunchBytes(entry.deviceId, buildLaunchInput(plan, claim)),
       launchTurn: async (request) => {
         if (entry.executionMode !== "worker-turn") {
           throw new Error("remote-exec environments do not launch embedded worker turns");
@@ -309,14 +328,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           options.validateWorkerTurn(claim);
         const operation = options.launchNodeWorker({
           deviceId: entry.deviceId,
-          input: {
-            environmentSession: 1,
-            launchId: plan.assignment.turnId,
-            gatewayNamespace,
-            expectedBundleHash: entry.expectedBuild.bundleHash,
-            placementGeneration: claim.placementGeneration,
-            descriptor: plan,
-          },
+          input: buildLaunchInput(plan, claim),
           isDispatchAuthorized,
           isCancellationAuthorized: () => hasDurableBinding(entry),
           timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,

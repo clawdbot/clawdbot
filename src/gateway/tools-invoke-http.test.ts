@@ -3,6 +3,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
@@ -25,10 +26,6 @@ import {
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
-
-const pluginToolMetaState = vi.hoisted(
-  () => new Map<string, { pluginId: string; optional: boolean }>(),
-);
 
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
@@ -102,16 +99,11 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/tools.js", () => ({
-  copyPluginToolMeta: () => {},
-  getPluginToolMeta: (tool: { name?: string }) =>
-    typeof tool?.name === "string" ? pluginToolMetaState.get(tool.name) : undefined,
-}));
-
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
 // routing/policy tests we only need a small set of tool names.
 vi.mock("../agents/openclaw-tools.js", async () => {
   const { createTerminalTool } = await import("../agents/tools/terminal-tool.js");
+  const { setPluginToolMeta } = await import("../plugins/tool-metadata.js");
   const toolInputError = (message: string) => {
     const err = new Error(message);
     err.name = "ToolInputError";
@@ -124,6 +116,14 @@ vi.mock("../agents/openclaw-tools.js", async () => {
     return err;
   };
 
+  const pluginDoctor = {
+    name: "plugin_doctor",
+    label: "Plugin doctor",
+    description: "Fixture plugin permission flow",
+    parameters: Type.Object({}),
+    execute: async () => ({ content: [], details: {}, ok: true, permissionFlow: true }),
+  };
+  setPluginToolMeta(pluginDoctor, { pluginId: "test-plugin", optional: true });
   const tools = [
     {
       name: "session_status",
@@ -184,11 +184,7 @@ vi.mock("../agents/openclaw-tools.js", async () => {
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "browser" }),
     },
-    {
-      name: "plugin_doctor",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, permissionFlow: true }),
-    },
+    pluginDoctor,
     {
       name: "write_scoped_test",
       parameters: { type: "object", properties: {} },
@@ -329,9 +325,7 @@ beforeEach(() => {
   pluginHttpHandlers = [];
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
-  pluginToolMetaState.clear();
   sessionEntries.clear();
-  pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();

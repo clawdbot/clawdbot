@@ -99,6 +99,7 @@ type AttemptWorkspaceParams = Pick<
   | "execOverrides"
   | "permissionMode"
   | "sandboxSessionKey"
+  | "sandboxAgentId"
   | "sessionId"
   | "sessionKey"
   | "sessionRoot"
@@ -109,16 +110,24 @@ type AttemptWorkspaceParams = Pick<
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
 export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspaceParams) {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  const sessionKey = params.sessionKey?.trim() || params.sessionId;
+  const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
   // Collection review is a host-owned maintenance run with one restricted tool.
   // Sandboxing would hide that tool or redirect it to a disposable workspace.
   const sandbox = params.skillWorkshopCollectionReconcile
     ? null
     : await resolveSandboxContext({
         config: params.config,
+        // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
+        agentId:
+          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
         execOverrides: params.execOverrides,
         sessionKey: sandboxSessionKey,
         skillsSnapshot: params.skillsSnapshot,
@@ -129,9 +138,10 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
   // Recorded roots pin worktree/explicit-cwd boundaries; rootless sessions use
   // the agent's canonical workspace as their permission boundary.
+  const sessionPermissionRoot = params.sessionRoot ?? (await fs.realpath(resolvedWorkspace));
   const sessionPermissionPolicy = params.permissionMode
     ? {
-        root: params.sessionRoot ?? (await fs.realpath(resolvedWorkspace)),
+        root: sessionPermissionRoot,
         mode: params.permissionMode,
       }
     : undefined;
@@ -141,11 +151,6 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     );
   }
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
   return {
     effectiveCwd: sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace),
     effectiveFsWorkspaceOnly: resolveAttemptFsWorkspaceOnly({
@@ -154,6 +159,7 @@ export async function resolveAttemptWorkspaceSandbox(params: AttemptWorkspacePar
     }),
     effectiveWorkspace,
     resolvedWorkspace,
+    sessionPermissionRoot,
     sessionPermissionPolicy,
     sandbox,
     sandboxSessionKey,

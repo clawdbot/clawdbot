@@ -495,7 +495,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private connectionOwner: GoogleLiveConnectionAttempt | undefined;
   private connectAttempt: GoogleLiveConnectionAttempt | undefined;
   // Google can interleave independent input/output transcripts, so each role
-  // owns its own in-progress byte budget until `finished` or terminal cleanup.
+  // owns its own in-progress byte budget until its protocol boundary or cleanup.
   private readonly pendingTranscripts: Record<RealtimeVoiceRole, GoogleLiveTranscriptAccumulator> =
     {
       user: { text: "", byteCount: 0 },
@@ -941,8 +941,12 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleServerContent(content: LiveServerContent): void {
+    const owner = this.connectionOwner;
     if (content.interrupted) {
       this.config.onClearAudio("barge-in");
+      if (this.connectionOwner !== owner) {
+        return;
+      }
     }
 
     if (content.inputTranscription) {
@@ -971,14 +975,28 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
         const audio = this.toOutputAudio(pcm, sampleRate);
         if (audio.length > 0) {
           this.config.onAudio(audio);
+          if (this.connectionOwner !== owner) {
+            return;
+          }
           this.config.onMark?.(`audio-${randomUUID()}`);
+          if (this.connectionOwner !== owner) {
+            return;
+          }
         }
         continue;
       }
     }
+    // Output transcription precedes these model boundaries; input transcription
+    // is independently ordered and must not be finalized by an assistant turn.
+    if (content.generationComplete || content.interrupted || content.turnComplete) {
+      this.flushPendingTranscript("assistant");
+    }
   }
 
   private appendTranscript(role: RealtimeVoiceRole, transcript: GoogleLiveTranscription): boolean {
+    const owner = this.connectionOwner;
+    // Live 3.1 emits complete input utterances without the optional finished flag.
+    const completeInput = role === "user" && isGemini31LiveModel(this.model);
     const text = transcript.text;
     if (text) {
       const pending = this.pendingTranscripts[role];
@@ -990,14 +1008,17 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }
       pending.text += text;
       pending.byteCount += textBytes;
-      this.emitTranscript(role, text, false);
+      if (!completeInput) {
+        this.emitTranscript(role, text, false);
+        if (this.connectionOwner !== owner) {
+          return false;
+        }
+      }
     }
-    // turnComplete belongs to model generation and is unordered with transcription.
-    // Finalize only on the protocol terminal or when the bridge permanently closes.
-    if (transcript.finished) {
+    if (transcript.finished || completeInput) {
       this.flushPendingTranscript(role);
     }
-    return true;
+    return this.connectionOwner === owner;
   }
 
   private flushPendingTranscript(role: RealtimeVoiceRole): void {

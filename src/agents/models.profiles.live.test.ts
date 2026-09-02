@@ -27,7 +27,6 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   readLiveTestConfig,
-  requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
@@ -1802,10 +1801,7 @@ describeLive("live models (profile keys)", () => {
             cfg,
             requireProfileKeys: REQUIRE_PROFILE_KEYS,
           });
-          if (
-            requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
-            !apiKeyInfo.source.startsWith("profile:")
-          ) {
+          if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
             skipped.push({
               model: id,
               reason: `non-profile credential source: ${apiKeyInfo.source}`,

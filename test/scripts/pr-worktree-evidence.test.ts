@@ -61,7 +61,12 @@ function fixture() {
   const outcomes = () =>
     git(["for-each-ref", "--format=%(refname) %(objectname)", "refs/openclaw/pr-merge-outcomes/"]);
   const worktrees = () => git(["worktree", "list", "--porcelain"]);
-  const add = (pr: number, capture?: Capture, registered = true) => {
+  const add = (
+    pr: number,
+    capture?: Capture,
+    registered = true,
+    captureName = "merge-output.log",
+  ) => {
     const dir = join(repo, ".worktrees", `pr-${pr}`);
     if (registered) git(["worktree", "add", "-q", "-b", `temp/pr-${pr}`, dir]);
     else git(["branch", `temp/pr-${pr}`]);
@@ -69,10 +74,10 @@ function fixture() {
     git(["branch", `pr-${pr}-prep`]);
     mkdirSync(join(dir, ".local"), { recursive: true });
     writeFileSync(join(dir, ".local", "prep.env"), "synthetic metadata\n");
-    if (capture === "symlink") symlinkSync("missing-capture", join(dir, ".local/merge-output.log"));
+    if (capture === "symlink") symlinkSync("missing-capture", join(dir, ".local", captureName));
     else if (capture) {
       writeFileSync(
-        join(dir, ".local/merge-output.log"),
+        join(dir, ".local", captureName),
         capture === "empty" ? "" : "Synthetic response\n",
       );
     }
@@ -161,8 +166,8 @@ ${commands.join("\n")}
   return { root, repo, head, git, add, run, record, branches, outcomes, worktrees };
 }
 
-function evidence(dir: string) {
-  const capture = join(dir, ".local/merge-output.log");
+function evidence(dir: string, captureName = "merge-output.log") {
+  const capture = join(dir, ".local", captureName);
   const stat = lstatSync(capture);
   return {
     inode: stat.ino,
@@ -174,15 +179,21 @@ function evidence(dir: string) {
 }
 
 describePosix("native worktree cleanup preserves merge evidence", () => {
-  it.each(["CLOSED", "MERGED"])(
-    "preserves registered captures during dry-run and actual GC for %s",
-    (state) => {
+  it.each(
+    ["CLOSED", "MERGED"].flatMap((state) =>
+      ["merge-output.log", "merge-output.11111111-1111-4111-8111-111111111111.log"].map(
+        (captureName) => ({ state, captureName }),
+      ),
+    ),
+  )(
+    "preserves registered captures during dry-run and actual GC for %j",
+    ({ state, captureName }) => {
       const f = fixture();
       const protectedDirs = ["empty", "populated", "symlink"].map((shape, index) =>
-        f.add(910001 + index, shape as Capture),
+        f.add(910001 + index, shape as Capture, true, captureName),
       );
       const eligible = f.add(910009);
-      const before = protectedDirs.map(evidence);
+      const before = protectedDirs.map((dir) => evidence(dir, captureName));
       const branches = f.branches();
       const registrations = f.worktrees();
       const dry = f.run(["gc_pr_worktrees true"], state);
@@ -198,7 +209,9 @@ describePosix("native worktree cleanup preserves merge evidence", () => {
       // Check the original path first: moving evidence to Trash also violates recovery.
       for (const [index, dir] of protectedDirs.entries()) {
         expect.soft(existsSync(join(dir, ".local")), actual.output).toBe(true);
-        if (existsSync(join(dir, ".local"))) expect(evidence(dir)).toEqual(before[index]);
+        if (existsSync(join(dir, ".local"))) {
+          expect(evidence(dir, captureName)).toEqual(before[index]);
+        }
         expect.soft(actual.output).not.toContain(`removed .worktrees/pr-${910001 + index}`);
         expect.soft(f.worktrees()).toContain(`worktree ${dir}\n`);
         for (const branch of [

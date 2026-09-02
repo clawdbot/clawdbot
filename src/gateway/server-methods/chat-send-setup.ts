@@ -13,7 +13,11 @@ export async function prepareAndAdmitChatSend(
     respond,
     context,
     client,
-  }: Pick<GatewayRequestHandlerOptions, "params" | "respond" | "context" | "client">,
+    sessionMutationAuthorization,
+  }: Pick<
+    GatewayRequestHandlerOptions,
+    "params" | "respond" | "context" | "client" | "sessionMutationAuthorization"
+  >,
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
     trustedSystemInput?: boolean;
@@ -59,6 +63,7 @@ export async function prepareAndAdmitChatSend(
     respond,
     context,
     client,
+    assertCurrent: sessionMutationAuthorization?.assertCurrent,
   });
   if (!shouldAdmit) {
     return undefined;

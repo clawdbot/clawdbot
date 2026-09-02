@@ -19,6 +19,7 @@ import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
+  isExternallyDistributedPlugin,
   isOfficialExternalPluginId,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalChannelEnvVars,
@@ -330,6 +331,23 @@ describe("official external plugin catalog", () => {
     expect(source).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
     expect(source).toContain('await import("../infra/net/fetch-guard.js")');
   });
+
+  it.each([
+    { pluginId: "google-meet", packageName: "@openclaw/google-meet", external: true },
+    { pluginId: "google-meet", packageName: "@example/google-meet", external: false },
+    { pluginId: "other-plugin", packageName: "@openclaw/google-meet", external: false },
+    {
+      pluginId: "source-external",
+      packageName: "@example/source-external",
+      packageBuild: { bundledDist: false },
+      external: true,
+    },
+  ])(
+    "classifies distribution ownership for $pluginId from $packageName",
+    ({ external, ...plugin }) => {
+      expect(isExternallyDistributedPlugin(plugin)).toBe(external);
+    },
+  );
 
   it("ships the official plugin catalog as a feed-shaped bundled fallback", () => {
     expect(isOfficialExternalPluginCatalogFeed(officialExternalPluginCatalog)).toBe(true);
@@ -2656,7 +2674,7 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("lists Matrix as an official external ClawHub channel after cutover", () => {
+  it("lists Matrix as an official external npm-first channel after cutover", () => {
     const ids = new Set<string>();
     for (const entry of listOfficialExternalPluginCatalogEntries()) {
       const pluginId = resolveOfficialExternalPluginId(entry);
@@ -2670,7 +2688,7 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
       clawhubSpec: "clawhub:@openclaw/matrix",
       npmSpec: "@openclaw/matrix",
-      defaultChoice: "clawhub",
+      defaultChoice: "npm",
       minHostVersion: ">=2026.4.10",
       allowInvalidConfigRecovery: true,
     });
