@@ -5314,17 +5314,20 @@ public struct SessionCatalogCapabilities: Codable, Sendable {
     public let archive: Bool
     public let createsession: [String: AnyCodable]?
     public let openterminal: Bool?
+    public let startterminal: Bool?
 
     public init(
         continuesession: Bool,
         archive: Bool,
         createsession: [String: AnyCodable]? = nil,
-        openterminal: Bool? = nil)
+        openterminal: Bool? = nil,
+        startterminal: Bool? = nil)
     {
         self.continuesession = continuesession
         self.archive = archive
         self.createsession = createsession
         self.openterminal = openterminal
+        self.startterminal = startterminal
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -5332,6 +5335,7 @@ public struct SessionCatalogCapabilities: Codable, Sendable {
         case archive
         case createsession = "createSession"
         case openterminal = "openTerminal"
+        case startterminal = "startTerminal"
     }
 }
 
@@ -5464,6 +5468,7 @@ public struct SessionCatalogHost: Codable, Sendable {
     public let kind: AnyCodable
     public let connected: Bool
     public let nodeid: String?
+    public let canstartterminal: Bool?
     public let sessions: [SessionCatalogSession]
     public let nextcursor: String?
     public let error: [String: AnyCodable]?
@@ -5474,6 +5479,7 @@ public struct SessionCatalogHost: Codable, Sendable {
         kind: AnyCodable,
         connected: Bool,
         nodeid: String? = nil,
+        canstartterminal: Bool? = nil,
         sessions: [SessionCatalogSession],
         nextcursor: String? = nil,
         error: [String: AnyCodable]? = nil)
@@ -5483,6 +5489,7 @@ public struct SessionCatalogHost: Codable, Sendable {
         self.kind = kind
         self.connected = connected
         self.nodeid = nodeid
+        self.canstartterminal = canstartterminal
         self.sessions = sessions
         self.nextcursor = nextcursor
         self.error = error
@@ -5494,6 +5501,7 @@ public struct SessionCatalogHost: Codable, Sendable {
         case kind
         case connected
         case nodeid = "nodeId"
+        case canstartterminal = "canStartTerminal"
         case sessions
         case nextcursor = "nextCursor"
         case error
@@ -18535,6 +18543,8 @@ public struct TerminalAttachResult: Codable, Sendable {
     public let shell: String
     public let cwd: String
     public let confined: Bool
+    public let title: String?
+    public let owner: AnyCodable?
     public let buffer: String
     public let seq: Int?
 
@@ -18544,6 +18554,8 @@ public struct TerminalAttachResult: Codable, Sendable {
         shell: String,
         cwd: String,
         confined: Bool,
+        title: String? = nil,
+        owner: AnyCodable? = nil,
         buffer: String,
         seq: Int? = nil)
     {
@@ -18552,6 +18564,8 @@ public struct TerminalAttachResult: Codable, Sendable {
         self.shell = shell
         self.cwd = cwd
         self.confined = confined
+        self.title = title
+        self.owner = owner
         self.buffer = buffer
         self.seq = seq
     }
@@ -18562,6 +18576,8 @@ public struct TerminalAttachResult: Codable, Sendable {
         case shell
         case cwd
         case confined
+        case title
+        case owner
         case buffer
         case seq
     }
@@ -18571,6 +18587,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
     public let sessionid: String
     public let agentid: String
     public let shell: String
+    public let title: String?
     public let cwd: String
     public let confined: Bool
     public let attached: Bool
@@ -18581,6 +18598,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         sessionid: String,
         agentid: String,
         shell: String,
+        title: String? = nil,
         cwd: String,
         confined: Bool,
         attached: Bool,
@@ -18590,6 +18608,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         self.sessionid = sessionid
         self.agentid = agentid
         self.shell = shell
+        self.title = title
         self.cwd = cwd
         self.confined = confined
         self.attached = attached
@@ -18601,6 +18620,7 @@ public struct TerminalSessionInfo: Codable, Sendable {
         case sessionid = "sessionId"
         case agentid = "agentId"
         case shell
+        case title
         case cwd
         case confined
         case attached
