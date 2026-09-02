@@ -31,10 +31,7 @@ import type {
   EmbeddedRunAttemptInternalParams,
   RunEmbeddedAgentInternalParams,
 } from "./internal-params.js";
-import {
-  EMBEDDED_RUN_LANE_HEARTBEAT_MS,
-  EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-} from "./lane-runtime.js";
+import type { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
@@ -105,9 +102,9 @@ type AttemptTranscriptOwnership =
 type AttemptControl = {
   lifecycleGeneration: string;
   pluginHarnessOwnsTransport: boolean;
-  laneTaskAbortController: AbortController;
-  laneTaskReleaseController: AbortController;
-  noteLaneTaskProgress: () => void;
+  createAttemptControls: ReturnType<
+    typeof createEmbeddedRunLaneController
+  >["createAttemptControls"];
   onToolOutcome: ToolOutcomeObserver;
   isTurnTainted: () => boolean;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
@@ -139,69 +136,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
   maxBeforeAgentFinalizeRevisions: number;
 }): Promise<{
   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
-  cancellationRequested: boolean;
   preparedAttempt: EmbeddedRunAttemptParams;
 }> {
   const { params, runtime, control } = input;
   const observeToolTerminal = createToolTerminalObserver(params.runId);
   const attemptAbortController = new AbortController();
   control.setPostCompactionAbortController(attemptAbortController);
-  const parentAbortSignal = params.abortSignal;
-  const relayParentAbort = (): void => {
-    control.laneTaskAbortController.abort(parentAbortSignal?.reason);
-    attemptAbortController.abort(parentAbortSignal?.reason);
-  };
-  if (parentAbortSignal?.aborted) {
-    relayParentAbort();
-  } else {
-    parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
-  }
-
-  // Native attempts start the heartbeat only after their own timeout watchdog
-  // is armed, keeping preflight inside the requested deadline.
-  let progressInterval: ReturnType<typeof setInterval> | undefined;
-  const stopLaneProgressHeartbeat = () => {
-    if (progressInterval) {
-      clearInterval(progressInterval);
-      progressInterval = undefined;
-    }
-    attemptAbortController.signal.removeEventListener("abort", stopLaneProgressHeartbeat);
-  };
-  const startLaneProgressHeartbeat = () => {
-    if (progressInterval || attemptAbortController.signal.aborted) {
-      return;
-    }
-    progressInterval = setInterval(
-      () => control.noteLaneTaskProgress(),
-      EMBEDDED_RUN_LANE_HEARTBEAT_MS,
-    );
-    progressInterval.unref?.();
-    attemptAbortController.signal.addEventListener("abort", stopLaneProgressHeartbeat, {
-      once: true,
-    });
-  };
-
-  // Timeout recovery can continue after an attempt returns, but a native
-  // transport that ignores its timeout releases the lane after one grace.
-  let timeoutReleaseTimer: ReturnType<typeof setTimeout> | undefined;
-  const clearAttemptTimeoutRelease = () => {
-    if (timeoutReleaseTimer) {
-      clearTimeout(timeoutReleaseTimer);
-      timeoutReleaseTimer = undefined;
-    }
-  };
-  const armAttemptTimeoutRelease = (reason: Error) => {
-    if (timeoutReleaseTimer) {
-      return;
-    }
-    timeoutReleaseTimer = setTimeout(
-      () => control.laneTaskReleaseController.abort(reason),
-      EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-    );
-    timeoutReleaseTimer.unref?.();
-  };
-
-  let cancellationRequested = false;
   const preparedExecApprovalContinuation = prepareExecApprovalContinuationForAttempt({
     prompt: runtime.prompt,
     transcriptPrompt: params.transcriptPrompt,
@@ -256,6 +196,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
   }
+  const admittedRunContext = params.admittedRunContext;
   if (params.permissionMode) {
     // Attempts narrow this shared run-owned policy before recovery can reuse it.
     params.execOverrides ??= {};
@@ -296,6 +237,15 @@ export async function dispatchEmbeddedRunAttempt(input: {
       skillsPromptWorkspaceDir: prepared.skillsPromptWorkspaceDir,
     });
   }
+  const attemptControls = control.createAttemptControls({
+    admittedRunContext,
+    abortSignal: attemptAbortController.signal,
+    onAbort: () => {
+      if (!params.abortSignal?.aborted) {
+        params.replyOperation?.abortByUser();
+      }
+    },
+  });
   const attemptParams: EmbeddedRunAttemptInternalParams = {
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
@@ -464,21 +414,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,
     lifecycleGeneration: control.lifecycleGeneration,
-    abortSignal: attemptAbortController.signal,
-    onAttemptTimeoutArmed: control.pluginHarnessOwnsTransport
-      ? undefined
-      : startLaneProgressHeartbeat,
-    onAttemptTimeout: control.pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
-    onAttemptAbort: () => {
-      cancellationRequested = true;
-      if (!params.abortSignal?.aborted) {
-        params.replyOperation?.abortByUser();
-      }
-      if (!control.pluginHarnessOwnsTransport) {
-        stopLaneProgressHeartbeat();
-        control.laneTaskAbortController.abort();
-      }
-    },
+    abortSignal: attemptControls.abortSignal,
+    onAttemptDeadlineChanged: attemptControls.onAttemptDeadlineChanged,
+    onAttemptTimeout: attemptControls.onAttemptTimeout,
+    onAttemptAbort: attemptControls.onAttemptAbort,
     replyOperation: params.replyOperation,
     shouldEmitToolResult: params.shouldEmitToolResult,
     shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -580,9 +519,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       throw control.getPostCompactionAbortError() ?? err;
     })
     .finally(() => {
-      clearAttemptTimeoutRelease();
-      stopLaneProgressHeartbeat();
-      parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
+      attemptControls.close();
       control.clearPostCompactionAbortController(attemptAbortController);
     });
 
@@ -590,5 +527,5 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
   }
-  return { rawAttempt, cancellationRequested, preparedAttempt: attemptParams };
+  return { rawAttempt, preparedAttempt: attemptParams };
 }

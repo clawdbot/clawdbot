@@ -47,7 +47,11 @@ My GitHub requires an authenticated, durable Gateway profile. An identified oper
 
 ### Publish with your account
 
-For an idle session with a reconciled local worktree, **Publish PR** shows the account that will publish. Keep the effective shared account, or explicitly select **My GitHub**. If the agent has its own override, the shared choice identifies that override rather than calling it the System account. Publication requires `operator.write` and current access to modify the session; connecting your account alone does not grant either permission.
+For an idle session with a reconciled local worktree, open the compact account arrow beside **Publish PR** to inspect the publisher and account help. The effective shared account remains the default. When only a shared account is available, the popover is informational, with no redundant selector. When multiple accounts are available, choose the publisher in the popover. **My GitHub** always requires explicit selection, even when it is the only available account. If the agent has its own override, the shared account is labeled as an override rather than System.
+
+The account arrow appears only while publication is idle and the account selection is unlocked, before a publication request or result. Pending status, retry actions, confirmation details, errors, and publication results remain inline, not inside the popover.
+
+Publication requires `operator.write` and current access to modify the session; connecting your account alone does not grant either permission.
 
 Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, repository previews and discovery, and cloud-worker execution keep their existing credential behavior. Finish and reclaim remote work before publishing it with your personal connection. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
 

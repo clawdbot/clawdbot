@@ -383,11 +383,11 @@ public struct OpenClawChatView: View {
                     self.messageListRows
 
                     Color.clear
-                    #if os(macOS)
-                        .frame(height: Layout.messageListPaddingBottom)
-                    #else
-                        .frame(height: Layout.messageListPaddingBottom + 1)
-                    #endif
+                        #if os(macOS)
+                            .frame(height: Layout.messageListPaddingBottom)
+                        #else
+                            .frame(height: Layout.messageListPaddingBottom + 1)
+                        #endif
                         .id(self.scrollerBottomID)
                 }
                 // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
@@ -1123,6 +1123,7 @@ extension OpenClawChatView {
                 content: content,
                 timestamp: last.timestamp,
                 transcriptMessageID: last.transcriptMessageID,
+                transcriptRunID: last.transcriptRunID,
                 isTruncated: last.isTruncated,
                 idempotencyKey: last.idempotencyKey,
                 toolCallId: last.toolCallId,

@@ -3,7 +3,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createChatSubmissions } from "../../../app/chat-submissions.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
+import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import {
@@ -58,19 +61,8 @@ function mountTranscriptPane(props: Parameters<typeof renderChatThread>[0]) {
 function createCanonicalImageTranscript(
   factIndexes = [0],
   inlineUrls = ["data:image/png;base64,aW5saW5l"],
+  origin: "canonical" | "queued" | "submitted" | "initial receipt" = "canonical",
 ) {
-  const decodes: Array<{ image: HTMLImageElement; resolve: () => void; reject: () => void }> = [];
-  vi.stubGlobal(
-    "Image",
-    vi.fn(function () {
-      const image = document.createElement("img");
-      const decoded = new Promise<void>((resolve, reject) => {
-        decodes.push({ image, resolve, reject: () => reject(new Error("Image decode failed")) });
-      });
-      image.decode = vi.fn(() => decoded);
-      return image;
-    }),
-  );
   const requests: Array<{ resolve: (response: Response) => void; signal?: AbortSignal | null }> =
     [];
   vi.stubGlobal(
@@ -84,28 +76,54 @@ function createCanonicalImageTranscript(
   const canonical = {
     id: crypto.randomUUID(),
     seq: 1,
-    idempotencyKey: "canonical-image-send",
+    idempotencyKey: "canonical-image-send:user",
     mediaImageLayout: { slots: factIndexes.map((factIndex) => ({ kind: "inline", factIndex })) },
   };
-  const cached = {
-    role: "user",
-    timestamp: 1_000,
-    content: [
-      { type: "text", text: "Cached text" },
-      ...inlineUrls.map((url) => ({ type: "image", url })),
-    ],
-    __openclaw: canonical,
+  const input = {
+    text: "Cached text",
+    createdAt: 1_000,
+    runId: "canonical-image-send",
+    attachments: inlineUrls.map((dataUrl, index) => ({
+      id: `image-${index}`,
+      mimeType: "image/png",
+      dataUrl,
+    })),
   };
+  const local = expectDefined(buildLocalUserMessage(input), "submitted image message");
+  const cached = origin === "canonical" ? { ...local, __openclaw: canonical } : local;
+  const owner = {
+    sessionKey: "agent:main:main",
+    client: {},
+    chatSubmissions: createChatSubmissions(),
+    chatMessages: [] as unknown[],
+  };
+  if (origin === "initial receipt") {
+    owner.chatSubmissions.retain(
+      buildInitialChatSubmission(owner.sessionKey, input, owner.client, input.runId),
+    );
+    admitChatSubmission(owner);
+  } else if (origin === "submitted") {
+    reduceChatSessionProjection(owner, { type: "sendPending", runId: input.runId, message: local });
+  }
   const media = Array.from({ length: Math.max(...factIndexes) + 1 }, (_, index) =>
     factIndexes.includes(index)
       ? { path: `media://inbound/${crypto.randomUUID()}.png`, contentType: "image/png" }
       : null,
   );
   const props = {
-    ...threadProps(`pane-${crypto.randomUUID()}`, "agent:main:main", [cached]),
+    ...threadProps(
+      `pane-${crypto.randomUUID()}`,
+      owner.sessionKey,
+      origin === "canonical" ? [cached] : owner.chatMessages,
+    ),
     assistantAttachmentAuthToken: "test-auth-token",
     connectionEpoch: 1,
   };
+  if (origin === "queued") {
+    props.queue = [
+      { ...input, id: input.runId, sendRunId: input.runId, sendState: "sending", sendAttempts: 1 },
+    ];
+  }
   const { container, renderPane, root } = mountTranscriptPane(props);
   const images = () => [...container.querySelectorAll<HTMLImageElement>(".chat-message-image")];
   const displayed = images();
@@ -119,14 +137,25 @@ function createCanonicalImageTranscript(
     metadata: Record<string, unknown> = {},
     nextMedia = media,
     text = "Fresh authoritative text",
+    content: unknown[] = [],
   ) => {
-    props.messages = [
+    const messages = [
       {
         ...cached,
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text }, ...content],
         __openclaw: { ...canonical, media: nextMedia, ...metadata },
       },
     ];
+    if (origin === "canonical") {
+      props.messages = messages;
+    } else {
+      reduceChatSessionProjection(
+        owner,
+        { type: "snapshotLoaded", messages },
+        { runActive: false },
+      );
+      props.messages = owner.chatMessages;
+    }
     renderPane();
   };
   return {
@@ -136,7 +165,6 @@ function createCanonicalImageTranscript(
     inlineUrls,
     media,
     requests,
-    decodes,
     images,
     publish,
     renderPane,
@@ -148,36 +176,34 @@ describe("canonical image presentation handoff", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("keeps the displayed canonical inline image while fresh history text and media metadata arrive", async () => {
-    const fixture = createCanonicalImageTranscript();
-    const displayed = expectDefined(fixture.displayed[0], "displayed inline image");
-    fixture.publish();
+  it.each(["canonical", "submitted", "initial receipt"] as const)(
+    "keeps the displayed %s image while fresh history text and media metadata arrive",
+    async (origin) => {
+      const fixture = createCanonicalImageTranscript(undefined, undefined, origin);
+      const displayed = expectDefined(fixture.displayed[0], "displayed inline image");
+      if (origin === "initial receipt") {
+        fixture.publish();
+        expectSameImageNodes(fixture.images(), [displayed]);
+      }
+      fixture.publish();
 
-    expect(fixture.container.textContent).toContain("Fresh authoritative text");
-    expect(fixture.container.textContent).not.toContain("Cached text");
-    expectSameImageNodes(fixture.images(), [displayed]);
-    expect(displayed.getAttribute("src")).toBe(fixture.inlineUrls[0]);
+      expect(fixture.container.textContent).toContain("Fresh authoritative text");
+      expect(fixture.container.textContent).not.toContain("Cached text");
+      expectSameImageNodes(fixture.images(), [displayed]);
+      expect(displayed.getAttribute("src")).toBe(fixture.inlineUrls[0]);
 
-    fixture.requests[0]?.resolve(mediaMetadataResponse());
-    await flushDeferredRowPrune();
-    expectSameImageNodes(fixture.images(), [displayed]);
-    expect(displayed.getAttribute("src")).toBe(fixture.inlineUrls[0]);
-    const prepared = expectDefined(fixture.decodes[0], "canonical decode request");
-    expect(prepared.image.getAttribute("src")).toContain(
-      encodeURIComponent(expectDefined(fixture.media[0], "canonical media fact").path),
-    );
-    fixture.renderPane();
-    expect(fixture.decodes).toHaveLength(1);
-    prepared.resolve();
-    await flushDeferredRowPrune();
-    expectSameImageNodes(fixture.images(), [displayed]);
-    expect(displayed.getAttribute("src")).toContain(
-      encodeURIComponent(expectDefined(fixture.media[0], "canonical media fact").path),
-    );
-    expect(prepared.image.getAttribute("src")).not.toBeNull();
-    displayed.dispatchEvent(new Event("load"));
-    expect(prepared.image.getAttribute("src")).toBeNull();
-  });
+      fixture.requests[0]?.resolve(mediaMetadataResponse());
+      await flushDeferredRowPrune();
+      expectSameImageNodes(fixture.images(), [displayed]);
+      expect(displayed.getAttribute("src")).toContain(
+        encodeURIComponent(expectDefined(fixture.media[0], "canonical media fact").path),
+      );
+      fixture.renderPane();
+      expectSameImageNodes(fixture.images(), [displayed]);
+      displayed.dispatchEvent(new Event("load"));
+      expectSameImageNodes(fixture.images(), [displayed]);
+    },
+  );
 
   it.each([
     {
@@ -187,6 +213,15 @@ describe("canonical image presentation handoff", () => {
     { name: "different canonical sequence", metadata: { seq: 2 } },
     { name: "missing persisted ID", metadata: { id: undefined } },
     { name: "imported message identity", metadata: { importedFrom: "external" } },
+    {
+      name: "imported message replacing a queued send",
+      metadata: {
+        importedFrom: "external",
+        cliSessionId: "imported-session",
+        externalId: "imported-image",
+      },
+      origin: "queued" as const,
+    },
     { name: "pending message identity", metadata: { id: "pending:input" } },
     { name: "missing layout", metadata: { mediaImageLayout: undefined } },
     {
@@ -200,8 +235,8 @@ describe("canonical image presentation handoff", () => {
         },
       },
     },
-  ])("does not borrow an inline preview for $name", ({ metadata }) => {
-    const fixture = createCanonicalImageTranscript();
+  ])("does not borrow an inline preview for $name", ({ metadata, origin }) => {
+    const fixture = createCanonicalImageTranscript(undefined, undefined, origin);
     fixture.publish(metadata, fixture.media, "Cached text");
     expect(fixture.images()).toHaveLength(0);
     expect(fixture.container.querySelector('[aria-busy="true"]')).not.toBeNull();
@@ -223,6 +258,62 @@ describe("canonical image presentation handoff", () => {
     expectSameImageNodes(fixture.images(), fixture.displayed);
     expect(container.querySelector(".chat-message-image")).toBeNull();
     expect(fixture.requests).toHaveLength(1);
+  });
+
+  it.each(["complete", "partial"] as const)(
+    "handles a %s receipt for duplicate submitted attachments",
+    (receipt) => {
+      const fixture = createCanonicalImageTranscript(
+        [0, 1, 2],
+        ["data:image/png;base64,YQ==", "data:image/png;base64,YQ==", "data:image/png;base64,Yg=="],
+        "submitted",
+      );
+      fixture.media[1] = fixture.media[0] ?? null;
+      const media = receipt === "partial" ? fixture.media.slice(0, 2) : fixture.media;
+      fixture.publish(
+        {
+          mediaImageLayout: { slots: media.map((_, factIndex) => ({ kind: "inline", factIndex })) },
+        },
+        media,
+      );
+      expectSameImageNodes(fixture.images(), receipt === "complete" ? fixture.displayed : []);
+    },
+  );
+
+  it("binds local previews by fact position when inline blocks reorder mixed image receipts", () => {
+    const fixture = createCanonicalImageTranscript(
+      [0, 1],
+      ["data:image/png;base64,aW1hZ2VB", "data:image/png;base64,aW1hZ2VC"],
+      "queued",
+    );
+    fixture.publish(
+      {
+        mediaImageLayout: {
+          slots: [
+            { kind: "offloaded", factIndex: 0 },
+            { kind: "inline", factIndex: 1 },
+          ],
+        },
+      },
+      fixture.media,
+      "Fresh authoritative text",
+      [{ type: "image", url: expectDefined(fixture.media[1], "inline image fact").path }],
+    );
+
+    expectSameImageNodes(fixture.images(), fixture.displayed.toReversed());
+    expect(fixture.images().map((image) => image.getAttribute("src"))).toEqual(
+      fixture.inlineUrls.toReversed(),
+    );
+  });
+
+  it("adopts submitted images across interleaved non-image fact slots", () => {
+    const fixture = createCanonicalImageTranscript(
+      [1, 3],
+      ["data:image/png;base64,YQ==", "data:image/png;base64,Yg=="],
+      "submitted",
+    );
+    fixture.publish();
+    expectSameImageNodes(fixture.images(), fixture.displayed);
   });
 
   it.each([
@@ -271,9 +362,8 @@ describe("canonical image presentation handoff", () => {
         await flushDeferredRowPrune();
         expectSameImageNodes(fixture.images(), expected);
       }
-      for (const prepared of fixture.decodes.toReversed()) {
-        prepared.resolve();
-        await flushDeferredRowPrune();
+      for (const image of expected.toReversed()) {
+        image.dispatchEvent(new Event("load"));
         expectSameImageNodes(fixture.images(), expected);
       }
       for (const [index, { factIndex }] of order.entries()) {
@@ -347,13 +437,13 @@ describe("canonical image presentation handoff", () => {
   );
 
   it.each(["removal", "auth", "replacement", "disconnect"] as const)(
-    "discards a pending decode on %s and ignores its late completion",
+    "retires a pending native image on %s and ignores its late load and error",
     async (change) => {
       const fixture = createCanonicalImageTranscript();
       fixture.publish();
       fixture.requests[0]?.resolve(mediaMetadataResponse());
       await flushDeferredRowPrune();
-      const prepared = expectDefined(fixture.decodes[0], "pending decode");
+      const displayed = expectDefined(fixture.displayed[0], "pending native image");
       expectSameImageNodes(fixture.images(), fixture.displayed);
       if (change === "removal") {
         fixture.publish({}, []);
@@ -367,10 +457,9 @@ describe("canonical image presentation handoff", () => {
       } else {
         fixture.root().setConnected(false);
       }
-      expect(prepared.image.getAttribute("src")).toBeNull();
-      prepared.resolve();
+      displayed.dispatchEvent(new Event("load"));
+      displayed.dispatchEvent(new Event("error"));
       await flushDeferredRowPrune();
-      expect(fixture.displayed[0]?.getAttribute("src")).toBe(fixture.inlineUrls[0]);
       if (change === "disconnect") {
         fixture.root().setConnected(true);
       }
@@ -379,7 +468,7 @@ describe("canonical image presentation handoff", () => {
   );
 
   it.each(["renewal", "denial"] as const)(
-    "discards the old decode after metadata ticket %s",
+    "updates native image presentation after metadata ticket %s",
     async (change) => {
       vi.useFakeTimers();
       try {
@@ -387,24 +476,19 @@ describe("canonical image presentation handoff", () => {
         fixture.publish();
         fixture.requests[0]?.resolve(mediaMetadataResponse(true, "before-refresh"));
         await vi.advanceTimersByTimeAsync(0);
-        const old = expectDefined(fixture.decodes[0], "old ticket decode");
+        const displayed = expectDefined(fixture.displayed[0], "displayed image");
         await vi.advanceTimersByTimeAsync(1_000);
         fixture.requests[1]?.resolve(mediaMetadataResponse(change === "renewal", "after-refresh"));
         await vi.advanceTimersByTimeAsync(0);
-        expect(old.image.getAttribute("src")).toBeNull();
-        old.reject();
-        await vi.advanceTimersByTimeAsync(0);
         if (change === "denial") {
+          displayed.dispatchEvent(new Event("load"));
+          displayed.dispatchEvent(new Event("error"));
           expect(fixture.images()).toHaveLength(0);
           expect(fixture.container.textContent).toContain("Attachment removed");
         } else {
           expectSameImageNodes(fixture.images(), fixture.displayed);
-          expect(fixture.displayed[0]?.getAttribute("src")).toBe(fixture.inlineUrls[0]);
-          const current = expectDefined(fixture.decodes[1], "renewed ticket decode");
-          current.resolve();
-          await vi.advanceTimersByTimeAsync(0);
-          expectSameImageNodes(fixture.images(), fixture.displayed);
-          expect(fixture.displayed[0]?.getAttribute("src")).toContain("mediaTicket=after-refresh");
+          expect(displayed.getAttribute("src")).toContain("mediaTicket=after-refresh");
+          displayed.dispatchEvent(new Event("load"));
         }
       } finally {
         vi.clearAllTimers();
@@ -413,7 +497,7 @@ describe("canonical image presentation handoff", () => {
     },
   );
 
-  it.each(["decode rejection", "decode deadline", "display load deadline"] as const)(
+  it.each(["native load error", "display load deadline"] as const)(
     "ends the retained handoff visibly on %s without retrying or resurrecting it",
     async (failure) => {
       vi.useFakeTimers();
@@ -422,33 +506,45 @@ describe("canonical image presentation handoff", () => {
         fixture.publish();
         fixture.requests[0]?.resolve(mediaMetadataResponse());
         await vi.advanceTimersByTimeAsync(0);
-        const prepared = expectDefined(fixture.decodes[0], "pending decode");
-        if (failure === "decode rejection") {
-          prepared.reject();
+        const displayed = expectDefined(fixture.displayed[0], "pending native image");
+        if (failure === "native load error") {
+          displayed.dispatchEvent(new Event("error"));
           await vi.advanceTimersByTimeAsync(0);
         } else {
-          if (failure === "display load deadline") {
-            prepared.resolve();
-            await vi.advanceTimersByTimeAsync(0);
-          }
           await vi.advanceTimersByTimeAsync(29_999);
           expectSameImageNodes(fixture.images(), fixture.displayed);
           await vi.advanceTimersByTimeAsync(1);
         }
-        expect(prepared.image.getAttribute("src")).toBeNull();
         expect(fixture.images()).toHaveLength(0);
         expect(
           fixture.container.querySelector(".chat-assistant-attachment-card--definitive"),
         ).not.toBeNull();
-        prepared.resolve();
+        displayed.dispatchEvent(new Event("load"));
         fixture.renderPane();
         await vi.advanceTimersByTimeAsync(0);
         expect(fixture.images()).toHaveLength(0);
-        expect(fixture.decodes).toHaveLength(1);
       } finally {
         vi.clearAllTimers();
         vi.useRealTimers();
       }
     },
   );
+
+  it("keeps a successfully loaded native image after the handoff deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const fixture = createCanonicalImageTranscript();
+      fixture.publish();
+      fixture.requests[0]?.resolve(mediaMetadataResponse());
+      await vi.advanceTimersByTimeAsync(0);
+      const displayed = expectDefined(fixture.displayed[0], "pending native image");
+      displayed.dispatchEvent(new Event("load"));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expectSameImageNodes(fixture.images(), [displayed]);
+      expect(fixture.container.querySelector('[aria-busy="true"]')).toBeNull();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });

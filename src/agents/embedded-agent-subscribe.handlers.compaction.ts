@@ -24,6 +24,7 @@ type CompactionStartEvent =
   | {
       type: "compaction_start";
       reason?: unknown;
+      itemId?: string;
     };
 
 // Unknown reasons come from external runtimes or older sessions. Treat them as
@@ -37,9 +38,10 @@ function normalizeCompactionReason(reason: unknown): CompactionReason {
 function emitCompactionAgentEvent(
   ctx: EmbeddedAgentSubscribeContext,
   data:
-    | { phase: "start" }
+    | { phase: "start"; itemId?: string }
     | {
         phase: "end";
+        itemId?: string;
         completed: boolean;
         willRetry: boolean;
         outcome: SessionCompactionEndEvent["outcome"]["status"];
@@ -104,7 +106,7 @@ export function handleCompactionStart(
     reason,
     consoleMessage: `embedded run ${kind} start: runId=${ctx.params.runId} reason=${reason}`,
   });
-  emitCompactionAgentEvent(ctx, { phase: "start" });
+  emitCompactionAgentEvent(ctx, { phase: "start", ...(evt.itemId ? { itemId: evt.itemId } : {}) });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
   // cannot be delayed by plugin work.
@@ -218,6 +220,7 @@ export function handleCompactionEnd(
   }
   emitCompactionAgentEvent(ctx, {
     phase: "end",
+    ...(evt.itemId ? { itemId: evt.itemId } : {}),
     completed,
     willRetry,
     outcome: outcome.status,

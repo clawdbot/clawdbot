@@ -365,7 +365,7 @@ function createPluginHandler(
         })
       : outbound?.presentationCapabilities,
     renderPresentation: outbound?.renderPresentation
-      ? async (payload) => {
+      ? async (payload, sourcePresentation) => {
           // The delivery owner already normalized/adapted this; cloning drops fallback fragments.
           const presentation = payload.presentation;
           if (!presentation) {
@@ -381,7 +381,12 @@ function createPluginHandler(
             mediaUrl: payload.mediaUrl,
             payload,
           };
-          return await outbound.renderPresentation!({ payload, presentation, ctx });
+          return await outbound.renderPresentation!({
+            payload,
+            presentation,
+            sourcePresentation,
+            ctx,
+          });
         }
       : undefined,
     pinDeliveredMessage: outbound?.pinDeliveredMessage

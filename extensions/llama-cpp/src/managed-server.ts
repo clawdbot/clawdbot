@@ -3,6 +3,10 @@ import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import {
+  readProviderJsonResponse,
+  readProviderTextResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -593,7 +597,11 @@ async function fetchEndpoint(
       if (!response.ok) {
         return { ok: false };
       }
-      return { ok: true, value: accept === "json" ? await response.json() : await response.text() };
+      const value =
+        accept === "json"
+          ? await readProviderJsonResponse(response, "llama-server inspection")
+          : await readProviderTextResponse(response, "llama-server inspection");
+      return { ok: true, value };
     } finally {
       await release();
     }

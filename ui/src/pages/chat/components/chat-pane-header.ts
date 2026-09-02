@@ -32,7 +32,6 @@ import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
-import { renderChatPanePlacement } from "./chat-pane-placement.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
@@ -76,12 +75,8 @@ type ChatPaneHeaderProps = {
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
+  placementControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
-  placementMoving?: boolean;
-  placementRestarting?: boolean;
-  placementMoveDisabledReason?: string;
-  placementReclaimDisabledReason?: string;
-  placementRestartDisabledReason?: string;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
@@ -92,9 +87,6 @@ type ChatPaneHeaderProps = {
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
-  onPlacementMove?: () => void;
-  onPlacementReclaim?: () => void;
-  onPlacementRestart?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
   onOpenSplitView?: () => void;
   onSplitDown?: (paneId: string) => void;
@@ -451,8 +443,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             variant="session"
           ></openclaw-viewer-facepile>`
         : nothing}
-      ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
-      ${props.sharingControl ?? nothing}
+      ${props.placementControl ?? nothing} ${props.presence ?? nothing}
+      ${props.faceControl ?? nothing} ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
             <wa-dropdown

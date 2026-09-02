@@ -637,6 +637,67 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
 
+  it.each([
+    { name: "direct", toolNames: ["show_widget", "dashboard", "portal"] },
+    {
+      name: "Code Mode",
+      toolNames: ["exec", "wait"],
+      capabilityToolNames: ["show_widget", "dashboard", "portal"],
+      codeModeActive: true,
+    },
+  ])("teaches UI presentation boundaries for $name tools", (surface) => {
+    const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", ...surface });
+    const presentation = prompt.split("## UI Presentation\n")[1]?.split("\n## ")[0] ?? "";
+
+    expect(Buffer.byteLength(presentation, "utf8")).toBeLessThan(800);
+    expect(presentation).toContain("`show_widget`");
+    expect(presentation).toContain("pin=true");
+    expect(presentation).toContain("result.presentation");
+    expect(presentation).toContain("inline support varies by surface");
+    expect(presentation).toContain("`dashboard`");
+    expect(presentation).toContain("`portal`");
+    expect(presentation).toContain("publicUrl");
+    expect(presentation).toContain("token URLs stay private");
+    expect(presentation).toContain("Control UI");
+    expect(presentation).toContain("delivered interaction");
+    expect(presentation).toContain("unverified");
+    expect(prompt.indexOf("## UI Presentation")).toBeGreaterThan(
+      prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
+    );
+  });
+
+  it("explains missing custom authoring without inventing a product-wide limitation", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["dashboard", "portal"],
+      runtimeInfo: { channel: "webchat" },
+    });
+
+    expect(prompt).toContain(
+      "Custom authoring is unavailable this turn, not unsupported by dashboards",
+    );
+    expect(prompt).not.toContain("show_widget");
+    expect(prompt).toContain("publicUrl");
+  });
+
+  it.each([
+    { name: "absent", toolNames: [] },
+    {
+      name: "filtered Code Mode",
+      toolNames: ["exec"],
+      capabilityToolNames: [],
+      codeModeActive: true,
+    },
+    { name: "minimal", toolNames: ["show_widget", "dashboard", "portal"], promptMode: "minimal" },
+    { name: "none", toolNames: ["show_widget", "dashboard", "portal"], promptMode: "none" },
+  ] satisfies Array<{ name: string } & Partial<Parameters<typeof buildAgentSystemPrompt>[0]>>)(
+    "omits UI presentation guidance when $name",
+    (surface) => {
+      const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", ...surface });
+      expect(prompt).not.toContain("## UI Presentation");
+    },
+  );
+
   it("offers routine promotion only when the automations tool is available", () => {
     const withAutomations = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -2105,9 +2166,45 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt.match(/## Conversation Context/g)).toHaveLength(1);
   });
 
+  it("keeps the unsplit workspace prompt byte-identical", () => {
+    const params = { workspaceDir: "/tmp/openclaw" };
+    const prompt = buildAgentSystemPrompt(params);
+    expect(buildAgentSystemPrompt({ ...params, runtimeCwd: params.workspaceDir })).toBe(prompt);
+    expect(prompt).toContain(
+      "## Workspace\nWorking directory: /tmp/openclaw\nSingle global file workspace unless explicitly told otherwise.",
+    );
+    expect(prompt).not.toContain("## Directory Roles");
+  });
+
+  it("keys the stable directory roles by runtime cwd without moving agent files", () => {
+    const params = { workspaceDir: "/tmp/openclaw", fsWorkspaceOnly: true };
+    const prompts = ["/tmp/repo-a", "/tmp/repo-b", "/tmp/repo-a"].map((runtimeCwd) =>
+      buildAgentSystemPrompt({ ...params, runtimeCwd }),
+    );
+    for (const [index, cwd] of ["/tmp/repo-a", "/tmp/repo-b"].entries()) {
+      const prefix = prompts[index]!.split(SYSTEM_PROMPT_CACHE_BOUNDARY)[0];
+      expect(prefix).toContain(
+        `## Directory Roles\nWorking directory: ${cwd} (tools and deliverables).\nAgent workspace: /tmp/openclaw (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
+      );
+      expect(prefix).not.toContain("## Workspace\n");
+      expect(prefix).not.toContain("Single global file workspace");
+      expect(prefix).toContain("file-tool scratch/temp/meta stays in working directory");
+    }
+    expect(prompts[2]).toBe(prompts[0]);
+  });
+
+  it("sanitizes runtime cwd before rendering directory roles", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeCwd: "/tmp/repo\n\u2028\u202e-injected",
+    });
+    expect(prompt).toContain("Working directory: /tmp/repo-injected (tools and deliverables).");
+  });
+
   it("describes sandboxed runtime and elevated when allowed", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      runtimeCwd: "/tmp/task-repo",
       toolNames: ["exec"],
       sandboxInfo: {
         enabled: true,
@@ -2120,6 +2217,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Working directory: /workspace");
+    expect(prompt).not.toContain("## Directory Roles");
     expect(prompt).toContain(
       "File tools use host workspace /tmp/openclaw. exec uses container /workspace or relative workdir paths; never host paths.",
     );

@@ -1,5 +1,6 @@
 // Reconciles configured plugin installs after the core package update has completed.
 import path from "node:path";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
@@ -18,6 +19,7 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "../../../plugins/plugin-peer-link.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../../plugins/stale-local-bundled-plugin-install-records.js";
+import type { PluginUpdateOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 // Link mandatory repairs before a package swap can remove this updater's old chunks.
@@ -36,6 +38,7 @@ type PostCoreConvergenceResult = {
   changes: string[];
   notices?: PostCoreConvergenceWarning[];
   warnings: PostCoreConvergenceWarning[];
+  outcomes?: PluginUpdateOutcome[];
   errored: boolean;
   smokeFailures: PluginPayloadSmokeFailure[];
   /**
@@ -143,12 +146,10 @@ function formatPeerLinkPackageReadWarning(failure: { error: unknown }): PostCore
 /**
  * Mandatory post-core convergence pass. Runs AFTER the core package files
  * are swapped and the in-update doctor pass has already returned, but BEFORE
- * the gateway is restarted. Missing-plugin repair failures stay nonblocking:
- * an external package fetch may be transient, and failing the core update
- * would strand the user. Explicit `openclaw update` callers keep reporting
- * payload smoke failures as errors. Gateway startup consumes the same typed
- * failures by quarantining each known plugin owner before any module import,
- * then boots with that plugin marked configured-unavailable.
+ * the gateway is restarted. Transient repair fetch failures stay nonblocking;
+ * consent that prevents activation and payload smoke failures are errors.
+ * Gateway startup quarantines known payload failures before any module import,
+ * then boots with those plugins marked configured-unavailable.
  */
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
@@ -274,36 +275,13 @@ export async function runPostCorePluginConvergence(params: {
     ],
     notices,
     warnings,
-    errored: smoke.failures.length > 0,
+    outcomes: repair.outcomes,
+    errored:
+      repair.outcomes?.some(
+        (outcome) =>
+          outcome.status === "error" && outcome.code === PLUGIN_CAPABILITY_CONSENT_REQUIRED,
+      ) === true || smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,
-  };
-}
-
-/**
- * Pure helper used by `updatePluginsAfterCoreUpdate` to fold a convergence
- * result into the existing `PluginUpdateOutcome[]` / warning shape that the
- * post-core update result carries.
- *
- * Returns:
- *  - `outcomes` to append to `pluginUpdateOutcomes`. Only convergence
- *    warnings that name a `pluginId` produce per-plugin error outcomes; the
- *    rest are surfaced via `warnings`.
- *  - `errored` boolean that callers translate into `status: "error"`.
- *    Repair warnings are nonblocking; smoke failures remain errors on the
- *    explicit update path even though Gateway startup can quarantine them.
- */
-export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
-  warnings: PostCoreConvergenceWarning[];
-  outcomes: Array<{ pluginId: string; status: "error"; message: string }>;
-  errored: boolean;
-} {
-  const outcomes = convergence.warnings
-    .filter((w): w is PostCoreConvergenceWarning & { pluginId: string } => Boolean(w.pluginId))
-    .map((w) => ({ pluginId: w.pluginId, status: "error" as const, message: w.message }));
-  return {
-    warnings: [...convergence.warnings, ...(convergence.notices ?? [])],
-    outcomes,
-    errored: convergence.errored,
   };
 }

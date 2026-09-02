@@ -174,9 +174,7 @@ describe("renderChatComposer controls", () => {
     const { container } = renderComposer();
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
 
-    expect(textarea?.getAttribute("aria-label")).toBe(
-      t("chat.composer.placeholder", { name: "OpenClaw" }),
-    );
+    expect(textarea?.getAttribute("aria-label")).toBe(t("chat.composer.composerInput"));
   });
 
   it("clears a whitespace-only draft on blur so the native placeholder returns", () => {
@@ -1045,15 +1043,9 @@ describe("renderChatComposer status", () => {
     expect(view.container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
   });
 
-  it("renders fresh compaction and fallback status", () => {
+  it("keeps fallback status in the composer without a compaction overlay", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { container } = renderComposer({
-      compactionStatus: {
-        phase: "active",
-        runId: "run-1",
-        startedAt: 1_000,
-        completedAt: null,
-      },
       fallbackStatus: {
         selected: "fireworks/minimax-m2p5",
         active: "deepinfra/moonshotai/Kimi-K2.5",
@@ -1061,9 +1053,8 @@ describe("renderChatComposer status", () => {
         occurredAt: 900,
       },
     });
-    expect(container.querySelector(".compaction-indicator--active")?.textContent?.trim()).toBe(
-      "Compacting context...",
-    );
+    expect(container.querySelector(".compaction-indicator--active")).toBeNull();
+    expect(container.querySelector(".chat-compaction")).toBeNull();
     expect(container.querySelector(".compaction-indicator--fallback")?.textContent?.trim()).toBe(
       "Fallback active: deepinfra/moonshotai/Kimi-K2.5",
     );

@@ -1,5 +1,6 @@
 name: OpenClaw
 options:
+  preGenCommand: node ../../scripts/prepare-apple-mermaid.mjs
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
     iOS: "18.0"
@@ -396,6 +397,8 @@ targets:
         excludes:
           - Logic
       - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
+        group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatMermaidRenderModelTests.swift
         group: Tests
       - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
         group: WatchApp/Sources

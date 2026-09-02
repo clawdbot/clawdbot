@@ -196,8 +196,8 @@ describe("provider env vars dynamic manifest metadata", () => {
     });
   });
 
-  it("scrubs usage credentials from the active configured plugin snapshot", () => {
-    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
+  it("scrubs usage credentials using host metadata rather than the candidate sandbox env", () => {
+    const configuredSnapshot = {
       workspaceDir: "/workspace",
       index: {
         plugins: [
@@ -231,7 +231,11 @@ describe("provider env vars dynamic manifest metadata", () => {
           },
         },
       ],
-    });
+    };
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
+      (params: { env?: NodeJS.ProcessEnv }) =>
+        !params.env || params.env === process.env ? configuredSnapshot : undefined,
+    );
 
     expect(
       sanitizeEnvVars({

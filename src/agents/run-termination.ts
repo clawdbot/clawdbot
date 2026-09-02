@@ -33,10 +33,16 @@ export function createAgentRunDirectAbortError(): Error {
   return error;
 }
 
+function hasAgentRunAbortCode(value: unknown, code: string): boolean {
+  try {
+    return value instanceof Error && "code" in value && value.code === code;
+  } catch {
+    return false;
+  }
+}
+
 export function isAgentRunDirectAbortReason(value: unknown): boolean {
-  return (
-    value instanceof Error && "code" in value && value.code === AGENT_RUN_DIRECT_ABORT_ERROR_CODE
-  );
+  return hasAgentRunAbortCode(value, AGENT_RUN_DIRECT_ABORT_ERROR_CODE);
 }
 
 export function createAgentRunRestartAbortError(): Error {
@@ -54,25 +60,11 @@ export function createAgentRunSupersededAbortError(): Error {
 }
 
 export function isAgentRunRestartAbortReason(value: unknown): boolean {
-  try {
-    return (
-      value instanceof Error && "code" in value && value.code === AGENT_RUN_RESTART_ABORT_ERROR_CODE
-    );
-  } catch {
-    return false;
-  }
+  return hasAgentRunAbortCode(value, AGENT_RUN_RESTART_ABORT_ERROR_CODE);
 }
 
 export function isAgentRunSupersededAbortReason(value: unknown): boolean {
-  try {
-    return (
-      value instanceof Error &&
-      "code" in value &&
-      value.code === AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE
-    );
-  } catch {
-    return false;
-  }
+  return hasAgentRunAbortCode(value, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE);
 }
 
 export function throwAgentRunRestartAbortReason(value: unknown): void {
@@ -143,6 +135,10 @@ export function resolveAgentRunErrorLifecycleFields(
   const abortFields = resolveAgentRunAbortLifecycleFields(signal);
   if (abortFields.aborted) {
     return abortFields;
+  }
+  // A run-owned controller can stop work without aborting its caller's signal.
+  if (isAgentRunDirectAbortReason(error)) {
+    return { aborted: true, stopReason: "aborted" };
   }
   if (!isProviderTimeoutError(error)) {
     return {};

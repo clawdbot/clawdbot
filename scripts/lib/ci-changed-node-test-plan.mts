@@ -12,9 +12,12 @@ import {
 } from "../test-projects.test-support.mts";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
+  COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS,
   createNodeTestShards,
   isPolicyTestOwnedPath,
+  packNodeTestGroups,
   resolvePolicyTestTargets,
+  type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import {
   estimateExtensionTestCost,
@@ -33,6 +36,7 @@ import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  groups?: NodeTestShardGroup[];
   env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
@@ -43,6 +47,7 @@ type ChangedNodeTestShard = {
   shardName: string;
   targets?: string[];
 };
+type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
 
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
@@ -362,7 +367,9 @@ function resolveChangedExtensionRoots(changedPaths: string[]) {
   ];
 }
 
-function createChangedExtensionConfigShards(extensionRoots: string[]) {
+function createChangedExtensionConfigShards(
+  extensionRoots: string[],
+): ChangedExtensionConfigShard[] {
   const rootsByConfig = new Map<string, string[]>();
   for (const root of extensionRoots) {
     const config = resolveExtensionTestConfig(root);
@@ -408,7 +415,7 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
   });
   return plans.map(({ config, env, includePatterns, predictedSeconds }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
-    const shard: ChangedNodeTestShard = {
+    const shard: ChangedExtensionConfigShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
       // No plans overlap in this row, so CI can scale the single process's worker budget.
@@ -475,12 +482,53 @@ export function createChangedExtensionFallbackShards(
   options: CwdOptions = {},
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
-  if (hasCoreExtensionImpact(changedPaths, { cwd })) {
-    return createChangedExtensionConfigShards(
-      listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+  const shards = hasCoreExtensionImpact(changedPaths, { cwd })
+    ? createChangedExtensionConfigShards(
+        listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+      )
+    : createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+  const bins = packNodeTestGroups(
+    shards.toSorted(
+      (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
+    ),
+    // Config averages can hide slow process-bounded chunks. Keep those and
+    // runtime preparation separate; pair only whole/native config envelopes.
+    (bin, shard) =>
+      bin.length === 1 &&
+      !bin[0].pretestBuildMode &&
+      !shard.pretestBuildMode &&
+      !bin[0].configs.some((config) => shouldSplitExtensionTestProcesses(config)) &&
+      !shard.configs.some((config) => shouldSplitExtensionTestProcesses(config)) &&
+      bin[0].configs[0] !== shard.configs[0] &&
+      bin[0].runner === shard.runner &&
+      bin[0].requiresDist === shard.requiresDist &&
+      bin[0].predictedSeconds + shard.predictedSeconds <=
+        COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS,
+  );
+  // Singleton objects keep their full metadata and original relative order.
+  return bins
+    .toSorted((a, b) => shards.indexOf(a[0]) - shards.indexOf(b[0]))
+    .map((bin, index) =>
+      bin.length === 1
+        ? bin[0]
+        : {
+            checkName: `checks-node-changed-extensions-bundle-${index + 1}`,
+            configs: [],
+            groups: bin.map((shard) => ({
+              configs: shard.configs,
+              ...(shard.env ? { env: shard.env } : {}),
+              ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+              requiresDist: shard.requiresDist,
+              runner: shard.runner,
+              shard_name: shard.shardName,
+            })),
+            planConcurrency: 1,
+            predictedSeconds: bin.reduce((seconds, shard) => seconds + shard.predictedSeconds, 0),
+            requiresDist: bin[0].requiresDist,
+            runner: bin[0].runner,
+            shardName: `changed-extensions-bundle-${index + 1}`,
+          },
     );
-  }
-  return createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
 }
 
 /**

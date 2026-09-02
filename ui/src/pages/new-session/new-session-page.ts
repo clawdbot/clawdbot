@@ -3,7 +3,6 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
@@ -27,7 +26,7 @@ import { renderDraftError } from "./composer.ts";
 import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
 import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { renderNewSessionBody, renderNewSessionDraftComposer } from "./draft-composer.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import * as drafts from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
@@ -66,6 +65,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private presenceSignature = "";
   private readonly connectMachine: ConnectMachineSetupState;
   @state() private imageLightbox: ImageLightboxItem | null = null;
+  @state() private agentPickerOpen = false;
   private readonly groupRouteRevalidation = new catalog.GroupRouteRevalidation(
     () => this.data,
     () => this.context?.revalidate("new-session"),
@@ -77,6 +77,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private readonly dictation: NewSessionDictationControl;
   private readonly subscriptions: SubscriptionsController;
   private readonly flushDraft = () => this.submission.draftPersistence.persistNow();
+  private readonly setImageLightbox = (item: ImageLightboxItem | null) => {
+    this.imageLightbox = item;
+  };
 
   constructor() {
     super();
@@ -189,7 +192,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
               return;
             }
             if (isPlaceTopologyEvent(event.event)) {
-              this.refreshPlaceTopology();
+              void this.gateway.refreshCloudProfiles();
               return;
             }
             const presence = event.event === "presence" ? readPresenceEntries(event.payload) : null;
@@ -199,7 +202,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             const signature = presenceStateSignature(presence);
             if (signature !== this.presenceSignature) {
               this.presenceSignature = signature;
-              this.refreshPlaceTopology();
+              void this.gateway.refreshCloudProfiles();
             }
           });
         },
@@ -221,10 +224,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
         () => this.context?.config,
         (config, notify) => config.subscribe(() => notify()),
       );
-  }
-
-  private refreshPlaceTopology() {
-    void this.gateway.refreshCloudProfiles();
   }
 
   handleEvent(event: Event) {
@@ -264,7 +263,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       this.connectMachine.close();
     }
     this.gateway.retryPendingCatalogTarget();
-    void this.context?.agentIdentity.ensure(this.place.agents().map((agent) => agent.id));
+    void this.context?.agentIdentity.ensure(
+      this.agentPickerOpen ? this.place.agents().map((agent) => agent.id) : [this.place.agentId],
+    );
     const agentState = this.context?.agents.state;
     const agentsReady = Boolean(
       this.gateway.connected &&
@@ -344,25 +345,11 @@ export class NewSessionPage extends OpenClawLightDomElement {
       : catalog.routeKeyFromSearch(window.location.search);
   }
 
-  private setMessage(message: string, ownerKey = catalog.routeKey(this.data)) {
-    this.submission.setMessage(message);
-    this.messageOwnerKey = ownerKey;
-  }
-
   private setMessageFromUser(message: string) {
     if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-      this.setMessage(message, catalog.routeKeyFromSearch(window.location.search));
+      this.submission.setMessage(message);
+      this.messageOwnerKey = catalog.routeKeyFromSearch(window.location.search);
     }
-  }
-
-  private renderAgentSelect() {
-    return renderAgentSelect({
-      agents: this.place.agents(),
-      agentId: this.place.agentId,
-      agentIdentity: this.context?.agentIdentity,
-      disabled: this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
-      onSelect: (agentId) => this.place.selectAgentId(agentId),
-    });
   }
 
   private renderTargetBar() {
@@ -371,7 +358,20 @@ export class NewSessionPage extends OpenClawLightDomElement {
     return catalog.renderBar({
       data: this.data,
       groupPending: catalog.isGroupRoutePending(this.data, sessions),
-      agentSelect: agents.length > 1 ? this.renderAgentSelect() : nothing,
+      agentSelect:
+        agents.length > 1
+          ? renderAgentSelect({
+              agents,
+              agentId: this.place.agentId,
+              agentIdentity: this.context?.agentIdentity,
+              disabled:
+                this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
+              onSelect: (agentId) => this.place.selectAgentId(agentId),
+              onOpenChange: (open) => {
+                this.agentPickerOpen = open;
+              },
+            })
+          : nothing,
       placeSelect: this.renderPlaceChips(),
       retrying:
         this.gateway.catalogRetrying ||
@@ -547,7 +547,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
       <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
         ${this.renderTargetBar()}
         ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
-        ${this.submission.error ? renderDraftError(this.submission.error) : nothing}
         ${this.submission.submissionOutcomeUnknown
           ? renderDraftError(
               t(
@@ -611,9 +610,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
               }
             : undefined,
           onInput: (message) => this.setMessageFromUser(message),
-          onOpenImage: (item) => {
-            this.imageLightbox = item;
-          },
+          onOpenImage: this.setImageLightbox,
           onVisibilityChange: (visibility) => {
             if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
               this.submission.setVisibility(visibility);
@@ -679,9 +676,11 @@ export class NewSessionPage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const pendingMessage = this.submission.pendingMessage;
+    const incognito = this.submission.visibility === "incognito";
     return html`
       <div
-        class="new-session-page ${this.submission.visibility === "incognito"
+        class="new-session-page ${pendingMessage ? "chat" : ""} ${incognito
           ? "new-session-page--incognito"
           : ""}"
       >
@@ -689,14 +688,13 @@ export class NewSessionPage extends OpenClawLightDomElement {
           this.submission,
           this.submission.capabilities.canStartAsDraft(this.context),
         )}
-        <div
-          class="new-session-page__scroll"
-          ?inert=${this.submission.submitting}
-          aria-busy=${String(this.submission.submitting)}
-          @mousedown=${beginNativeWindowDragFromTopInset}
-        >
-          ${this.renderWelcome()}
-        </div>
+        ${renderNewSessionBody({
+          error: this.submission.error,
+          pendingMessage,
+          submitting: this.submission.submitting,
+          renderDraft: () => this.renderWelcome(),
+          onOpenImage: this.setImageLightbox,
+        })}
         ${renderConnectMachineDialog({
           open: this.connectMachine.open && this.place.isAdmin(),
           loading: this.connectMachine.loading,
@@ -712,9 +710,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
             this.context?.navigate("devices");
           },
         })}
-        ${renderChatImageLightbox(this.imageLightbox, () => {
-          this.imageLightbox = null;
-        })}
+        ${renderChatImageLightbox(this.imageLightbox, () => this.setImageLightbox(null))}
       </div>
     `;
   }

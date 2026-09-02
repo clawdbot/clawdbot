@@ -1245,13 +1245,44 @@ describe("scripts/changed-lanes", () => {
       path: "tsconfig.ui.json",
       expected: { includes: ["tsgo:ui", "tsgo:core:test", "lint:core"], excludes: [] },
     },
+    {
+      name: "routes the shared Mermaid renderer through browser typechecking",
+      path: "packages/mermaid-renderer/src/renderer.ts",
+      expected: { includes: ["tsgo:ui", "tsgo:core:test"], excludes: ["tsgo:core"] },
+    },
+    {
+      name: "routes the native Mermaid build through browser typechecking",
+      path: "packages/mermaid-renderer/vite.config.ts",
+      expected: { includes: ["tsgo:ui", "tsgo:core:test"], excludes: ["tsgo:core"] },
+    },
+    ...[
+      "packages/normalization-core/src/record-coerce.ts",
+      "packages/normalization-core/package.json",
+    ].map((path) => ({
+      name: `keeps core checks and adds browser typechecking for ${path}`,
+      path,
+      expected: {
+        includes: ["tsgo:core", "tsgo:core:test", "tsgo:ui"],
+        excludes: [],
+        lanes: { core: true, coreTests: true, ui: true },
+      },
+    })),
+    {
+      name: "keeps tooling checks and adds browser typechecking for root tsconfig",
+      path: "tsconfig.json",
+      expected: {
+        includes: ["tsgo:ui", "lint:scripts"],
+        excludes: [],
+        lanes: { tooling: true, ui: true },
+      },
+    },
   ])("$name", ({ path: changedPath, expected }) => {
     const result = detectChangedLanes([changedPath]);
     const commands = createChangedCheckPlan(result, {
       env: { PATH: "/usr/bin" },
     }).commands.map((command) => command.args[0]);
 
-    expectLanes(result.lanes, { coreTests: true, ui: true });
+    expectLanes(result.lanes, expected.lanes ?? { coreTests: true, ui: true });
     for (const command of expected.includes) {
       expect(commands).toContain(command);
     }

@@ -107,7 +107,7 @@ it.each(["owned", "borrowed"] as const)(
       scheduleTabsSync: () => {},
       captureDebugger: () => () => {},
       captureAccess: (_tabId, method) => {
-        const epoch = { revision: 1, tabRevision: 1 };
+        const epoch = { revision: 1, groupRevision: 0, tabRevision: 1 };
         methods.set(epoch, { method, checks: 0 });
         return epoch;
       },

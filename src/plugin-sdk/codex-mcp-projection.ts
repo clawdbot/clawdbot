@@ -17,6 +17,12 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 
 export { pinExecToolTarget };
 export { resolveBootstrapFilesForPreparation } from "../agents/bootstrap-files.js";
+export { loadCodexBundleMcpApprovalConfig } from "../agents/codex-mcp-config.js";
+export {
+  formatMcpCodexApprovalRemedy,
+  requiresMcpCodexToolApproval,
+  resolveProjectedMcpCodexToolApprovalMode,
+} from "../agents/mcp-codex-tool-approval.js";
 export type CodexScheduledToolProjectionFactory = AgentHarnessScheduledToolProjectionFactory;
 export type CodexTtsProvenanceTransfer = AgentHarnessTtsProvenanceTransfer;
 

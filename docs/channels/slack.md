@@ -1560,6 +1560,8 @@ Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back 
 
 Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. An eligible final text answer replaces that same Slack message. Set `style: "card"` explicitly to retain a card while hiding tool progress.
 
+For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
+
 ```json5
 {
   channels: {

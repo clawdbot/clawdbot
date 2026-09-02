@@ -32,11 +32,13 @@ import {
   ensureSkillLibrarySchema,
   requireSkillLibraryEntry,
   requireSkillLibraryProfile,
+  requireSkillLibraryUpload,
   skillLibraryDb,
   type SkillLibraryAuthority,
 } from "./store.js";
 
 const MAX_CHUNK_BYTES = 256 * 1024;
+const MAX_ACTIVE_UPLOADS = 32;
 
 async function publishDirectory(
   authority: SkillLibraryAuthority,
@@ -108,15 +110,25 @@ export async function uploadSkillLibrary(
         kysely.deleteFrom("skill_library_uploads").where("expires_at", "<=", Date.now()),
       );
       // Completed receipts remain replayable without occupying an active upload slot.
-      const activeUploads = kysely
-        .selectFrom("skill_library_uploads")
-        .select("upload_id")
-        .where("published_skill_id", "is", null)
-        .limit(32);
-      if (executeSqliteQuerySync(db, activeUploads).rows.length >= 32) {
+      const activeUploads = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("skill_library_uploads")
+          .select("owner_profile_id")
+          .where("published_skill_id", "is", null)
+          .limit(MAX_ACTIVE_UPLOADS),
+      ).rows;
+      // One canonical profile may fill only half the pool, including uploads begun before a merge.
+      if (
+        activeUploads.length >= MAX_ACTIVE_UPLOADS ||
+        activeUploads.filter(
+          (upload) => selectResolvedUserProfileById(db, upload.owner_profile_id)?.id === actor,
+        ).length >=
+          MAX_ACTIVE_UPLOADS / 2
+      ) {
         throw new SkillLibraryError(
           "LIMIT",
-          "Too many active imports. Finish an existing import or retry after it expires.",
+          "Active import limit reached for your profile or the Gateway. Finish an existing import or retry after it expires.",
         );
       }
       const uploadId = randomUUID();
@@ -136,28 +148,8 @@ export async function uploadSkillLibrary(
       return { uploadId, offset: 0, maxChunkBytes: MAX_CHUNK_BYTES };
     }, options);
   }
-  const readOwned = () => {
-    const db = openOpenClawStateDatabase(options).db;
-    const actor = requireSkillLibraryProfile(db, authority);
-    const upload = executeSqliteQuerySync(
-      db,
-      skillLibraryDb(db)
-        .selectFrom("skill_library_uploads")
-        .selectAll()
-        .where("upload_id", "=", params.uploadId),
-    ).rows[0];
-    if (
-      !upload ||
-      upload.expires_at <= Date.now() ||
-      selectResolvedUserProfileById(db, upload.owner_profile_id)?.id !== actor
-    ) {
-      throw new SkillLibraryError(
-        "NOT_FOUND",
-        "Upload not found for your profile, or expired. Start a new import.",
-      );
-    }
-    return upload;
-  };
+  const readOwned = () =>
+    requireSkillLibraryUpload(openOpenClawStateDatabase(options).db, params.uploadId, authority);
   if (params.action === "chunk") {
     const bytes = Buffer.from(params.data, "base64");
     if (
@@ -238,9 +230,7 @@ export async function uploadSkillLibrary(
           receipt: await publishDirectory(
             {
               ...authority,
-              assertCurrent: () => {
-                readOwned();
-              },
+              assertCurrent: readOwned,
             },
             upload.slug,
             rootDir,
