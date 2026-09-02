@@ -8,6 +8,7 @@ struct ChatSessionSidebarModelTests {
     private func entry(
         key: String,
         displayName: String? = nil,
+        derivedTitle: String? = nil,
         label: String? = nil,
         subject: String? = nil,
         sessionId: String? = nil,
@@ -67,7 +68,8 @@ struct ChatSessionSidebarModelTests {
             hasActiveRun: hasActiveRun,
             activeRunIds: activeRunIds,
             hasActiveSubagentRun: hasActiveSubagentRun,
-            endedAt: endedAt)
+            endedAt: endedAt,
+            derivedTitle: derivedTitle)
     }
 
     @Test func `pinned sessions get their own section, rest sorted by recency`() {
@@ -360,9 +362,19 @@ struct ChatSessionSidebarModelTests {
         #expect(ChatSessionSidebarModel.displayName(forKey: "global") == "global")
     }
 
-    @Test func `display name prefers explicit names over key prettifying`() {
-        let named = self.entry(key: "agent:main:x", displayName: "  Weekly Sync  ")
+    @Test func `display name prefers explicit and derived names over key prettifying`() {
+        let labeled = self.entry(
+            key: "agent:main:x",
+            displayName: "Generated name",
+            derivedTitle: "Derived title",
+            label: "Pinned label")
+        #expect(ChatSessionSidebarModel.displayName(for: labeled) == "Pinned label")
+
+        let named = self.entry(key: "agent:main:x", displayName: "  Weekly Sync  ", derivedTitle: "Derived title")
         #expect(ChatSessionSidebarModel.displayName(for: named) == "Weekly Sync")
+
+        let derived = self.entry(key: "agent:main:x", derivedTitle: "  Derived title  ")
+        #expect(ChatSessionSidebarModel.displayName(for: derived) == "Derived title")
 
         let unnamed = self.entry(key: "agent:main:x")
         #expect(ChatSessionSidebarModel.displayName(for: unnamed) == "x")
@@ -845,7 +857,9 @@ struct ChatSessionSidebarModelTests {
 
         let omitted = try decoder.decode(
             OpenClawChatSessionsChangedEvent.self,
-            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#.utf8))
+            from: Data(
+                #"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#
+                    .utf8))
         let retained = try #require(ChatSessionSidebarModel.applying(
             sessionChange: omitted,
             to: [existing]))
@@ -853,7 +867,9 @@ struct ChatSessionSidebarModelTests {
 
         let tombstoned = try decoder.decode(
             OpenClawChatSessionsChangedEvent.self,
-            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#.utf8))
+            from: Data(
+                #"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#
+                    .utf8))
         let cleared = try #require(ChatSessionSidebarModel.applying(
             sessionChange: tombstoned,
             to: retained))

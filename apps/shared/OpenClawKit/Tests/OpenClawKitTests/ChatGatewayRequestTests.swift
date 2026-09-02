@@ -112,12 +112,14 @@ struct ChatGatewayRequestTests {
             limit: 12,
             search: "  incident  ",
             archived: true,
-            agentID: " Reviewer ")
+            agentID: " Reviewer ",
+            includeDerivedTitles: true)
 
         #expect(request.method == "sessions.list")
         #expect(request.timeoutMs == 15000)
         #expect(request.params["includeGlobal"]?.value as? Bool == true)
         #expect(request.params["includeUnknown"]?.value as? Bool == false)
+        #expect(request.params["includeDerivedTitles"]?.value as? Bool == true)
         #expect(request.params["limit"]?.value as? Int == 12)
         #expect(request.params["search"]?.value as? String == "incident")
         #expect(request.params["archived"]?.value as? Bool == true)
@@ -129,6 +131,7 @@ struct ChatGatewayRequestTests {
             archived: false,
             agentID: "   ")
         #expect(unscoped.params["agentId"] == nil)
+        #expect(unscoped.params["includeDerivedTitles"] == nil)
     }
 
     @Test func `child session request encodes focused pagination filters`() {

@@ -669,10 +669,6 @@ struct CommandCenterTab: View {
         if let label, !label.isEmpty {
             return label
         }
-        if let title = redactedSessionTitle(for: session.key) {
-            return title
-        }
-
         let displayName = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let displayName, !displayName.isEmpty {
             return Self.redactedSessionTitle(for: displayName) ?? displayName
@@ -680,6 +676,13 @@ struct CommandCenterTab: View {
         let subject = session.subject?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let subject, !subject.isEmpty {
             return Self.redactedSessionTitle(for: subject) ?? subject
+        }
+        let derivedTitle = session.derivedTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let derivedTitle, !derivedTitle.isEmpty, derivedTitle != session.key {
+            return derivedTitle
+        }
+        if let title = redactedSessionTitle(for: session.key) {
+            return title
         }
         return session.key
     }

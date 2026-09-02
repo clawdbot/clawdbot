@@ -60,6 +60,23 @@ struct RootTabsPresentationTests {
         #expect(visible.map(\.key) == ["main"])
     }
 
+    @Test(arguments: [
+        ("Pinned label", "Generated name", "Derived title", "Pinned label"),
+        (nil, "Generated name", "Derived title", "Generated name"),
+        (nil, nil, "Derived title", "Derived title"),
+        (nil, nil, nil, "iOS chat"),
+    ] as [(String?, String?, String?, String)])
+    func `session titles prefer gateway names before key fallbacks`(
+        label: String?, displayName: String?, derivedTitle: String?, expected: String)
+    {
+        let session = Self.sessionEntry(
+            key: "agent:main:ios-session",
+            label: label,
+            displayName: displayName,
+            derivedTitle: derivedTitle)
+        #expect(CommandCenterTab.sessionTitle(session) == expected)
+    }
+
     @Test func `overview token usage sums known totals and marks stale or missing rows partial`() {
         let summary = RootSidebarModel.tokenUsageSummary(for: [
             Self.sessionEntry(key: "fresh", totalTokens: 1200, totalTokensFresh: true, contextTokens: 200_000),
@@ -1137,6 +1154,9 @@ struct RootTabsPresentationTests {
 
     private static func sessionEntry(
         key: String,
+        label: String? = nil,
+        displayName: String? = nil,
+        derivedTitle: String? = nil,
         archived: Bool? = nil,
         pinned: Bool? = nil,
         totalTokens: Int? = nil,
@@ -1149,7 +1169,7 @@ struct RootTabsPresentationTests {
         OpenClawChatSessionEntry(
             key: key,
             kind: nil,
-            displayName: nil,
+            displayName: displayName,
             surface: nil,
             subject: nil,
             room: nil,
@@ -1167,11 +1187,13 @@ struct RootTabsPresentationTests {
             modelProvider: nil,
             model: nil,
             contextTokens: contextTokens,
+            label: label,
             pinned: pinned,
             archived: archived,
             observerDigest: observerDigest,
             lastReadAt: lastReadAt,
-            worktree: worktree)
+            worktree: worktree,
+            derivedTitle: derivedTitle)
     }
 
     private static func cronJob(enabled: Bool, status: String) -> CronJob {

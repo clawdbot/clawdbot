@@ -380,7 +380,7 @@ public struct ChatSessionsSheet: View {
     private func sessionRowContent(_ session: OpenClawChatSessionEntry) -> some View {
         HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.displayName ?? session.key)
+                Text(ChatSessionSidebarModel.displayName(for: session))
                     .font(OpenClawChatTypography.mono(size: 17, relativeTo: .body))
                     .lineLimit(1)
                 if let updatedAt = session.updatedAt, updatedAt > 0 {

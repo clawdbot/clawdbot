@@ -228,6 +228,7 @@ public enum OpenClawChatGatewayRequests {
         agentID: String? = nil,
         includeGlobal: Bool = true,
         includeUnknown: Bool = false,
+        includeDerivedTitles: Bool = false,
         activeMinutes: Int? = nil,
         spawnedBy: String? = nil,
         offset: Int? = nil,
@@ -238,6 +239,9 @@ public enum OpenClawChatGatewayRequests {
             "includeGlobal": AnyCodable(includeGlobal),
             "includeUnknown": AnyCodable(includeUnknown),
         ]
+        if includeDerivedTitles {
+            params["includeDerivedTitles"] = AnyCodable(true)
+        }
         if let agentID = normalized(agentID) {
             params["agentId"] = AnyCodable(agentID)
         }
