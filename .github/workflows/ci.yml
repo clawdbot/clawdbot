@@ -1830,8 +1830,10 @@ jobs:
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
-      # First-party scan before any package install: no network, no third-party
-      # hook code, and a PyPI outage cannot stop it.
+      # First-party scan before any package install: the scan itself uses no
+      # network and no third-party hook code, so a PyPI outage cannot stop it.
+      # Node 24 comes from the runner tool cache; the shared helper downloads
+      # only on images that lack it.
       - name: Detect committed private keys
         run: node "$PRIVATE_KEY_SCANNER_PATH"
 
