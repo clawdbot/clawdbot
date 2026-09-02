@@ -112,7 +112,7 @@ function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string,
   for (const entry of entries) {
     const jobName = jobNameById?.[entry.jobId];
     if (jobName) {
-      (entry as CronRunLogEntry & { jobName?: string }).jobName = jobName;
+      entry.jobName = jobName;
     }
   }
 }
