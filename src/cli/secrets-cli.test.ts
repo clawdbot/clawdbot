@@ -212,6 +212,20 @@ describe("secrets CLI", () => {
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
   });
 
+  it("prints a JSON failure when reload fails in JSON mode", async () => {
+    callGatewayFromCli.mockRejectedValue(new Error("reload failed"));
+
+    await expect(
+      createProgram().parseAsync(["secrets", "reload", "--json"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "reload failed" },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("explains Gateway reload failures without duplicate doctor noise", async () => {
     callGatewayFromCli.mockRejectedValue(
       new Error(
@@ -261,6 +275,20 @@ describe("secrets CLI", () => {
       throw new Error("Expected secrets audit result for exit-code resolution");
     }
     expect(exitCodeCall[1]).toBe(true);
+  });
+
+  it("prints a JSON failure when audit fails in JSON mode", async () => {
+    runSecretsAudit.mockRejectedValue(new Error("audit failed"));
+
+    await expect(
+      createProgram().parseAsync(["secrets", "audit", "--json"], { from: "user" }),
+    ).rejects.toThrow("__exit__:2");
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "audit failed" },
+    });
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("forwards --allow-exec to secrets audit", async () => {
@@ -324,6 +352,40 @@ describe("secrets CLI", () => {
       path: "skills.entries.qa-secret-test.apiKey",
     });
     expect(runtimeLogs.at(-1)).toContain("Secrets applied");
+  });
+
+  it("prints a JSON failure when configure fails in JSON mode", async () => {
+    runSecretsConfigureInteractive.mockRejectedValue(new Error("configure failed"));
+
+    await expect(
+      createProgram().parseAsync(["secrets", "configure", "--json"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: { type: "cli_error", message: "configure failed" },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("prints a JSON failure when apply cannot read its plan in JSON mode", async () => {
+    const missingPlan = path.join(os.tmpdir(), "openclaw-secrets-cli-missing-plan.json");
+    await fs.rm(missingPlan, { force: true });
+
+    await expect(
+      createProgram().parseAsync(["secrets", "apply", "--from", missingPlan, "--json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: `Secrets plan file not found: ${missingPlan}`,
+      },
+    });
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("emits one JSON document when --yes applies configure output", async () => {
