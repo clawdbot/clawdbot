@@ -75,7 +75,7 @@ export async function finalizeCodexAttempt(
     startupAuthProfileId,
   } = connection;
   const { toolBridge, toolState } = attemptTools;
-  const { state, completion, deadlines } = turnRuntime;
+  const { state, completion, deadlines, openClawDynamicToolExecutions } = turnRuntime;
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
   const { drainNotificationQueue } = notifications;
   const { codexModelCallDiagnostics } = requestRuntime;
@@ -109,7 +109,10 @@ export async function finalizeCodexAttempt(
     state.projectionClosed = true;
     return activeProjector.closeProjection();
   };
-  const settlement = drainNotificationQueue().then(closeProjection);
+  const settlement = Promise.all([
+    drainNotificationQueue(),
+    openClawDynamicToolExecutions.drain(),
+  ]).then(closeProjection);
   try {
     // Native completion does not end accepted projection or checkpoint work.
     // Both remain under the original receipt-anchored settlement deadline.
@@ -125,6 +128,19 @@ export async function finalizeCodexAttempt(
     if (!state.projectionClosed) {
       await resources.runCleanupStep("codex-transcript-checkpoint", closeProjection);
     }
+  }
+  if (state.finalSourceReplyCommit) {
+    // The source receipt commits before plugin result middleware. If bounded
+    // native cleanup wins that race, preserve the already-delivered tool result
+    // in the local transcript instead of synthesizing a false missing result.
+    activeProjector.recordDynamicToolResult({
+      callId: state.finalSourceReplyCommit.call.callId,
+      tool: state.finalSourceReplyCommit.call.tool,
+      success: true,
+      terminalType: "completed",
+      sideEffectEvidence: true,
+      contentItems: [],
+    });
   }
   const result = activeProjector.buildResult(toolBridge.telemetry, {
     yieldDetected: toolState.yieldDetected,

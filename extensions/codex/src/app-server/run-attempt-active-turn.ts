@@ -67,6 +67,7 @@ export function activateCodexAttemptTurn(
     completion,
     userInputBridgeRef,
     steeringQueueRef,
+    serverRequestAdmission,
     deadlines,
     noteProgress,
     completeTurn,
@@ -88,7 +89,7 @@ export function activateCodexAttemptTurn(
     paramsForRun: params,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
-    signal: runAbortController.signal,
+    signal: AbortSignal.any([runAbortController.signal, serverRequestAdmission.signal]),
   });
   trajectoryRecorder?.recordEvent("prompt.submitted", {
     threadId: resourceState.thread.threadId,
@@ -293,7 +294,7 @@ export function activateCodexAttemptTurn(
   const assertSteeringActive = () => {
     params.hostCapabilities.assertActive();
     runAbortController.signal.throwIfAborted();
-    if (state.completed || state.terminalTurnNotificationQueued) {
+    if (state.completed || state.terminalTurnNotificationQueued || state.finalSourceReplyCommit) {
       throw new Error("codex app-server turn is no longer accepting steering");
     }
   };
@@ -398,13 +399,22 @@ export function activateCodexAttemptTurn(
       resolvedBy,
     });
   const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
+    const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
+    if (state.finalSourceReplyCommit) {
+      if (isInboundUserMessage) {
+        lifecycle.interruptTurnForTerminalRelease("new_inbound_message");
+      }
+      // Final delivery sealed this queue. Let the canonical rejection path tell
+      // the gateway to admit the message on a fresh turn instead of losing it.
+      return await activeSteeringQueue.queue(text, optionsLocal);
+    }
     if (await claimPendingUserInputAnswer(text, optionsLocal)) {
       // A question claim is already consumption. Closing the run during its
       // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
       return undefined;
     }
-    if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
+    if (isInboundUserMessage && hasPromptImageInput(optionsLocal)) {
       assertSteeringActive();
       try {
         await cancelPendingUserInput("image-reply");

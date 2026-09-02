@@ -8,6 +8,7 @@ import type {
 export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   executionStarted?: boolean;
   executedArguments?: Record<string, unknown>;
+  finalCurrentSourceReply?: boolean;
   transcriptDetails?: unknown;
   terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
 };
@@ -64,6 +65,7 @@ export function withDynamicToolExecutionState<T extends CodexDynamicToolRuntimeR
   state: {
     executedArguments: Record<string, unknown>;
     executionStarted: boolean;
+    finalCurrentSourceReply?: boolean;
     sideEffectEvidence?: boolean;
   },
 ): T {
@@ -80,6 +82,15 @@ export function withDynamicToolExecutionState<T extends CodexDynamicToolRuntimeR
       enumerable: false,
       value: state.executionStarted,
     },
+    ...(state.finalCurrentSourceReply === true
+      ? {
+          finalCurrentSourceReply: {
+            configurable: true,
+            enumerable: false,
+            value: true,
+          },
+        }
+      : {}),
   });
   return withDynamicToolSideEffectEvidence(response, state.sideEffectEvidence === true);
 }
@@ -140,4 +151,28 @@ export function createFailedDynamicToolResponse(
     });
   }
   return withDynamicToolSideEffectEvidence(response, options?.sideEffectEvidence === true);
+}
+
+/** Restores the authoritative outcome when delivery preceded a presentation failure. */
+export function createCommittedFinalSourceReplyResponse(params: {
+  executedArguments: Record<string, unknown>;
+}): CodexDynamicToolRuntimeResponse {
+  const response = withDynamicToolExecutionState(
+    {
+      contentItems: [{ type: "inputText", text: "Source reply delivered." }],
+      success: true,
+    },
+    {
+      executedArguments: params.executedArguments,
+      executionStarted: true,
+      finalCurrentSourceReply: true,
+      sideEffectEvidence: true,
+    },
+  );
+  Object.defineProperty(response, "terminate", {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return response;
 }

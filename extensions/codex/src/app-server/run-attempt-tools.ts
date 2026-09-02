@@ -66,9 +66,24 @@ export function createCodexDynamicToolExecutionRegistry() {
       if (existing) {
         return { execution: existing, replayed: true } as const;
       }
-      const execution = start();
+      let resolveExecution!: (value: CodexDynamicToolRuntimeResponse) => void;
+      let rejectExecution!: (reason?: unknown) => void;
+      const execution = new Promise<CodexDynamicToolRuntimeResponse>((resolve, reject) => {
+        resolveExecution = resolve;
+        rejectExecution = reject;
+      });
+      // Publish ownership before invoking start: synchronous projection or
+      // diagnostic callbacks may re-enter with the same app-server call id.
       executions.set(keyFor(call), execution);
+      try {
+        void start().then(resolveExecution, rejectExecution);
+      } catch (error) {
+        rejectExecution(error);
+      }
       return { execution, replayed: false } as const;
+    },
+    drain: async () => {
+      await Promise.allSettled(executions.values());
     },
   };
 }

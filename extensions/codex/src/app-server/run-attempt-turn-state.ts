@@ -10,16 +10,14 @@ import {
   type CodexAttemptTimeout,
 } from "./attempt-deadlines.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import {
   resolveCodexNativeHookRelayTtlMs,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
 } from "./native-hook-relay.js";
-import type {
-  CodexServerNotification,
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-} from "./protocol.js";
+import type { CodexServerNotification, CodexDynamicToolCallParams } from "./protocol.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import { createCodexServerRequestAdmissionController } from "./run-attempt-server-request-admission.js";
 import { createCodexDynamicToolExecutionRegistry } from "./run-attempt-tools.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
@@ -61,12 +59,21 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     pendingTerminalDynamicToolRelease: undefined as
       | {
           call: CodexDynamicToolCallParams;
-          response: CodexDynamicToolCallResponse;
+          response: CodexDynamicToolRuntimeResponse;
           durationMs: number;
         }
       | undefined,
     terminalDynamicToolReleaseCheckScheduled: false,
     currentTurnHadNonTerminalDynamicToolResult: false,
+    // SAFETY: The commit begins unset and is populated only with the closed record below.
+    finalSourceReplyCommit: undefined as
+      | {
+          call: CodexDynamicToolCallParams;
+          committedAtMs: number;
+        }
+      | undefined,
+    // SAFETY: An absent timer is the valid initial and cleared state.
+    terminalReleaseDeadlineTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   };
   const { promise: completion, resolve: resolveCompletion } = createDeferred<void>();
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
@@ -76,12 +83,36 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const activeTurnItemIds = new Set<string>();
   const turnIdRef: { current?: string } = {};
   const userInputBridgeRef: { current?: ReturnType<typeof createCodexUserInputBridge> } = {};
+  const serverRequestAdmission = createCodexServerRequestAdmissionController();
   const steeringQueueRef: { current?: ReturnType<typeof createCodexSteeringQueue> } = {};
+  const clearTerminalReleaseDeadline = () => {
+    clearTimeout(state.terminalReleaseDeadlineTimer);
+    state.terminalReleaseDeadlineTimer = undefined;
+  };
+  const armTerminalReleaseDeadline = (deadlineAtMs: number, onDeadline: () => void) => {
+    clearTerminalReleaseDeadline();
+    const timer = setTimeout(
+      () => {
+        if (state.terminalReleaseDeadlineTimer !== timer) {
+          return;
+        }
+        state.terminalReleaseDeadlineTimer = undefined;
+        if (!state.completed && !runAbortController.signal.aborted) {
+          onDeadline();
+        }
+      },
+      Math.max(1, deadlineAtMs - Date.now()),
+    );
+    timer.unref?.();
+    state.terminalReleaseDeadlineTimer = timer;
+  };
   const completeTurn = () => {
     if (state.completed) {
       return;
     }
     state.completed = true;
+    clearTerminalReleaseDeadline();
+    serverRequestAdmission.seal();
     steeringQueueRef.current?.cancel();
     deadlines.beginSettlement(Date.now());
     resolveCompletion();
@@ -176,7 +207,10 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     activeTurnItemIds,
     turnIdRef,
     userInputBridgeRef,
+    serverRequestAdmission,
     steeringQueueRef,
+    armTerminalReleaseDeadline,
+    clearTerminalReleaseDeadline,
     completeTurn,
     interruptTurn,
     renewNativeHookRelayForTurnProgress,

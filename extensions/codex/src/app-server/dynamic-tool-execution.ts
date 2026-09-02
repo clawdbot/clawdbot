@@ -157,6 +157,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
   onFallbackSelected?: () => void;
   onTimeout?: () => void;
   observeToolTerminal?: EmbeddedRunAttemptParams["observeToolTerminal"];
+  onFinalSourceReplyDelivery?: () => void;
 }): Promise<CodexDynamicToolRuntimeResponse> {
   // Timeout or run abort can win while a tool ignores cancellation. Keep the
   // private observer terminal result exactly once across those competing paths.
@@ -284,6 +285,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
         onAgentToolResult: notifyAgentToolResult,
         toolCallOrdinal: params.toolCallOrdinal,
         retainExecutionSnapshot: true,
+        onFinalSourceReplyDelivery: params.onFinalSourceReplyDelivery,
       }),
       abortPromise,
       timeoutPromise,

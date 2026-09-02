@@ -400,6 +400,53 @@ function hasExplicitNonSourceMessageRoute(
   return false;
 }
 
+function confirmsMessageToolSourceReply(params: {
+  toolName: string;
+  args: Record<string, unknown>;
+  result: unknown;
+  hookResult: unknown;
+  isError: boolean;
+  hookContext?: CodexDynamicToolHookContext;
+  messagingTarget?: MessagingToolSend;
+  allowToolTermination?: boolean;
+}): boolean {
+  if (
+    params.hookContext?.sourceReplyDeliveryMode !== "message_tool_only" ||
+    params.toolName !== "message"
+  ) {
+    return false;
+  }
+  const blocksSourceReply = hasExplicitNonSourceMessageRoute(
+    params.args,
+    params.hookContext,
+    params.messagingTarget,
+  );
+  const deliveredSourceReply = isDeliveredMessageToolOnlySourceReplyResult({
+    sourceReplyDeliveryMode: params.hookContext.sourceReplyDeliveryMode,
+    toolName: params.toolName,
+    args: params.args,
+    result: params.result,
+    hookResult: params.hookResult,
+    isError: params.isError,
+    allowExplicitSourceRoute: !blocksSourceReply,
+  });
+  const receiptConfirmedSourceReply =
+    normalizeRouteToken(typeof params.args.action === "string" ? params.args.action : undefined) ===
+      "reply" &&
+    !params.isError &&
+    !blocksSourceReply &&
+    isDeliveredMessagingToolResult(params) &&
+    (replyReceiptMatchesCurrentMessage(params.result, params.hookContext) ||
+      replyReceiptMatchesCurrentMessage(params.hookResult, params.hookContext));
+  const resultRecord = asOptionalRecord(params.result);
+  const hookResultRecord = asOptionalRecord(params.hookResult);
+  const toolConfirmedSourceReply =
+    params.allowToolTermination === true &&
+    !params.isError &&
+    (resultRecord?.terminate === true || hookResultRecord?.terminate === true);
+  return deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply;
+}
+
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
   /** Final executable tools after schema projection and hook-wrapper quarantine. */
@@ -415,6 +462,7 @@ export type CodexDynamicToolBridge = {
       onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
       toolCallOrdinal?: number;
       retainExecutionSnapshot?: boolean;
+      onFinalSourceReplyDelivery?: () => void;
     },
   ) => Promise<CodexDynamicToolRuntimeResponse>;
   /** Consume exact boundary evidence retained while post-execution processing is incomplete. */
@@ -659,6 +707,7 @@ export function createCodexDynamicToolBridge(params: {
       let didStartExecution = false;
       let didDispatchExecution = false;
       let executionPrevented = false;
+      let rawFinalSourceReplyDeliveryRecorded = false;
       let executedArgs = structuredClone(args);
       const executionSnapshotState: ExecutionSnapshotState = {
         consumed: false,
@@ -733,6 +782,45 @@ export function createCodexDynamicToolBridge(params: {
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
+        const rawMessagingArgs = applyCurrentMessageProvider(
+          toolName,
+          executedArgs,
+          params.hookContext?.currentChannelProvider,
+        );
+        const rawMessagingTarget = isMessagingTool(toolName)
+          ? extractMessagingToolSend(toolName, rawMessagingArgs, messagingContext)
+          : undefined;
+        const rawConfirmedMessagingTarget =
+          !rawIsError && rawMessagingTarget
+            ? extractMessagingToolSendResult(rawMessagingTarget, telemetryRawResult)
+            : rawMessagingTarget;
+        const rawConfirmedSourceReply = confirmsMessageToolSourceReply({
+          toolName,
+          args: executedArgs,
+          result: rawResult,
+          hookResult: rawResult,
+          isError: rawIsError,
+          hookContext: params.hookContext,
+          messagingTarget: rawConfirmedMessagingTarget,
+        });
+        if (executedArgs.final !== false && rawConfirmedSourceReply) {
+          // A transport receipt is the irreversible delivery boundary. Retain
+          // its evidence before optional result middleware can block or fail.
+          collectToolTelemetry({
+            toolName,
+            args: executedArgs,
+            result: rawResult,
+            mediaTrustResult: telemetryRawResult,
+            telemetry,
+            signal,
+            isError: false,
+            messagingTarget: rawConfirmedMessagingTarget,
+            sourceReplyFinal: true,
+          });
+          telemetry.didDeliverSourceReplyViaMessageTool = true;
+          rawFinalSourceReplyDeliveryRecorded = true;
+          options?.onFinalSourceReplyDelivery?.();
+        }
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
@@ -832,46 +920,27 @@ export function createCodexDynamicToolBridge(params: {
           asOptionalRecord(sanitizeToolResult(result))?.details,
         );
         withDiagnosticFailureDisposition(response, resultFailureKind);
-        const blocksSourceReplyTermination = hasExplicitNonSourceMessageRoute(
-          executedArgs,
-          params.hookContext,
-          confirmedMessagingTarget,
-        );
-        const deliveredSourceReply = isDeliveredMessageToolOnlySourceReplyResult({
-          sourceReplyDeliveryMode: params.hookContext?.sourceReplyDeliveryMode,
+        const canonicalSourceReply = confirmsMessageToolSourceReply({
           toolName,
           args: executedArgs,
           result,
           hookResult: rawResult,
           isError: resultIsError,
-          allowExplicitSourceRoute: !blocksSourceReplyTermination,
+          hookContext: params.hookContext,
+          messagingTarget: confirmedMessagingTarget,
         });
-        const receiptConfirmedSourceReply =
-          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-          toolName === "message" &&
-          normalizeRouteToken(
-            typeof executedArgs.action === "string" ? executedArgs.action : undefined,
-          ) === "reply" &&
-          !resultIsError &&
-          !blocksSourceReplyTermination &&
-          isDeliveredMessagingToolResult({
-            toolName,
-            args: executedArgs,
-            result,
-            hookResult: rawResult,
-            isError: resultIsError,
-          }) &&
-          (replyReceiptMatchesCurrentMessage(rawResult, params.hookContext) ||
-            replyReceiptMatchesCurrentMessage(result, params.hookContext));
-        const toolConfirmedSourceReply =
-          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-          toolName === "message" &&
-          !resultIsError &&
-          (rawResult.terminate === true || result.terminate === true);
-        const confirmedSourceReply =
-          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
-          toolName === "message" &&
-          (toolConfirmedSourceReply || deliveredSourceReply || receiptConfirmedSourceReply);
+        // A message implementation may still own legacy turn termination, but
+        // bare `terminate` is not enough evidence for the final-source grace.
+        const confirmedSourceReply = confirmsMessageToolSourceReply({
+          toolName,
+          args: executedArgs,
+          result,
+          hookResult: rawResult,
+          isError: resultIsError,
+          hookContext: params.hookContext,
+          messagingTarget: confirmedMessagingTarget,
+          allowToolTermination: true,
+        });
         const sourceReplyFinal = confirmedSourceReply ? executedArgs.final !== false : undefined;
         const autoDeliveryTtsMediaUrls = getCoreTtsToolResultMediaUrls(rawResult);
         collectToolTelemetry({
@@ -886,8 +955,9 @@ export function createCodexDynamicToolBridge(params: {
           coreTtsToolResult: autoDeliveryTtsMediaUrls?.length ? rawResult : undefined,
           messagingTarget: confirmedMessagingTarget,
           sourceReplyFinal,
+          skipMessagingDelivery: rawFinalSourceReplyDeliveryRecorded,
         });
-        if (deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply) {
+        if (confirmedSourceReply) {
           telemetry.didDeliverSourceReplyViaMessageTool = true;
         }
         const continuesSourceReplyProgress = confirmedSourceReply && sourceReplyFinal === false;
@@ -912,6 +982,7 @@ export function createCodexDynamicToolBridge(params: {
         return withDynamicToolExecutionState(response, {
           executedArguments: executedArgs,
           executionStarted: didStartExecution && !executionPrevented,
+          finalCurrentSourceReply: canonicalSourceReply && sourceReplyFinal === true,
           sideEffectEvidence: !replaySafe,
         });
       } catch (error) {
@@ -1184,6 +1255,7 @@ function collectToolTelemetry(params: {
   coreTtsToolResult?: object;
   messagingTarget?: MessagingToolSend;
   sourceReplyFinal?: boolean;
+  skipMessagingDelivery?: boolean;
 }): MessagingToolSend | MessagingToolSourceReplyPayload | undefined {
   if (params.isError) {
     return undefined;
@@ -1235,7 +1307,7 @@ function collectToolTelemetry(params: {
       }
     }
   }
-  if (!isMessagingTool(params.toolName)) {
+  if (params.skipMessagingDelivery || !isMessagingTool(params.toolName)) {
     return undefined;
   }
   const isMessagingSendAction = isMessagingToolSendAction(params.toolName, params.args);
