@@ -545,8 +545,8 @@ describe("Git-backed SQLite snapshots", () => {
     const password = ["synthetic", "password"].join("-");
     const remote = `https://${username}:${password}@example.invalid/repository`;
     mocks.pushDiagnostic = {
-      stderr: `fatal: unable to access '${remote}': ${"x".repeat(600)}🦞`,
-      stdout: `remote: rejected '${remote}' after validation`,
+      stderr: `${"x".repeat(1_400)} fatal: unable to access '${remote}' stderr-tail-🦞`,
+      stdout: `${"y".repeat(1_400)} remote: rejected '${remote}' stdout-tail-🐚`,
     };
     await initializeGitBackupRepository({ repositoryPath, stateDir, remote });
     await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
@@ -565,17 +565,22 @@ describe("Git-backed SQLite snapshots", () => {
       expect(result.pushWarning).toContain("https://***@example.invalid/repository");
       expect(result.pushWarning).not.toContain(username);
       expect(result.pushWarning).not.toContain(password);
+      expect(result.pushWarning).toContain("stderr-tail-🦞");
+      expect(result.pushWarning).toContain("stdout-tail-🐚");
       expect(Buffer.from(result.pushWarning ?? "", "utf8").toString("utf8")).toBe(
         result.pushWarning,
       );
-      expect(result.pushWarning?.length).toBeLessThanOrEqual(1_200);
+      expect(result.pushWarning).toHaveLength(1_200);
 
       const persisted = readBackupFreshness(process.env).latest?.error;
+      expect(persisted).toBe(result.pushWarning);
       expect(persisted).toContain("stderr:");
       expect(persisted).toContain("stdout:");
       expect(persisted).toContain("https://***@example.invalid/repository");
       expect(persisted).not.toContain(username);
       expect(persisted).not.toContain(password);
+      expect(persisted).toContain("stderr-tail-🦞");
+      expect(persisted).toContain("stdout-tail-🐚");
     });
   });
 
