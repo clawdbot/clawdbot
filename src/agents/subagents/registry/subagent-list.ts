@@ -5,6 +5,7 @@
  */
 import { realpathSync } from "node:fs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../../../config/sessions/session-accessor.js";
@@ -35,12 +36,40 @@ import { buildSubagentRunView } from "./subagent-run-view.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
 /**
+ * Model-visible bounds for the shared-cwd advisory.
+ *
+ * `subagents list` emits one structured row per live run *and* the rendered text
+ * view, so whatever the advisory attaches to a row reaches the model roughly
+ * twice per run. Naming every peer therefore made the advisory quadratic: at the
+ * schema maximum of 20 children for one agent session
+ * (`maxChildrenPerAgent`, `.max(20)` in `zod-schema.agent-defaults.ts`) a single
+ * ordinary `list` call emitted 380 run ids and 40 copies of the directory —
+ * measured at ~30 KB / ~7.5K tokens, and ~134 KB / ~33K tokens for a 50-child
+ * swarm group. AGENTS.md's model-context budget makes an unbounded model-visible
+ * item a release blocker, so a row carries the exact peer *count* (a scalar) plus
+ * a hard-capped id sample and a hard-capped path. Both caps are constants, so the
+ * advisory's contribution is linear in live runs with a fixed per-row ceiling.
+ */
+const SHARED_CWD_PEER_SAMPLE_MAX = 3;
+const SHARED_CWD_PATH_MAX_CHARS = 72;
+
+/**
  * Advisory marker for live sibling runs spawned into one working directory.
  * Present only when the spawner passed an explicit `cwd`; inherited workspaces
  * are shared by design and are never reported.
  */
 type SubagentSharedCwd = {
+  /**
+   * The shared directory, capped at `SHARED_CWD_PATH_MAX_CHARS` for display. The
+   * untruncated path stays internal to grouping and is never emitted per row.
+   */
   path: string;
+  /** Live peers sharing the directory, excluding this run. Always exact. */
+  peerCount: number;
+  /**
+   * At most `SHARED_CWD_PEER_SAMPLE_MAX` peer run ids, in list order. A sample,
+   * not an inventory — read `peerCount` for the real total.
+   */
   peerRunIds: string[];
 };
 
@@ -183,6 +212,23 @@ function sharedCwdGroupKey(identity: string) {
 }
 
 /**
+ * Cap a shared directory for display, keeping the tail.
+ *
+ * Sibling checkouts share long leading prefixes, so the house head-preserving
+ * `truncateLine` would render every distinct group as the same unusable prefix.
+ * The leaf directories are what tell two groups apart, so the ellipsis goes in
+ * front. `sliceUtf16Safe` takes the negative offset and keeps the cut off a
+ * surrogate pair.
+ */
+function capSharedCwdPath(value: string) {
+  if (value.length <= SHARED_CWD_PATH_MAX_CHARS) {
+    return value;
+  }
+  const marker = "...";
+  return `${marker}${sliceUtf16Safe(value, -(SHARED_CWD_PATH_MAX_CHARS - marker.length))}`;
+}
+
+/**
  * Index live runs by the explicit working directory they were spawned into.
  *
  * Reads `spawnedCwd` off the already-cached session entry, so grouping costs no
@@ -198,7 +244,7 @@ function buildSharedCwdIndex(params: {
   cache: Map<string, Record<string, SessionEntry>>;
   now: number;
 }) {
-  const groups = new Map<string, { path: string; runIds: string[] }>();
+  const groups = new Map<string, { path: string; displayPath: string; runIds: string[] }>();
   const groupKeyByRunId = new Map<string, string>();
   const identityMemo = new Map<string, string>();
   for (const run of params.runs) {
@@ -226,8 +272,13 @@ function buildSharedCwdIndex(params: {
       continue;
     }
     // Report the canonical directory rather than whichever alias was named
-    // first, so the operator sees the checkout the runs actually share.
-    groups.set(groupKey, { path: identity, runIds: [run.runId] });
+    // first, so the operator sees the checkout the runs actually share. The cap
+    // is applied once per group, not once per emitted row.
+    groups.set(groupKey, {
+      path: identity,
+      displayPath: capSharedCwdPath(identity),
+      runIds: [run.runId],
+    });
   }
   return (runId: string): SubagentSharedCwd | undefined => {
     const groupKey = groupKeyByRunId.get(runId);
@@ -235,9 +286,24 @@ function buildSharedCwdIndex(params: {
     if (!group || group.runIds.length < 2) {
       return undefined;
     }
+    // Collect only the sample rather than filtering the whole group per row:
+    // the old `filter` also made the *work* quadratic, not just the output.
+    const peerRunIds: string[] = [];
+    for (const peerRunId of group.runIds) {
+      if (peerRunId === runId) {
+        continue;
+      }
+      peerRunIds.push(peerRunId);
+      if (peerRunIds.length >= SHARED_CWD_PEER_SAMPLE_MAX) {
+        break;
+      }
+    }
     return {
-      path: group.path,
-      peerRunIds: group.runIds.filter((peerRunId) => peerRunId !== runId),
+      path: group.displayPath,
+      // Every run in the group is a peer of every other, so the count is exact
+      // without walking the list.
+      peerCount: group.runIds.length - 1,
+      peerRunIds,
     };
   };
 }
@@ -329,8 +395,10 @@ export function buildSubagentList(params: {
     const taskName = entry.taskName?.trim();
     const taskNamePrefix = taskName ? `${taskName}: ` : "";
     const sharedCwd = resolveSharedCwd(entry.runId);
+    // `peerCount`, never `peerRunIds.length`: the id list is a capped sample, so
+    // reading its length would under-report every group larger than the cap.
     const sharedCwdSuffix = sharedCwd
-      ? ` [shared cwd with ${sharedCwd.peerRunIds.length} other run${sharedCwd.peerRunIds.length === 1 ? "" : "s"}: ${sharedCwd.path}]`
+      ? ` [shared cwd with ${sharedCwd.peerCount} other run${sharedCwd.peerCount === 1 ? "" : "s"}: ${sharedCwd.path}]`
       : "";
     const line = `${index}. ${taskNamePrefix}${label} (${resolveModelDisplay(sessionEntry, entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${normalizeLowercaseStringOrEmpty(task) !== normalizeLowercaseStringOrEmpty(label) ? ` - ${task}` : ""}${sharedCwdSuffix}`;
     const view: SubagentListItem = {

@@ -36,6 +36,13 @@
  *   6. Distinct directories — silent.
  *   7. Deleted directory — canonicalization fails, lexical fallback still
  *      groups rather than throwing or dropping the row.
+ *   8. Model-context bound at the supported child maximum: 20 live children in
+ *      one long-pathed directory. Measures the real model-visible payload the
+ *      `subagents` tool emits for `action: "list"` and asserts the advisory's
+ *      per-row contribution is capped — the P0 regression. Also re-measures at
+ *      50 (the swarm `maxChildrenPerGroup` default) to show the growth is
+ *      linear rather than quadratic, and pins that a long path is still grouped
+ *      on its full value while only its display form is truncated.
  *
  * Run: pnpm tsx scripts/proof-135480-subagent-shared-cwd-advisory.ts
  */
@@ -183,10 +190,12 @@ async function main(): Promise<void> {
     check("both ACP rows are flagged and name each other", () => {
       assert.deepEqual(advisoryFor(list, runs[0]!.runId), {
         path: dir,
+        peerCount: 1,
         peerRunIds: [runs[1]!.runId],
       });
       assert.deepEqual(advisoryFor(list, runs[1]!.runId), {
         path: dir,
+        peerCount: 1,
         peerRunIds: [runs[0]!.runId],
       });
     });
@@ -246,10 +255,12 @@ async function main(): Promise<void> {
     check("aliased runs group together and report the canonical directory", () => {
       assert.deepEqual(advisoryFor(list, realRun.runId), {
         path: canonical,
+        peerCount: 1,
         peerRunIds: [linkRun.runId],
       });
       assert.deepEqual(advisoryFor(list, linkRun.runId), {
         path: canonical,
+        peerCount: 1,
         peerRunIds: [realRun.runId],
       });
     });
@@ -318,6 +329,142 @@ async function main(): Promise<void> {
         assert.equal(advisoryFor(list, run.runId)?.path, dir);
         assert.equal(advisoryFor(list, run.runId)?.peerRunIds.length, 1);
       }
+    });
+  }
+
+  console.log("── scenario 8: model-context bound at the supported child maximum ──");
+  {
+    // The advisory attaches to every row of `subagents list` AND to the rendered
+    // text view, so naming every peer made one ordinary call grow as O(runs^2).
+    // This scenario drives the real tool payload shape and measures it.
+    const SAMPLE_MAX = 3;
+    const PATH_MAX = 72;
+    // A realistically long checkout path, as the finding calls out.
+    const deepDir = path.join(
+      root,
+      "home/operator/projects/worktrees/openclaw-feat-subagent-shared-cwd-advisory/packages/agent-core",
+    );
+    await fs.mkdir(deepDir, { recursive: true });
+    assert.ok(deepDir.length > PATH_MAX, "scenario needs a path longer than the display cap");
+
+    const measure = async (childCount: number) => {
+      const store = path.join(root, `sessions-bound-${childCount}.json`);
+      const runs = Array.from({ length: childCount }, (_unused, i) =>
+        makeRun(`bound-${childCount}-${String(i).padStart(2, "0")}`, now),
+      );
+      for (const run of runs) {
+        await createChildSession({
+          storePath: store,
+          sessionKey: run.childSessionKey,
+          requestedCwd: deepDir,
+        });
+      }
+      const { list } = listFor(store, runs);
+      // Exactly what subagents-tool.ts emits for `action: "list"`: structured
+      // rows with `line` stripped, plus the rendered text view.
+      const modelVisible = JSON.stringify({
+        active: list.active.map(({ line: _line, ...view }) => view),
+        recent: list.recent.map(({ line: _line, ...view }) => view),
+        text: list.text,
+      });
+      const emittedPeerIds = list.active.reduce(
+        (sum, item) => sum + (item.sharedCwd?.peerRunIds.length ?? 0),
+        0,
+      );
+      return { list, runs, modelVisible, emittedPeerIds };
+    };
+
+    const at20 = await measure(20);
+    const at50 = await measure(50);
+    for (const [childCount, m] of [
+      [20, at20],
+      [50, at50],
+    ] as const) {
+      console.log(
+        `   ${String(childCount).padStart(2)} children sharing one cwd: ${m.modelVisible.length} B model-visible, ${m.emittedPeerIds} peer ids emitted (pre-fix would be ${childCount * (childCount - 1)})`,
+      );
+    }
+
+    check("every row reports the exact peer count, not the sample size", () => {
+      for (const item of at20.list.active) {
+        assert.equal(item.sharedCwd?.peerCount, 19);
+      }
+    });
+    check(`no row emits more than ${SAMPLE_MAX} peer ids`, () => {
+      for (const item of at20.list.active) {
+        const ids = item.sharedCwd?.peerRunIds ?? [];
+        assert.ok(ids.length <= SAMPLE_MAX, `row emitted ${ids.length} peer ids`);
+        assert.ok(!ids.includes(item.runId), "a row listed itself as its own peer");
+      }
+    });
+    check("total peer ids grow linearly, not quadratically", () => {
+      // min(SAMPLE_MAX, n-1) * n, versus n*(n-1) before the fix.
+      assert.equal(at20.emittedPeerIds, 60);
+      assert.equal(at50.emittedPeerIds, 150);
+    });
+    check(`the reported directory is capped at ${PATH_MAX} characters`, () => {
+      for (const item of at20.list.active) {
+        const reported = item.sharedCwd?.path ?? "";
+        assert.ok(
+          reported.length <= PATH_MAX,
+          `reported path was ${reported.length} characters: ${reported}`,
+        );
+        assert.ok(reported.startsWith("..."), `expected a truncation marker: ${reported}`);
+        // The tail is what identifies the checkout, so it must survive.
+        assert.ok(reported.endsWith("packages/agent-core"), `lost the path tail: ${reported}`);
+      }
+      // The untruncated path must not leak into the payload anywhere.
+      assert.ok(
+        !at20.modelVisible.includes(deepDir),
+        "the full path reached the model-visible payload",
+      );
+    });
+    check("the text view reports the true group size", () => {
+      assert.ok(
+        at20.list.text.includes("[shared cwd with 19 other runs: "),
+        "the text view did not report the real peer count",
+      );
+      assert.ok(
+        !at20.list.text.includes(`[shared cwd with ${SAMPLE_MAX} other runs`),
+        "the text view reported the sample size instead of the real count",
+      );
+    });
+    // Sibling checkouts identical for their first 100+ characters, differing
+    // only past the display cap: grouping must still keep them apart.
+    const alphaDir = path.join(deepDir, "openclaw-worktree-alpha");
+    const betaDir = path.join(deepDir, "openclaw-worktree-beta");
+    await fs.mkdir(alphaDir, { recursive: true });
+    await fs.mkdir(betaDir, { recursive: true });
+    const siblingStore = path.join(root, "sessions-bound-siblings.json");
+    const alphaRuns = ["sib-alpha-a", "sib-alpha-b"].map((suffix) => makeRun(suffix, now));
+    const betaRuns = ["sib-beta-a", "sib-beta-b"].map((suffix) => makeRun(suffix, now));
+    for (const [runs, dir] of [
+      [alphaRuns, alphaDir],
+      [betaRuns, betaDir],
+    ] as const) {
+      for (const run of runs) {
+        await createChildSession({
+          storePath: siblingStore,
+          sessionKey: run.childSessionKey,
+          requestedCwd: dir,
+        });
+      }
+    }
+    const siblingList = listFor(siblingStore, [...alphaRuns, ...betaRuns]).list;
+    const alphaAdvisory = advisoryFor(siblingList, alphaRuns[0]!.runId);
+    const betaAdvisory = advisoryFor(siblingList, betaRuns[0]!.runId);
+    console.log(`   sibling alpha reports: ${alphaAdvisory?.path}`);
+    console.log(`   sibling beta  reports: ${betaAdvisory?.path}`);
+    check("sibling checkouts past the display cap remain distinct groups", () => {
+      assert.equal(alphaAdvisory?.peerCount, 1);
+      assert.equal(betaAdvisory?.peerCount, 1);
+      assert.deepEqual(alphaAdvisory?.peerRunIds, [alphaRuns[1]!.runId]);
+      assert.deepEqual(betaAdvisory?.peerRunIds, [betaRuns[1]!.runId]);
+      assert.notEqual(
+        alphaAdvisory?.path,
+        betaAdvisory?.path,
+        "the display cap collapsed two distinct directories into one label",
+      );
     });
   }
 

@@ -376,14 +376,26 @@ sub-agent cannot cancel work owned by another session.
   "runId": "…",
   "sharedCwd": {
     "path": "/abs/path/to/directory",
-    "peerRunIds": ["…"]
+    "peerCount": 4,
+    "peerRunIds": ["…", "…", "…"]
   }
 }
 ```
 
-`path` is the resolved directory; `peerRunIds` lists the other live runs
-sharing it, excluding the row's own run. The human-readable `text` view
-appends a matching `[shared cwd with N other runs: <path>]` suffix.
+`path` is the resolved directory, shortened to 72 characters with a leading
+`...` when it is longer — grouping always uses the full path, so two sibling
+checkouts that differ only in their final segment stay separate groups.
+`peerCount` is the exact number of other live runs sharing the directory,
+excluding the row's own run. `peerRunIds` is a **bounded sample** of at most
+three of those peers, not a complete list; read `peerCount` for the real
+total. The human-readable `text` view appends a matching
+`[shared cwd with N other runs: <path>]` suffix, where `N` is `peerCount`.
+
+The sample and the length cap exist because a `list` call renders one row per
+live run: naming every peer on every row made the output grow as the square of
+the number of sharing runs, which at the supported maximum of 20 children for
+one agent session reached roughly 7.5K tokens of model-visible text on an
+ordinary `list`.
 
 The field is **advisory only** — it never blocks or refuses a spawn. Two
 agents editing one checkout can overwrite each other's work, so treat it as

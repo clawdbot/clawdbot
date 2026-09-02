@@ -536,10 +536,12 @@ describe("buildSubagentList", () => {
       const byRunId = new Map(list.active.map((item) => [item.runId, item]));
       expect(byRunId.get(runA.runId)?.sharedCwd).toEqual({
         path: path.resolve(sharedDir),
+        peerCount: 1,
         peerRunIds: [runB.runId],
       });
       expect(byRunId.get(runB.runId)?.sharedCwd).toEqual({
         path: path.resolve(sharedDir),
+        peerCount: 1,
         peerRunIds: [runA.runId],
       });
       expect(byRunId.get(runA.runId)?.line).toContain(
@@ -567,6 +569,7 @@ describe("buildSubagentList", () => {
         expect(item.sharedCwd?.path).toBe(path.resolve(sharedDir));
         expect(item.sharedCwd?.peerRunIds).not.toContain(item.runId);
         expect(item.sharedCwd?.peerRunIds).toHaveLength(2);
+        expect(item.sharedCwd?.peerCount).toBe(2);
         expect(item.line).toContain("[shared cwd with 2 other runs:");
       }
     });
@@ -645,11 +648,13 @@ describe("buildSubagentList", () => {
       const byRunId = new Map(list.active.map((item) => [item.runId, item]));
       expect(byRunId.get(runA.runId)?.sharedCwd).toEqual({
         path: canonical,
+        peerCount: 1,
         peerRunIds: [runB.runId],
       });
       // The alias row reports the canonical directory, not the link it named.
       expect(byRunId.get(runB.runId)?.sharedCwd).toEqual({
         path: canonical,
+        peerCount: 1,
         peerRunIds: [runA.runId],
       });
     });
@@ -674,6 +679,7 @@ describe("buildSubagentList", () => {
       for (const item of list.active) {
         expect(item.sharedCwd?.path).toBe(path.resolve(missingDir));
         expect(item.sharedCwd?.peerRunIds).toHaveLength(1);
+        expect(item.sharedCwd?.peerCount).toBe(1);
       }
     });
 
@@ -697,6 +703,105 @@ describe("buildSubagentList", () => {
         expect(item.sharedCwd).toBeUndefined();
         expect(item.line).not.toContain("shared cwd");
       }
+    });
+
+    // Regression for the model-context budget (AGENTS.md): the advisory used to
+    // name every peer on every row, so one `subagents list` grew as
+    // O(live runs^2) with no cap on either the id list or the directory. At the
+    // schema maximum of 20 children for one agent session that measured ~30 KB /
+    // ~7.5K tokens of model-visible output. These tests pin the caps, not just
+    // the happy path.
+    it("caps the peer sample and reports the exact peer count at the supported child maximum", async () => {
+      const now = Date.now();
+      const sharedDir = path.join(testWorkspaceDir, "shared-tree-max-children");
+      // 20 == `maxChildrenPerAgent`'s `.max(20)` in zod-schema.agent-defaults.ts.
+      const runs = Array.from({ length: 20 }, (_unused, i) =>
+        makeRun(`max-children-${String(i).padStart(2, "0")}`, now),
+      );
+      for (const run of runs) {
+        addSubagentRunForTests(run);
+      }
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-max-children.json");
+      for (const run of runs) {
+        await seedSessionEntry(storePath, run.childSessionKey, sharedDir);
+      }
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({ cfg, runs, recentMinutes: 30 });
+
+      expect(list.active).toHaveLength(20);
+      let emittedPeerIds = 0;
+      for (const item of list.active) {
+        // The count stays exact so the operator still learns the real group size...
+        expect(item.sharedCwd?.peerCount).toBe(19);
+        // ...while the id list is a bounded sample, never an inventory.
+        expect(item.sharedCwd?.peerRunIds.length).toBeLessThanOrEqual(3);
+        expect(item.sharedCwd?.peerRunIds).not.toContain(item.runId);
+        emittedPeerIds += item.sharedCwd?.peerRunIds.length ?? 0;
+        // The text view must read peerCount, not the truncated sample length:
+        // reporting "3 other runs" for a group of 20 would be a silent lie.
+        expect(item.line).toContain("[shared cwd with 19 other runs: ");
+      }
+      // Pre-fix this was 20 * 19 == 380 ids for a single ordinary list call.
+      expect(emittedPeerIds).toBe(60);
+    });
+
+    it("caps the reported directory while grouping on the full path", async () => {
+      const now = Date.now();
+      // Two sibling checkouts under one long prefix: they differ only in the
+      // tail, which is exactly what head-preserving truncation would destroy.
+      const longPrefix = path.join(
+        testWorkspaceDir,
+        "a-deliberately-long-checkout-prefix",
+        "that-exceeds-the-display-cap-on-its-own",
+        "and-keeps-going-for-good-measure",
+      );
+      const sharedDir = path.join(longPrefix, "openclaw-worktree-alpha");
+      const otherDir = path.join(longPrefix, "openclaw-worktree-beta");
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.mkdir(otherDir, { recursive: true });
+      expect(sharedDir.length).toBeGreaterThan(72);
+
+      const sharedRuns = ["long-a", "long-b"].map((suffix) => makeRun(suffix, now));
+      const otherRuns = ["long-c", "long-d"].map((suffix) => makeRun(suffix, now));
+      for (const run of [...sharedRuns, ...otherRuns]) {
+        addSubagentRunForTests(run);
+      }
+      const storePath = path.join(testWorkspaceDir, "sessions-shared-cwd-long-path.json");
+      for (const run of sharedRuns) {
+        await seedSessionEntry(storePath, run.childSessionKey, sharedDir);
+      }
+      for (const run of otherRuns) {
+        await seedSessionEntry(storePath, run.childSessionKey, otherDir);
+      }
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+      const list = buildSubagentList({
+        cfg,
+        runs: [...sharedRuns, ...otherRuns],
+        recentMinutes: 30,
+      });
+
+      expect(list.active).toHaveLength(4);
+      const byRunId = new Map(list.active.map((item) => [item.runId, item]));
+      const alpha = byRunId.get(sharedRuns[0]!.runId)?.sharedCwd;
+      const beta = byRunId.get(otherRuns[0]!.runId)?.sharedCwd;
+
+      for (const advisory of [alpha, beta]) {
+        expect(advisory?.path.length).toBeLessThanOrEqual(72);
+        expect(advisory?.path.startsWith("...")).toBe(true);
+      }
+      // The tail survives, so the two groups stay distinguishable — the reason
+      // the cap keeps the end of the path rather than the beginning.
+      expect(alpha?.path.endsWith("openclaw-worktree-alpha")).toBe(true);
+      expect(beta?.path.endsWith("openclaw-worktree-beta")).toBe(true);
+      expect(alpha?.path).not.toBe(beta?.path);
+      // Grouping still used the full path: neither group absorbed the other
+      // despite sharing every character up to the leaf.
+      expect(alpha?.peerCount).toBe(1);
+      expect(beta?.peerCount).toBe(1);
+      expect(alpha?.peerRunIds).toEqual([sharedRuns[1]!.runId]);
+      expect(beta?.peerRunIds).toEqual([otherRuns[1]!.runId]);
     });
 
     it("does not flag a live run whose only directory peer has ended", async () => {

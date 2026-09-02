@@ -152,11 +152,19 @@ describe("subagents tool", () => {
         expect.arrayContaining([
           expect.objectContaining({
             runId: "run-tool-shared-a",
-            sharedCwd: { path: path.resolve(sharedCwd), peerRunIds: ["run-tool-shared-b"] },
+            sharedCwd: {
+              path: path.resolve(sharedCwd),
+              peerCount: 1,
+              peerRunIds: ["run-tool-shared-b"],
+            },
           }),
           expect.objectContaining({
             runId: "run-tool-shared-b",
-            sharedCwd: { path: path.resolve(sharedCwd), peerRunIds: ["run-tool-shared-a"] },
+            sharedCwd: {
+              path: path.resolve(sharedCwd),
+              peerCount: 1,
+              peerRunIds: ["run-tool-shared-a"],
+            },
           }),
         ]),
       );
