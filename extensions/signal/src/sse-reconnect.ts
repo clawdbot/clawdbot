@@ -28,7 +28,7 @@ const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
 const SSE_REJECTION_STATUS_PATTERN = /^Signal SSE failed \((\d{3})\b/;
 const UNAUTHORIZED_ACCOUNT_STATUS = 401;
 const UNAUTHORIZED_ACCOUNT_MESSAGE =
-  'Signal daemon rejected the account (401 Unauthorized); the signal-cli device is likely unregistered or unlinked. Re-link with `signal-cli link -n "OpenClaw"` or re-register the account, then restart the channel.';
+  'Signal daemon rejected the connection (401 Unauthorized). This usually means the account needs re-linking (`signal-cli link -n "OpenClaw"`) or re-registering; if the daemon sits behind its own auth proxy, its credentials may need attention instead. Restart the channel once resolved.';
 
 function parseSseRejectionStatus(err: unknown): number | undefined {
   const message = err instanceof Error ? err.message : undefined;
