@@ -83,8 +83,11 @@ suite.define(() => {
         );
       });
 
-      await composer.press("Meta+Enter");
-      await gateway.waitForRequest("chat.send");
+      // A chord fires the one-shot listener on its modifier before submission.
+      // Arm the next-input task from the actual submit key instead.
+      await composer.press("Enter");
+      const request = await gateway.waitForRequest("chat.send");
+      expect(request.params).toMatchObject({ message: "first prompt" });
       await expect
         .poll(() => composer.getAttribute("data-submit-task-order"))
         .toBe(JSON.stringify(["next-input-task", "transport:second prompt"]));
