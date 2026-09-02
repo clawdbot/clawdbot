@@ -166,7 +166,23 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       .toBe("auto");
     await holdProof(page, params.captureProof);
     await captureProof(params, page, "08-desktop-inbox-main-agent.png");
-    await sidebar.locator(".sidebar-issues-button").click();
+    const mainAutomationChevron = automationRows
+      .filter({ hasText: "Main release digest" })
+      .locator(".sidebar-issues-panel__chevron");
+    const mainAutomationChevronBox = await mainAutomationChevron.boundingBox();
+    expect(mainAutomationChevronBox).not.toBeNull();
+    if (!mainAutomationChevronBox) {
+      throw new Error("Main release digest chevron has no bounding box");
+    }
+    await page.mouse.click(
+      mainAutomationChevronBox.x + mainAutomationChevronBox.width / 2,
+      mainAutomationChevronBox.y + mainAutomationChevronBox.height / 2,
+    );
+    await captureProof(params, page, "08a-desktop-inbox-chevron-click-result.png");
+    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+    await captureProof(params, page, "08b-desktop-inbox-chevron-navigation.png");
+    await page.goBack();
+    await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
 
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
     await sidebar
