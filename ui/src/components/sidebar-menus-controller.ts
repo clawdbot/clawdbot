@@ -57,12 +57,19 @@ interface SidebarMenusControllerState {
   sessionMenu: SidebarSessionMenuState | null;
   sessionMenuWork: SessionMenuWork | null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null;
-  sessionSortMenuPosition: { x: number; y: number } | null;
-  catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null;
+  sessionSortMenuPosition: { x: number; y: number; view: SidebarFilterMenuView } | null;
+  catalogViewMenuPosition: {
+    catalogId: string;
+    x: number;
+    y: number;
+    view: SidebarFilterMenuView;
+  } | null;
   agentMenuPosition: { x: number; top: number } | null;
   agentMenuInteractionState: AgentMenuInteractionState;
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
 }
+
+export type SidebarFilterMenuView = "root" | "specific-owner";
 
 type SidebarMenusRenderer = {
   renderSidebarAgentMenuForController(controller: SidebarMenusController): unknown;
@@ -159,8 +166,13 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   sessionMenu: SidebarSessionMenuState | null = null;
   sessionMenuWork: SessionMenuWork | null = null;
   sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
-  sessionSortMenuPosition: { x: number; y: number } | null = null;
-  catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null = null;
+  sessionSortMenuPosition: { x: number; y: number; view: SidebarFilterMenuView } | null = null;
+  catalogViewMenuPosition: {
+    catalogId: string;
+    x: number;
+    y: number;
+    view: SidebarFilterMenuView;
+  } | null = null;
   agentMenuPosition: { x: number; top: number } | null = null;
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   identityMenuPosition: { x: number; bottom: number; width: number } | null = null;
@@ -452,7 +464,16 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.updateState("sessionSortMenuPosition", {
       x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
+      view: "root",
     });
+  }
+
+  setSessionSortMenuView(view: SidebarFilterMenuView) {
+    const menu = this.sessionSortMenuPosition;
+    if (menu) {
+      this.updateState("sessionSortMenuPosition", { ...menu, view });
+      this.focusFilterMenuView();
+    }
   }
 
   toggleCatalogViewMenu(catalogId: string, trigger: HTMLElement) {
@@ -474,6 +495,25 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
       catalogId,
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+      view: "root",
+    });
+  }
+
+  setCatalogViewMenuView(view: SidebarFilterMenuView) {
+    const menu = this.catalogViewMenuPosition;
+    if (menu) {
+      this.updateState("catalogViewMenuPosition", { ...menu, view });
+      this.focusFilterMenuView();
+    }
+  }
+
+  private focusFilterMenuView() {
+    void this.host.updateComplete.then(() => {
+      document
+        .querySelector<HTMLElement>(
+          ".sidebar-session-sort-menu wa-dropdown-item:not([disabled]):not([slot='submenu'])",
+        )
+        ?.focus();
     });
   }
 

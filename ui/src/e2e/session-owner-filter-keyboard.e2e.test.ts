@@ -9,6 +9,14 @@ import {
 
 const suite = createSessionManagementE2eSuite();
 
+function largeOwnerList(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    type: "human" as const,
+    id: index === count - 1 ? `profile-${"owner-without-label-".repeat(10)}` : `profile-${index}`,
+    ...(index === count - 1 ? {} : { label: `Owner ${index + 1}` }),
+  }));
+}
+
 suite.define(() => {
   it("navigates the owner filter submenu with arrow, Enter, and Escape keys", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
@@ -39,7 +47,10 @@ suite.define(() => {
       await trigger.focus();
       await page.keyboard.press("Enter");
       const menu = page.locator(".sidebar-session-sort-menu");
-      const ownerSubmenu = menu.getByRole("menuitem", { name: "Specific owner", exact: true });
+      const ownerSubmenu = menu.getByRole("menuitem", {
+        name: "Specific owner: 5 available",
+        exact: true,
+      });
       const allOwnersLabel = menu.locator('[value="owner:"] .session-menu__text');
       const ownersLabel = ownerSubmenu.locator(":scope > .session-menu__text");
       const labelAlignment = await allOwnersLabel.evaluate(
@@ -52,13 +63,15 @@ suite.define(() => {
         await allOwnersLabel.evaluate((label) => getComputedStyle(label).color),
       );
       await expect
-        .poll(() => ownerSubmenu.locator(".session-menu__shortcut").textContent())
+        .poll(() => ownerSubmenu.locator(".sidebar-session-owner-count").textContent())
         .toBe("5");
-      expect(await ownerSubmenu.locator(":scope > .sidebar-session-owner-selection").count()).toBe(
-        0,
-      );
-      const trailingGap = (selector: string) =>
-        ownerSubmenu.evaluate((element, contentSelector) => {
+      expect(
+        await ownerSubmenu
+          .locator(":scope > .sidebar-session-owner-selection .viewer-avatar")
+          .count(),
+      ).toBe(0);
+      const trailingGap = (item: typeof ownerSubmenu, selector: string) =>
+        item.evaluate((element, contentSelector) => {
           const details = element.querySelector<HTMLElement>(":scope > [slot='details']");
           const chevron = element.shadowRoot?.querySelector<HTMLElement>("[part='submenu-icon']");
           const content = element.querySelector<HTMLElement>(contentSelector);
@@ -73,7 +86,9 @@ suite.define(() => {
           }
           return chevron.getBoundingClientRect().left - contentBounds.right;
         }, selector);
-      expect(await trailingGap(".sidebar-session-owner-count")).toBeLessThanOrEqual(8);
+      expect(await trailingGap(ownerSubmenu, ".sidebar-session-owner-count")).toBeLessThanOrEqual(
+        8,
+      );
       const focusedTopLevelItem = menu.locator(
         ':scope > wa-dropdown-item:not([slot="submenu"]):focus',
       );
@@ -101,6 +116,13 @@ suite.define(() => {
 
       await page.keyboard.press("ArrowRight");
       await expect.poll(() => ownerSubmenu.getAttribute("aria-expanded")).toBe("true");
+      await expect
+        .poll(() =>
+          ownerSubmenu.evaluate((element) =>
+            element.shadowRoot?.querySelector('[part="submenu"]')?.getAttribute("aria-label"),
+          ),
+        )
+        .toBe("Specific owner: 5 available");
       await page.keyboard.press("Escape");
       await expect.poll(() => ownerSubmenu.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => menu.getAttribute("open")).toBeNull();
@@ -128,13 +150,13 @@ suite.define(() => {
       await expect
         .poll(() =>
           page
-            .getByRole("menuitem", { name: "Specific owner", exact: true })
+            .getByRole("menuitem", { name: "Specific owner: Ada", exact: true })
             .locator(".sidebar-session-owner-selection .viewer-avatar")
             .count(),
         )
         .toBe(1);
       const selectedOwnerSubmenu = page.getByRole("menuitem", {
-        name: "Specific owner",
+        name: "Specific owner: Ada",
         exact: true,
       });
       await expect
@@ -145,7 +167,82 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('[value="owner:"]').getAttribute("aria-checked"))
         .toBe("false");
-      expect(await trailingGap(".sidebar-session-owner-selection__name")).toBeLessThanOrEqual(8);
+      expect(
+        await trailingGap(selectedOwnerSubmenu, ".sidebar-session-owner-selection__name"),
+      ).toBeLessThanOrEqual(8);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it.each([
+    { name: "desktop", ownerCount: 60, viewport: { height: 800, width: 1200 } },
+    { name: "compact", ownerCount: 30, viewport: { height: 650, width: 390 } },
+  ])("contains a large owner roster in the $name menu", async ({ name, ownerCount, viewport }) => {
+    const context = await suite.browser.newContext({ viewport });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      sessionKey: "agent:main:large-roster",
+      methodResponses: {
+        "sessions.list": {
+          ...sessionsListResponse([
+            sessionRow("agent:main:large-roster", "Large owner roster", Date.now()),
+          ]),
+          owners: largeOwnerList(ownerCount),
+        },
+      },
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:large-roster"));
+      if (name === "compact") {
+        await page.getByRole("button", { name: "Expand sidebar" }).click();
+      }
+      await page.getByRole("button", { name: "Filter & sort" }).click();
+      const menu = page.locator(".sidebar-session-sort-menu");
+      const specificOwner = menu.getByRole("menuitem", { name: /Specific owner/ });
+      await specificOwner.waitFor();
+      await expect
+        .poll(() => specificOwner.getAttribute("aria-label"))
+        .toMatch(/^Specific owner: \d+ available$/u);
+
+      if (name === "compact") {
+        expect(await specificOwner.getAttribute("aria-haspopup")).toBeNull();
+        await specificOwner.click();
+        await menu.getByRole("menuitem", { name: "Back", exact: true }).waitFor();
+        expect(await menu.locator('[slot="submenu"]').count()).toBe(0);
+        await menu.getByRole("menuitem", { name: "Back", exact: true }).click();
+        await menu.getByRole("menuitem", { name: /Specific owner/ }).click();
+        await menu.locator('[value^="owner:"]').last().click();
+        await expect.poll(() => menu.count()).toBe(0);
+        return;
+      }
+
+      await specificOwner.hover();
+      const submenuMetrics = await specificOwner.evaluate((element) => {
+        const submenu = element.shadowRoot?.querySelector<HTMLElement>('[part="submenu"]');
+        const lastLabel = element.querySelector<HTMLElement>(
+          'wa-dropdown-item[slot="submenu"]:last-of-type .session-menu__text',
+        );
+        if (!submenu || !lastLabel) {
+          throw new Error("expected a complete owner submenu");
+        }
+        const style = getComputedStyle(submenu);
+        return {
+          clientHeight: submenu.clientHeight,
+          scrollHeight: submenu.scrollHeight,
+          width: submenu.getBoundingClientRect().width,
+          maxHeight: style.maxHeight,
+          maxWidth: style.maxWidth,
+          overflowY: style.overflowY,
+          labelOverflows: lastLabel.scrollWidth > lastLabel.clientWidth,
+        };
+      });
+      expect(submenuMetrics.clientHeight).toBeLessThanOrEqual(viewport.height - 16);
+      expect(submenuMetrics.scrollHeight).toBeGreaterThan(submenuMetrics.clientHeight);
+      expect(submenuMetrics.width).toBeLessThanOrEqual(220);
+      expect(submenuMetrics.overflowY).toBe("auto");
+      expect(submenuMetrics.labelOverflows).toBe(true);
     } finally {
       await context.close();
     }

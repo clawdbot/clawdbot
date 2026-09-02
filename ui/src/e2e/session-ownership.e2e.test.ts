@@ -310,7 +310,7 @@ suite.define(() => {
     await captureUiProof(suite, currentPage, "00-people-controls-from-session-owners.png");
     await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
     await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
-    const ownerSubmenu = ownerMenu.getByRole("menuitem", { name: "Specific owner", exact: true });
+    const ownerSubmenu = ownerMenu.getByRole("menuitem", { name: /Specific owner/ });
     await ownerSubmenu.hover();
     const ownerRows = ownerSubmenu.locator('[slot="submenu"][value^="owner:"]');
     await expectBrowser(ownerRows).toHaveCount(3);
@@ -367,7 +367,7 @@ suite.define(() => {
         );
     };
     const beforeSelection = (await gateway.getRequests("sessions.list")).length;
-    await peopleMenu.getByRole("menuitem", { name: "Specific owner", exact: true }).hover();
+    await peopleMenu.getByRole("menuitem", { name: /Specific owner/ }).hover();
     await peopleMenu.locator('[slot="submenu"][value="owner:profile-ada"]').click();
     await expectOwnerFilter(beforeSelection);
     await captureSessionOwnerProof(suite, currentPage, "04-owner-filter-selected.png");

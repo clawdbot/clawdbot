@@ -2574,6 +2574,12 @@ wa-dropdown.session-menu--compact::part(menu) {
   overflow-y: auto;
 }
 
+.session-menu__compact-details {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Popover hosts live in the top layer so menus escape in-page stacking
    contexts (e.g. the sidebar resizer above the nav); the host itself must
    stay a zero-size shell around its fixed-position menu. */
@@ -2617,6 +2623,13 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   box-shadow: var(--overlay-shadow);
 }
 
+wa-dropdown-item.sidebar-session-owner-submenu::part(submenu) {
+  width: min(220px, calc(100dvw - 16px));
+  max-width: calc(100dvw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+}
+
 .sidebar-session-sort-menu__title {
   padding: 4px 8px 2px;
   color: var(--muted);
@@ -2645,6 +2658,7 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .row.session-menu__label {
   gap: 8px;
+  min-width: 0;
 }
 
 /* Web Awesome's shadow row adds `margin-inline-end: 0.75em !important` to the

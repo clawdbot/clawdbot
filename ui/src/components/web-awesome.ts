@@ -68,6 +68,27 @@ function labelDropdownMenu(dropdown: HTMLElement) {
   }
 }
 
+function labelDropdownSubmenus(dropdown: HTMLElement) {
+  for (const item of dropdown.querySelectorAll<HTMLElement>("wa-dropdown-item")) {
+    const submenu = item.shadowRoot?.querySelector<HTMLElement>('[part="submenu"]');
+    if (!submenu) {
+      continue;
+    }
+    const labelSlot = item.shadowRoot?.querySelector<HTMLSlotElement>("slot:not([name])");
+    const slottedLabel = labelSlot
+      ?.assignedNodes({ flatten: true })
+      .map((node) => node.textContent)
+      .join(" ")
+      .replace(/\s+/gu, " ")
+      .trim();
+    const label = item.getAttribute("aria-label") ?? slottedLabel;
+    if (label) {
+      submenu.setAttribute("aria-label", label);
+      submenu.removeAttribute("aria-labelledby");
+    }
+  }
+}
+
 const dropdownLabelObservers = new WeakMap<HTMLElement, MutationObserver>();
 
 function startDropdownLabelSync(event: Event) {
@@ -79,11 +100,15 @@ function startDropdownLabelSync(event: Event) {
   // Reopening must restore the menu before Web Awesome moves focus into it.
   dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]')?.removeAttribute("inert");
   labelDropdownMenu(dropdown);
+  labelDropdownSubmenus(dropdown);
   dropdownLabelObservers.get(dropdown)?.disconnect();
   if (typeof MutationObserver === "undefined") {
     return;
   }
-  const observer = new MutationObserver(() => labelDropdownMenu(dropdown));
+  const observer = new MutationObserver(() => {
+    labelDropdownMenu(dropdown);
+    labelDropdownSubmenus(dropdown);
+  });
   // Open menus can survive an in-place locale render. Watch only their light
   // DOM so translated labels stay current without observing the whole app.
   observer.observe(dropdown, {
