@@ -6198,7 +6198,7 @@ describe("update-cli", () => {
       existingCallerBackup,
     );
     expect(result.status).toBe("error");
-    expect(result.after.version).toBe("2026.4.21");
+    expect(result.after?.version).toBe("2026.4.21");
     expect(result.recovery).toEqual({
       serviceRestartSafe: false,
       reason: "runtime-verification-failed",
