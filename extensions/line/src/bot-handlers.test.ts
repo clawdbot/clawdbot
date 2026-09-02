@@ -19,10 +19,15 @@ const pairingDeliveryMocks = vi.hoisted(() => ({
 
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => ({
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   // Keep mention facts real without loading the inbound execution lifecycle.
   implicitMentionKindWhen: (await import("openclaw/plugin-sdk/channel-mention-gating"))
     .implicitMentionKindWhen,
+  // How a gated image reaches the group window is under test, so its media
+  // converter is the real one; it has no subpath of its own to import from.
+  toHistoryMediaEntries: (
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()
+  ).toHistoryMediaEntries,
   buildMentionRegexes: () => [],
   isChannelPartialDeliveryError: (error: unknown) =>
     Boolean(
