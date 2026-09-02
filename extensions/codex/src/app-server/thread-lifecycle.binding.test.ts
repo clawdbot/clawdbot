@@ -2985,13 +2985,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
   it.each([
     {
       expectedError:
-        'migrate /etc/codex/managed_config.toml to /etc/codex/requirements.toml before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in requirements.toml.',
+        'Codex restricted tool surface cannot override config layer legacyManagedConfigTomlFromFile; migrate /etc/codex/managed_config.toml to /etc/codex/requirements.toml before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in requirements.toml.',
       name: "legacy managed file",
       layer: { name: { type: "legacyManagedConfigTomlFromFile" } },
     },
     {
       expectedError:
-        'replace the legacy managed-config MDM payload with Codex requirements policy before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in requirements.toml.',
+        'Codex restricted tool surface cannot override config layer legacyManagedConfigTomlFromMdm; replace the legacy managed-config MDM payload with Codex requirements policy before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in requirements.toml.',
       name: "legacy managed MDM",
       layer: { name: { type: "legacyManagedConfigTomlFromMdm" } },
     },
