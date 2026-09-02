@@ -1817,7 +1817,6 @@ src/agents/embedded-agent-runner/run/message-tool-terminal.ts	1
 src/agents/embedded-agent-runner/run/message-transform-stream-wrapper.ts	3
 src/agents/embedded-agent-runner/run/payloads.ts	2
 src/agents/embedded-agent-runner/run/pre-persisted-user-turn.ts	5
-src/agents/embedded-agent-runner/run/prompt-image-metadata.ts	4
 src/agents/embedded-agent-runner/run/recovery-message-action-capability.ts	1
 src/agents/embedded-agent-runner/run/run-attempt-result.ts	1
 src/agents/embedded-agent-runner/run/session-bootstrap.ts	2
@@ -3285,7 +3284,6 @@ src/media/local-media-access.ts	1
 src/media/media-facts.ts	16
 src/media/media-probe.ts	1
 src/media/playback-transcode.ts	1
-src/media/runtime-prompt-image-provenance.ts	1
 src/media/store.remote.runtime.ts	1
 src/media/store.ts	2
 src/media/web-media.ts	2
