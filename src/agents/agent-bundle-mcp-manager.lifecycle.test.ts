@@ -400,5 +400,14 @@ describe("MCP manager creation ownership", () => {
     expect(manager.listRuntimeKeys()).toEqual([
       expect.stringContaining('"requesterSenderId":"sender-a"'),
     ]);
+    console.log(
+      JSON.stringify({
+        claim: "competing requester capacity eviction",
+        firstRuntimeDisposed: first.dispose.mock.calls.length > 0,
+        retainedRequesterRuntime: manager.listRuntimeKeys().some((key) =>
+          key.includes('"requesterSenderId":"sender-a"'),
+        ),
+      }),
+    );
   });
 });
