@@ -3,7 +3,6 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
@@ -18,24 +17,20 @@ import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
-import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
-import { renderDraftError } from "./composer.ts";
 import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
-import { isWorktreeNameValid } from "./create-params.ts";
 import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
-import { renderNewSessionBody, renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { renderNewSessionBody } from "./draft-composer.ts";
 import { DraftGatewayState } from "./draft-gateway-state.ts";
 import * as drafts from "./draft-navigation-handoff.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
-import {
-  renderNewSessionIncognitoControl,
-  renderNewSessionIncognitoNotice,
-} from "./incognito-control.ts";
+import { NewSessionTitleController } from "./draft-title.ts";
+import { renderNewSessionDraftView } from "./draft-view.ts";
+import { renderNewSessionIncognitoControl } from "./incognito-control.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import {
   closeAgentPicker,
@@ -76,6 +71,13 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private readonly submission: DraftSubmissionFlow;
   private readonly dictation: NewSessionDictationControl;
   private readonly subscriptions: SubscriptionsController;
+  private readonly titlePreparation = new NewSessionTitleController(this, () => ({
+    context: this.context,
+    data: this.data,
+    place: this.place,
+    submission: this.submission,
+    dictating: this.dictation.active,
+  }));
   private readonly flushDraft = () => this.submission.draftPersistence.persistNow();
   private readonly setImageLightbox = (item: ImageLightboxItem | null) => {
     this.imageLightbox = item;
@@ -159,6 +161,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       {
         requestUpdate: () => this.requestUpdate(),
         closeTransientUi: () => closeSessionMenus(this),
+        takePreparedTitle: () => this.titlePreparation.takePreparedTitle(),
       },
     );
     this.connectMachine = new ConnectMachineSetupState(
@@ -538,93 +541,22 @@ export class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private renderDraftBlock() {
-    const worktreeNameInvalid =
-      this.place.worktree && !isWorktreeNameValid(this.place.worktreeName);
-    const capabilities = this.submission.capabilities;
-    const voiceControl = this.dictation.render(this.routeOwnerKey());
-    const dictationLocked = this.dictation.active;
-    return html`
-      <div class="new-session-page__draft" aria-busy=${String(this.submission.submitting)}>
-        ${this.renderTargetBar()}
-        ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
-        ${this.submission.submissionOutcomeUnknown
-          ? renderDraftError(
-              t(
-                this.submission.submissionOutcomeUnknown === "gateway-changed"
-                  ? "newSession.createOutcomeUnknown"
-                  : "newSession.placementSetupInterrupted",
-              ),
-              this.submission.pendingPlacement.sessionKey
-                ? {
-                    label: t("common.reset"),
-                    onClick: () => this.submission.clearPendingPlacementRecovery(),
-                  }
-                : undefined,
-            )
-          : nothing}
-        ${renderNewSessionDraftComposer({
-          agent: this.place.selectedAgent(),
-          agentId: this.place.agentId,
-          attachmentDraft: this.submission.attachmentDraft,
-          canSubmit: !this.submission.submitting && !dictationLocked && this.submission.canSubmit(),
-          submitDisabledReason: this.submission.submitDisabledReason(),
-          blockedSubmitNotice: this.submission.blockedSubmitNotice(),
-          dictationActive: this.dictation.active,
-          dictationPreview: this.dictation.previewDraft(),
-          dictationStatus: this.dictation.renderStatus(),
-          context: this.context,
-          isCatalogTarget: catalog.isTarget(this.data),
-          draftOwnerKey: this.routeOwnerKey(),
-          message: this.submission.message,
-          visibility: this.submission.visibility,
-          draftAvailable: capabilities.canStartAsDraft(this.context),
-          ...capabilities.composerProps(this.context, this.gateway, this.place.agentId),
-          modelControl: this.place.modelControl,
-          permissionControl: catalog.isTarget(this.data)
-            ? undefined
-            : renderChatPermissionPicker({
-                canSelectFull: this.place.isAdmin(),
-                defaultMode: this.place.selectedAgent()?.defaultPermissionMode,
-                disabled:
-                  this.submission.submitting ||
-                  Boolean(this.submission.pendingPlacement.sessionKey),
-                disabledReason: this.submission.submitting ? t("newSession.starting") : undefined,
-                mode: this.submission.permission.value,
-                onSelect: (permissionMode) =>
-                  this.submission.permission.set(permissionMode ?? undefined),
-              }),
-          requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
-          requestUpdate: () => this.requestUpdate(),
-          submitting: this.submission.submitting,
-          textareaController: this.submission.composerTextarea,
-          voiceControl,
-          messageLocked: Boolean(this.submission.pendingPlacement.sessionKey),
-          terminalAction: this.submission.showStartInTerminal()
-            ? {
-                canStart:
-                  !this.submission.submitting &&
-                  !dictationLocked &&
-                  this.submission.canSubmit("terminal"),
-                disabledReason: this.submission.submitBlock("terminal")?.reason,
-                onStart: () => void this.submission.startInTerminal(),
-              }
-            : undefined,
-          onInput: (message) => this.setMessageFromUser(message),
-          onOpenImage: this.setImageLightbox,
-          onVisibilityChange: (visibility) => {
-            if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-              this.submission.setVisibility(visibility);
-            }
-          },
-          onSubmit: () => void this.submission.submit(),
-          onBackgroundSubmit:
-            this.submission.visibility === "draft"
-              ? undefined
-              : () => void this.submission.submit(undefined, true),
-        })}
-        ${renderNewSessionIncognitoNotice(this.submission.visibility === "incognito")}
-      </div>
-    `;
+    return renderNewSessionDraftView({
+      context: this.context,
+      gateway: this.gateway,
+      place: this.place,
+      submission: this.submission,
+      dictation: this.dictation,
+      titlePreparation: this.titlePreparation,
+      draftOwnerKey: this.routeOwnerKey(),
+      isCatalogTarget: catalog.isTarget(this.data),
+      renderTargetBar: () => this.renderTargetBar(),
+      requestUpdate: () => this.requestUpdate(),
+      onMessage: (message) => this.setMessageFromUser(message),
+      onOpenImage: (item) => {
+        this.imageLightbox = item;
+      },
+    });
   }
 
   private renderWelcome() {

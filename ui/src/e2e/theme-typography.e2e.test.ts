@@ -10,10 +10,10 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
+  type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
-import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 /*
@@ -47,7 +47,11 @@ function themeConfigResponse(theme: string, mode: "dark" | "light") {
   };
 }
 
-async function openThemedChat(theme: string, mode: "dark" | "light", basePath = "") {
+async function openThemedChat(
+  theme: string,
+  mode: "dark" | "light",
+  scenario: Pick<ControlUiMockGatewayScenario, "basePath" | "historyMessages"> = {},
+) {
   const context = await suite.newBrowserContext({
     colorScheme: mode,
     locale: "en-US",
@@ -80,33 +84,10 @@ async function openThemedChat(theme: string, mode: "dark" | "light", basePath = 
     }
   });
   const gateway = await installMockGateway(page, {
-    ...(basePath ? { basePath } : {}),
+    ...scenario,
     methodResponses: { "config.get": themeConfigResponse(theme, mode) },
   });
   return { themeRequests, gateway, page };
-}
-
-async function renderAssistantProse(
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  page: Awaited<ReturnType<typeof openThemedChat>>["page"],
-) {
-  await page.locator(".agent-chat__composer-combobox textarea").fill("say something");
-  await page.getByRole("button", { name: "Send message" }).click();
-  const sendRequest = await gateway.waitForRequest("chat.send");
-  const runId = requireString(
-    requireRecord(sendRequest.params).idempotencyKey,
-    "chat send idempotency key",
-  );
-  const text =
-    "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
-  await gateway.emitGatewayEvent("chat", {
-    message: { content: [{ text, type: "text" }], role: "assistant", timestamp: Date.now() },
-    runId,
-    sessionKey: "main",
-    state: "final",
-  });
-  // first() is the prompt this test just sent; the assistant reply is last.
-  await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("Typography");
 }
 
 async function captureTypography(
@@ -250,9 +231,27 @@ suite.define(() => {
   ] as const)(
     "paints %s chrome and chat prose in its own faces",
     async (theme, body, chat, faces, chatSmoothing) => {
-      const { themeRequests, gateway, page } = await openThemedChat(theme, "dark");
+      const timestamp = Date.now();
+      const text =
+        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
+      const { themeRequests, page } = await openThemedChat(theme, "dark", {
+        historyMessages: [
+          {
+            content: [{ text: "say something", type: "text" }],
+            role: "user",
+            timestamp: timestamp - 1,
+          },
+          {
+            content: [{ text, type: "text" }],
+            role: "assistant",
+            timestamp,
+          },
+        ],
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await renderAssistantProse(gateway, page);
+      await expect
+        .poll(() => page.locator(".chat-text").last().textContent())
+        .toContain("Typography");
 
       const report = await page.evaluate(async () => {
         await document.fonts.ready;
@@ -574,7 +573,7 @@ suite.define(() => {
     // root-absolute font URLs 404 there and the theme silently falls back to
     // system faces while its palette still applies.
     const basePath = "/openclaw";
-    const { page } = await openThemedChat("absolutely", "dark", basePath);
+    const { page } = await openThemedChat("absolutely", "dark", { basePath });
     const requested: string[] = [];
     // The preview server does not stamp Gateway HTML. Reproduce the actual
     // document contract, rather than letting runtime repair a wrong boot URL.

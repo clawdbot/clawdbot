@@ -20,10 +20,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  DEFAULT_POSIX_TMP_ROOT,
-  resolvePreferredOpenClawTmpDir,
-} from "../infra/tmp-openclaw-dir.js";
+import { DEFAULT_POSIX_TMP_ROOT } from "../infra/tmp-openclaw-dir.js";
 import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
@@ -42,18 +39,8 @@ import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
 
-function resolveDefaultLogDir(): string {
-  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
-}
-
-function resolveDefaultLogFile(defaultLogDir: string): string {
-  return canUseNodeFs()
-    ? path.join(defaultLogDir, "openclaw.log")
-    : `${DEFAULT_POSIX_TMP_ROOT}/openclaw.log`;
-}
-
-export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
-export const DEFAULT_LOG_FILE = resolveDefaultLogFile(DEFAULT_LOG_DIR); // legacy single-file path
+export const DEFAULT_LOG_DIR = DEFAULT_POSIX_TMP_ROOT;
+export const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-file path
 
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
@@ -521,7 +508,7 @@ function resolveDefaultActiveLogFile(): string {
       `${LOG_PREFIX}-vitest-${process.pid}-${formatLocalDate(new Date())}${LOG_SUFFIX}`,
     );
   }
-  return resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR });
+  return resolveDefaultRollingLogFile();
 }
 
 function resolveSettings(): ResolvedRuntimeSettings {
@@ -540,7 +527,7 @@ function resolveSettings(): ResolvedRuntimeSettings {
   if (canUseSilentVitestFileLogFastPath(envLevel)) {
     return {
       level: "silent",
-      file: resolveDefaultRollingLogFile({ logDir: DEFAULT_LOG_DIR }),
+      file: resolveDefaultRollingLogFile(),
       maxFileBytes: DEFAULT_MAX_LOG_FILE_BYTES,
       rolling: true,
     };
@@ -786,5 +773,3 @@ function pruneOldRollingLogs(dir: string): void {
     // ignore missing dir or read errors
   }
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

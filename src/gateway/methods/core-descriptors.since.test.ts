@@ -145,6 +145,7 @@ const CURRENT_TRAIN_METHODS = [
   "skills.library.activate",
   "skills.library.import",
   "skills.library.upload",
+  "sessions.title.prepare",
 ] as const;
 
 describe("core gateway method release trains", () => {

@@ -1767,6 +1767,7 @@ function emitAcpTerminalLifecycle(
 ) {
   const data = {
     ...terminal,
+    executionSettled: true,
     ...(params.completionSource ? { completionSource: params.completionSource } : {}),
   };
   const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;

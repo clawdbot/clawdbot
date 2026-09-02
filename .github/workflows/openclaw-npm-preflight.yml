@@ -448,7 +448,6 @@ jobs:
           while IFS= read -r previous_tag; do
             git -C "$tooling_dir" rev-parse --verify "${previous_tag}^{commit}" >/dev/null
           done < <(jq -r '.[]' <<< "$bases_json")
-          pnpm --dir "$tooling_dir" install --frozen-lockfile --ignore-scripts --filter openclaw
           diff_args=(
             --head "$target_sha"
             --evidence "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-evidence.json"
@@ -460,7 +459,11 @@ jobs:
           else
             diff_args+=(--base "$(jq -r '.[]' <<< "$bases_json")")
           fi
-          pnpm --dir "$tooling_dir" run plugin-sdk:api:diff -- "${diff_args[@]}"
+          (
+            cd "$tooling_dir"
+            pnpm install --frozen-lockfile --ignore-scripts --filter openclaw
+            pnpm run plugin-sdk:api:diff -- "${diff_args[@]}"
+          )
 
       - name: Upload npm sdk proof
         id: artifact

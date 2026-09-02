@@ -4291,6 +4291,7 @@ NODE
     const workflow = readCiWorkflow();
     const jobs = workflow.jobs as Record<string, { "timeout-minutes": unknown }>;
     const expectedHostedTimeouts = {
+      android: 35,
       "build-artifacts": 35,
       "macos-swift": 30,
     } as const;
@@ -4304,43 +4305,97 @@ NODE
     const canonicalPullRequest = {
       eventName: "pull_request",
       headRepository: "openclaw/openclaw",
+      matrix: { task: "build-play" },
       repository: "openclaw/openclaw",
       runAttempt: 1,
     } as const;
+    const evaluateTimeout = (
+      jobName: string,
+      context: Parameters<typeof evaluateWorkflowExpression>[1],
+    ) => {
+      const value = jobs[jobName]?.["timeout-minutes"];
+      return typeof value === "number" ? value : evaluateWorkflowExpression(value, context);
+    };
 
-    expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
     for (const [jobName, hostedTimeout] of Object.entries(expectedHostedTimeouts)) {
-      const expression = jobs[jobName]?.["timeout-minutes"];
-      expect(expression, jobName).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
       expect(
-        evaluateWorkflowExpression(expression, {
+        evaluateTimeout(jobName, {
           ...canonicalPullRequest,
           runnerBackend: "github",
         }),
         jobName,
       ).toBe(hostedTimeout);
       expect(
-        evaluateWorkflowExpression(expression, {
+        evaluateTimeout(jobName, {
           ...canonicalPullRequest,
           runnerBackend: "blacksmith",
         }),
         jobName,
       ).toBe(20);
       expect(
-        evaluateWorkflowExpression(expression, {
+        evaluateTimeout(jobName, {
           ...canonicalPullRequest,
           runnerBackend: "hybrid",
         }),
         jobName,
       ).toBe(20);
       expect(
-        evaluateWorkflowExpression(expression, {
+        evaluateTimeout(jobName, {
           ...canonicalPullRequest,
           runnerBackend: "hybrid",
           runAttempt: 2,
         }),
         jobName,
       ).toBe(hostedTimeout);
+      expect(jobs[jobName]?.["timeout-minutes"], jobName).toContain(
+        "vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'",
+      );
+    }
+    expect(routeDependentTimeoutJobs).toEqual(Object.keys(expectedHostedTimeouts).toSorted());
+
+    const androidRoutes = [
+      ["GitHub override", { runnerBackend: "github" }, "ubuntu-24.04"],
+      ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
+      ["manual dispatch", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
+      ["non-canonical repository", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
+      ["untrusted author", { authorAssociation: "NONE" }, "ubuntu-24.04"],
+      [
+        "untrusted fork",
+        { authorAssociation: "FIRST_TIME_CONTRIBUTOR", headRepository: "contributor/openclaw" },
+        "ubuntu-24.04",
+      ],
+      [
+        "trusted fork first attempt",
+        { headRepository: "contributor/openclaw" },
+        "blacksmith-8vcpu-ubuntu-2404",
+      ],
+      [
+        "trusted fork retry",
+        { headRepository: "contributor/openclaw", runAttempt: 2 },
+        "ubuntu-24.04",
+      ],
+      ["same-repository Blacksmith retry", { runAttempt: 2 }, "blacksmith-8vcpu-ubuntu-2404"],
+    ] as const;
+    for (const [label, overrides, runner] of androidRoutes) {
+      const context = { ...canonicalPullRequest, ...overrides };
+      expect(evaluateWorkflowExpression(workflow.jobs.android["runs-on"], context), label).toBe(
+        runner,
+      );
+      for (const task of [
+        "build-play",
+        "build-play-compat",
+        "build-wear",
+        "ktlint",
+        "test-play",
+        "test-play-compat",
+        "test-third-party",
+        "test-wear",
+      ]) {
+        expect(
+          evaluateTimeout("android", { ...context, matrix: { task } }),
+          `${label}: ${task}`,
+        ).toBe(task === "build-play" && runner === "ubuntu-24.04" ? 35 : 20);
+      }
     }
 
     const macosSwift = workflow.jobs["macos-swift"];

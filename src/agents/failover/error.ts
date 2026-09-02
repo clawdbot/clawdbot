@@ -1,5 +1,5 @@
-// Error identity and timeout recognition must not load provider classification.
-import { readErrorName } from "../../infra/errors.js";
+// Error identity and timeout recognition must not load logging or provider runtime.
+import { readErrorName } from "@openclaw/normalization-core/error-coercion";
 import { isProviderRequestSizeCeilingError, isTimeoutErrorMessage } from "./message-patterns.js";
 import type { FailoverReason } from "./signal.js";
 
