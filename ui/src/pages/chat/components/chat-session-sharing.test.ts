@@ -171,6 +171,32 @@ describe("chat session sharing menu", () => {
     }
   });
 
+  it("shows shape-matched member skeletons while identities load", () => {
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: { loading: true },
+        allowedVisibilities: ["shared", "read-only"],
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    const loading = root.querySelector(".chat-pane__sharing-members-loading");
+    expect(loading?.getAttribute("role")).toBe("status");
+    expect(loading?.getAttribute("aria-busy")).toBe("true");
+    expect(loading?.textContent?.trim()).toBe("");
+    expect(root.querySelectorAll(".chat-pane__sharing-member-skeleton")).toHaveLength(3);
+    expect(root.querySelectorAll(".chat-pane__sharing-member-skeleton .skeleton")).toHaveLength(6);
+  });
+
   it("shows only the draft marker to a non-manager", () => {
     const root = mount(
       renderChatSessionSharing({

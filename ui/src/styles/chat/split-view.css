@@ -764,6 +764,34 @@ openclaw-chat-pane {
   margin-top: 8px;
 }
 
+.chat-pane__sharing-member-skeleton {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+}
+
+.chat-pane__sharing-member-skeleton-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.chat-pane__sharing-member-skeleton-label {
+  width: 72%;
+  height: 10px;
+}
+
+.chat-pane__sharing-member-skeleton:nth-child(2) .chat-pane__sharing-member-skeleton-label {
+  width: 56%;
+}
+
+.chat-pane__sharing-member-skeleton:nth-child(3) .chat-pane__sharing-member-skeleton-label {
+  width: 64%;
+}
+
 .chat-pane__sharing-member {
   gap: 0;
   font-size: 12px;
