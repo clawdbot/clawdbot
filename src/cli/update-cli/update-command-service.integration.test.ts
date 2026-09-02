@@ -14,6 +14,7 @@ import {
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -280,6 +281,11 @@ describe("preserved update activation with real version guards", () => {
   ])(
     "handles $phase $denial denial for $channel $mode activation ($outcome)",
     async ({ mode, denial, outcome, channel, phase }) => {
+      let nowMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+      vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
+        nowMs += ms;
+      });
       const late = phase === "late";
       const serviceCommand = await mocks.command(process.env);
       if (!serviceCommand) {
