@@ -1268,6 +1268,7 @@ describe("spawnSubagentDirect seam flow", () => {
       label: "",
       runtime: "subagent",
       sandbox: "inherit",
+      expectsCompletionMessage: true,
       options: {
         agentSessionKey: controllerSessionKey,
         completionOwnerKey: "agent:main:main",

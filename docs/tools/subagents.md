@@ -245,6 +245,9 @@ In `prefer` mode, hidden sub-agents are for internal legwork that the user does 
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
   `"delete"` archives the session immediately after announce (still keeps the transcript via rename).
 </ParamField>
+<ParamField path="expectsCompletionMessage" type="boolean" default="true">
+  Set `false` for fire-and-forget children. When the child finishes, OpenClaw skips the completion handoff to the requester (no announce or steer turn), records the delivery as not required, and still runs child cleanup. Inspect such children with `subagents` or `sessions_history`. `collect: true` always uses `false`.
+</ParamField>
 <ParamField path="sandbox" type='"inherit" | "require"' default="inherit">
   `require` rejects the spawn unless the target child runtime is sandboxed.
 </ParamField>
@@ -556,6 +559,7 @@ fallbacks. Fully isolated auth per agent is not supported yet.
 Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
+- Runs spawned with `expectsCompletionMessage: false` skip the announce step entirely; the run registry records their delivery as not required.
 - An exact `ANNOUNCE_SKIP` response suppresses announce output.
 - For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
 - Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
