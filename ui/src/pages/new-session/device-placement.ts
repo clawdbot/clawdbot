@@ -41,20 +41,20 @@ function unavailableReason(
   if (environment.sessionHost !== true) {
     return t("newSession.sessionHostingDisabled");
   }
-  const unavailableCommand = requirement.requiredNodeCommands.find(
-    (command) => !environment.invocableCommands?.includes(command),
-  );
-  if (unavailableCommand) {
-    // A missing command has three causes: the node never declared it, the node
-    // declared it but it still awaits pairing reapproval, or the Gateway
-    // allowlist did not authorize it. Name the right one.
-    if (environment.pendingDeclaredCommands?.includes(unavailableCommand)) {
-      return t("newSession.nodeCommandPendingApproval", { command: unavailableCommand });
+  if (requirement.requiredNodeCommands.length > 0) {
+    const requiredCommand = environment.requiredNodeCommand;
+    if (!requiredCommand) {
+      return t("newSession.placementNotReady");
     }
-    const declared = environment.capabilities?.includes(unavailableCommand);
-    return declared
-      ? `${t("pluginsPage.enableAction")} ${unavailableCommand}: gateway.nodes.commands.allow.`
-      : t("newSession.nodeCommandNotDeclared", { command: unavailableCommand });
+    if (requiredCommand.state === "pending-approval") {
+      return t("newSession.nodeCommandPendingApproval", { command: requiredCommand.command });
+    }
+    if (requiredCommand.state === "undeclared") {
+      return t("newSession.nodeCommandUndeclared", { command: requiredCommand.command });
+    }
+    if (requiredCommand.state === "unauthorized") {
+      return t("newSession.nodeCommandUnauthorized", { command: requiredCommand.command });
+    }
   }
   if (!requirement.consumesWorkerSlot) {
     return undefined;

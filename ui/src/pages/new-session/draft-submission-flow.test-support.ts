@@ -95,6 +95,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
         recoveryScope: "",
       },
       agentsHydrated: place?.agentsHydrated ?? false,
+      runtimeId: place?.devicePlacementRuntime()?.id ?? "",
     }),
     {
       requestUpdate: vi.fn(),

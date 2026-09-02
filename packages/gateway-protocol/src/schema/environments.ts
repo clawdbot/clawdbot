@@ -70,6 +70,19 @@ export const WorkerSlotSummarySchema = Type.Refine(
   (slots) => `available worker slots ${slots.available} exceed total ${slots.total}`,
 );
 
+/** Gateway-owned authority state for one runtime-required node command. */
+export const RequiredNodeCommandStateSchema = Type.Union([
+  Type.Literal("invocable"),
+  Type.Literal("pending-approval"),
+  Type.Literal("undeclared"),
+  Type.Literal("unauthorized"),
+]);
+
+export const RequiredNodeCommandSchema = closedObject({
+  command: Type.String({ minLength: 1, maxLength: 128 }),
+  state: RequiredNodeCommandStateSchema,
+});
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
   providerId: NonEmptyString,
@@ -86,7 +99,7 @@ export const WorkerEnvironmentMetadataSchema = closedObject({
   ),
 });
 
-function createEnvironmentSummarySchema() {
+function createEnvironmentSummarySchema(options?: { requiredNodeCommand?: boolean }) {
   return closedObject({
     id: NonEmptyString,
     type: NonEmptyString,
@@ -108,7 +121,9 @@ function createEnvironmentSummarySchema() {
         uniqueItems: true,
       }),
     ),
-    pendingDeclaredCommands: Type.Optional(Type.Array(NonEmptyString)),
+    ...(options?.requiredNodeCommand
+      ? { requiredNodeCommand: Type.Optional(RequiredNodeCommandSchema) }
+      : {}),
     desktop: Type.Optional(Type.Boolean()),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
@@ -116,10 +131,14 @@ function createEnvironmentSummarySchema() {
 }
 
 /** Public environment summary shown in listings and status responses. */
-export const EnvironmentSummarySchema = createEnvironmentSummarySchema();
+export const EnvironmentSummarySchema = createEnvironmentSummarySchema({
+  requiredNodeCommand: true,
+});
 
-/** Empty request payload for listing known environments. */
-export const EnvironmentsListParamsSchema = closedObject({});
+/** Optional runtime scope for listing known environments. */
+export const EnvironmentsListParamsSchema = closedObject({
+  runtimeId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+});
 
 /** Provider-authored machine choice for one configured worker profile. */
 export const WorkerMachineOptionSchema = closedObject({
@@ -217,6 +236,8 @@ export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
 export type WorkerDesktopAppId = Static<typeof WorkerDesktopAppIdSchema>;
 export type RuntimeTargetIssue = Static<typeof RuntimeTargetIssueSchema>;
 export type WorkerSlotSummary = Static<typeof WorkerSlotSummarySchema>;
+export type RequiredNodeCommandState = Static<typeof RequiredNodeCommandStateSchema>;
+export type RequiredNodeCommand = Static<typeof RequiredNodeCommandSchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type WorkerMachineOption = Static<typeof WorkerMachineOptionSchema>;
 export type WorkerExecutionMode = Static<typeof WorkerExecutionModeSchema>;

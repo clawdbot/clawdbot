@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type {
   EnvironmentStatus,
+  RequiredNodeCommand,
   RuntimeTargetIssue,
   WorkerExecutionMode,
   WorkerSlotSummary,
@@ -59,7 +60,7 @@ export type DraftEnvironment = {
   trust?: "persistent" | "disposable";
   capabilities?: string[];
   invocableCommands?: string[];
-  pendingDeclaredCommands?: string[];
+  requiredNodeCommand?: RequiredNodeCommand;
   issues?: RuntimeTargetIssue[];
 };
 
@@ -203,6 +204,22 @@ function readWorkerSlots(value: unknown): WorkerSlotSummary | undefined {
     : undefined;
 }
 
+function readRequiredNodeCommand(value: unknown): RequiredNodeCommand | undefined {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== "command" && key !== "state")) {
+    return undefined;
+  }
+  const command = normalizeOptionalString(value.command);
+  const state = value.state;
+  return command &&
+    command.length <= 128 &&
+    (state === "invocable" ||
+      state === "pending-approval" ||
+      state === "undeclared" ||
+      state === "unauthorized")
+    ? { command, state }
+    : undefined;
+}
+
 export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
   return (Array.isArray(value) ? value : [])
     .flatMap<DraftEnvironment>((raw) => {
@@ -224,7 +241,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
         trust?: unknown;
         capabilities?: unknown;
         invocableCommands?: unknown;
-        pendingDeclaredCommands?: unknown;
+        requiredNodeCommand?: unknown;
         issues?: unknown;
       };
       const id = normalizeOptionalString(environment.id);
@@ -249,9 +266,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
             .filter((command) => command.length <= 128)
             .slice(0, 128)
         : undefined;
-      const pendingDeclaredCommands = normalizeArrayBackedTrimmedStringList(
-        environment.pendingDeclaredCommands,
-      );
+      const requiredNodeCommand = readRequiredNodeCommand(environment.requiredNodeCommand);
       const lastConnectedAtMs = normalizeTimestamp(environment.lastConnectedAtMs);
       const lastDisconnectedAtMs = normalizeTimestamp(environment.lastDisconnectedAtMs);
       const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
@@ -276,7 +291,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ...(trust ? { trust } : {}),
           ...(capabilities ? { capabilities } : {}),
           ...(invocableCommands ? { invocableCommands } : {}),
-          ...(pendingDeclaredCommands ? { pendingDeclaredCommands } : {}),
+          ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
           ...(issues ? { issues } : {}),
         },
       ];

@@ -8,8 +8,12 @@ import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
+  runtimeId?: string,
 ): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
-  const result = await client.request<EnvironmentsListResult>("environments.list", {});
+  const result = await client.request<EnvironmentsListResult>(
+    "environments.list",
+    runtimeId ? { runtimeId } : {},
+  );
   return {
     profiles: readDraftCloudProfiles(result?.profiles),
     environments: readDraftEnvironments(result?.environments),

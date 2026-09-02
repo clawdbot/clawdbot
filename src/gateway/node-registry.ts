@@ -91,6 +91,12 @@ export type NodeSession = {
 };
 
 type PairingBoundNodeSession = NodeSession & { pairingIdentity: string };
+const NODE_SESSION_WITHHELD_COMMANDS = new WeakMap<object, readonly string[]>();
+
+/** Reads the private pre-pairing policy result retained for the current live session. */
+export function readNodeSessionWithheldCommands(node: object): readonly string[] {
+  return NODE_SESSION_WITHHELD_COMMANDS.get(node) ?? [];
+}
 
 type PairingBoundNodeSessionLease = {
   session: PairingBoundNodeSession;
@@ -469,6 +475,9 @@ export class NodeRegistry {
     )
       ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
       : commands;
+    // SAFETY: reconciliation attaches this fact before admission, preserving policy-denial provenance.
+    const withheldCommandsValue = (connect as { withheldCommands?: string[] }).withheldCommands;
+    const withheldCommands = Array.isArray(withheldCommandsValue) ? withheldCommandsValue : [];
     const computerUse =
       connect.computerUse === undefined
         ? undefined
@@ -540,6 +549,7 @@ export class NodeRegistry {
       pathEnv,
       connectedAtMs: Date.now(),
     };
+    NODE_SESSION_WITHHELD_COMMANDS.set(session, withheldCommands);
     const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
     forgetNodeRunnerInventory(this, client.connId);
     this.nodesById.set(nodeId, session);

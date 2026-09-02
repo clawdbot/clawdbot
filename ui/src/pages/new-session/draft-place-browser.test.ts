@@ -52,6 +52,7 @@ function createBrowser(request: (method: string) => Promise<unknown>, data?: New
       cloudProfileId: "",
       pendingPlacement: { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
       agentsHydrated: false,
+      runtimeId: "",
     }),
     {
       requestUpdate: vi.fn(),

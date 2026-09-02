@@ -19,9 +19,10 @@ import { draftCloudProfileSupportsExecutionMode } from "../new-session/discovery
 async function loadPlacementMoveCatalog(
   client: GatewayBrowserClient,
   includeProfiles: boolean,
+  runtimeId: string | undefined,
   requirement?: DevicePlacementRequirement,
 ) {
-  const catalog = await requestPlaceCatalog(client);
+  const catalog = await requestPlaceCatalog(client, runtimeId);
   return {
     profiles: includeProfiles ? catalog.profiles : [],
     devices: projectDevicePlacements(catalog.environments, requirement),
@@ -94,6 +95,7 @@ export async function moveChatPanePlacement(params: {
         await loadPlacementMoveCatalog(
           client,
           hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
+          runtime?.id,
           runtime?.devicePlacement,
         ),
     });

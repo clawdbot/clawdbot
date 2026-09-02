@@ -197,17 +197,17 @@ export class DraftPlaceState {
     return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
   }
 
-  devicePlacementRequirement() {
+  devicePlacementRuntime() {
     return this.modelControl.resolveAgentRuntime({
       agent: this.selectedAgent(),
       context: this.read().context,
-    })?.devicePlacement;
+    });
   }
 
   devices() {
     return projectDevicePlacements(
       this.gateway.environments,
-      this.devicePlacementRequirement(),
+      this.devicePlacementRuntime()?.devicePlacement,
       this.gateway.deviceCatalogDisabledReason,
     );
   }

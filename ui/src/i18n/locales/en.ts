@@ -919,10 +919,12 @@ export const en: TranslationMap = {
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
     nodeUpdateRequired:
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
-    nodeCommandNotDeclared:
-      "This device does not declare the required command ({command}). Declare it on the node or pick another device.",
     nodeCommandPendingApproval:
-      "This device declared the required command ({command}) but it awaits pairing approval. Approve the pending request or pick another device.",
+      "Ask an administrator to approve the pending {command} request, or pick another device.",
+    nodeCommandUndeclared:
+      "Make {command} available on this device, then reconnect, or pick another device.",
+    nodeCommandUnauthorized:
+      "Authorize {command} in the Gateway node command policy, or pick another device.",
     capabilityCamera: "Camera",
     capabilityLocation: "Location",
     capabilityTalk: "Talk",

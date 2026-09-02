@@ -97,6 +97,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           recoveryScope: "",
         },
         agentsHydrated: this.place?.agentsHydrated ?? false,
+        runtimeId: this.place?.devicePlacementRuntime()?.id ?? "",
       }),
       {
         requestUpdate: () => this.requestUpdate(),
@@ -400,7 +401,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
       autoDevice: this.place.autoDevice,
-      devicePlacement: this.place.devicePlacementRequirement(),
+      devicePlacement: this.place.devicePlacementRuntime()?.devicePlacement,
       deviceDisabledReason:
         this.place.modelControl.devicePlacementUnsupportedReason() ??
         this.gateway.deviceCatalogDisabledReason,

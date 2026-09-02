@@ -82,6 +82,13 @@ public enum WorkerDesktopAppId: String, Codable, Sendable {
     case terminal = "terminal"
 }
 
+public enum RequiredNodeCommandState: String, Codable, Sendable {
+    case invocable = "invocable"
+    case pendingApproval = "pending-approval"
+    case undeclared = "undeclared"
+    case unauthorized = "unauthorized"
+}
+
 public enum WorktreeRepositoryStatus: String, Codable, Sendable {
     case git = "git"
     case notGit = "not_git"
@@ -2136,6 +2143,19 @@ public struct UserPrefsLimitExceededErrorDetails: Codable, Sendable {
     }
 }
 
+public struct RequiredNodeCommand: Codable, Sendable {
+    public let command: String
+    public let state: RequiredNodeCommandState
+
+    public init(
+        command: String,
+        state: RequiredNodeCommandState)
+    {
+        self.command = command
+        self.state = state
+    }
+}
+
 public struct WorkerEnvironmentMetadata: Codable, Sendable {
     public let providerid: String
     public let leaseid: String?
@@ -2215,7 +2235,7 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let invocablecommands: [String]?
-    public let pendingdeclaredcommands: [String]?
+    public let requirednodecommand: RequiredNodeCommand?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
@@ -2236,7 +2256,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         invocablecommands: [String]? = nil,
-        pendingdeclaredcommands: [String]? = nil,
+        requirednodecommand: RequiredNodeCommand? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
@@ -2256,7 +2276,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.invocablecommands = invocablecommands
-        self.pendingdeclaredcommands = pendingdeclaredcommands
+        self.requirednodecommand = requirednodecommand
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
@@ -2278,7 +2298,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         case trust
         case capabilities
         case invocablecommands = "invocableCommands"
-        case pendingdeclaredcommands = "pendingDeclaredCommands"
+        case requirednodecommand = "requiredNodeCommand"
         case desktop
         case issues
         case worker
@@ -2319,7 +2339,6 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let invocablecommands: [String]?
-    public let pendingdeclaredcommands: [String]?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
@@ -2340,7 +2359,6 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         invocablecommands: [String]? = nil,
-        pendingdeclaredcommands: [String]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
@@ -2360,7 +2378,6 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.invocablecommands = invocablecommands
-        self.pendingdeclaredcommands = pendingdeclaredcommands
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
@@ -2382,7 +2399,6 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         case trust
         case capabilities
         case invocablecommands = "invocableCommands"
-        case pendingdeclaredcommands = "pendingDeclaredCommands"
         case desktop
         case issues
         case worker
@@ -2423,7 +2439,6 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let invocablecommands: [String]?
-    public let pendingdeclaredcommands: [String]?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
@@ -2444,7 +2459,6 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         invocablecommands: [String]? = nil,
-        pendingdeclaredcommands: [String]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
@@ -2464,7 +2478,6 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.invocablecommands = invocablecommands
-        self.pendingdeclaredcommands = pendingdeclaredcommands
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
@@ -2486,14 +2499,25 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         case trust
         case capabilities
         case invocablecommands = "invocableCommands"
-        case pendingdeclaredcommands = "pendingDeclaredCommands"
         case desktop
         case issues
         case worker
     }
 }
 
-public struct EnvironmentsListParams: Codable, Sendable {}
+public struct EnvironmentsListParams: Codable, Sendable {
+    public let runtimeid: String?
+
+    public init(
+        runtimeid: String? = nil)
+    {
+        self.runtimeid = runtimeid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runtimeid = "runtimeId"
+    }
+}
 
 public struct EnvironmentsListResult: Codable, Sendable {
     public let environments: [EnvironmentSummary]
@@ -2538,7 +2562,6 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let trust: String?
     public let capabilities: [String]?
     public let invocablecommands: [String]?
-    public let pendingdeclaredcommands: [String]?
     public let desktop: Bool?
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
@@ -2559,7 +2582,6 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         trust: String? = nil,
         capabilities: [String]? = nil,
         invocablecommands: [String]? = nil,
-        pendingdeclaredcommands: [String]? = nil,
         desktop: Bool? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil)
@@ -2579,7 +2601,6 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         self.trust = trust
         self.capabilities = capabilities
         self.invocablecommands = invocablecommands
-        self.pendingdeclaredcommands = pendingdeclaredcommands
         self.desktop = desktop
         self.issues = issues
         self.worker = worker
@@ -2601,7 +2622,6 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         case trust
         case capabilities
         case invocablecommands = "invocableCommands"
-        case pendingdeclaredcommands = "pendingDeclaredCommands"
         case desktop
         case issues
         case worker
