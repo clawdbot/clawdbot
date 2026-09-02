@@ -126,7 +126,12 @@ describe("tool JSON details", () => {
     render(
       renderToolCard(
         { id: "json-tool", name: "lookup", outputText: text, completed: true },
-        { expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar: openSidebar },
+        {
+          messageKey: "test-message",
+          expanded: true,
+          onToggleExpanded: vi.fn(),
+          onOpenSidebar: openSidebar,
+        },
       ),
       container,
     );

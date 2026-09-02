@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  clearAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  registerAgentRunContext,
+} from "../infra/agent-run-registry.js";
+import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createActiveRun,
   createGatewayBroadcaster,
@@ -97,7 +104,7 @@ describe("createLifecycleEventBroadcastHandler", () => {
   it.each([
     { name: "projects configured persisted state without publishing its goal" },
     { name: "publishes active state and goal for the explicit owner", agentId: "ops" },
-  ])("$name", ({ agentId }) => {
+  ])("$name through capacity transitions without a refresh", ({ agentId }) => {
     runtimeConfigState.value = fixedStoreRuntimeConfig("ops", ["ops", "research"]);
     sessionRow.key = "global";
     const goal = { ...ownerGoal };
@@ -134,6 +141,24 @@ describe("createLifecycleEventBroadcastHandler", () => {
       expect(payload).not.toHaveProperty("agentId");
       expect(payload).not.toHaveProperty("goal");
       expect(payload).not.toHaveProperty("session.goal");
+    }
+    const runId = "run-before-finalize";
+    registerAgentRunContext(runId, { sessionKey: "global", agentId: "ops" });
+    const unsubscribe = onSessionLifecycleEvent(handler);
+    const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+    try {
+      releaseWait?.();
+      const transitions = broadcastToConnIds.mock.calls.slice(1);
+      expect(
+        transitions.map(([, event]) => [event.reason, event.status, event.hasActiveRun]),
+      ).toEqual([
+        ["run-capacity", "queued", true],
+        ["run-capacity", "running", true],
+      ]);
+    } finally {
+      unsubscribe();
+      releaseWait?.();
+      clearAgentRunContext(runId);
     }
   });
 

@@ -11,7 +11,7 @@ import {
   selectDeterministicTranslation,
   selectGeneratedTranslation,
 } from "../../scripts/android-app-i18n.ts";
-import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
+import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
 describe("Android app i18n resources", () => {
   it("keeps generated resources, runtime coverage, and every locale aligned", async () => {
@@ -46,7 +46,7 @@ describe("Android app i18n resources", () => {
     ]);
   });
 
-  it("builds complete Wear resources for every native locale", async () => {
+  it("builds complete Wear and third-party resources for every native locale", async () => {
     const catalog = await buildAndroidAppI18nCatalog();
     const wearResources = [...catalog.resources].filter(
       ([filePath]) =>
@@ -90,11 +90,8 @@ describe("Android app i18n resources", () => {
         'name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
       );
     }
-  });
 
-  it("builds complete third-party flavor resources for every native locale", async () => {
-    const catalog = await buildAndroidAppI18nCatalog();
-    const base = await readFile(
+    const thirdPartyBase = await readFile(
       "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
       "utf8",
     );
@@ -104,7 +101,7 @@ describe("Android app i18n resources", () => {
         filePath.endsWith("/accessibility_strings.xml"),
     );
 
-    expect(base).toContain('tools:ignore="MissingTranslation"');
+    expect(thirdPartyBase).toContain('tools:ignore="MissingTranslation"');
     expect(resources).toHaveLength(NATIVE_I18N_LOCALES.length);
     for (const [, content] of resources) {
       expect(content).toContain('name="accessibility_service_label"');
@@ -295,12 +292,6 @@ describe("Android app i18n resources", () => {
       expect.objectContaining({ source: "Second sentence." }),
       expect.objectContaining({ source: "Ready" }),
     ]);
-    expect(
-      findUnlocalizedAndroidUiLiterals(
-        source,
-        "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
-      ).map((finding) => finding.source),
-    ).not.toEqual(expect.arrayContaining(["Connected", "Waiting"]));
   });
 
   it("maps typed model fields across generic types and named argument omissions", () => {
@@ -359,6 +350,19 @@ describe("Android app i18n resources", () => {
     );
   });
 
+  it("decodes Kotlin Unicode escapes without collapsing escaped backslashes", () => {
+    const source = String.raw`
+      Text("Progress \u00b7 ready")
+      Text("Literal \\u00b7 marker")
+    `;
+    const findings = findUnlocalizedAndroidUiLiterals(
+      source,
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
+    ).map((finding) => finding.source);
+
+    expect(findings).toEqual(["Progress · ready", String.raw`Literal \u00b7 marker`]);
+  });
+
   it("inventories command, attention, and overview model display literals", () => {
     const source = `
       data class CommandItem(
@@ -399,26 +403,14 @@ describe("Android app i18n resources", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
     ).map((finding) => finding.source);
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        "Open Chat",
-        "Start a conversation",
-        "Gateway",
-        "Connect before chat, voice, and live status.",
-        "Online",
-        "All systems nominal",
-      ]),
-    );
-    expect(findings).not.toEqual(
-      expect.arrayContaining([
-        "chat",
-        "voice",
-        "Start Voice",
-        "Talk with OpenClaw",
-        "Offline",
-        "gateway",
-      ]),
-    );
+    expect(findings).toEqual([
+      "Open Chat",
+      "Start a conversation",
+      "Gateway",
+      "Connect before chat, voice, and live status.",
+      "Online",
+      "All systems nominal",
+    ]);
   });
 
   it("requires exact String fields and scans multiline helper expressions", () => {
@@ -444,8 +436,7 @@ describe("Android app i18n resources", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/ui/Example.kt",
     ).map((finding) => finding.source);
 
-    expect(findings).toEqual(expect.arrayContaining(["Failure", "Fallback"]));
-    expect(findings).not.toEqual(expect.arrayContaining(["resource_key", "Ready"]));
+    expect(findings).toEqual(["Failure", "Fallback"]);
   });
 
   it("ignores preview fixtures", () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
-import { formatGatewayClosedDiagnostic, formatHealthChannelLines } from "./health-format.js";
+import {
+  formatDeliveryQueueHealthLine,
+  formatGatewayClosedDiagnostic,
+  formatHealthChannelLines,
+} from "./health-format.js";
 
 describe("formatGatewayClosedDiagnostic", () => {
   it("formats a coded gateway transport close", () => {
@@ -28,7 +32,11 @@ describe("formatGatewayClosedDiagnostic", () => {
 });
 
 const createHealthSummary = (
-  params: Pick<HealthSummary, "channels" | "channelOrder" | "channelLabels">,
+  params: Pick<HealthSummary, "channels" | "channelOrder" | "channelLabels"> = {
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+  },
 ): HealthSummary => ({
   ok: true,
   ts: 0,
@@ -106,72 +114,6 @@ describe("formatHealthChannelLines", () => {
     expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
       "Telegram: ok (@pinguini_ugi_bot:main:196ms, @flurry_ugi_bot:flurry:190ms, @poe_ugi_bot:poe:188ms)",
     ]);
-  });
-
-  it("shows a metered channel's remaining allowance beside probe health", () => {
-    const summary = createHealthSummary({
-      channels: {
-        line: {
-          accountId: "default",
-          configured: true,
-          linked: true,
-          healthState: "healthy",
-          probe: { ok: true, elapsedMs: 41, quota: { kind: "limited", limit: 200, used: 200 } },
-        },
-      },
-      channelOrder: ["line"],
-      channelLabels: { line: "LINE" },
-    });
-
-    // Without this an operator only reads "ok" while the account can no longer send.
-    expect(formatHealthChannelLines(summary)).toStrictEqual(["LINE: ok (41ms) - quota 200/200"]);
-  });
-
-  it("keeps the allowance in the per-account status view operators actually get", () => {
-    // `openclaw status` asks for every account, which collapses to per-account
-    // tokens instead of the single-probe line; the allowance has to survive that
-    // path too or the promise is empty where operators actually read it.
-    const probe = {
-      ok: true,
-      elapsedMs: 41,
-      quota: { kind: "limited", limit: 200, used: 200 },
-    };
-    const summary = createHealthSummary({
-      channels: {
-        line: {
-          accountId: "default",
-          configured: true,
-          linked: true,
-          healthState: "healthy",
-          probe,
-          accounts: { default: { accountId: "default", configured: true, probe } },
-        },
-      },
-      channelOrder: ["line"],
-      channelLabels: { line: "LINE" },
-    });
-
-    expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
-      "LINE: ok (default:default:41ms:200/200)",
-    ]);
-  });
-
-  it("says nothing about an allowance a channel does not meter", () => {
-    const summary = createHealthSummary({
-      channels: {
-        line: {
-          accountId: "default",
-          configured: true,
-          linked: true,
-          healthState: "healthy",
-          probe: { ok: true, elapsedMs: 41, quota: { kind: "unlimited" } },
-        },
-      },
-      channelOrder: ["line"],
-      channelLabels: { line: "LINE" },
-    });
-
-    expect(formatHealthChannelLines(summary)).toStrictEqual(["LINE: ok (41ms)"]);
   });
 
   it("formats statusState without inferring from linked", () => {
@@ -391,5 +333,86 @@ describe("formatHealthChannelLines", () => {
     expect(formatHealthChannelLines(summary)).toContain(
       "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
+  });
+});
+
+describe("formatDeliveryQueueHealthLine", () => {
+  it("summarizes dead-lettered delivery queue entries with the oldest age", () => {
+    const summary = createHealthSummary();
+    summary.deliveryQueues = {
+      failed: [
+        { queueName: "outbound", count: 3, oldestFailedAt: 90_000 },
+        { queueName: "session", count: 1 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead-lettered ingress entries per channel account", () => {
+    const summary = createHealthSummary();
+    summary.deliveryQueues = {
+      failed: [],
+      ingressFailed: [
+        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
+        { channelId: "telegram", accountId: "ops", count: 2 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes ingress pressure per channel account", () => {
+    const summary = createHealthSummary();
+    summary.deliveryQueues = {
+      failed: [],
+      ingressPressure: [
+        {
+          channelId: "telegram",
+          accountId: "ops",
+          laneCount: 1,
+          pendingCount: 56,
+          claimedCount: 0,
+          blockedCount: 55,
+          oldestReceivedAt: 90_000,
+        },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (ingress pressure — inbound telegram/ops: 1 pressured lane, 56 pending, 0 claimed, 55 blocked; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead letters and ingress pressure together", () => {
+    const summary = createHealthSummary();
+    summary.deliveryQueues = {
+      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
+      ingressPressure: [
+        {
+          channelId: "line",
+          accountId: "default",
+          laneCount: 2,
+          pendingCount: 3,
+          claimedCount: 1,
+          blockedCount: 2,
+          oldestReceivedAt: 3_690_000,
+        },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago; ingress pressure — inbound line/default: 2 pressured lanes, 3 pending, 1 claimed, 2 blocked; oldest 1h ago)",
+    );
+  });
+
+  it("returns null when no dead-lettered entries are reported", () => {
+    const summary = createHealthSummary();
+
+    expect(formatDeliveryQueueHealthLine(summary)).toBeNull();
   });
 });

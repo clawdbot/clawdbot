@@ -64,7 +64,7 @@ export async function accountAgentTurnCompaction(params: {
       storePath: fact.target.storePath,
       expectedSession: fact.target,
       amount: fact.count,
-      tokensAfter: fact.currentContextTokens,
+      tokensAfter: fact.currentContextSnapshot?.tokens,
       authorize,
     });
     if (persistedCount !== undefined) {
@@ -96,7 +96,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   let { activeSessionEntry } = context;
   const latestCompaction = execution.compaction?.durable.at(-1);
   const currentContextSnapshot = execution.compaction
-    ? { tokens: latestCompaction?.currentContextTokens }
+    ? (latestCompaction?.currentContextSnapshot ?? { tokens: undefined })
     : undefined;
   const expectedSession = latestCompaction?.target ?? {
     sessionId: activeSessionEntry?.sessionId ?? followupRun.run.sessionId,
@@ -157,12 +157,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   }
 
   const usage = runResult.meta?.agentMeta?.usage;
-  const hasBillableUsageBuckets =
-    usage &&
-    (usage.input !== undefined ||
-      usage.output !== undefined ||
-      usage.cacheRead !== undefined ||
-      usage.cacheWrite !== undefined);
   const promptTokens = runResult.meta?.agentMeta?.promptTokens;
   const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed =
@@ -363,7 +357,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
-    hasBillableUsageBuckets,
     modelUsed,
     payloadArray,
     preserveUserFacingSessionState,

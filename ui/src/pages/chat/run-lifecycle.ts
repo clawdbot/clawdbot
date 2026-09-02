@@ -24,18 +24,18 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { reduceChatSessionProjection, setChatRunOwner } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
+import type {
+  CompactionStatus,
+  FallbackStatus,
+  WaitingApprovalStatus,
+} from "./tool-stream-contract.ts";
 // Control UI chat module implements run lifecycle behavior.
-import {
-  resetToolStream,
-  resetToolStreamRun,
-  type CompactionStatus,
-  type FallbackStatus,
-  type WaitingApprovalStatus,
-} from "./tool-stream.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 export type ChatRunError = {
+  kind?: "auth_refresh";
   summary: string;
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
@@ -172,12 +172,19 @@ export function adoptStartedChatRun(
   }
   const adopted = host.chatRunId === runId;
   const adoptedStream = adopted && typeof host.chatStream === "string";
+  if (!adopted) {
+    // Session-scoped activity can arrive before adoption. Retire only the prior
+    // owner so the incoming run keeps its already accepted tools and approvals.
+    reconcileChatRunLifecycle(host, {
+      clearToolStreamForRun: true,
+      clearIndicators: Boolean(host.chatRunId),
+      clearRunStatus: true,
+      requestUpdate: false,
+    });
+    host.chatRunError = null;
+  }
   host.chatRunId = runId;
   setChatRunOwner(host, runId);
-  if (!adopted) {
-    host.chatRunError = null;
-    host.chatRunStartup = null;
-  }
   if (!adoptedStream) {
     host.chatStream = "";
     host.chatStreamStartedAt = startedAt;
@@ -188,9 +195,14 @@ export function setChatRunError(
   state: { chatRunError?: ChatRunError | null },
   summary: string,
   runId?: string,
+  kind?: ChatRunError["kind"],
 ) {
   setChatRunOwner(state, runId);
-  state.chatRunError = { summary: formatUiExternalText(summary), ...(runId ? { runId } : {}) };
+  state.chatRunError = {
+    ...(kind ? { kind } : {}),
+    summary: formatUiExternalText(summary),
+    ...(runId ? { runId } : {}),
+  };
 }
 
 type SessionRunHost = {
@@ -416,9 +428,9 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   if (!runId || host.chatRunStartup?.runId === runId) {
     host.chatRunStartup = null;
   }
-  clearTimer(host.compactionClearTimer);
-  host.compactionClearTimer = null;
-  if (host.compactionStatus) {
+  if (!runId || host.compactionStatus?.runId === runId) {
+    clearTimer(host.compactionClearTimer);
+    host.compactionClearTimer = null;
     host.compactionStatus = null;
   }
   clearTimer(host.fallbackClearTimer);

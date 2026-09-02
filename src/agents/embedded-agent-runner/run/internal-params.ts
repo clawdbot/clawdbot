@@ -18,45 +18,45 @@ export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "model"; contextTokens: number | undefined }
 >;
 
-/** Each fact carries the latest context (undefined means unknown), never authority to resume. */
+/** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */
 export type CompactionAccountingFact = Readonly<
-  { count: number; currentContextTokens?: number } & (
-    | { kind: "durable"; target: CompactionAccountingTarget }
+  { count: number; currentContextSnapshot?: { tokens: number | undefined } } & (
+    | {
+        kind: "durable";
+        target: CompactionAccountingTarget;
+        /** Present only when the host committed a successor session rotation. */
+        previousSessionId?: string;
+      }
     | { kind: "presentation-only" }
   )
 >;
 
-type CompactionAccountingParams =
-  | { compactionCountOwner?: "subscription"; onCompactionAccounting?: never }
-  | {
-      compactionCountOwner: "caller";
-      onCompactionAccounting: (fact: CompactionAccountingFact | undefined) => void;
-    };
-
-export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams &
-  CompactionAccountingParams & {
-    /** Attempt-local context observer, installed by the host loop before dispatch. */
-    onContextAccountingEvent?: (event: EmbeddedContextAccountingEvent) => void;
-    onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
-    /** Maintenance needs the winning profile, not native runtime artifact capture. */
-    onSuccessfulAuthProfile?: (profileId: string | undefined) => void;
-    authProfileStateMode?: "read-write" | "read-only";
-    /** Prepare only the requested candidate with this runtime; fallbacks keep their own policy. */
-    agentHarnessRuntimePreparationHint?: string;
-    /** Keep staged setup config and credentials outside configured Gateway ownership. */
-    preparedModelRuntimeMode?: "isolated-read-only";
-    /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
-    systemAgentTool?: SystemAgentToolOptions;
-    /** Gateway-private lifecycle generation selected before command admission. */
-    pluginGeneration?: PreparedModelRuntimePluginGeneration;
-    /** Host-only transfer of attempt terminal resources to the logical turn. */
-    onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
-    /** Aborts the logical turn when its retained embedded handle is cancelled. */
-    onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
-  };
+export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  onCompactionAccounting?: (fact: CompactionAccountingFact | undefined) => void;
+  /** Attempt-local context observer, installed by the host loop before dispatch. */
+  onContextAccountingEvent?: (event: EmbeddedContextAccountingEvent) => void;
+  onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+  /** Maintenance needs the winning profile, not native runtime artifact capture. */
+  onSuccessfulAuthProfile?: (profileId: string | undefined) => void;
+  authProfileStateMode?: "read-write" | "read-only";
+  /** Prepare only the requested candidate with this runtime; fallbacks keep their own policy. */
+  agentHarnessRuntimePreparationHint?: string;
+  /** Keep staged setup config and credentials outside configured Gateway ownership. */
+  preparedModelRuntimeMode?: "isolated-read-only";
+  /** Ring-zero tool override, supplied only by the OpenClaw orchestrator. */
+  systemAgentTool?: SystemAgentToolOptions;
+  /** Gateway-private lifecycle generation selected before command admission. */
+  pluginGeneration?: PreparedModelRuntimePluginGeneration;
+  /** Host-only transfer of attempt terminal resources to the logical turn. */
+  onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
+  /** Aborts the logical turn when its retained embedded handle is cancelled. */
+  onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
+};
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
-  Pick<RunEmbeddedAgentInternalParams, "compactionCountOwner" | "onContextAccountingEvent">;
+  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent"> & {
+    compactionCountOwner?: "subscription" | "caller";
+  };
 
 export type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;

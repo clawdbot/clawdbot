@@ -515,13 +515,13 @@ export type ToolsConfig = {
    * Session tool visibility controls which sessions can be targeted by session tools
    * (sessions_list, sessions_history, sessions_search, sessions_send).
    *
-   * Default: "tree" (current session + spawned subagent sessions).
+   * Default: "agent" (all sessions belonging to the current agent).
    */
   sessions?: {
     /**
      * - "self": only the current session
-     * - "tree": current session + sessions spawned by this session (default)
-     * - "agent": any session belonging to the current agent id (can include other users)
+     * - "tree": current session + sessions spawned by this session
+     * - "agent": any session belonging to the current agent id (default; can include other users)
      * - "all": any session (cross-agent still requires tools.agentToAgent)
      */
     visibility?: SessionsToolsVisibility;

@@ -1,8 +1,6 @@
-import { vi } from "vitest";
+import { type Mock, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-
-type LineMessageQuotaReader = typeof import("./message-quota.js").readLineAccountMessageQuota;
 
 type LineRuntimeMocks = {
   pushMessageLine: ReturnType<typeof vi.fn>;
@@ -10,14 +8,13 @@ type LineRuntimeMocks = {
   pushFlexMessage: ReturnType<typeof vi.fn>;
   pushTemplateMessage: ReturnType<typeof vi.fn>;
   pushLocationMessage: ReturnType<typeof vi.fn>;
-  pushTextMessageWithQuickReplies: ReturnType<typeof vi.fn>;
+  pushTextMessageWithQuickReplies: Mock<typeof import("./send.js").pushTextMessageWithQuickReplies>;
   createQuickReplyItems: ReturnType<typeof vi.fn>;
   buildTemplateMessageFromPayload: ReturnType<typeof vi.fn>;
   sendMessageLine: ReturnType<typeof vi.fn>;
   chunkMarkdownText: ReturnType<typeof vi.fn>;
   resolveLineAccount: ReturnType<typeof vi.fn>;
   resolveTextChunkLimit: ReturnType<typeof vi.fn>;
-  readAccountMessageQuota: ReturnType<typeof vi.fn<LineMessageQuotaReader>>;
 };
 
 export function lineResult(messageId: string, chatId = "c1") {
@@ -34,15 +31,14 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
   const pushFlexMessage = vi.fn(async () => lineResult("m-flex"));
   const pushTemplateMessage = vi.fn(async () => lineResult("m-template"));
   const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
-  const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
+  const pushTextMessageWithQuickReplies = vi.fn<
+    typeof import("./send.js").pushTextMessageWithQuickReplies
+  >(async () => lineResult("m-quick"));
   const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
   const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
   const sendMessageLine = vi.fn(async () => lineResult("m-media"));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);
-  // Defaults to an unreadable allowance so a refusal keeps whatever verdict the
-  // status alone proves; tests that care supply a quota explicitly.
-  const readAccountMessageQuota = vi.fn<LineMessageQuotaReader>(async () => undefined);
   const resolveLineAccount = vi.fn(
     ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) => {
       const resolved = accountId ?? "default";
@@ -70,7 +66,6 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
         buildTemplateMessageFromPayload,
         sendMessageLine,
         resolveLineAccount,
-        readAccountMessageQuota,
       },
       text: {
         chunkMarkdownText,
@@ -94,7 +89,6 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
       chunkMarkdownText,
       resolveLineAccount,
       resolveTextChunkLimit,
-      readAccountMessageQuota,
     },
   };
 }

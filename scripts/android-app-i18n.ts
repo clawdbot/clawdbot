@@ -386,11 +386,15 @@ function lineNumber(source: string, offset: number): number {
 }
 
 function decodeKotlinLiteral(value: string): string {
-  return value
-    .replaceAll("\\n", "\n")
-    .replaceAll('\\"', '"')
-    .replaceAll("\\$", "$")
-    .replaceAll("\\\\", "\\");
+  return value.replace(
+    /\\(?:u([0-9a-fA-F]{4})|[n"$\\])/gu,
+    (escape, codeUnit: string | undefined) => {
+      if (codeUnit) {
+        return String.fromCharCode(Number.parseInt(codeUnit, 16));
+      }
+      return escape === "\\n" ? "\n" : escape.slice(1);
+    },
+  );
 }
 
 function collectExplicitRuntimeSources(

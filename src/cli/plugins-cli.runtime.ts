@@ -1,6 +1,7 @@
 // Runtime implementations for `openclaw plugins` subcommands. Heavy plugin modules stay
 // lazy-loaded so the base CLI can start without activating the plugin registry.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   collectConfiguredRuntimePluginIds,
@@ -15,12 +16,14 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
+import { resolvePluginInstallSources } from "../plugins/install-channel-specs.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
   PluginDoctorOptions,
@@ -94,12 +97,10 @@ function formatConfiguredRuntimePluginInstallSpec(params: {
   npmSpec?: string;
   pluginId: string;
 }): string {
-  const clawhubSpec = params.clawhubSpec?.trim();
-  const npmSpec = params.npmSpec?.trim();
-  if (clawhubSpec && params.defaultChoice !== "npm") {
-    return clawhubSpec;
-  }
-  return npmSpec ?? clawhubSpec ?? params.pluginId;
+  return (
+    resolvePluginInstallSources({ npmSpec: params.npmSpec, clawhubSpec: params.clawhubSpec })[0]
+      ?.spec ?? params.pluginId
+  );
 }
 
 function pluginIdListIncludes(list: readonly string[] | undefined, pluginId: string): boolean {
@@ -342,16 +343,51 @@ export async function runPluginsInstallAction(
 export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Promise<void> {
   const { inspectPluginRegistry } = await import("../plugins/plugin-registry.js");
 
+  const formatDifferences = (
+    differences: Awaited<ReturnType<typeof inspectPluginRegistry>>["differences"],
+  ) => {
+    const formatSource = (source: string | null) =>
+      source ? sanitizeTerminalText(shortenHomeInString(source)) : "missing";
+    return differences.map(
+      (difference) =>
+        `${sanitizeTerminalText(difference.pluginId)}: persisted ${formatSource(difference.persistedSource)}; derived ${formatSource(difference.derivedSource)}`,
+    );
+  };
+
   if (opts.refresh) {
     const { refreshPluginRegistry } = await import("../plugins/plugin-registry-refresh.js");
     return await withPluginLifecycleLease({}, async () => {
+      const config = getRuntimeConfig();
       const index = await refreshPluginRegistry({
-        config: getRuntimeConfig(),
+        config,
         reason: "manual",
       });
+      const inspection = await inspectPluginRegistry({ config });
+      if (inspection.state !== "fresh") {
+        const differenceLines = formatDifferences(inspection.differences);
+        const message = [
+          "Plugin registry refresh could not verify the persisted replacement.",
+          ...differenceLines.map((difference) => `- ${difference}`),
+          "Stop plugin package changes, then run `openclaw plugins registry --refresh` again.",
+        ].join("\n");
+        if (opts.json) {
+          defaultRuntime.writeJson({
+            ...formatCliJsonFailure(message),
+            refreshed: false,
+            state: inspection.state,
+            refreshReasons: inspection.refreshReasons,
+            differences: inspection.differences,
+          });
+          exitCliAfterOutput(defaultRuntime, 1);
+        }
+        throw new Error(message);
+      }
       if (opts.json) {
         defaultRuntime.writeJson({
           refreshed: true,
+          state: inspection.state,
+          refreshReasons: inspection.refreshReasons,
+          differences: inspection.differences,
           registry: index,
         });
         return;
@@ -367,6 +403,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     defaultRuntime.writeJson({
       state: inspection.state,
       refreshReasons: inspection.refreshReasons,
+      differences: inspection.differences,
       persisted: inspection.persisted,
       current: inspection.current,
     });
@@ -386,6 +423,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
   ];
   if (inspection.refreshReasons.length > 0) {
     lines.push(`${theme.muted("Refresh reasons:")} ${inspection.refreshReasons.join(", ")}`);
+    lines.push(...formatDifferences(inspection.differences).map((difference) => `- ${difference}`));
     lines.push(`${theme.muted("Repair:")} ${theme.command("openclaw plugins registry --refresh")}`);
   }
   defaultRuntime.log(lines.join("\n"));
@@ -429,10 +467,12 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
   const hasInstallTreeIssues =
     [errors, diags, shadowed].some(({ length }) => length > 0) ||
     compatibility.some(({ severity }) => severity === "warn");
+  const doctorOk = !hasInstallTreeIssues && pluginConfigWarnings.size === 0;
+  process.exitCode = doctorOk ? 0 : 1;
 
   if (opts.json) {
     defaultRuntime.writeJson({
-      ok: !hasInstallTreeIssues && pluginConfigWarnings.size === 0,
+      ok: doctorOk,
       pluginErrors: errors.map((entry) => ({
         id: entry.id,
         ...(entry.failurePhase ? { failurePhase: entry.failurePhase } : {}),
@@ -775,10 +815,12 @@ function sanitizeMarketplaceRefreshPayload(
 }
 
 function formatMarketplaceEntryInstall(entry: MarketplaceEntryPayload): string | undefined {
-  if (entry.install?.defaultChoice === "npm") {
-    return entry.install.npmSpec ?? entry.install.clawhubSpec ?? entry.install.localPath;
-  }
-  return entry.install?.clawhubSpec ?? entry.install?.npmSpec ?? entry.install?.localPath;
+  return (
+    resolvePluginInstallSources({
+      npmSpec: entry.install?.npmSpec,
+      clawhubSpec: entry.install?.clawhubSpec,
+    })[0]?.spec ?? entry.install?.localPath
+  );
 }
 
 function formatMarketplaceEntryLine(entry: MarketplaceEntryPayload): string {

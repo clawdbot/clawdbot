@@ -252,14 +252,8 @@ function resolveToolCardId(
   item: Record<string, unknown>,
   message: Record<string, unknown>,
   index: number,
-  prefix = "tool",
 ): string {
-  const explicitId = resolveToolCallId(item, message);
-  if (explicitId) {
-    return `${prefix}:${explicitId}`;
-  }
-  const name = resolveToolName(item, message);
-  return `${prefix}:${name}:${index}`;
+  return resolveToolCallId(item, message) ?? `${resolveToolName(item, message)}:${index}`;
 }
 
 function serializeToolInput(args: unknown): string | undefined {
@@ -349,10 +343,9 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
   return undefined;
 }
 
-const anonymousPreviewRevisions = new WeakMap<object, number>();
 let nextPreviewRevision = 0;
 
-function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
+function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   const isStandaloneToolMessage =
@@ -389,7 +382,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       const callId = resolveToolCallId(item, m);
       const details = item.details ?? m.details;
       cards.push({
-        id: resolveToolCardId(item, m, index, prefix),
+        id: resolveToolCardId(item, m, index),
         ...(callId ? { callId } : {}),
         name: resolveToolName(item, m),
         args,
@@ -406,7 +399,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
 
     if (isToolResultContentType(item.type)) {
       const name = resolveToolName(item, m);
-      const cardId = resolveToolCardId(item, m, index, prefix);
+      const cardId = resolveToolCardId(item, m, index);
       const callId = resolveToolCallId(item, m);
       const existing =
         cards.find((card) => card.id === cardId) ??
@@ -477,7 +470,7 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
     const callId = resolveToolCallId({}, m);
     const exitCode = readToolExitCode(m, m.details, text ? parseJsonRecord(text) : undefined);
     cards.push({
-      id: resolveToolCardId({}, m, 0, prefix),
+      id: resolveToolCardId({}, m, 0),
       ...(callId ? { callId } : {}),
       name,
       completed: isToolResultMessage(message) || role === "tool" || role === "function",
@@ -490,36 +483,28 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
     });
   }
 
+  let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
     if (card.preview?.kind !== "browser-tab" || card.callId || card.messageId) {
       continue;
     }
-    let revision = anonymousPreviewRevisions.get(m);
-    if (revision === undefined) {
-      revision = ++nextPreviewRevision;
-      anonymousPreviewRevisions.set(m, revision);
-    }
+    revision ??= ++nextPreviewRevision;
     card.previewRevision = `${revision}:${index}`;
   }
   return cards;
 }
 
-const toolCardsByMessage = new WeakMap<object, Map<string, ToolCard[]>>();
+const toolCardsByMessage = new WeakMap<object, ToolCard[]>();
 
-export function extractToolCardsCached(message: unknown, prefix = "tool"): ToolCard[] {
+export function extractToolCardsCached(message: unknown): ToolCard[] {
   if (!message || typeof message !== "object") {
-    return extractToolCards(message, prefix);
+    return extractToolCards(message);
   }
-  let byPrefix = toolCardsByMessage.get(message);
-  if (!byPrefix) {
-    byPrefix = new Map();
-    toolCardsByMessage.set(message, byPrefix);
-  }
-  const cached = byPrefix.get(prefix);
+  const cached = toolCardsByMessage.get(message);
   if (cached) {
     return cached;
   }
-  const cards = extractToolCards(message, prefix);
-  byPrefix.set(prefix, cards);
+  const cards = extractToolCards(message);
+  toolCardsByMessage.set(message, cards);
   return cards;
 }

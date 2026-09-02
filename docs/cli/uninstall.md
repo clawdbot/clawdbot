@@ -25,7 +25,7 @@ removed; uninstall it via npm/pnpm separately.
 | `--dry-run`         | `false` | Print planned actions without removing files.        |
 
 With no scope flags, an interactive multiselect prompts for which components
-to remove (defaults to service, state, workspace preselected).
+to remove (defaults to the Gateway service only).
 
 ## Examples
 

@@ -1,7 +1,7 @@
 // LINE auto-reply tests cover HTTP rejection recovery and replay safety.
 import { HTTPFetchError, type messagingApi } from "@line/bot-sdk";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import {
   baseDeliveryParams,
@@ -11,7 +11,17 @@ import {
   LINE_TEST_CFG,
   type LineAutoReplyDeps,
 } from "./auto-reply-delivery.test-helpers.js";
+import {
+  createPendingLineResponse,
+  LINE_QUOTA_ACCOUNT,
+  stubLineApiFetch,
+} from "./probe.test-support.js";
 import { runLinePushWithRetries } from "./send-retry.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
 describe("deliverLineAutoReply HTTP recovery", () => {
   const createHttpError = (status: number) =>
@@ -23,20 +33,21 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     });
 
   it("keeps a stalled allowance from holding back the webhook reply failure", async () => {
-    // Same deadline as durable delivery: a stalled allowance endpoint must not
-    // hold the reply route's own failure, which the caller needs to report.
     vi.useFakeTimers();
+    const pending = createPendingLineResponse({ type: "none" });
+    const fetchMock = stubLineApiFetch(pending.response);
+    let delivered: Promise<unknown> | undefined;
     try {
       const rejection = createHttpError(429);
       const { deps } = createDeps({
         pushMessagesLine: (async () => {
           throw rejection;
         }) as LineAutoReplyDeps["pushMessagesLine"],
-        readAccountMessageQuota: () => new Promise(() => {}),
       });
 
-      const delivered = deliverLineAutoReply({
+      delivered = deliverLineAutoReply({
         ...baseDeliveryParams,
+        ...LINE_QUOTA_ACCOUNT,
         replyTokenUsed: true,
         payload: { text: "an answer nobody will see" },
         lineData: {},
@@ -45,8 +56,12 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       const settled = expect(delivered).rejects.toThrow("429 - provider rejected the request");
       await vi.advanceTimersByTimeAsync(2_500);
       await settled;
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(pending.cancel).toHaveBeenCalledOnce();
     } finally {
-      vi.useRealTimers();
+      pending.finish();
+      await vi.runAllTimersAsync();
+      await delivered?.catch(() => {});
     }
   });
 
@@ -54,7 +69,7 @@ describe("deliverLineAutoReply HTTP recovery", () => {
     {
       label: "names the spent allowance once the reply token is gone",
       used: 200,
-      expected: "LINE refused the message: 200/200 monthly messages used.",
+      expected: "LINE refused the push: 200/200 monthly messages used.",
     },
     {
       label: "keeps LINE's own words when the allowance still has room",
@@ -62,28 +77,30 @@ describe("deliverLineAutoReply HTTP recovery", () => {
       expected: "429 - provider rejected the request",
     },
   ])("$label", async ({ used, expected }) => {
-    // The reply token is already spent, so this common inbound route reaches the
-    // push API directly; before this it reported LINE's bare status line and the
-    // bot went quiet with no reason an operator could act on.
     const rejection = createHttpError(429);
     const pushMessagesLine = vi.fn(async () => {
       throw rejection;
     });
     const { deps } = createDeps({
       pushMessagesLine: pushMessagesLine as LineAutoReplyDeps["pushMessagesLine"],
-      readAccountMessageQuota: async () => ({ kind: "limited", limit: 200, used }) as const,
     });
+    const fetchMock = stubLineApiFetch(
+      Response.json({ type: "limited", value: 200 }),
+      Response.json({ totalUsage: used }),
+    );
 
     await expect(
       deliverLineAutoReply({
         ...baseDeliveryParams,
+        ...LINE_QUOTA_ACCOUNT,
         replyTokenUsed: true,
         payload: { text: "an answer nobody will see" },
         lineData: {},
         deps,
       }),
     ).rejects.toThrow(expected);
-    expect(pushMessagesLine).toHaveBeenCalled();
+    expect(pushMessagesLine).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([

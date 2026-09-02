@@ -76,6 +76,22 @@ describe("QA Docker E2E lane fixture", () => {
     ).toBe("openclaw@custom");
   });
 
+  it.each(["update-migration", "update-restart-auth"])(
+    "%s defaults to stable while preserving replay overrides",
+    (lane) => {
+      for (const baseline of [undefined, "openclaw@2026.4.23"]) {
+        const resolved = resolveQaDockerE2eLane(lane, {
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
+          OPENCLAW_CURRENT_PACKAGE_TGZ: "/tmp/candidate.tgz",
+        });
+        expect(resolved.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC).toBe(
+          baseline ?? "openclaw@latest",
+        );
+        expect(resolved.env.OPENCLAW_CURRENT_PACKAGE_TGZ).toBe("/tmp/candidate.tgz");
+      }
+    },
+  );
+
   it("dispatches through bash without running Docker in fixture tests", () => {
     const spawn = vi.fn(() => ({ signal: null, status: 0 }));
 

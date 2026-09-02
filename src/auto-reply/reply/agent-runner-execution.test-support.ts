@@ -190,7 +190,6 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
     isLikelyContextOverflowError: (message?: string) =>
       state.isLikelyContextOverflowErrorMock(message),
-    isTransientHttpError: () => false,
     sanitizeUserFacingText: (text?: string) => text ?? "",
   };
 });
@@ -601,6 +600,18 @@ export function expectBlockReplyCall(
   fields: Record<string, unknown>,
 ) {
   expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
+}
+
+/**
+ * Session-store paths reach production resolution, which derives a real agent
+ * SQLite file from the store's directory. A shared /tmp path would therefore
+ * open the machine-wide agent database and make unrelated suites depend on it.
+ */
+export function makeTestSessionStorePath(): string {
+  return path.join(
+    useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
+    "sessions.json",
+  );
 }
 
 export function createMinimalRunAgentTurnParams(overrides?: {

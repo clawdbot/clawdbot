@@ -1,7 +1,4 @@
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import {
   listProviderEnvAuthLookupKeys,
@@ -12,13 +9,14 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
 } from "../../agents/model-auth-markers.js";
+import { resolveProviderConfigSecretInput } from "../../agents/model-auth-provider-config.js";
 import {
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import type { ProviderAuthAliasLookupParams } from "../../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { coerceSecretRef, hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import type { readPreparedCatalog } from "../server-model-catalog-auth.js";
 import type { ModelAuthStatusProvider } from "./models-auth-status.types.js";
 
@@ -56,9 +54,8 @@ export function resolveProviderApiKeys(
     if (!provider) {
       continue;
     }
-    const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
+    const { providerConfig, ref } = resolveProviderConfigSecretInput(cfg, provider);
     if (hasConfiguredSecretInput(providerConfig?.apiKey, cfg.secrets?.defaults)) {
-      const ref = coerceSecretRef(providerConfig?.apiKey, cfg.secrets?.defaults);
       const profileReference = resolveProviderEntryApiKeyProfileReference({
         cfg,
         authAliasLookupParams,

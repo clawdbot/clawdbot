@@ -49,7 +49,8 @@ Gateway, then restart the Gateway to load it.
   <Step title="Configure provider and webhook">
     Set config under `plugins.entries.voice-call.config` (see
     [Configuration](#configuration) below). At minimum: `provider`, provider
-    credentials, `fromNumber`, and a publicly reachable webhook URL.
+    credentials, `fromNumber`, and a publicly reachable webhook URL. With
+    multiple agents, also set `agentId` to the agent that should own calls.
 
     For an inbound Twilio number, set its **Voice webhook** to the public Voice
     Call webhook URL with method `POST`. Set the number-level **Status
@@ -63,8 +64,8 @@ Gateway, then restart the Gateway to load it.
     openclaw voicecall setup --json
     ```
 
-    Checks plugin enablement, provider credentials, webhook exposure, and
-    that only one audio mode (`streaming` or `realtime`) is active.
+    Checks plugin enablement, provider credentials, webhook exposure, agent
+    ownership, and that only one audio mode (`streaming` or `realtime`) is active.
 
   </Step>
   <Step title="Smoke test">
@@ -171,6 +172,20 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
 }
 ```
 
+### Choose the call owner
+
+With one configured agent, Voice Call uses that agent automatically. With
+multiple agents, set `plugins.entries.voice-call.config.agentId` to the intended
+response and session owner. `main` is an ordinary agent ID, not a fallback for
+a multi-agent fleet. Per-number routes may choose different agents for inbound
+calls, but do not replace the plugin's startup owner.
+
+If startup reports that Voice Call has no explicit owner, list your agents with
+`openclaw agents list`, set the existing `agentId` field, and rerun
+`openclaw voicecall setup`. Restart the Gateway after updating its configuration.
+Existing legacy default-agent selection is preserved; new multi-agent setups
+should use an explicit owner. See [Agent configuration](/gateway/config-agents).
+
 ### Config reference
 
 Top-level keys under `plugins.entries.voice-call.config` not shown above:
@@ -189,7 +204,7 @@ Top-level keys under `plugins.entries.voice-call.config` not shown above:
 | `outbound.notifyHangupDelaySec` | `3`          | Seconds to wait after TTS before auto-hangup in notify mode.                                       |
 | `skipSignatureVerification`     | `false`      | Local testing only; never enable in production.                                                    |
 | `store`                         | unset        | Overrides the default `$OPENCLAW_STATE_DIR/voice-calls` path (normally `~/.openclaw/voice-calls`). |
-| `agentId`                       | `"main"`     | Agent used for response generation and session storage.                                            |
+| `agentId`                       | sole agent   | Agent used for response generation and session storage. Set explicitly with multiple agents.       |
 | `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                                  |
 | `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                                        |
 | `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                                      |
@@ -220,10 +235,11 @@ that Region. See
 
   </Accordion>
   <Accordion title="Legacy config migrations">
-    Config parsing normalizes these legacy keys automatically and logs a
-    warning naming the replacement path; the shim is removed in a future
-    release (`2026.6.0`), so run `openclaw doctor --fix` to rewrite committed
-    config to the canonical shape:
+    Run `openclaw doctor --fix` to rewrite these legacy keys to the canonical
+    shape. The Voice Call plugin owns the migration; runtime config parsing
+    accepts only the current keys. When both old and current settings exist,
+    Doctor keeps the current setting, removes the legacy key, and reports which
+    destination it retained. Legacy values fill only missing current fields:
 
     - `provider: "log"` → `provider: "mock"`
     - `twilio.from` → `fromNumber`
@@ -246,16 +262,16 @@ booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
 Set `sessionScope: "main"` to route every call into the configured agent's main
-session. This honors the core `session.mainKey` setting and resolves to
-`global` when core `session.scope` is `"global"`. Raw call turns then share
-history with the agent's primary session, so use this only when that shared
-context is intentional.
+session, `agent:<agentId>:main`, or `global` when core `session.scope` is
+`"global"`. Custom core `session.mainKey` values are ignored. Raw call turns
+then share history with the agent's primary session, so use this only when
+that shared context is intentional.
 
 For `per-phone` and `per-call`, Voice Call stores generated session keys under
 the configured agent namespace (`agent:<agentId>:voice:*`). Raw explicit
 integration keys resolve into the same namespace: a canonical
 `agent:<configuredAgentId>:*` key keeps that owner and honors core
-`session.mainKey`/global-scope aliasing; foreign or malformed `agent:*` input
+main-session/global-scope aliasing; foreign or malformed `agent:*` input
 is scoped as an opaque key under the configured agent; `global` and `unknown`
 remain global sentinels.
 
@@ -273,7 +289,7 @@ audio mode per call.
 Current runtime behavior:
 
 - `realtime.enabled` is supported for Twilio and Telnyx.
-- `realtime.provider` is optional. If unset, Voice Call uses the first registered realtime voice provider.
+- `realtime.provider` is optional. If unset, Voice Call selects the first configured realtime voice provider in provider priority order. Providers named in `realtime.providers` are discovered even when another provider is already active; plugin disablement and allow/deny rules still apply.
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the built-in `openclaw_end_call` realtime tool on every call. It takes no arguments or call ID; the active voice bridge binds it to the current call.
@@ -335,6 +351,10 @@ close and the inactivity backstop remain independent of it.
 | `auto`        | Keep the default prompt and let the provider decide when to call the consult tool.              |
 | `substantive` | Answer simple conversational glue directly and consult before facts, memory, tools, or context. |
 | `always`      | Consult before every substantive answer.                                                        |
+
+When a host tool run reports cancellation, the realtime model receives a
+cancelled result and the phone call stays open. Timeouts and other tool failures
+remain errors; ending the phone session suppresses pending consult results.
 
 ### Agent voice context
 
@@ -455,7 +475,7 @@ authenticated `realtime.enabled` path instead.
 
 Current runtime behavior:
 
-- `streaming.provider` is optional. If unset, Voice Call uses the first registered realtime transcription provider.
+- `streaming.provider` is optional. If unset, Voice Call selects the first configured realtime transcription provider in provider priority order. Providers named in `streaming.providers` are discovered even when another provider is already active; plugin disablement and allow/deny rules still apply.
 - Bundled realtime transcription providers: Deepgram (`deepgram`), ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
 - After Twilio sends an accepted stream `start` message, Voice Call registers the stream immediately, queues inbound media through the transcription provider while the provider connects, and starts the initial greeting only after realtime transcription is ready.
@@ -564,6 +584,7 @@ Behavior notes:
 - If a Twilio media stream is already active, Voice Call does not fall back to TwiML `<Say>`. If telephony TTS is unavailable in that state, the playback request fails instead of mixing two playback paths.
 - When telephony TTS falls back to a secondary provider, Voice Call logs a warning with the provider chain (`from`, `to`, `attempts`) for debugging.
 - When Twilio barge-in or stream teardown clears the pending TTS queue, queued playback requests settle instead of hanging callers awaiting playback completion.
+- Resumed caller speech discards older automatic replies that are still being generated. Twilio streaming reacts to speech-start and partial transcripts; carrier webhook calls react when a new speech event arrives. Explicit speech requests remain available, and already accepted agent work can finish without speaking an obsolete reply.
 
 ### TTS examples
 
@@ -830,8 +851,9 @@ delegate to the Gateway-owned voice-call runtime so the CLI does not bind a
 second webhook server. If no Gateway is reachable, the commands fall back to
 a standalone CLI runtime.
 
-`latency` reads `calls.jsonl` from the default voice-call storage path. Use
-`--file <path>` to point at a different log and `--last <n>` to limit
+`latency` reads persisted call records from SQLite by default. Use
+`--file <path>` to read an existing custom JSONL log (with a basename other than
+`calls.jsonl`) and `--last <n>` to limit
 analysis to the last N records (default 200). Output includes min/max/avg,
 p50, and p95 for turn latency and listen-wait times.
 
@@ -869,6 +891,13 @@ should use `voicecall.dtmf` after the call exists if they need post-connect
 digits.
 
 ## Troubleshooting
+
+### Call placement fails to save its initial record
+
+Voice Call saves the initial record before reserving a concurrency slot or
+contacting the carrier. If that write fails, the placement reports the storage
+error without dialing. Restore access to the state directory, then retry; the
+failed placement does not consume `maxConcurrentCalls` capacity.
 
 ### Setup fails webhook exposure
 

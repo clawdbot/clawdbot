@@ -433,6 +433,15 @@ describe("runCapability auto audio entries", () => {
       cfgExtra: {
         tools: {
           media: {
+            models: [
+              {
+                provider: "openai",
+                model: "whisper-1",
+                capabilities: ["audio"],
+                language: "pt",
+                prompt: "entry prompt",
+              },
+            ],
             audio: {
               enabled: true,
               prompt: "configured prompt",
@@ -501,7 +510,7 @@ describe("runCapability auto audio entries", () => {
       prompt: "Transcribe in Russian.",
       models: [{ provider: "openai", model: "whisper-1" }],
     });
-    for (const language of ["en-US", "eng", "english"]) {
+    for (const language of ["en", " en-US ", "eng", "english", "EN_us"]) {
       await runCase({
         enabled: true,
         language,
@@ -510,6 +519,7 @@ describe("runCapability auto audio entries", () => {
     }
     await runCase({
       enabled: true,
+      prompt: "OpenClaw, Whisper, and Groq.",
       models: [{ provider: "openai", model: "whisper-1" }],
     });
 
@@ -519,8 +529,35 @@ describe("runCapability auto audio entries", () => {
       "Transcribe the audio.",
       "Transcribe the audio.",
       "Transcribe the audio.",
+      "Transcribe the audio.",
+      "OpenClaw, Whisper, and Groq.",
     ]);
   });
+
+  it.each([undefined, "", " \t "])(
+    "omits the implicit audio prompt for autodetect language %j",
+    async (language) => {
+      const requests: AudioTranscriptionRequest[] = [];
+      const result = await runAutoAudioCase({
+        transcribeAudio: async (request) => {
+          requests.push(request);
+          return { text: "Bonjour.", model: request.model ?? "unknown" };
+        },
+        cfgExtra: {
+          tools: {
+            media: {
+              models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
+              audio: { enabled: true, language },
+            },
+          },
+        },
+      });
+      expect(requireCapabilityOutput(result, 0).text).toBe("Bonjour.");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.prompt).toBeUndefined();
+      expect(requests[0]?.language).toBe(language);
+    },
+  );
 
   it("uses mistral when only mistral key is configured", async () => {
     const isolatedAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audio-agent-"));

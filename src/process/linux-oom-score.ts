@@ -55,12 +55,14 @@ function defaultShellAvailable(): boolean {
 export type OomWrapOptions = {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
+  argv0?: string;
   shellAvailable?: () => boolean;
 };
 
 export type OomScoreAdjustedSpawn = {
   command: string;
   args: string[];
+  argv0?: string;
   env: NodeJS.ProcessEnv | undefined;
   wrapped: boolean;
 };
@@ -102,8 +104,21 @@ export function prepareOomScoreAdjustedSpawn(
   options?: OomWrapOptions,
 ): OomScoreAdjustedSpawn {
   const copy = [...args];
-  if (!command || !canUseShellExecCommand(command) || !shouldWrapChildForOomScore(options)) {
-    return { command, args: copy, env: options?.env, wrapped: false };
+  const directSpawn: OomScoreAdjustedSpawn = {
+    command,
+    args: copy,
+    ...(options?.argv0 === undefined ? {} : { argv0: options.argv0 }),
+    env: options?.env,
+    wrapped: false,
+  };
+  if (
+    !command ||
+    !canUseShellExecCommand(command) ||
+    !shouldWrapChildForOomScore(options) ||
+    (options?.argv0 !== undefined && options.argv0 !== command)
+  ) {
+    // POSIX sh cannot preserve an argv0 that differs from the exec pathname.
+    return directSpawn;
   }
   if (isWrapped(command, copy)) {
     return { command, args: copy, env: hardenShellEnv(options?.env), wrapped: true };

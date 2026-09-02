@@ -303,19 +303,25 @@ internal fun SessionsScreen(
             contentAlignment = Alignment.Center,
           ) {
             when (sessionEmptyMode(searchState.query, searchState.loading)) {
-              SessionEmptyMode.SearchLoading -> ClawLoadingState(title = nativeString("Searching threads"))
-              SessionEmptyMode.SearchNoMatches ->
+              SessionEmptyMode.SearchLoading -> {
+                ClawLoadingState(title = nativeString("Searching threads"))
+              }
+
+              SessionEmptyMode.SearchNoMatches -> {
                 ClawEmptyState(
                   title = nativeString("No matching threads"),
                   body = nativeString("Try a different search or clear the current query."),
                   action = { ClawPrimaryButton(text = nativeString("Clear Search"), onClick = { searchText = "" }) },
                 )
-              SessionEmptyMode.Filter ->
+              }
+
+              SessionEmptyMode.Filter -> {
                 ClawEmptyState(
                   title = emptySessionTitle(filter),
                   body = emptySessionBody(filter),
                   action = { ClawPrimaryButton(text = nativeString("Start Chat"), onClick = onOpenChat) },
                 )
+              }
             }
           }
         }
@@ -814,13 +820,15 @@ private fun SessionRow(
             menuExpanded = false
             onRename()
           }
-          SessionMenuItem(
-            nativeString(
-              if (session.hasActiveRun == true) "Fork from last completed message" else "Fork",
-            ),
-          ) {
-            menuExpanded = false
-            onFork()
+          if (session.modelSelectionLocked != true) {
+            SessionMenuItem(
+              nativeString(
+                if (session.hasActiveRun == true) "Fork from last completed message" else "Fork",
+              ),
+            ) {
+              menuExpanded = false
+              onFork()
+            }
           }
           SessionMenuItem(nativeString("Move to group")) { submenu = SessionRowSubmenu.Group }
           if (canChangeArchived) {
@@ -1034,7 +1042,9 @@ internal fun resolveSessionBrowserEntries(
   val filtered =
     when (filter) {
       SessionFilter.Recent -> entries.filter { it.archived != true }
+
       SessionFilter.Current -> entries.filter { it.key == currentSessionKey && it.archived != true }
+
       // Gate on the entry's own archived flag so a pre-toggle active list can
       // never render with archived-only actions while a refetch is in flight.
       SessionFilter.Archived -> entries.filter { it.archived == true }

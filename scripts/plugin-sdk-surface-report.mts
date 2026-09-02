@@ -197,9 +197,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
-      // +1: read-only authoritative conversation-binding inspection for route-owner plugins.
       // +1: diagnostic flag checks without event, trace, or redaction initialization.
-      148,
+      // +1: restore the shipped read-only conversation-binding inspection facade.
+      // +1: canonical node CLI owners for plugin-provided node commands.
+      149,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -310,7 +311,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: named bounded structured-input surface for native harness protocol adapters.
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -2: retire the uncalled secret-plan target resolver and its result type.
-      // +2: conversation-binding inspection result and runtime inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
       // +2: embedded foreground prompt context builder and its public context type.
@@ -331,7 +331,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      4355,
+      // +3: typed system-agent approval request, payload, and resolution contracts for channel plugins.
+      // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
+      // +2: bounded display-only error diagnostic attachment and rendering.
+      // +1: shared presentation delivery policy for core and channel plugins.
+      // +2: shipped conversation-binding inspection function and result type.
+      // +4: canonical node CLI option, envelope, presentation, and error owners.
+      // +1: Gateway caller ownership for standalone browser routing.
+      4369,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -420,7 +427,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the test-only channel activity reset export.
       // +1: OpenAI-compatible video execution in the existing media-understanding owner.
       // -1: retire the uncalled secret-plan target resolver.
-      // +1: read-only authoritative conversation-binding inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
       // +1: embedded foreground prompt context builder.
@@ -438,7 +444,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: strict session-agent resolution aliases preserve shipped Plugin SDK behavior.
       // +1: manifest-owned plugin capability secret availability guard.
       // +1: canonical diagnostic flag checker through its focused subpath.
-      2592,
+      // +1: shared approval expiry formatter for native channel prompts.
+      // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
+      // +2: bounded display-only error diagnostic attachment and rendering.
+      // +1: shared presentation delivery policy for core and channel plugins.
+      // +1: shipped read-only conversation-binding inspection function.
+      // +4: canonical node CLI option, envelope, presentation, and error owners.
+      // +1: Gateway caller ownership for standalone browser routing.
+      2603,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

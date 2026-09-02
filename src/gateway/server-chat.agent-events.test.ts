@@ -3,14 +3,28 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatEventSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "../agents/command/attempt-callbacks.js";
+import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
+import { createSubscribedSessionHarness } from "../agents/embedded-agent-subscribe.e2e-harness.js";
 import { buildAssistantStreamData } from "../agents/embedded-agent-subscribe.handlers.messages.stream.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
+import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
+import {
+  loadSessionEntry as loadStoredSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
@@ -25,6 +39,7 @@ import {
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/gateway-events.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 const loadGatewaySessionLifecycleSnapshotMock = vi.hoisted(() => vi.fn());
@@ -99,6 +114,7 @@ import {
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
 import { broadcastChatError } from "./server-methods/chat-broadcast.js";
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 function waitForFast<T>(
@@ -350,6 +366,23 @@ describe("agent event handler", () => {
         }),
       ]),
     );
+  });
+
+  it("replays cumulative usage with the same client identity as live delivery", () => {
+    const { chatRunState, handler, broadcast } = createHarness();
+    registerChatRun(chatRunState, "provider-run", "session-1", "client-run");
+    emitAgentEvents(handler, "provider-run", [
+      ["usage", { outputTokens: 100 }],
+      ["usage", { outputTokens: 170 }],
+    ]);
+    const usage = agentBroadcastCalls(broadcast).at(-1)?.[1];
+    expect(usage).toMatchObject({
+      runId: "client-run",
+      sessionKey: "session-1",
+      stream: "usage",
+      data: { outputTokens: 170 },
+    });
+    expect(chatRunState.runs.get("client-run")?.progressSnapshot?.events).toEqual([usage]);
   });
 
   it("records, replaces, dismisses, and clears normalized plan snapshots", () => {
@@ -1471,8 +1504,9 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-flush", "assistant", { text: "Hello" });
 
-    now = 10_100;
+    now = 10_050;
     emitAgentEvent(handler, "run-flush", "assistant", { text: "Hello world" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
 
     emitLifecycleEnd(handler, "run-flush");
 
@@ -1503,8 +1537,9 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-err-flush", "assistant", { text: "Hello" });
 
-    now = 10_100;
+    now = 10_050;
     emitAgentEvent(handler, "run-err-flush", "assistant", { text: "Hello world" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
 
     emitAgentEvent(
       handler,
@@ -1538,8 +1573,9 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-err-grace", "assistant", { text: "Hello" });
 
-    now = 10_100;
+    now = 10_050;
     emitAgentEvent(handler, "run-err-grace", "assistant", { text: "Hello world" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
 
     emitAgentEvent(
       handler,
@@ -1570,8 +1606,9 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello" });
 
-    now = 10_100;
+    now = 10_050;
     emitAgentEvent(handler, "run-err-cancel", "assistant", { text: "Hello world" });
+    expect(chatDeltaTexts(broadcast)).toEqual(["Hello"]);
 
     emitAgentEvent(
       handler,
@@ -1840,16 +1877,25 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
-  it("flushes throttled shorter replacement deltas before final", () => {
+  it.each(["Hi", "Hello", ""])("flushes a scoped replacement %j before final", (text) => {
     let now = 11_700;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
     registerNamedChatRun(chatRunState, "short-replacement-flush");
 
-    emitAgentEvent(handler, "run-short-replacement-flush", "assistant", { text: "Hello world" });
+    emitAgentEvent(handler, "run-short-replacement-flush", "assistant", {
+      text: "Hello world",
+      itemId: "message-1",
+    });
 
     now = 11_760;
-    emitAgentEvent(handler, "run-short-replacement-flush", "assistant", { text: "Hi" }, { seq: 2 });
+    emitAgentEvent(
+      handler,
+      "run-short-replacement-flush",
+      "assistant",
+      { text, itemId: "message-1" },
+      { seq: 2 },
+    );
 
     emitLifecycleEnd(handler, "run-short-replacement-flush", 3);
 
@@ -1862,9 +1908,9 @@ describe("agent event handler", () => {
       message?: { content?: Array<{ text?: string }> };
     };
     expect(replacementPayload.state).toBe("delta");
-    expect(replacementPayload.deltaText).toBe("Hi");
+    expect(replacementPayload.deltaText).toBe(text);
     expect(replacementPayload.replace).toBe(true);
-    expect(replacementPayload.message?.content?.[0]?.text).toBe("Hi");
+    expect(replacementPayload.message?.content?.[0]?.text).toBe(text);
     expect(
       (expectDefined(chatCalls[2], "chatCalls[2] test invariant")[1] as { state?: string }).state,
     ).toBe("final");
@@ -1934,7 +1980,7 @@ describe("agent event handler", () => {
 
     emitAgentEvent(handler, "run-tool-flush", "assistant", { text: "Before tool" });
 
-    // Throttled assistant update (within 150ms window).
+    // Keep the second update inside the live-text pacing window.
     now = 12_050;
     emitAgentEvent(
       handler,
@@ -1965,8 +2011,15 @@ describe("agent event handler", () => {
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    const flushCallOrder = broadcast.mock.invocationCallOrder[1] ?? 0;
-    const toolCallOrder = broadcastToConnIds.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const flushCallIndex = broadcast.mock.calls.findIndex((call) => call === chatCalls[1]);
+    const flushCallOrder = expectDefined(
+      broadcast.mock.invocationCallOrder[flushCallIndex],
+      "flushed chat delta invocation",
+    );
+    const toolCallOrder = expectDefined(
+      broadcastToConnIds.mock.invocationCallOrder[0],
+      "tool start invocation",
+    );
     expect(flushCallOrder).toBeLessThan(toolCallOrder);
     nowSpy.mockRestore();
   });
@@ -4224,40 +4277,103 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-terminal-error")).toBe(false);
   });
 
-  it("finalizes fallback-exhausted lifecycle errors without waiting for retry grace", () => {
-    vi.useFakeTimers();
-    const { broadcast, clearAgentRunContext, agentRunSeq, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-terminal-error",
-      lifecycleErrorRetryGraceMs: 100,
-    });
-    registerAgentRunContext("run-terminal-final-failure", {
-      sessionKey: "session-terminal-error",
-    });
+  it.each([
+    {
+      name: "fallback-exhausted failure",
+      terminal: {
+        error: "LLM request failed: network connection error.",
+        fallbackExhaustedFailure: true,
+      },
+      status: "failed",
+    },
+    {
+      name: "provider timeout after a tool error",
+      terminal: {
+        error:
+          "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+        aborted: false,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      status: "timeout",
+    },
+  ])("persists $name without waiting for retry grace", ({ terminal, status }) =>
+    withOpenClawTestState({ label: "terminal-projection" }, async (state) => {
+      const sessionKey = "session-terminal-error";
+      const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+      const target = { storePath, sessionKey };
+      const read = () => loadStoredSessionEntry({ ...target, readConsistency: "latest" });
+      await replaceSessionEntry(target, {
+        sessionId: "session-terminal",
+        updatedAt: 1_000,
+        status: "running",
+        startedAt: 1_000,
+      });
+      vi.mocked(loadSessionEntry).mockImplementation(() => ({
+        cfg: {},
+        agentId: "main",
+        storePath,
+        store: {},
+        entry: read(),
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+        legacyKey: undefined,
+      }));
+      loadGatewaySessionRow.mockImplementation(() => ({
+        ...OWNED_SESSION_ROW,
+        ...read(),
+        key: sessionKey,
+      }));
+      persistGatewaySessionLifecycleEventMock.mockImplementation(
+        persistGatewaySessionLifecycleEvent,
+      );
+      const { broadcast, broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+        resolveSessionKeyForRun: () => sessionKey,
+      });
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(2_000);
+        sessionEventSubscribers.subscribe("conn-session");
+        registerAgentRunContext("run-terminal-final-failure", { sessionKey });
 
-    emitAgentEvent(handler, "run-terminal-final-failure", "lifecycle", {
-      phase: "error",
-      error: "LLM request failed: network connection error.",
-      fallbackExhaustedFailure: true,
-    });
+        emitAgentEvents(handler, "run-terminal-final-failure", [
+          ["lifecycle", { phase: "error", error: "Retryable provider failure." }],
+          [
+            "tool",
+            { phase: "result", name: "read", isError: true, result: "An earlier tool failed." },
+          ],
+          ["lifecycle", { phase: "error", startedAt: 1_000, endedAt: 2_000, ...terminal }],
+        ]);
+        await Promise.all(
+          persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
+        );
 
-    const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
-      state?: string;
-      runId?: string;
-      errorMessage?: string;
-    };
-    expect(finalPayload.state).toBe("error");
-    expect(finalPayload.runId).toBe("run-terminal-final-failure");
-    expect(finalPayload.errorMessage).toContain("network connection error");
-    expect(clearAgentRunContext).toHaveBeenCalledWith("run-terminal-final-failure");
-    expect(agentRunSeq.has("run-terminal-final-failure")).toBe(false);
-    expect(
-      persistGatewaySessionLifecycleEventMock.mock.calls.some(
-        ([params]) =>
-          (params as { event?: { data?: { fallbackExhaustedFailure?: boolean } } }).event?.data
-            ?.fallbackExhaustedFailure === true,
-      ),
-    ).toBe(true);
-  });
+        expect(read()).toMatchObject({ status, lastRunError: terminal.error, endedAt: 2_000 });
+        expect(
+          broadcastToConnIds.mock.calls.find(([event]) => event === "sessions.changed")?.[1],
+        ).toMatchObject({ status, lastRunError: terminal.error });
+
+        vi.setSystemTime(3_000);
+        emitAgentEvents(handler, "run-recovered", [
+          ["lifecycle", { phase: "start", startedAt: 3_000 }],
+          ["lifecycle", { phase: "end", startedAt: 3_000, endedAt: 4_000 }],
+        ]);
+        await Promise.all(
+          persistGatewaySessionLifecycleEventMock.mock.results.map((result) => result.value),
+        );
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(read()).toMatchObject({ status: "done", startedAt: 3_000, endedAt: 4_000 });
+        expect(read()?.lastRunError).toBeUndefined();
+        expect(chatBroadcastCalls(broadcast).map(([, payload]) => payload.state)).toEqual([
+          "error",
+          "final",
+        ]);
+      } finally {
+        handler.dispose();
+        vi.useRealTimers();
+      }
+    }),
+  );
 
   it("keeps deferred lifecycle-error cleanup across later non-terminal events", () => {
     vi.useFakeTimers();
@@ -4470,6 +4586,169 @@ describe("agent event handler", () => {
     };
     expect(nodePayload.errorKind).toBe("rate_limit");
     expect(nodePayload).not.toHaveProperty("message");
+    expect(payload).not.toHaveProperty("errorDetail");
+  });
+
+  it.each([
+    ["error", "direct"],
+    ["stop", "direct"],
+    ["error", "command"],
+    ["stop", "command"],
+    ["error", "reply"],
+    ["stop", "reply"],
+  ] as const)(
+    "projects subscribed provider %s terminals through %s ownership",
+    (stopReason, owner) => {
+      const runId = `run-provider-${stopReason}`;
+      const { broadcast, nodeSendToSession, handler, chatRunState } = createHarness({
+        lifecycleErrorRetryGraceMs: 0,
+      });
+      registerChatRun(chatRunState, runId, "session-provider-detail", runId);
+      const state: AgentAttemptLifecycleState = {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      };
+      const callbacks = createAgentAttemptLifecycleCallbacks(state);
+      const command = createAgentCommandLifecycle({
+        runId,
+        lifecycleGeneration: getAgentEventLifecycleGeneration,
+        startedAt: 1,
+        state,
+      });
+      const reply = createAgentLifecycleTerminalBackstop({
+        runId,
+        getLifecycleGeneration: getAgentEventLifecycleGeneration,
+        resolveTerminationFields: () => ({}),
+      });
+      const onAgentEvent = vi.fn((event) => {
+        if (owner === "command") {
+          void callbacks.onAgentEvent(event);
+        }
+        if (owner === "reply") {
+          reply.note(event);
+        }
+      });
+      const unlisten = onAgentRuntimeEvent(handler);
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId,
+        onAgentEvent,
+        terminalLifecyclePhase: owner === "direct" ? "end" : "finishing",
+      });
+      try {
+        const message = {
+          role: "assistant",
+          stopReason,
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          content: stopReason === "stop" ? [{ type: "text", text: "Done" }] : [],
+          errorMessage:
+            '502 {"error":{"type":"server_error","message":"Upstream unavailable x-api-key: synthetic-provider-credential"}}',
+        };
+        emit({ type: "message_end", message });
+        emit({ type: "agent_end" });
+        const terminal = {
+          metadata: {},
+          outcome: buildAgentRunTerminalOutcome({
+            status: stopReason === "error" ? "error" : "ok",
+            stopReason,
+          }),
+        };
+        if (owner === "command") {
+          if (stopReason === "error") {
+            command.emitResultError({ payloads: [], meta: { durationMs: 0 } }, true, terminal);
+          } else {
+            command.emitEnd(terminal);
+          }
+        }
+        if (owner === "reply") {
+          reply.emit(
+            stopReason === "error" ? "error" : "end",
+            stopReason === "error" ? "Provider failed" : { meta: {} },
+          );
+        }
+        const payload = chatBroadcastCalls(broadcast).at(-1)?.[1];
+        const serialized = JSON.stringify(payload);
+        const wire = JSON.parse(serialized);
+        expect(Value.Check(ChatEventSchema, wire)).toBe(true);
+        expect(sessionChatCalls(nodeSendToSession).at(-1)?.[2]).toEqual(payload);
+        if (stopReason === "error") {
+          expect(wire.errorDetail).toEqual({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            failoverReason: "server_error",
+            providerRuntimeFailureKind: "timeout",
+            providerErrorType: "server_error",
+            httpStatus: 502,
+            providerErrorMessagePreview: "Upstream unavailable x-api-key: ***",
+          });
+          const callbackTerminal = onAgentEvent.mock.calls.find(
+            ([event]) => event.stream === "lifecycle" && event.data.error,
+          )?.[0];
+          const runtimeTerminal = agentBroadcastCalls(broadcast).find(
+            ([, event]) => event.stream === "lifecycle" && event.data.phase === "error",
+          )?.[1];
+          expect(callbackTerminal.data.errorObservation).toMatchObject({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            httpStatus: 502,
+            providerErrorMessagePreview: wire.errorDetail.providerErrorMessagePreview,
+          });
+          expect(runtimeTerminal.data.errorObservation).toEqual(
+            callbackTerminal.data.errorObservation,
+          );
+          expect(serialized).not.toContain("synthetic-provider-credential");
+          expect(JSON.stringify(callbackTerminal.data.errorObservation)).not.toContain("rawError");
+        } else {
+          expect(wire.state).toBe("final");
+          expect(wire).not.toHaveProperty("errorDetail");
+        }
+      } finally {
+        subscription.unsubscribe();
+        unlisten();
+        handler.dispose();
+      }
+    },
+  );
+
+  it("bounds the chat error allowlist and omits invalid or log-only facts", () => {
+    const { broadcast, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-bounded-error",
+      lifecycleErrorRetryGraceMs: 0,
+    });
+    try {
+      emitAgentEvent(handler, "run-bounded-error", "lifecycle", {
+        phase: "error",
+        error: "Request failed",
+        errorObservation: {
+          provider: "p".repeat(301),
+          model: "m".repeat(301),
+          failoverReason: "f".repeat(301),
+          providerRuntimeFailureKind: "k".repeat(301),
+          providerErrorType: "t".repeat(301),
+          providerErrorMessagePreview: `${"x".repeat(299)}🚀tail`,
+          httpStatus: "invalid",
+          rawErrorPreview: "log-only",
+          rawErrorHash: "log-only",
+          errorBody: "log-only",
+          unexpected: "log-only",
+        },
+      });
+      const serialized = JSON.stringify(chatBroadcastCalls(broadcast).at(-1)?.[1]);
+      const payload = JSON.parse(serialized);
+      expect(serialized).not.toContain("log-only");
+      expect(payload.errorDetail).toEqual({
+        provider: "p".repeat(300),
+        model: "m".repeat(300),
+        failoverReason: "f".repeat(300),
+        providerRuntimeFailureKind: "k".repeat(300),
+        providerErrorType: "t".repeat(300),
+        providerErrorMessagePreview: "x".repeat(299),
+      });
+      expect(Value.Check(ChatEventSchema, payload)).toBe(true);
+    } finally {
+      handler.dispose();
+    }
   });
 
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {

@@ -36,6 +36,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  concurrency?: { group?: string; "cancel-in-progress"?: boolean; queue?: string };
   "continue-on-error"?: boolean | string;
   environment?: string;
   if?: string;
@@ -444,29 +445,47 @@ describe("Vercel Container Registry publishing", () => {
     ).toBe(false);
   });
 
+  it("allows a first VCR alias publication when the exact target ref is absent", () => {
+    const calls: string[][] = [];
+    const execute = successfulExecutor(calls);
+    let created = false;
+    const execFileSyncImpl = vi.fn((command: string, args: string[]) => {
+      if (args[2] === "create") {
+        created = true;
+      } else if (args.at(-1)?.includes(".Image") && !args[3]!.includes("@") && !created) {
+        const error = new Error("docker inspect failed");
+        Object.assign(error, { stderr: `ERROR: ${args[3]}: not found` });
+        throw error;
+      }
+      return execute(command, args);
+    });
+
+    promoteVercelContainerRegistryAliases(
+      {
+        includeBrowser: false,
+        targetImage,
+        version: "2026.7.2",
+      },
+      { execFileSyncImpl, log: () => {} },
+    );
+
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(2);
+  });
+
   it("transports only secret-safe digests across the VCR workflow boundary", () => {
     const dockerRelease = readWorkflow(".github/workflows/docker-release.yml");
     const releaseWorkflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
     const reusable = readWorkflow(".github/workflows/vercel-container-registry-publish.yml");
-    const verifyAttestations = requireJob(dockerRelease, "verify-attestations");
+    const dockerPublish = requireJob(dockerRelease, "publish");
     const releasePublish = requireJob(releaseWorkflow, "publish_vcr");
     const reusablePublish = requireJob(reusable, "publish");
 
-    expect(verifyAttestations.outputs?.vcr_source_digests).toBe(
-      "${{ steps.vcr_source_digests.outputs.value }}",
+    expect(dockerPublish.outputs?.vcr_source_digests).toBe(
+      "${{ steps.promote.outputs.vcr_source_digests }}",
     );
-    expect(dockerRelease.on?.workflow_call?.outputs?.vcr_source_digests).toEqual({
-      description: "Newline-delimited attestation-verified immutable GHCR source digests",
-      value: "${{ jobs.verify-attestations.outputs.vcr_source_digests }}",
-    });
-    const immutableSourceStep = verifyAttestations.steps?.find(
-      (step) => step.name === "Resolve and verify immutable VCR source refs",
+    expect(dockerRelease.on?.workflow_call?.outputs?.vcr_source_digests?.value).toBe(
+      "${{ jobs.publish.outputs.vcr_source_digests }}",
     );
-    expect(immutableSourceStep?.run).toContain("docker buildx imagetools inspect");
-    expect(immutableSourceStep?.run).toContain("${GHCR_IMAGE}@${digest}");
-    expect(immutableSourceStep?.run).toContain("verify-docker-attestations.mjs");
-    expect(immutableSourceStep?.run).toContain("${aliases[$index]}=${digest}");
-    expect(immutableSourceStep?.run).not.toContain("${aliases[$index]}=${immutable_ref}");
 
     expect(releasePublish.with?.source_digests).toBe(
       "${{ needs.publish_docker.outputs.vcr_source_digests }}",
@@ -511,7 +530,7 @@ describe("Vercel Container Registry publishing", () => {
     const manualResolve = requireJob(manualPromotion, "resolve");
     const manualApproval = requireJob(manualPromotion, "approve");
 
-    expect(dockerRelease.concurrency).toEqual({
+    expect(requireJob(dockerRelease, "publish").concurrency).toEqual({
       group: "docker-release-publish",
       "cancel-in-progress": false,
       queue: "max",
@@ -637,18 +656,18 @@ describe("Vercel Container Registry publishing", () => {
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ sandbox: "4.0.0", vercel: "59.3.0" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.1.0", vercel: "59.5.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-Bj/SN1qln/9guMcIz4gEGn+Ij+amGtkT2kqxwUAFgrLU2Hr0zYk4kX4QfxmZEs6WhheAaMlblVw2VUF2JFP5fA==",
-      version: "59.3.0",
+        "sha512-tQgKXmppJ/uoQZfX+HYAVIxWSUS6V6FMounEEpsHTUqlHyBI/aOATH9sKtkXXD1lQt/JsN4ocWymIGUPLRTxwA==",
+      version: "59.5.0",
     });
     expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
       bin: { sandbox: "bin/sandbox.mjs" },
       integrity:
-        "sha512-3fNfxSmRJpoCGF3wBncPjxypKYmgtleaAYgyhMrowBpp83388gIELSQ4evIPt1sP+fa6gnn0wRr8CBnUneFzRQ==",
-      version: "4.0.0",
+        "sha512-kzDiAyvrGHGdrQ/7mT6Md18K9OUVgZW/KUKO/wBJ/gHouDh6oJPWcGWfOV5i7CSep2map3Pl7vV9gszm3Cvu7Q==",
+      version: "4.1.0",
     });
     const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
     expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);

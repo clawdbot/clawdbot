@@ -304,6 +304,7 @@ function buildSessionCommandParams(
     directives: parseInlineSessionDirectives(commandBody),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
+    agentId: "main",
     workspaceDir: "/tmp",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
@@ -497,6 +498,7 @@ describe("/session conversation bindings", () => {
     expect(result?.reply?.text).toBe("✅ Conversation unbound.");
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
       bindingId: binding.bindingId,
+      scope: binding.conversation,
       reason: "manual",
     });
   });
@@ -520,6 +522,7 @@ describe("/session conversation bindings", () => {
     expect(result?.reply?.text).toBe("✅ Conversation unbound.");
     expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledExactlyOnceWith({
       bindingId: binding.bindingId,
+      scope: binding.conversation,
       reason: "manual",
     });
   });

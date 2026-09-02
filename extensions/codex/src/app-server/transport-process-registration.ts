@@ -67,7 +67,7 @@ async function reapRegisteredCodexAppServerOrphans(requestedDeadline?: number): 
     ) {
       let command: string | undefined;
       try {
-        command = await readCodexAppServerProcessCommand(registration.child.pid, deadline);
+        command = await readCodexAppServerProcessCommand(child, deadline);
       } catch (error) {
         // Only a successful inspection may revoke the fingerprint obligation.
         const current = (
@@ -141,7 +141,7 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
         "Cannot register the Codex child process: its direct-parent identity is unavailable. Retry.",
       );
     }
-    const command = await readCodexAppServerProcessCommand(spawned.pid, Date.now() + 2_000);
+    const command = await readCodexAppServerProcessCommand(spawned, Date.now() + 2_000);
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         "Cannot register the Codex child process command: the child exited during inspection. Retry.",

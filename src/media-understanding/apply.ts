@@ -17,7 +17,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
-import { extractFileContentFromSource } from "../media/input-files.js";
+import { extractFileContentFromBuffer } from "../media/input-files.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { runMediaCapability } from "./apply-capability.js";
 import { resolveAttachmentKind } from "./attachments.js";
@@ -232,16 +232,13 @@ async function classifyFileAttachment(params: {
         };
     return { outcome, filename, mimeType };
   }
-  let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
+  let extracted: Awaited<ReturnType<typeof extractFileContentFromBuffer>>;
   try {
     const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
-    extracted = await extractFileContentFromSource({
-      source: {
-        type: "base64",
-        data: bufferResult.buffer.toString("base64"),
-        mediaType: mimeType,
-        filename: bufferResult.fileName,
-      },
+    extracted = await extractFileContentFromBuffer({
+      // Extractor plugins receive owned mutable bytes, never the attachment cache's buffer.
+      buffer: Buffer.from(bufferResult.buffer),
+      filename: bufferResult.fileName,
       limits: { ...baseLimits, allowedMimes },
       config: cfg,
       classification,

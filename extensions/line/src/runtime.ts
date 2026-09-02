@@ -12,7 +12,6 @@ type LineChannelRuntime = {
   pushMessagesLine?: typeof import("./send.js").pushMessagesLine;
   pushTemplateMessage?: typeof import("./send.js").pushTemplateMessage;
   pushTextMessageWithQuickReplies?: typeof import("./send.js").pushTextMessageWithQuickReplies;
-  readAccountMessageQuota?: typeof import("./message-quota.js").readLineAccountMessageQuota;
   resolveLineAccount?: typeof import("./accounts.js").resolveLineAccount;
   sendMessageLine?: typeof import("./send.js").sendMessageLine;
 };

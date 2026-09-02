@@ -23,7 +23,10 @@ import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
-import { resolveWorkspaceMigrationSourceKey } from "./state-migrations.workspace-setup-receipts.js";
+import {
+  resolveWorkspaceMigrationSourceKey,
+  type MigrationReceipt,
+} from "./state-migrations.workspace-setup-receipts.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
 const MIGRATION_KIND = WORKSPACE_LEGACY_STATE_MIGRATION_KIND;
@@ -44,6 +47,7 @@ export type SourceSnapshot = {
   sha256: string;
   size: number;
   raw: string;
+  buffer: Buffer;
 };
 
 type ParsedSetup = {
@@ -175,16 +179,16 @@ function canonicalFingerprint(value: unknown): string {
 }
 
 function setupFingerprint(params: {
-  workspacePath: string;
-  bootstrapSeededAt: string | null;
-  setupCompletedAt: string | null;
+  workspace_path: string | null;
+  bootstrap_seeded_at: string | null;
+  setup_completed_at: string | null;
 }): string {
   return canonicalFingerprint({
     kind: "setup",
-    workspacePath: params.workspacePath,
+    workspacePath: params.workspace_path,
     version: WORKSPACE_SETUP_STATE_VERSION,
-    bootstrapSeededAt: params.bootstrapSeededAt,
-    setupCompletedAt: params.setupCompletedAt,
+    bootstrapSeededAt: params.bootstrap_seeded_at,
+    setupCompletedAt: params.setup_completed_at,
   });
 }
 
@@ -268,9 +272,6 @@ export function canonicalCoversParsedSource(params: {
   return runSqliteDeferredTransactionSync(db, () => {
     const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
     if (params.source.kind === "setup" && params.parsed.kind === "setup") {
-      if (!params.source.workspaceDir) {
-        return false;
-      }
       const row = executeSqliteQueryTakeFirstSync(
         db,
         kysely
@@ -278,25 +279,11 @@ export function canonicalCoversParsedSource(params: {
           .selectAll()
           .where("workspace_key", "=", params.source.workspaceKey),
       );
-      if (
-        !row ||
-        row.workspace_path !== params.source.workspaceDir ||
-        row.version !== WORKSPACE_SETUP_STATE_VERSION
-      ) {
-        return false;
-      }
-      const fingerprint = setupFingerprint({
-        workspacePath: row.workspace_path,
-        bootstrapSeededAt: row.bootstrap_seeded_at,
-        setupCompletedAt: row.setup_completed_at,
-      });
-      const sourceBootstrapSeededAt = params.parsed.value.bootstrapSeededAt ?? null;
-      const sourceSetupCompletedAt = params.parsed.value.setupCompletedAt ?? null;
-      const coversSource =
-        (sourceBootstrapSeededAt === null || row.bootstrap_seeded_at === sourceBootstrapSeededAt) &&
-        (sourceSetupCompletedAt === null || row.setup_completed_at === sourceSetupCompletedAt);
-      const authority = findMigrationAuthority({ db, kysely, source: params.source, fingerprint });
-      return coversSource || Boolean(authority && authority.priority <= params.source.priority);
+      // SQLite owns initialized milestones; a matching receipt permits cleanup only.
+      return (
+        row?.version === WORKSPACE_SETUP_STATE_VERSION &&
+        row.workspace_path === params.source.workspaceDir
+      );
     }
     if (params.source.kind !== "attestation" || params.parsed.kind !== "attestation") {
       return false;
@@ -343,8 +330,9 @@ export function importAndRecordReceipt(params: {
   snapshot: SourceSnapshot;
   parsed: ParsedSource;
   env: NodeJS.ProcessEnv;
-  replaceRemovedReceipt?: boolean;
-}): { sourceKey: string; imported: boolean } {
+  previousReceipt?: MigrationReceipt;
+  archivePath?: string;
+}): { sourceKey: string; imported: boolean; differences: string[] } {
   const key = resolveWorkspaceMigrationSourceKey(params.source);
   const runId = `${key}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
@@ -353,23 +341,23 @@ export function importAndRecordReceipt(params: {
       const { db } = database;
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
       const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
-      // Only a receipt whose source was fully removed can be replaced by a later generation.
-      if (existingReceipt && (!params.replaceRemovedReceipt || !existingReceipt.removedSource)) {
+      // Revalidate the observed receipt before publishing a new backup or generation.
+      if (
+        existingReceipt &&
+        (existingReceipt.sourceSha256 !== params.previousReceipt?.sha256 ||
+          existingReceipt.removedSource !== params.previousReceipt?.removedSource)
+      ) {
         throw new Error("workspace migration receipt appeared concurrently; retry Doctor");
       }
 
       let imported = false;
+      const differences: string[] = [];
       let resolution: "inserted" | "verified" | "merged" | "replaced" | "superseded";
       let verifiedFingerprint: string;
       if (params.parsed.kind === "setup") {
         if (!params.source.workspaceDir) {
           throw new Error("legacy workspace setup has no workspace path");
         }
-        const incomingFingerprint = setupFingerprint({
-          workspacePath: params.source.workspaceDir,
-          bootstrapSeededAt: params.parsed.value.bootstrapSeededAt ?? null,
-          setupCompletedAt: params.parsed.value.setupCompletedAt ?? null,
-        });
         const existing = executeSqliteQueryTakeFirstSync(
           db,
           kysely
@@ -384,77 +372,22 @@ export function importAndRecordReceipt(params: {
           ) {
             throw new Error("legacy workspace setup conflicts with canonical SQLite state");
           }
-          const existingFingerprint = setupFingerprint({
-            workspacePath: existing.workspace_path,
-            bootstrapSeededAt: existing.bootstrap_seeded_at,
-            setupCompletedAt: existing.setup_completed_at,
-          });
-          const sourceBootstrapSeededAt = params.parsed.value.bootstrapSeededAt ?? null;
-          const sourceSetupCompletedAt = params.parsed.value.setupCompletedAt ?? null;
-          const coversSource =
-            (sourceBootstrapSeededAt === null ||
-              existing.bootstrap_seeded_at === sourceBootstrapSeededAt) &&
-            (sourceSetupCompletedAt === null ||
-              existing.setup_completed_at === sourceSetupCompletedAt);
-          const authority = findMigrationAuthority({
-            db,
-            kysely,
-            source: params.source,
-            fingerprint: existingFingerprint,
-          });
-          if (authority && params.source.priority < authority.priority) {
-            executeSqliteQuerySync(
-              db,
-              kysely
-                .updateTable("workspace_setup_state")
-                .set({
-                  bootstrap_seeded_at: sourceBootstrapSeededAt,
-                  setup_completed_at: sourceSetupCompletedAt,
-                  updated_at: now,
-                })
-                .where("workspace_key", "=", params.source.workspaceKey),
-            );
-            imported = true;
-            resolution = "replaced";
-            verifiedFingerprint = incomingFingerprint;
-          } else if (coversSource) {
-            resolution = "verified";
-            verifiedFingerprint = existingFingerprint;
-          } else if (!authority) {
-            const mergedBootstrapSeededAt = existing.bootstrap_seeded_at ?? sourceBootstrapSeededAt;
-            const mergedSetupCompletedAt = existing.setup_completed_at ?? sourceSetupCompletedAt;
-            const hasConflictingMilestone =
-              (sourceBootstrapSeededAt !== null &&
-                existing.bootstrap_seeded_at !== null &&
-                sourceBootstrapSeededAt !== existing.bootstrap_seeded_at) ||
-              (sourceSetupCompletedAt !== null &&
-                existing.setup_completed_at !== null &&
-                sourceSetupCompletedAt !== existing.setup_completed_at);
-            if (hasConflictingMilestone) {
-              throw new Error("legacy workspace setup conflicts with canonical SQLite state");
+          const existingFingerprint = setupFingerprint(existing);
+          // The canonical record is authoritative even without an import receipt.
+          // Keep legacy differences for inspection instead of replaying old milestones.
+          for (const [milestone, canonical] of [
+            ["bootstrapSeededAt", existing.bootstrap_seeded_at],
+            ["setupCompletedAt", existing.setup_completed_at],
+          ] as const) {
+            const legacy = params.parsed.value[milestone];
+            if (legacy !== undefined && legacy !== canonical) {
+              differences.push(
+                `${milestone} legacy=${JSON.stringify(legacy)} canonical=${JSON.stringify(canonical)}`,
+              );
             }
-            executeSqliteQuerySync(
-              db,
-              kysely
-                .updateTable("workspace_setup_state")
-                .set({
-                  bootstrap_seeded_at: mergedBootstrapSeededAt,
-                  setup_completed_at: mergedSetupCompletedAt,
-                  updated_at: now,
-                })
-                .where("workspace_key", "=", params.source.workspaceKey),
-            );
-            imported = true;
-            resolution = "merged";
-            verifiedFingerprint = setupFingerprint({
-              workspacePath: existing.workspace_path,
-              bootstrapSeededAt: mergedBootstrapSeededAt,
-              setupCompletedAt: mergedSetupCompletedAt,
-            });
-          } else {
-            resolution = "superseded";
-            verifiedFingerprint = existingFingerprint;
           }
+          resolution = differences.length > 0 ? "superseded" : "verified";
+          verifiedFingerprint = existingFingerprint;
         } else {
           // Missing row, or an attestation-only merged row (NULL version) that
           // adopts the legacy setup facts; a differing recorded path conflicts.
@@ -480,7 +413,7 @@ export function importAndRecordReceipt(params: {
           );
           imported = true;
           resolution = existing ? "merged" : "inserted";
-          verifiedFingerprint = incomingFingerprint;
+          verifiedFingerprint = setupFingerprint(setupColumns);
         }
         const verified = executeSqliteQueryTakeFirstSync(
           db,
@@ -492,18 +425,29 @@ export function importAndRecordReceipt(params: {
         // Every setup import branch writes the source path, so a NULL path
         // here is a verification failure, not an attestation-only row.
         const actualFingerprint =
-          verified && verified.workspace_path != null
-            ? setupFingerprint({
-                workspacePath: verified.workspace_path,
-                bootstrapSeededAt: verified.bootstrap_seeded_at,
-                setupCompletedAt: verified.setup_completed_at,
-              })
-            : null;
+          verified && verified.workspace_path != null ? setupFingerprint(verified) : null;
         if (!verified || actualFingerprint !== verifiedFingerprint) {
           throw new Error("SQLite verification failed for workspace setup state");
         }
       } else {
         const parsedAttestation = params.parsed.value;
+        const insertGeneratedHashes = () => {
+          const hashes = [...parsedAttestation.generatedHashes.entries()].toSorted(([a], [b]) =>
+            a.localeCompare(b),
+          );
+          if (hashes.length > 0) {
+            executeSqliteQuerySync(
+              db,
+              kysely.insertInto("workspace_generated_bootstrap_hashes").values(
+                hashes.map(([filename, sha256]) => ({
+                  workspace_key: params.source.workspaceKey,
+                  filename,
+                  sha256,
+                })),
+              ),
+            );
+          }
+        };
         const incomingFingerprint = attestationFingerprint({
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
@@ -549,21 +493,7 @@ export function importAndRecordReceipt(params: {
                 .deleteFrom("workspace_generated_bootstrap_hashes")
                 .where("workspace_key", "=", params.source.workspaceKey),
             );
-            const replacementHashes = [...parsedAttestation.generatedHashes.entries()].toSorted(
-              ([left], [right]) => left.localeCompare(right),
-            );
-            if (replacementHashes.length > 0) {
-              executeSqliteQuerySync(
-                db,
-                kysely.insertInto("workspace_generated_bootstrap_hashes").values(
-                  replacementHashes.map(([filename, sha256]) => ({
-                    workspace_key: params.source.workspaceKey,
-                    filename,
-                    sha256,
-                  })),
-                ),
-              );
-            }
+            insertGeneratedHashes();
           };
           const equivalent =
             existing.attested_at_ms === parsedAttestation.attestedAtMs &&
@@ -621,21 +551,7 @@ export function importAndRecordReceipt(params: {
                 }),
               ),
           );
-          const hashes = [...parsedAttestation.generatedHashes.entries()].toSorted(([a], [b]) =>
-            a.localeCompare(b),
-          );
-          if (hashes.length > 0) {
-            executeSqliteQuerySync(
-              db,
-              kysely.insertInto("workspace_generated_bootstrap_hashes").values(
-                hashes.map(([filename, sha256]) => ({
-                  workspace_key: params.source.workspaceKey,
-                  filename,
-                  sha256,
-                })),
-              ),
-            );
-          }
+          insertGeneratedHashes();
           imported = true;
           resolution = "inserted";
           verifiedFingerprint = incomingFingerprint;
@@ -706,6 +622,7 @@ export function importAndRecordReceipt(params: {
           receiptPreservesAuthority(existingReceipt, verifiedFingerprint),
         resolution,
         imported,
+        ...(params.archivePath ? { archivePath: params.archivePath, differences } : {}),
       });
       recordLegacyMigrationReceipt(db, {
         sourceKey: key,
@@ -720,7 +637,7 @@ export function importAndRecordReceipt(params: {
         reportJson,
         upsert: existingReceipt !== null,
       });
-      return { sourceKey: key, imported };
+      return { sourceKey: key, imported, differences };
     },
     { env: params.env },
   );

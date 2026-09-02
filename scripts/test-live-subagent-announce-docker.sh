@@ -85,7 +85,7 @@ cd "$tmp_dir"
 OPENCLAW_LIVE_TEST=1 \
 OPENCLAW_LIVE_SUBAGENT_E2E=1 \
 OPENCLAW_VITEST_MAX_WORKERS="${OPENCLAW_VITEST_MAX_WORKERS:-1}" \
-node --import tsx scripts/test-live.mts -- src/agents/subagents/announce/subagent-announce.live.test.ts -- --reporter=verbose
+openclaw_live_run_staged_script scripts/test-live -- src/agents/subagents/announce/subagent-announce.live.test.ts -- --reporter=verbose
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"

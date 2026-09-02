@@ -21,7 +21,11 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition, NativeCommandSpec } from "./commands-registry.types.js";
+import type {
+  ChatCommandDefinition,
+  CommandArgValues,
+  NativeCommandSpec,
+} from "./commands-registry.types.js";
 
 type NativeCommandNameResolver = (params: { commandKey: string; defaultName: string }) => string;
 
@@ -735,6 +739,54 @@ describe("commands registry args", () => {
       "/model gpt-5.4",
     );
   });
+
+  const structuredArgCases: Array<{
+    command: string;
+    values: CommandArgValues;
+    expected: string;
+  }> = [
+    {
+      command: "config",
+      values: { action: " GET ", path: " agents.defaults.model " },
+      expected: "/config get agents.defaults.model",
+    },
+    {
+      command: "config",
+      values: { action: "set", path: "agents.defaults.model" },
+      expected: "/config set agents.defaults.model",
+    },
+    {
+      command: "mcp",
+      values: { action: "get", path: "servers.github" },
+      expected: "/mcp get servers.github",
+    },
+    { command: "mcp", values: { action: "get" }, expected: "/mcp get" },
+    {
+      command: "plugins",
+      values: { action: "get", path: "discord" },
+      expected: "/plugins get discord",
+    },
+    {
+      command: "plugins",
+      values: { action: "list", path: "ignored" },
+      expected: "/plugins list",
+    },
+    {
+      command: "debug",
+      values: { action: "show", path: "ignored" },
+      expected: "/debug show",
+    },
+    { command: "debug", values: { action: "unset" }, expected: "/debug unset" },
+  ];
+
+  it.each(structuredArgCases)(
+    "serializes structured $command args through its registry definition",
+    (testCase) => {
+      expect(buildCommandTextFromArgs(requireChatCommand(testCase.command), testCase)).toBe(
+        testCase.expected,
+      );
+    },
+  );
 
   it("resolves auto arg menus when missing a choice arg", () => {
     const command = createUsageModeCommand();

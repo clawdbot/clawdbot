@@ -24,6 +24,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
@@ -46,6 +47,8 @@ import {
   type SkillMessageMap,
 } from "../../lib/skills/index.ts";
 
+registerSkillLibraryEnglish();
+
 function safeExternalHref(raw?: string): string | null {
   if (!raw) {
     return null;
@@ -57,6 +60,9 @@ export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
 type SkillsProps = {
+  library?: TemplateResult;
+  showInventory?: boolean;
+  personalImport?: boolean;
   canUpdate: boolean;
   canInstall: boolean;
   connected: boolean;
@@ -214,7 +220,7 @@ function activeClawHubMutation(props: SkillsProps, ref: string): boolean {
 }
 
 function installedClawHubSearchResult(props: SkillsProps, result: ClawHubSearchResult): boolean {
-  if (result.installOnly !== true) {
+  if (props.personalImport || result.installOnly !== true) {
     return false;
   }
   const reference = clawHubSkillRef(result);
@@ -264,18 +270,23 @@ export function renderSkills(props: SkillsProps) {
   return html`
     ${renderSettingsPage(
       html`
-        ${renderSkillsToolbar(props, statusCounts, filtered.length)}
+        ${props.library ?? nothing}
+        ${props.showInventory === false
+          ? nothing
+          : renderSkillsToolbar(props, statusCounts, filtered.length)}
         ${props.error
           ? html`<div class="callout danger" role="alert">${props.error}</div>`
           : nothing}
         ${renderClawHubSection(props)}
-        ${filtered.length === 0
-          ? renderSettingsEmpty(
-              !props.connected && !props.report
-                ? t("skillsPage.disconnected")
-                : t("skillsPage.empty"),
-            )
-          : groups.map((group) => renderSkillGroup(group, props))}
+        ${props.showInventory === false
+          ? nothing
+          : filtered.length === 0
+            ? renderSettingsEmpty(
+                !props.connected && !props.report
+                  ? t("skillsPage.disconnected")
+                  : t("skillsPage.empty"),
+              )
+            : groups.map((group) => renderSkillGroup(group, props))}
       `,
       { wide: true },
     )}
@@ -479,7 +490,7 @@ function renderClawHubResults(props: SkillsProps) {
                 ? t("skillsPage.installed")
                 : activeClawHubMutation(props, ref)
                   ? t("skillsPage.installing")
-                  : t("skillsPage.install")}
+                  : t(props.personalImport ? "skillLibrary.import" : "skillsPage.install")}
             </button>
           </div>
         </div>
@@ -570,7 +581,9 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                     >
                       ${activeClawHubMutation(props, props.clawhubDetailRef ?? "")
                         ? t("skillsPage.installing")
-                        : t("skillsPage.installNamed", { name: detail.skill.displayName })}
+                        : props.personalImport
+                          ? t("skillLibrary.import")
+                          : t("skillsPage.installNamed", { name: detail.skill.displayName })}
                     </button>
                   `
                 : html`<div class="muted">${t("skillsPage.notFound")}</div>`}

@@ -1,13 +1,12 @@
 // Line plugin module implements push retry policy behavior.
 import { HTTPFetchError } from "@line/bot-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import { describeLineQuotaRefusal, isLineMessageQuotaExhausted } from "./message-quota.js";
-import type { LineMessageQuota } from "./types.js";
+import { readLineAccountMessageQuota } from "./probe.js";
 
 /** The LINE HTTP response carried by an error graph, when the request reached LINE. */
 export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
@@ -43,31 +42,6 @@ function resolveAttemptNonDispatchRetryable(error: unknown): boolean | undefined
 // here, including a pre-connect failure that core can still prove by other
 // means, because this module cannot tell the two apart from the error alone.
 const pushErrorsWithAmbiguousAttempt = new WeakSet<object>();
-
-/** How long any refused send may spend asking LINE about the allowance. */
-const REFUSAL_QUOTA_BUDGET_MS = 2_000;
-
-/**
- * Refines a refusal verdict with the account's monthly allowance.
- *
- * LINE answers both "too many requests right now" and "no monthly messages left"
- * with 429, and only the first is worth retrying: the allowance resets on the
- * calendar month, so durable delivery would hold the reply for weeks while the
- * operator sees nothing. The quota is read from LINE, which owns it, so the two
- * cases stay apart without matching provider error text. An unreadable quota
- * keeps the plain verdict, so a rate limit stays retryable exactly as before.
- */
-async function resolveLineRefusalRetryable(params: {
-  error: unknown;
-  readQuota: () => Promise<LineMessageQuota | undefined>;
-}): Promise<boolean | undefined> {
-  const retryable = resolveLineNonDispatchRetryable(params.error);
-  if (retryable !== true || findLineHttpError(params.error)?.status !== 429) {
-    return retryable;
-  }
-  const quota = await params.readQuota();
-  return quota && isLineMessageQuotaExhausted(quota) ? false : retryable;
-}
 
 /** Retryability when LINE refused every attempt, or undefined when delivery is ambiguous. */
 export function resolveLineNonDispatchRetryable(error: unknown): boolean | undefined {
@@ -127,38 +101,23 @@ export const runLinePushWithRetries: typeof runLinePushAttempts = (fn, label) =>
   });
 };
 
-/**
- * The single explanation every LINE refusal report goes through.
- *
- * Both the durable outbound adapter and the direct inbound reply sender end at
- * the same push API and can be refused for the same spent allowance, so they
- * share one verdict and one operator-facing reason instead of each deciding for
- * itself. The allowance is read at most once per refusal.
- */
 export async function explainLineRefusal(params: {
   error: unknown;
-  readQuota: () => Promise<LineMessageQuota | undefined>;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
 }): Promise<{ retryable: boolean | undefined; reason: string }> {
-  let quota: LineMessageQuota | undefined;
-  let read = false;
-  const readOnce = async () => {
-    if (!read) {
-      read = true;
-      // The refusal already has a verdict; the allowance only refines it. Every
-      // refusal report shares this one deadline so a stalled allowance endpoint
-      // can never hold a retryable 429 back from the delivery that is waiting on
-      // it — the original verdict stands instead.
-      quota = await withTimeout(
-        params.readQuota(),
-        REFUSAL_QUOTA_BUDGET_MS,
-        "line quota refusal",
-      ).catch(() => undefined);
-    }
-    return quota;
+  const retryable = resolveLineNonDispatchRetryable(params.error);
+  const quota =
+    retryable === true && findLineHttpError(params.error)?.status === 429
+      ? await readLineAccountMessageQuota(params)
+      : undefined;
+  const exhausted = quota?.kind === "limited" && quota.used >= quota.limit;
+  return {
+    retryable: exhausted ? false : retryable,
+    reason: exhausted
+      ? `LINE refused the push: ${quota.used}/${quota.limit} monthly messages used. Check the account allowance or plan before retrying.`
+      : params.error instanceof Error
+        ? params.error.message
+        : "LINE rejected the message",
   };
-  const retryable = await resolveLineRefusalRetryable({ error: params.error, readQuota: readOnce });
-  const reason =
-    describeLineQuotaRefusal(quota) ??
-    (params.error instanceof Error ? params.error.message : "LINE rejected the message");
-  return { retryable, reason };
 }

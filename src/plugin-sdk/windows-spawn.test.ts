@@ -2,7 +2,7 @@
  * Tests Windows spawn compatibility helpers.
  */
 import { spawnSync } from "node:child_process";
-import { link, writeFile } from "node:fs/promises";
+import { copyFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
@@ -21,7 +21,7 @@ describe("resolveWindowsSpawnProgram", () => {
     async () => {
       const dir = await createTempDir("openclaw-windows-spawn-env-case-");
       const executable = path.join(dir, "mixed-env-tool.MiXeD");
-      await link(process.execPath, executable);
+      await copyFile(process.execPath, executable);
       const env = { pAtH: dir, pAtHeXt: ".MiXeD" };
 
       const program = resolveWindowsSpawnProgram({

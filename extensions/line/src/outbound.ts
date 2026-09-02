@@ -63,8 +63,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const buildTemplate =
       lineRuntime?.buildTemplateMessageFromPayload ??
       outboundRuntime.buildTemplateMessageFromPayload;
-    const readAccountQuota =
-      lineRuntime?.readAccountMessageQuota ?? outboundRuntime.readLineAccountMessageQuota;
     const sendOptions = { verbose: false, cfg, accountId: accountId ?? undefined };
 
     let lastResult: LineSendResult | null = null;
@@ -75,16 +73,12 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       try {
         result = await resultPromise;
       } catch (error) {
-        const refusal = isChannelPartialDeliveryError(error)
-          ? undefined
-          : await explainLineRefusal({
-              error,
-              readQuota: () => readAccountQuota({ cfg, accountId }),
-            });
-        // Nothing has been accepted yet for this payload, so a LINE client error
-        // proves the whole delivery was rejected rather than left ambiguous.
-        // Once a send has landed the failure is partial and keeps its own shape.
-        throw lastResult === null && refusal?.retryable !== undefined
+        // Accepted payload parts keep their receipt and must not wait for quota diagnosis.
+        const refusal =
+          lastResult !== null || isChannelPartialDeliveryError(error)
+            ? undefined
+            : await explainLineRefusal({ error, cfg, accountId });
+        throw refusal?.retryable !== undefined
           ? new PlatformMessageNotDispatchedError(refusal.reason, {
               cause: error,
               retryable: refusal.retryable,

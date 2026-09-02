@@ -1018,6 +1018,19 @@ class ChatComposerDraftTest {
     )
   }
 
+  @Test
+  fun sendIsDisabledForAPermanentlyUnavailableModel() {
+    assertFalse(
+      chatComposerSendEnabled(
+        voiceNoteState = VoiceNoteRecorderState.Idle,
+        pendingRunCount = 0,
+        hasContent = true,
+        shareStaging = false,
+        modelUnavailable = true,
+      ),
+    )
+  }
+
   private fun pendingAttachment(
     id: String,
     base64: String = id,

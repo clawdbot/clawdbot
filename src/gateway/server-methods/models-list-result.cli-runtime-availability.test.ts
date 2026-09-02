@@ -38,7 +38,25 @@ async function listClaudeCliModel(
         ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
         : config),
     preparedAuthModes: params.authenticated ? { "claude-cli": "api_key" } : {},
+    catalogComplete: true,
     view: "configured",
+  });
+}
+
+async function listDirectClaudeCliModel(params: {
+  authenticated: boolean;
+  pluginDisabled?: boolean;
+}) {
+  const cfg = params.pluginDisabled
+    ? { ...config, plugins: { entries: { anthropic: { enabled: false } } } }
+    : config;
+  return await listModels({
+    catalog: [providerCatalogEntry("claude-cli", "claude-opus-5")],
+    cfg,
+    preparedAuthModes:
+      params.authenticated && !params.pluginDisabled ? { "claude-cli": "oauth" } : {},
+    catalogComplete: true,
+    view: "all",
   });
 }
 
@@ -64,6 +82,31 @@ describe("models.list CLI runtime availability", () => {
   });
 
   it.each([
+    { authenticated: true, available: true, reason: undefined },
+    { authenticated: false, available: false, reason: "missing-auth" },
+    {
+      authenticated: true,
+      pluginDisabled: true,
+      available: false,
+      reason: "missing-auth",
+    },
+  ])(
+    "reports direct Claude CLI auth=$authenticated and plugin disabled=$pluginDisabled",
+    async (scenario) => {
+      const result = await listDirectClaudeCliModel(scenario);
+
+      expect(result.models).toEqual([
+        expect.objectContaining({
+          provider: "claude-cli",
+          id: "claude-opus-5",
+          available: scenario.available,
+          ...(scenario.reason ? { unavailableReason: scenario.reason } : {}),
+        }),
+      ]);
+    },
+  );
+
+  it.each([
     {
       authenticated: true,
       providerApiKey: false,
@@ -76,14 +119,14 @@ describe("models.list CLI runtime availability", () => {
       providerApiKey: false,
       pluginDisabled: false,
       available: false,
-      reason: undefined,
+      reason: "missing-auth",
     },
     {
       authenticated: false,
       providerApiKey: true,
       pluginDisabled: false,
       available: false,
-      reason: undefined,
+      reason: "missing-auth",
     },
     {
       authenticated: true,

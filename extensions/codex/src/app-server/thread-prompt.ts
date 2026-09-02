@@ -18,8 +18,23 @@ import {
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 
+export type CodexThreadPromptContext = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "agentId"
+  | "sessionKey"
+  | "modelId"
+  | "disableTools"
+  | "disableMessageTool"
+  | "delegationCapability"
+  | "toolsAllow"
+  | "sourceReplyDeliveryMode"
+  | "promptMode"
+  | "extraSystemPrompt"
+>;
+
 export function buildDeveloperInstructions(
-  params: EmbeddedRunAttemptParams,
+  params: CodexThreadPromptContext,
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();

@@ -1,19 +1,11 @@
 // Dispatches subagent inspection commands.
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
-import {
-  resolveHandledPrefix,
-  resolveRequesterSessionKey,
-  resolveSubagentsAction,
-  type SubagentsCommandContext,
-} from "./commands-subagents/shared.js";
+import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
+import { buildSubagentsHelp, resolveRequesterSessionKey } from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
 
 const actionAgentsLoader = createLazyImportLoader(
   () => import("./commands-subagents/action-agents.js"),
-);
-const actionHelpLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-help.js"),
 );
 const actionInfoLoader = createLazyImportLoader(
   () => import("./commands-subagents/action-info.js"),
@@ -23,22 +15,33 @@ const actionListLoader = createLazyImportLoader(
 );
 const actionLogLoader = createLazyImportLoader(() => import("./commands-subagents/action-log.js"));
 const controlRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-subagents-control.runtime.js"),
+  () => import("../../agents/subagents/registry/subagent-control-scope.js"),
 );
 
 export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/subagents",
-    match: (body) => resolveHandledPrefix(body) ?? null,
+    match: (
+      body,
+    ): { action: "agents" | "list" | "info" | "log" | "help"; restTokens: string[] } | null => {
+      const rest = matchCommandPrefix(body, "/subagents");
+      if (rest !== null) {
+        const [rawAction = "list", ...restTokens] = rest.split(/\s+/).filter(Boolean);
+        const action = rawAction.toLowerCase();
+        return {
+          action: action === "list" || action === "info" || action === "log" ? action : "help",
+          restTokens,
+        };
+      }
+      return matchCommandPrefix(body, "/agents") === null
+        ? null
+        : { action: "agents", restTokens: [] };
+    },
     silentUnauthorized: true,
   },
-  async (params, handledPrefix) => {
-    const normalized = params.command.commandBodyNormalized;
-    const rest = normalized.slice(handledPrefix.length).trim();
-    const restTokens = rest.split(/\s+/).filter(Boolean);
-    const action = resolveSubagentsAction({ handledPrefix, restTokens });
-    if (!action) {
-      return (await actionHelpLoader.load()).handleSubagentsHelpAction();
+  async (params, { action, restTokens }) => {
+    if (action === "help") {
+      return commandReply(buildSubagentsHelp());
     }
 
     const requesterKey = resolveRequesterSessionKey(params);
@@ -46,26 +49,21 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
       return commandReply("⚠️ Missing session key.");
     }
 
-    const ctx: SubagentsCommandContext = {
+    const actionHandler =
+      action === "agents"
+        ? (await actionAgentsLoader.load()).handleSubagentsAgentsAction
+        : action === "list"
+          ? (await actionListLoader.load()).handleSubagentsListAction
+          : action === "info"
+            ? (await actionInfoLoader.load()).handleSubagentsInfoAction
+            : (await actionLogLoader.load()).handleSubagentsLogAction;
+    const { listControlledSubagentRuns } = await controlRuntimeLoader.load();
+
+    return await actionHandler({
       params,
       requesterKey,
-      runs: (await controlRuntimeLoader.load()).listControlledSubagentRuns(requesterKey),
+      runs: listControlledSubagentRuns(requesterKey, params.agentId, params.cfg),
       restTokens,
-    };
-
-    switch (action) {
-      case "help":
-        return (await actionHelpLoader.load()).handleSubagentsHelpAction();
-      case "agents":
-        return (await actionAgentsLoader.load()).handleSubagentsAgentsAction(ctx);
-      case "list":
-        return (await actionListLoader.load()).handleSubagentsListAction(ctx);
-      case "info":
-        return (await actionInfoLoader.load()).handleSubagentsInfoAction(ctx);
-      case "log":
-        return await (await actionLogLoader.load()).handleSubagentsLogAction(ctx);
-      default:
-        return (await actionHelpLoader.load()).handleSubagentsHelpAction();
-    }
+    });
   },
 );

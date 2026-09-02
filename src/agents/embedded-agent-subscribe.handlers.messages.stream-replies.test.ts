@@ -2,12 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
   hasAssistantVisibleReply,
+  recordPendingAssistantReplyDirectives,
   resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import {
-  buildAssistantStreamData,
-  recordPendingAssistantReplyDirectives,
-} from "./embedded-agent-subscribe.handlers.messages.test-support.js";
+import { buildAssistantStreamData } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 
 describe("hasAssistantVisibleReply", () => {
   it("treats audio-only payloads as visible", () => {
@@ -22,12 +20,12 @@ describe("hasAssistantVisibleReply", () => {
 });
 
 describe("buildAssistantStreamData", () => {
-  it("normalizes media payloads for assistant stream events", () => {
+  it.each([true, false, undefined])("normalizes media and replacement flag %s", (replace) => {
     expect(
       buildAssistantStreamData({
         text: "hello",
         delta: "he",
-        replace: true,
+        replace,
         mediaUrl: "https://example.com/a.png",
         managedMediaUrls: ["https://example.com/a.png"],
         phase: "final_answer",
@@ -35,7 +33,7 @@ describe("buildAssistantStreamData", () => {
     ).toEqual({
       text: "hello",
       delta: "he",
-      replace: true,
+      replace: replace || undefined,
       mediaUrls: ["https://example.com/a.png"],
       managedMediaUrls: ["https://example.com/a.png"],
       phase: "final_answer",

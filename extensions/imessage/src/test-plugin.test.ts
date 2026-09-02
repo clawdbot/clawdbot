@@ -95,6 +95,16 @@ function requireMessageSendMedia(
 }
 
 describe("imessagePlugin contracts", () => {
+  it("tells the model to omit redacted current-conversation targets", () => {
+    const hints = imessagePlugin.agentPrompt?.messageToolHints?.({
+      cfg: {},
+      accountId: "default",
+    });
+
+    expect(hints?.join("\n")).toContain("omit target");
+    expect(hints?.join("\n")).toContain("never copy a redacted display value");
+  });
+
   it("rejects unqualified provider identifiers and exposes qualification guidance", async () => {
     const targetResolver = imessagePlugin.messaging?.targetResolver;
     const resolveTarget = targetResolver?.resolveTarget;

@@ -42,6 +42,7 @@ describe("chat transcript invalidation", () => {
       __openclaw: { id: `message-${index}` },
     }));
     const transcript = {
+      expandedAssistantMessages: new Map(),
       setContentReady: vi.fn(),
       syncMessageRows: vi.fn(),
     } as unknown as Parameters<typeof projectChatTranscript>[1];

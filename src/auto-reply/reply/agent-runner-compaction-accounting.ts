@@ -1,15 +1,33 @@
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type {
+  CompactionAccountingFact,
+  CompactionAccountingTarget,
+} from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { AgentTurnCompaction } from "./agent-runner-execution.types.js";
+
+export function hasSameCompactionWriter(
+  previous: CompactionAccountingTarget | undefined,
+  current: CompactionAccountingTarget,
+): boolean {
+  // Physical session IDs may rotate while the binding and retained writer stay fixed.
+  return (
+    previous !== undefined &&
+    previous.agentId === current.agentId &&
+    previous.sessionKey === current.sessionKey &&
+    previous.storePath === current.storePath &&
+    previous.lifecycleRevision === current.lifecycleRevision &&
+    previous.activeWriterRunId === current.activeWriterRunId
+  );
+}
 
 /** A later opaque candidate may lose freshness, but must never fabricate it. */
 export function invalidateTurnCompactionContext(compaction: AgentTurnCompaction): void {
   compaction.durable = compaction.durable.map((fact) => ({
     ...fact,
-    currentContextTokens: undefined,
+    currentContextSnapshot: { tokens: undefined },
   }));
 }
 
-/** Fold only observations belonging to the same retained writer; zero counts refresh context. */
+/** Fold same-writer facts; only an ordered snapshot may refresh context. */
 export function recordTurnCompaction(
   compaction: AgentTurnCompaction,
   fact: CompactionAccountingFact,
@@ -21,13 +39,8 @@ export function recordTurnCompaction(
   if (fact.kind !== "durable") {
     return;
   }
-  const index = compaction.durable.findIndex(
-    ({ target }) =>
-      target.agentId === fact.target.agentId &&
-      target.sessionKey === fact.target.sessionKey &&
-      target.storePath === fact.target.storePath &&
-      target.lifecycleRevision === fact.target.lifecycleRevision &&
-      target.activeWriterRunId === fact.target.activeWriterRunId,
+  const index = compaction.durable.findIndex(({ target }) =>
+    hasSameCompactionWriter(target, fact.target),
   );
   const previous = compaction.durable[index];
   if (!previous && fact.count === 0) {
@@ -36,5 +49,10 @@ export function recordTurnCompaction(
   if (previous) {
     compaction.durable.splice(index, 1);
   }
-  compaction.durable.push({ ...fact, count: (previous?.count ?? 0) + fact.count });
+  // Custody without an observation cannot erase the prior candidate's explicit invalidation.
+  compaction.durable.push({
+    ...fact,
+    count: (previous?.count ?? 0) + fact.count,
+    currentContextSnapshot: fact.currentContextSnapshot ?? previous?.currentContextSnapshot,
+  });
 }

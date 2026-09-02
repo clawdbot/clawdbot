@@ -1,5 +1,6 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import { disposeSelectedSessionMessageSubscription } from "./chat-history.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -8,16 +9,11 @@ import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
-import {
-  ChatComposerPersistence,
-  type ChatComposerPersistResult,
-  type StoredChatOutboxScope,
-} from "./composer-persistence.ts";
+import { ChatComposerPersistence, type ChatComposerPersistResult } from "./composer-persistence.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = {
-  connectionEpoch: number;
   cancellations: Set<() => void>;
 };
 
@@ -36,7 +32,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private forceScrollAfterUpdate = false;
   private readonly cleanups: Array<() => void> = [];
   private renderLifecycleConnected = false;
-  private renderLifecycleConnectionEpoch = 0;
   private renderLifecycleScope: ChatRenderLifecycleScope | undefined;
 
   constructor(private readonly host: ReactiveControllerHost) {
@@ -54,7 +49,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   createRenderLifecycle(): RenderLifecycle {
     this.cancelRenderLifecycleScope();
     const scope: ChatRenderLifecycleScope = {
-      connectionEpoch: this.renderLifecycleConnectionEpoch,
       cancellations: new Set(),
     };
     this.renderLifecycleScope = scope;
@@ -119,11 +113,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private isRenderLifecycleScopeActive(scope: ChatRenderLifecycleScope): boolean {
-    return (
-      this.renderLifecycleConnected &&
-      this.renderLifecycleScope === scope &&
-      scope.connectionEpoch === this.renderLifecycleConnectionEpoch
-    );
+    return this.renderLifecycleConnected && this.renderLifecycleScope === scope;
   }
 
   private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
@@ -252,7 +242,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   hostConnected() {
-    this.renderLifecycleConnectionEpoch += 1;
     this.renderLifecycleConnected = true;
     // A lifecycle created while detached must never become active on reconnect.
     this.cancelRenderLifecycleScope();
@@ -280,6 +269,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   startComposerPersistence() {
     this.composerPersistence.start();
+  }
+
+  pauseComposerPersistence() {
+    this.composerPersistence.stop();
   }
 
   persistComposerForEviction(): ChatComposerPersistResult {

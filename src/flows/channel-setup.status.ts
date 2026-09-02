@@ -352,13 +352,14 @@ export function findBundledSourceForCatalogChannel(params: {
 
 export async function collectChannelStatus(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
   installedPlugins?: ChannelSetupPlugin[];
   resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
-  const workspaceDir = resolveChannelSetupWorkspaceDir(params.cfg);
+  const workspaceDir = params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg);
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({
     cfg: params.cfg,
     installedPlugins,
@@ -543,13 +544,14 @@ export function resolveQuickstartDefault(
 
 export function resolveChannelSelectionNoteLines(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   installedPlugins: ChannelSetupPlugin[];
   selection: ChannelChoice[];
 }): string[] {
   const { entries } = resolveChannelSetupEntries({
     cfg: params.cfg,
     installedPlugins: params.installedPlugins,
-    workspaceDir: resolveChannelSetupWorkspaceDir(params.cfg),
+    workspaceDir: params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg),
   });
   const selectionNotes = new Map<string, string>();
   for (const entry of entries) {

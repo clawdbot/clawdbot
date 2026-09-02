@@ -57,8 +57,13 @@ describe("sanitizeForPlainText", () => {
 
   // --- block elements -----------------------------------------------------
 
-  it("converts <p> and <div> to newlines", () => {
-    expect(sanitizeForPlainText("<p>paragraph</p>")).toBe("\nparagraph\n");
+  it.each([
+    ["<p>paragraph</p>", "\nparagraph\n"],
+    ['before<p class="x">inside</p>after', "before\ninside\nafter"],
+    ['before<div id="y">inside</div>after', "before\ninside\nafter"],
+    ["before<DIV id='y' title='a>b'>inside</DIV>after", "before\ninside\nafter"],
+  ])("preserves block boundaries in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
   });
 
   it("converts headings to bold text with newlines", () => {
@@ -191,6 +196,27 @@ describe("sanitizeForPlainText", () => {
     );
     expect(sanitizeForPlainText("<li>call `Array<string>` first</li>")).toBe(
       "• call `Array<string>` first\n",
+    );
+  });
+
+  it.each([
+    ['Link: <a href="`hidden`">click</a> end', "Link: click end"],
+    ['Link: <a href="`hidden`">click</a> then `visible` end', "Link: click then `visible` end"],
+    ['`first` <a href="`hidden`">click</a> then `last`', "`first` click then `last`"],
+    ['<a href="`one`">a</a><span title="`two`">b</span> `visible`', "ab `visible`"],
+    ['<b title="`hidden`">`visible`</b>', "*`visible`*"],
+  ])("restores only surviving code regions in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+    expect(sanitizeForPlainText(input, { style: "markdown" })).toBe(
+      input.startsWith("<b") ? "**`visible`**" : expected,
+    );
+  });
+
+  it("preserves marker-shaped input around and inside surviving code", () => {
+    const sentinels = "\u0000e\u0000p0;\u0000p1;\u0000p12;";
+    const visible = `\`${sentinels}<Button>\``;
+    expect(sanitizeForPlainText(`${sentinels}<a href="\`hidden\`">click</a> ${visible}`)).toBe(
+      `${sentinels}click ${visible}`,
     );
   });
 

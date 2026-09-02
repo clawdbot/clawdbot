@@ -106,6 +106,17 @@ export const validateUsersListParams = compile(S.UsersListParamsSchema);
 export const validateUsersPrefsGetParams = compile(S.UsersPrefsGetParamsSchema);
 export const validateUsersPrefsSetParams = compile(S.UsersPrefsSetParamsSchema);
 export const validateUsersSelfParams = compile(S.UsersSelfParamsSchema);
+export const validateUsersGitHubStatusParams = compile(S.UsersGitHubStatusParamsSchema);
+export const validateUsersGitHubAuthorizeStartParams = compile(
+  S.UsersGitHubAuthorizeStartParamsSchema,
+);
+export const validateUsersGitHubAuthorizePollParams = compile(
+  S.UsersGitHubAuthorizePollParamsSchema,
+);
+export const validateUsersGitHubAuthorizeCancelParams = compile(
+  S.UsersGitHubAuthorizeCancelParamsSchema,
+);
+export const validateUsersGitHubDisconnectParams = compile(S.UsersGitHubDisconnectParamsSchema);
 export const validateUsersSelfResult = compile(S.UsersSelfResultSchema);
 export const validateUsersLinkEmailParams = compile(S.UsersLinkEmailParamsSchema);
 export const validateUsersLinkEmailResult = compile(S.UsersLinkEmailResultSchema);
@@ -213,6 +224,7 @@ export const validateSecretsStoreSetParams = compile(S.SecretsStoreSetParamsSche
 export const validateSecretsStoreDeleteParams = compile(S.SecretsStoreDeleteParamsSchema);
 export const validateSecretsStoreMutationResult = compile(S.SecretsStoreMutationResultSchema);
 export const validateSessionsListParams = compile(S.SessionsListParamsSchema);
+export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRouteSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
@@ -320,6 +332,9 @@ export const validateSystemAgentSetupVerifyParams = compile(S.SystemAgentSetupVe
 export const validateSystemAgentSetupActivateParams = compile(
   S.SystemAgentSetupActivateParamsSchema,
 );
+export const validateSystemAgentSetupActivateStartParams = compile(
+  S.SystemAgentSetupActivateStartParamsSchema,
+);
 export const validateSystemAgentSetupAuthStartParams = compile(
   S.SystemAgentSetupAuthStartParamsSchema,
 );
@@ -388,6 +403,9 @@ export const validateToolsGitHubAuthorizeCancelResult = compile(
   S.ToolsGitHubAuthorizeCancelResultSchema,
 );
 export const validateSessionGitHubPublishParams = compile(S.SessionGitHubPublishParamsSchema);
+export const validateSessionGitHubOptionsParams = compile(S.SessionGitHubOptionsParamsSchema);
+export const validateSessionGitHubStatusParams = compile(S.SessionGitHubStatusParamsSchema);
+export const validateSessionGitHubConfirmParams = compile(S.SessionGitHubConfirmParamsSchema);
 export const validateWorkerGitHubPublishParams = compile(S.WorkerGitHubPublishParamsSchema);
 export const validateToolsEffectiveParams = compile(S.ToolsEffectiveParamsSchema);
 export const validateToolsInvokeParams = compile(S.ToolsInvokeParamsSchema);

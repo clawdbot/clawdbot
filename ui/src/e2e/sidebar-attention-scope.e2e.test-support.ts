@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Browser, Page } from "playwright";
 import { expect } from "vitest";
@@ -50,9 +49,6 @@ async function setDarkTheme(page: Page) {
 }
 
 export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScopeFlowOptions) {
-  if (params.captureProof) {
-    await mkdir(params.artifactDir, { recursive: true });
-  }
   const context = await params.browser.newContext({
     locale: "en-US",
     recordVideo: params.captureProof

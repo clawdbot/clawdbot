@@ -21,12 +21,7 @@ import {
   findLineHttpError,
   resolveLineNonDispatchRetryable,
 } from "./send-retry.js";
-import type {
-  LineChannelData,
-  LineMessageQuota,
-  LineQuickReplyItem,
-  LineTemplateMessagePayload,
-} from "./types.js";
+import type { LineChannelData, LineQuickReplyItem, LineTemplateMessagePayload } from "./types.js";
 
 type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
@@ -56,10 +51,6 @@ type LineAutoReplyDeps = {
     messages: messagingApi.Message[],
     opts: { cfg: OpenClawConfig; accountId?: string },
   ) => Promise<unknown>;
-  readAccountMessageQuota?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => Promise<LineMessageQuota | undefined>;
   onReplyError?: (err: unknown) => void;
 };
 
@@ -399,20 +390,14 @@ export async function deliverLineAutoReply(params: {
 
   if (deliveryError !== undefined) {
     if (!visibleReplySent) {
-      // No user-visible content landed, so this is a full delivery failure.
-      // Throwing lets the caller surface or replace it instead of recording a
-      // successful empty reply. This route reaches the same push API as durable
-      // delivery, so it reports a spent allowance through the same explanation
-      // rather than leaving the operator with LINE's bare status line.
-      const readQuota = deps.readAccountMessageQuota;
-      const refusal = readQuota
-        ? await explainLineRefusal({
-            error: deliveryError,
-            readQuota: () => readQuota({ cfg: params.cfg, accountId }),
-          })
-        : undefined;
+      // Only an entirely refused delivery can replace the original failure with quota guidance.
       const named = toLineDeliveryError(deliveryError);
-      throw refusal && refusal.reason !== named.message
+      const refusal = await explainLineRefusal({
+        error: named,
+        cfg: params.cfg,
+        accountId,
+      });
+      throw refusal.reason !== named.message
         ? new Error(refusal.reason, { cause: deliveryError })
         : named;
     }
