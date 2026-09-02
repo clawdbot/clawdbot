@@ -75,6 +75,7 @@ import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
+import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
 import {
   getCliSessionBinding,
   resolveCliSessionClearReason,
@@ -92,6 +93,7 @@ import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-tu
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
@@ -121,7 +123,6 @@ import {
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import {
-  clearCliSessionInStore,
   consumeCliSessionForkInStore,
   persistCliSessionForkSuccessorInStore,
   restoreCliSessionForkInStore,
@@ -567,6 +568,8 @@ export function runAgentAttempt(params: {
   body: string;
   transcriptBody?: string;
   isFallbackRetry: boolean;
+  preserveCliSessionBinding?: boolean;
+  classifyResult?: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   modelRoutingProvenance: ModelFallbackAttemptProvenance;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: FastMode;
@@ -876,7 +879,7 @@ export function runAgentAttempt(params: {
         agentId: params.sessionAgentId,
         runId: params.runId,
       },
-      async () => {
+      async (assertSettlementCurrent) => {
         if (params.sessionKey && params.storePath) {
           params.sessionEntry = loadSessionEntry({
             sessionKey: params.sessionKey,
@@ -939,6 +942,8 @@ export function runAgentAttempt(params: {
                 sessionKey: params.sessionKey,
                 sessionStore: params.sessionStore,
                 storePath: params.storePath,
+                expectedSessionId: params.sessionId,
+                assertCommitAllowed: assertSettlementCurrent,
               }
             : undefined;
         const resolveReusableCliSessionBinding = async () => {
@@ -1004,6 +1009,10 @@ export function runAgentAttempt(params: {
                   provider: cliExecutionProvider,
                   expectedCliSessionId: nextCliSessionId,
                   ...mutableCliSessionStore,
+                  assertCommitAllowed: () => {
+                    assertSettlementCurrent();
+                    (params.deferredLifecycle?.signal ?? params.opts.abortSignal)?.throwIfAborted();
+                  },
                 }
               : undefined;
           return await runCliAgent({
@@ -1203,45 +1212,62 @@ export function runAgentAttempt(params: {
               : {}),
           });
         };
-        return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
-          try {
-            return await runCliWithSession(
-              activeCliSessionBinding?.sessionId,
-              activeCliSessionBinding,
+        const activeCliSessionBinding = await resolveReusableCliSessionBinding();
+        let result: EmbeddedAgentRunResult;
+        try {
+          result = await runCliWithSession(
+            activeCliSessionBinding?.sessionId,
+            activeCliSessionBinding,
+          );
+        } catch (err) {
+          const failedCliSessionBinding = getCliSessionBinding(
+            params.sessionEntry,
+            cliExecutionProvider,
+          );
+          const failedCliSessionId = failedCliSessionBinding?.sessionId;
+          if (
+            isClaudeCliProvider(cliExecutionProvider) &&
+            shouldClearFailedCliSessionBinding({
+              error: err,
+              binding: failedCliSessionBinding,
+              hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+                params.sessionKey,
+                mediaTaskIdsBefore,
+              ),
+            }) &&
+            failedCliSessionId &&
+            mutableCliSessionStore
+          ) {
+            log.warn(
+              `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
             );
-          } catch (err) {
-            const failedCliSessionBinding = getCliSessionBinding(
-              params.sessionEntry,
-              cliExecutionProvider,
-            );
-            const failedCliSessionId = failedCliSessionBinding?.sessionId;
-            if (
-              isClaudeCliProvider(cliExecutionProvider) &&
-              shouldClearFailedCliSessionBinding({
-                error: err,
-                binding: failedCliSessionBinding,
-                hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
-                  params.sessionKey,
-                  mediaTaskIdsBefore,
-                ),
-              }) &&
-              failedCliSessionId &&
-              mutableCliSessionStore
-            ) {
-              log.warn(
-                `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
-              );
 
-              params.sessionEntry =
-                (await clearCliSessionInStore({
-                  provider: cliExecutionProvider,
-                  expectedCliSessionId: failedCliSessionId,
-                  ...mutableCliSessionStore,
-                })) ?? params.sessionEntry;
-            }
-            throw err;
+            params.sessionEntry =
+              (await clearCliSessionInStore({
+                provider: cliExecutionProvider,
+                expectedCliSessionId: failedCliSessionId,
+                ...mutableCliSessionStore,
+              })) ?? params.sessionEntry;
           }
-        });
+          throw err;
+        }
+        const classification = params.classifyResult?.(result);
+        if (
+          !params.preserveCliSessionBinding &&
+          (!classification || result.meta.agentMeta?.clearCliSessionBinding === true)
+        ) {
+          await persistCliSessionBindingResult({
+            provider: cliExecutionProvider,
+            result,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            sessionStore: params.sessionStore,
+            expectedSession: params.sessionEntry,
+            assertSettlementCurrent,
+            abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
+          });
+        }
+        return result;
       },
       {
         lifecycleGeneration: params.lifecycleGeneration,

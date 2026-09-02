@@ -5588,7 +5588,7 @@ describe("persistSessionUsageUpdate", () => {
     expect(readSessionStoreFast(storePath)[sessionKey]).not.toHaveProperty("agentHarnessId");
   });
 
-  it("accounts exhausted-run usage without committing its model and persists CLI binding", async () => {
+  it("accounts exhausted-run usage without committing its model or native binding", async () => {
     const storePath = await createStorePath("openclaw-usage-exhausted-");
     await seedSessionStore(storePath, sessionKey, {
       sessionId: "s1",
@@ -5613,7 +5613,6 @@ describe("persistSessionUsageUpdate", () => {
       providerUsed: "claude-cli",
       modelUsed: "claude-sonnet-4-6",
       contextTokensUsed: 200_000,
-      cliSessionBinding: { sessionId: "exhausted-cli-session" },
       preserveRuntimeModel: true,
     });
 
@@ -5627,12 +5626,12 @@ describe("persistSessionUsageUpdate", () => {
       totalTokens: 100,
       totalTokensFresh: true,
       cliSessionBindings: {
-        "claude-cli": { sessionId: "exhausted-cli-session" },
+        "claude-cli": { sessionId: "existing-cli-session" },
       },
       cliSessionIds: {
-        "claude-cli": "exhausted-cli-session",
+        "claude-cli": "existing-cli-session",
       },
-      claudeCliSessionId: "exhausted-cli-session",
+      claudeCliSessionId: "existing-cli-session",
     });
   });
 
@@ -5708,101 +5707,20 @@ describe("persistSessionUsageUpdate", () => {
       },
     },
     {
-      name: "persists heartbeat CLI binding while preserving displayed session model",
-      seed: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionBindings: { "claude-cli": { sessionId: "old-heartbeat-cli-session" } },
-        cliSessionIds: { "claude-cli": "old-heartbeat-cli-session" },
-        claudeCliSessionId: "old-heartbeat-cli-session",
-      },
-      update: {
-        isHeartbeat: true,
-        usage: { input: 1_200, output: 100 },
-        lastCallUsage: { input: 1_200, output: 100 },
-        providerUsed: "claude-cli",
-        modelUsed: "claude-sonnet-4-6",
-        cliSessionBinding: {
-          sessionId: "new-heartbeat-cli-session",
-          authProfileId: "anthropic:heartbeat",
-        },
-        contextTokensUsed: 128_000,
-      },
-      expected: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionIds: { "claude-cli": "new-heartbeat-cli-session" },
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "new-heartbeat-cli-session",
-            authProfileId: "anthropic:heartbeat",
-          },
-        },
-        claudeCliSessionId: "new-heartbeat-cli-session",
-      },
-    },
-    {
-      name: "honors heartbeat CLI binding clears while preserving displayed session model",
-      seed: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionIds: {
-          "claude-cli": "old-heartbeat-cli-session",
-          "codex-cli": "codex-cli-session",
-        },
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "old-heartbeat-cli-session" },
-          "codex-cli": { sessionId: "codex-cli-session" },
-        },
-        claudeCliSessionId: "old-heartbeat-cli-session",
-      },
-      update: {
-        isHeartbeat: true,
-        usage: { input: 1_200, output: 100 },
-        lastCallUsage: { input: 1_200, output: 100 },
-        providerUsed: "claude-cli",
-        modelUsed: "claude-sonnet-4-6",
-        clearCliSessionBinding: true,
-        contextTokensUsed: 128_000,
-      },
-      expected: {
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        cliSessionIds: { "codex-cli": "codex-cli-session" },
-        cliSessionBindings: { "codex-cli": { sessionId: "codex-cli-session" } },
-        claudeCliSessionId: undefined,
-      },
-    },
-    {
       name: "treats CLI last-call usage as a fresh context snapshot",
       seed: {},
       update: {
         usage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
         lastCallUsage: { input: 24_000, output: 2_000, cacheRead: 8_000 },
         providerUsed: "claude-cli",
-        cliSessionBinding: {
-          sessionId: "cli-session-1",
-          authProfileId: "anthropic:default",
-          extraSystemPromptHash: "prompt-hash",
-          mcpConfigHash: "mcp-hash",
-        },
       },
       expected: {
         totalTokens: 32_000,
         totalTokensFresh: true,
-        cliSessionIds: { "claude-cli": "cli-session-1" },
-        cliSessionBindings: {
-          "claude-cli": {
-            sessionId: "cli-session-1",
-            authProfileId: "anthropic:default",
-            extraSystemPromptHash: "prompt-hash",
-            mcpConfigHash: "mcp-hash",
-          },
-        },
       },
     },
     {
-      name: "clears stale CLI binding when usage update reports an unflushed replacement",
+      name: "clears stale CLI binding with compaction accounting",
       seed: {
         cliSessionIds: { "claude-cli": "stale-cli-session", "codex-cli": "codex-session" },
         cliSessionBindings: {
@@ -6226,11 +6144,6 @@ describe("persistSessionUsageUpdate", () => {
       lastCallUsage: { input: 39_908, output: 122, cacheRead: 0, cacheWrite: 0 },
       providerUsed: "google",
       modelUsed: "gemini-2.5-flash",
-      cliSessionId: "internal-cli-session",
-      cliSessionBinding: {
-        sessionId: "internal-cli-session",
-        authProfileId: "anthropic:internal",
-      },
       contextTokensUsed: 1_000_000,
     });
     await persistSessionUsageUpdate({
@@ -6239,7 +6152,6 @@ describe("persistSessionUsageUpdate", () => {
       preserveUserFacingSessionModelState: true,
       providerUsed: "claude-cli",
       modelUsed: "claude-sonnet-4-6",
-      cliSessionId: "internal-cli-session-2",
       contextTokensUsed: 900_000,
     });
 
