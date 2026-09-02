@@ -19,6 +19,7 @@ import {
 } from "./plugin-thread-config.js";
 import { isJsonObject, type v2 } from "./protocol.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
+import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 import { withAbortableTimeout } from "./timeout.js";
 
 const CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE = "codex.apps";
@@ -32,8 +33,39 @@ type CronRuntimeAuthority = NonNullable<EmbeddedRunAttemptParams["scheduledRunti
 type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
 export type CurrentCodexScheduledAppPolicy = {
   config: Record<string, unknown>;
-  toolNamesByApp: ReadonlyMap<string, ReadonlySet<string>>;
+  toolsByApp: ReadonlyMap<string, ReadonlyMap<string, string | undefined>>;
 };
+
+export type ScheduledCodexAppCreatorAuth =
+  | { kind: "prepared-profile"; profileId: string; accountId: string }
+  | { kind: "configured-app-server"; connectionFingerprint: string };
+
+/** Hashes stable configured endpoint identity without retaining credentials or endpoint details. */
+export function buildScheduledCodexAppServerConnectionIdentity(
+  appServer: Pick<
+    CodexAttemptConnection["appServer"],
+    "start" | "connectionClass" | "remoteWorkspaceRoot"
+  >,
+): string {
+  const start = appServer.start;
+  return crypto
+    .createHash("sha256")
+    .update("openclaw:codex:scheduled-app-server:v1\0")
+    .update(
+      JSON.stringify({
+        transport: start.transport,
+        command: start.command,
+        commandSource: start.commandSource ?? null,
+        args: start.args,
+        cwd: start.cwd ?? null,
+        url: start.url ?? null,
+        homeScope: start.homeScope ?? null,
+        connectionClass: appServer.connectionClass,
+        remoteWorkspaceRoot: appServer.remoteWorkspaceRoot ?? null,
+      }),
+    )
+    .digest("hex");
+}
 
 export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
   appsMayBeVisible: boolean;
@@ -41,6 +73,7 @@ export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
   usesSupervisionConnection: boolean;
   homeScope: string | undefined;
   hasPreparedAccountIdentity: boolean;
+  hasConfiguredAppServerIdentity: boolean;
 }): { required: boolean; supported: boolean; unavailableReason?: string } {
   if (!params.appsMayBeVisible) {
     return { required: false, supported: false };
@@ -51,8 +84,8 @@ export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
       ? "Codex apps are visible through a supervised connection that cannot capture creator authority. Use an isolated prepared-profile Codex creator turn; no automation changes were saved."
       : params.homeScope === "user"
         ? "Codex apps are visible through a user-home runtime that cannot capture isolated creator authority. Use an agent-scoped prepared-profile Codex creator turn; no automation changes were saved."
-        : !params.hasPreparedAccountIdentity
-          ? "Codex app authority requires a genuine ChatGPT account identity. Reauthenticate the selected Codex profile, then retry; no automation changes were saved."
+        : !params.hasPreparedAccountIdentity && !params.hasConfiguredAppServerIdentity
+          ? "Codex app authority requires either a prepared ChatGPT profile or an isolated configured app-server identity. Reauthenticate the selected Codex profile or configured app-server, then retry; no automation changes were saved."
           : undefined;
   return {
     required: true,
@@ -61,9 +94,23 @@ export function resolveScheduledCodexAppCreatorCaptureDecision(params: {
   };
 }
 
+type ScheduledCodexAppPreparedProfileAuth = {
+  kind?: undefined;
+  profileId: string;
+  accountId: string;
+};
+type ScheduledCodexAppConfiguredServerAuth = {
+  kind: "configured-app-server";
+  connectionFingerprint: string;
+  managedRequirementsFingerprint: string;
+};
+type ScheduledCodexAppAuthorityAuth =
+  | ScheduledCodexAppPreparedProfileAuth
+  | ScheduledCodexAppConfiguredServerAuth;
+
 type ScheduledCodexAppAuthorityPayload = {
   version: 1;
-  auth: { profileId: string; accountId: string };
+  auth: ScheduledCodexAppAuthorityAuth;
   apps: Array<{
     id: string;
     allowDestructiveActions: boolean;
@@ -106,8 +153,24 @@ function parseScheduledCodexAppAuthority(
   const payload = asOptionalRecord(authority.payload);
   const auth = asOptionalRecord(payload?.auth);
   const profileId = normalizeOptionalString(auth?.profileId);
+  const connectionFingerprint = normalizeOptionalString(auth?.connectionFingerprint);
+  const managedRequirementsFingerprint = normalizeOptionalString(
+    auth?.managedRequirementsFingerprint,
+  );
   const accountId = normalizeOptionalString(auth?.accountId);
-  if (payload?.version !== 1 || !profileId || !accountId || !Array.isArray(payload.apps)) {
+  const parsedAuth: ScheduledCodexAppAuthorityAuth | undefined =
+    auth?.kind === "configured-app-server" &&
+    connectionFingerprint &&
+    managedRequirementsFingerprint
+      ? {
+          kind: "configured-app-server",
+          connectionFingerprint,
+          managedRequirementsFingerprint,
+        }
+      : auth?.kind === undefined && profileId && accountId
+        ? { profileId, accountId }
+        : undefined;
+  if (payload?.version !== 1 || !parsedAuth || !Array.isArray(payload.apps)) {
     throw new Error("Stored Codex app authority is invalid; reauthorize this automation.");
   }
   const seen = new Set<string>();
@@ -144,7 +207,7 @@ function parseScheduledCodexAppAuthority(
       tools,
     };
   });
-  return { version: 1, auth: { profileId, accountId }, apps };
+  return { version: 1, auth: parsedAuth, apps };
 }
 
 type CodexScheduledAppPolicyRequest = (
@@ -152,11 +215,11 @@ type CodexScheduledAppPolicyRequest = (
   params: Record<string, unknown>,
 ) => Promise<unknown>;
 
-async function readCodexScheduledAppToolNamesByApp(params: {
+async function readCodexScheduledAppToolsByApp(params: {
   request: CodexScheduledAppPolicyRequest;
   threadId?: string;
-}): Promise<Map<string, Set<string>>> {
-  const toolNamesByApp = new Map<string, Set<string>>();
+}): Promise<Map<string, Map<string, string | undefined>>> {
+  const toolsByApp = new Map<string, Map<string, string | undefined>>();
   const seenCursors = new Set<string>();
   let cursor: string | null | undefined;
   for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
@@ -179,9 +242,10 @@ async function readCodexScheduledAppToolNamesByApp(params: {
       for (const [toolName, tool] of Object.entries(status.tools)) {
         const connectorId = readCodexMcpToolConnectorId(tool);
         if (connectorId) {
-          const names = toolNamesByApp.get(connectorId) ?? new Set<string>();
-          names.add(toolName);
-          toolNamesByApp.set(connectorId, names);
+          const tools = toolsByApp.get(connectorId) ?? new Map<string, string | undefined>();
+          const title = asOptionalRecord(tool)?.title;
+          tools.set(toolName, typeof title === "string" ? title : undefined);
+          toolsByApp.set(connectorId, tools);
         }
       }
     }
@@ -194,7 +258,7 @@ async function readCodexScheduledAppToolNamesByApp(params: {
     }
     cursor = response.nextCursor;
     if (!cursor) {
-      return toolNamesByApp;
+      return toolsByApp;
     }
     if (seenCursors.has(cursor)) {
       throw new Error("Codex app connector inventory repeated its pagination cursor");
@@ -204,37 +268,52 @@ async function readCodexScheduledAppToolNamesByApp(params: {
   throw new Error("Codex app connector inventory exceeded its bounded page limit");
 }
 
-/** Reads the current account policy and connector-backed tool names under one caller deadline. */
+/** Reads current account policy and connector-backed tool metadata under one caller deadline. */
 export async function readCurrentCodexScheduledAppPolicy(params: {
   request: CodexScheduledAppPolicyRequest;
   configCwd?: string;
   threadId?: string;
 }): Promise<CurrentCodexScheduledAppPolicy> {
-  const [configResponse, toolNamesByApp] = await Promise.all([
+  const [configResponse, toolsByApp] = await Promise.all([
     params.request("config/read", {
       includeLayers: false,
       ...(params.configCwd ? { cwd: params.configCwd } : {}),
     }),
-    readCodexScheduledAppToolNamesByApp(params),
+    readCodexScheduledAppToolsByApp(params),
   ]);
   if (!isJsonObject(configResponse)) {
     throw new Error("Codex config/read returned an invalid scheduled app policy response");
   }
   return {
     config: isJsonObject(configResponse.config) ? configResponse.config : {},
-    toolNamesByApp,
+    toolsByApp,
   };
 }
 
-function readToolApprovalMode(
+function readCurrentToolPolicy(
   config: Record<string, unknown>,
   appId: string,
   toolName: string,
-  fallback: CodexAppToolApprovalMode = "auto",
-): CodexAppToolApprovalMode {
+  toolTitle: string | undefined,
+  fallbackApprovalMode: CodexAppToolApprovalMode = "auto",
+): { enabled: boolean; approvalMode: CodexAppToolApprovalMode } {
   const app = asOptionalRecord(asOptionalRecord(config.apps)?.[appId]);
-  const tool = asOptionalRecord(asOptionalRecord(app?.tools)?.[toolName]);
-  return normalizeAppToolApprovalMode(tool?.approval_mode) ?? fallback;
+  const tools = asOptionalRecord(app?.tools);
+  // Codex selects the full-name entry before the title entry, not each field
+  // independently. Preserve that precedence for both enablement and approval.
+  const tool = asOptionalRecord(
+    tools?.[toolName] ?? (toolTitle !== undefined ? tools?.[toolTitle] : undefined),
+  );
+  const defaultToolsEnabled = app?.default_tools_enabled;
+  return {
+    enabled:
+      typeof tool?.enabled === "boolean"
+        ? tool.enabled
+        : typeof defaultToolsEnabled === "boolean"
+          ? defaultToolsEnabled
+          : true,
+    approvalMode: normalizeAppToolApprovalMode(tool?.approval_mode) ?? fallbackApprovalMode,
+  };
 }
 
 /** Captures only apps callable on the exact active Codex client/thread. */
@@ -242,8 +321,7 @@ export async function captureScheduledCodexAppAuthority(params: {
   client: Pick<CodexAppServerClient, "request">;
   threadId: string;
   policyContext: PluginAppPolicyContext;
-  profileId: string;
-  accountId: string;
+  auth: ScheduledCodexAppCreatorAuth;
   configCwd?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -273,8 +351,9 @@ export async function captureScheduledCodexAppAuthority(params: {
   };
   let installed: v2.AppsInstalledResponse;
   let currentPolicy: CurrentCodexScheduledAppPolicy;
+  let managedRequirementsFingerprint: string | undefined;
   try {
-    [installed, currentPolicy] = await withAbortableTimeout({
+    [installed, currentPolicy, managedRequirementsFingerprint] = await withAbortableTimeout({
       promise: Promise.all([
         boundedClient.request("app/installed", {
           threadId: params.threadId,
@@ -286,6 +365,9 @@ export async function captureScheduledCodexAppAuthority(params: {
           threadId: params.threadId,
           configCwd: params.configCwd,
         }),
+        params.auth.kind === "configured-app-server"
+          ? readCodexManagedRequirementsFingerprint(boundedClient, params.signal)
+          : Promise.resolve(undefined),
       ]),
       timeoutMs,
       signal: params.signal,
@@ -309,23 +391,24 @@ export async function captureScheduledCodexAppAuthority(params: {
     installed.apps.filter((app) => app.enabled && app.callable).map((app) => app.id),
   );
   const apps = Object.entries(params.policyContext.apps)
-    .filter(([id]) => callableIds.has(id) && currentPolicy.toolNamesByApp.has(id))
+    .filter(([id]) => callableIds.has(id) && currentPolicy.toolsByApp.has(id))
     .map(([id, policy]) => ({
       id,
       allowDestructiveActions: policy.allowDestructiveActions,
       allowOpenWorld: policy.allowOpenWorld !== false,
       destructiveApprovalMode: defaultApprovalMode(policy),
       tools: Object.fromEntries(
-        [...(currentPolicy.toolNamesByApp.get(id) ?? [])]
+        [...(currentPolicy.toolsByApp.get(id)?.keys() ?? [])]
           .toSorted()
           .map((toolName) => [
             toolName,
-            readToolApprovalMode(
+            readCurrentToolPolicy(
               currentPolicy.config,
               id,
               toolName,
+              currentPolicy.toolsByApp.get(id)?.get(toolName),
               appApprovalCeiling(defaultApprovalMode(policy)),
-            ),
+            ).approvalMode,
           ]),
       ),
     }))
@@ -333,13 +416,27 @@ export async function captureScheduledCodexAppAuthority(params: {
   if (apps.length === 0) {
     return undefined;
   }
+  const auth: ScheduledCodexAppAuthorityAuth =
+    params.auth.kind === "prepared-profile"
+      ? { profileId: params.auth.profileId, accountId: params.auth.accountId }
+      : {
+          kind: "configured-app-server",
+          connectionFingerprint: params.auth.connectionFingerprint,
+          managedRequirementsFingerprint:
+            managedRequirementsFingerprint ??
+            (() => {
+              throw new Error(
+                "Codex configured app-server authority capture omitted managed requirements",
+              );
+            })(),
+        };
   return {
     version: 1,
     runtimeId: "codex",
     namespace: CODEX_SCHEDULED_APP_AUTHORITY_NAMESPACE,
     payload: {
       version: 1,
-      auth: { profileId: params.profileId, accountId: params.accountId },
+      auth,
       apps,
     },
   };
@@ -412,7 +509,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
   currentPolicy: CurrentCodexScheduledAppPolicy = {
     config: {},
-    toolNamesByApp: new Map(),
+    toolsByApp: new Map(),
   },
 ): CodexPluginThreadConfig {
   const scheduled = parseScheduledCodexAppAuthority(authority);
@@ -422,7 +519,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const omittedAppIds = scheduled.apps
     .map((app) => app.id)
     .filter((id) => {
-      const currentTools = currentPolicy.toolNamesByApp.get(id);
+      const currentTools = currentPolicy.toolsByApp.get(id);
       return (
         !Object.hasOwn(config.policyContext.apps, id) || !currentTools || currentTools.size === 0
       );
@@ -473,19 +570,24 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     const currentAppCeiling = appApprovalCeiling(defaultApprovalMode(currentApp));
     // Current inventory owns existence; captured modes only cap tools that
     // still exist (and tools added later within the already-authorized app).
-    const toolNames = currentPolicy.toolNamesByApp.get(appId) ?? new Set<string>();
+    const tools = currentPolicy.toolsByApp.get(appId) ?? new Map<string, string | undefined>();
     appPatch.tools = Object.fromEntries(
-      [...toolNames].toSorted().map((toolName) => {
+      [...tools.keys()].toSorted().map((toolName) => {
         const capturedMode = captured.tools[toolName] ?? storedAppCeiling;
+        const currentToolPolicy = readCurrentToolPolicy(
+          currentPolicy.config,
+          appId,
+          toolName,
+          tools.get(toolName),
+          currentAppCeiling,
+        );
         return [
           toolName,
           {
+            enabled: currentToolPolicy.enabled,
             approval_mode: intersectToolApprovalMode(
               intersectToolApprovalMode(capturedMode, storedAppCeiling),
-              intersectToolApprovalMode(
-                readToolApprovalMode(currentPolicy.config, appId, toolName, currentAppCeiling),
-                currentAppCeiling,
-              ),
+              intersectToolApprovalMode(currentToolPolicy.approvalMode, currentAppCeiling),
             ),
           },
         ];
@@ -520,6 +622,14 @@ function readScheduledCodexAppAuthorityAuth(
   return parseScheduledCodexAppAuthority(authority)?.auth;
 }
 
+/** Returns the managed-requirements identity captured for a configured app-server job. */
+export function readScheduledCodexAppManagedRequirementsFingerprint(
+  authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
+): string | undefined {
+  const auth = readScheduledCodexAppAuthorityAuth(authority);
+  return auth?.kind === "configured-app-server" ? auth.managedRequirementsFingerprint : undefined;
+}
+
 export function assertScheduledCodexAppAuthorityRuntime(
   connection: Pick<
     CodexAttemptConnection,
@@ -537,8 +647,19 @@ export function assertScheduledCodexAppAuthorityRuntime(
     connection.appServer.start.homeScope === "user"
   ) {
     throw new AgentHarnessPreflightError(
-      "This automation's Codex app authority requires an isolated scheduled prepared-profile runtime. Reauthorize it from a supported Codex creator turn.",
+      "This automation's Codex app authority requires an isolated scheduled runtime. Reauthorize it from a supported Codex creator turn.",
     );
+  }
+  if (scheduledAuth.kind === "configured-app-server") {
+    const connectionFingerprint = buildScheduledCodexAppServerConnectionIdentity(
+      connection.appServer,
+    );
+    if (connectionFingerprint !== scheduledAuth.connectionFingerprint) {
+      throw new AgentHarnessPreflightError(
+        "This automation was authorized for a different configured Codex app-server. Restore that connection or reauthorize the automation from a fresh owner turn.",
+      );
+    }
+    return;
   }
   const prepared = connection.startupPreparedAuth;
   if (

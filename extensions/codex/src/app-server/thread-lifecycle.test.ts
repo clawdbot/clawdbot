@@ -290,6 +290,30 @@ describe("Codex ring-zero thread config", () => {
     );
   });
 
+  it("accepts the attested app server alongside disabled inherited servers", async () => {
+    const request = vi.fn(async () => ({
+      data: [
+        disabledMcpServerStatus("inherited"),
+        {
+          name: "codex_apps",
+          serverInfo: { name: "codex_apps", version: "1.0.0" },
+          tools: { "calendar.list": {} },
+        },
+      ],
+      nextCursor: null,
+    }));
+
+    await expect(
+      attestCodexRestrictedToolSurfaceMcpServersDisabled(
+        { request } as never,
+        "thread-restricted",
+        { mcp_servers: { inherited: { enabled: false } } },
+        undefined,
+        ["codex_apps"],
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it.each([
     {
       name: "an unexpected server",
@@ -456,6 +480,54 @@ describe("Codex ring-zero thread config", () => {
       config: { project_doc_max_bytes: 64_000 },
     });
     expect(disabled.config?.project_doc_max_bytes).toBe(0);
+  });
+
+  it("keeps scheduled-authority apps enabled inside the restricted tool surface", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicyRestricted = true;
+    params.scheduledRuntimeAuthority = {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { version: 1, auth: {}, apps: [] },
+    };
+    const apps = {
+      _default: { enabled: false },
+      calendar: { enabled: true },
+    };
+
+    const appServer = createAppServerOptions() as never;
+    const options = {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      config: {
+        apps,
+        mcp_servers: {
+          inherited: { command: "inherited-mcp" },
+        },
+      },
+    };
+    const start = buildThreadStartParams(params, options);
+    const resume = buildThreadResumeParams(params, {
+      ...options,
+      threadId: "thread-1",
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.apps"]).toBe(true);
+      expect(request.config?.["orchestrator.mcp.enabled"]).toBe(true);
+      expect(request.config?.apps).toEqual(apps);
+      expect(request.config?.mcp_servers).toEqual({
+        inherited: {
+          command: "inherited-mcp",
+          enabled: false,
+        },
+      });
+      expect(request.config?.["features.multi_agent"]).toBe(false);
+    }
   });
 });
 

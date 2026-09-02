@@ -59,6 +59,8 @@ import {
 } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 
+const CODEX_APPS_MCP_SERVER_NAME = "codex_apps";
+
 type ResumeThreadContext = CodexThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
   clearCurrentBinding: (operation: string) => Promise<void>;
@@ -212,14 +214,17 @@ export async function resumeExistingCodexThread(
     resumeResponseAccepted = true;
     assertCodexThreadAcceptsDirectInput(response.thread);
     context.assertResumeConfiguration?.();
-    if (resumeBinding.pendingResumeConfiguration) {
-      await attestCodexPluginThreadApps({
-        client: params.client,
-        threadId: response.thread.id,
-        appIds: context.prebuiltPluginThreadConfig?.provisionalAppIds ?? [],
-        signal: params.signal,
-      });
-    }
+    const provisionalAppIds =
+      context.prebuiltPluginThreadConfig?.provisionalAppIds ??
+      (params.pluginThreadConfig?.enabled
+        ? Object.keys(resumeBinding.pluginAppPolicyContext?.apps ?? {})
+        : []);
+    await attestCodexPluginThreadApps({
+      client: params.client,
+      threadId: response.thread.id,
+      appIds: provisionalAppIds,
+      signal: params.signal,
+    });
     if (
       ringZeroActive ||
       isMessageOnlyCodexSourceReply(params.params) ||
@@ -232,6 +237,7 @@ export async function resumeExistingCodexThread(
             response.thread.id,
             resumeParams.config,
             params.signal,
+            provisionalAppIds.length > 0 ? [CODEX_APPS_MCP_SERVER_NAME] : [],
           ),
         );
       } catch (error) {
@@ -535,6 +541,7 @@ export async function startFreshCodexThread(
           response.thread.id,
           startParams.config,
           params.signal,
+          provisionalAppIds?.length ? [CODEX_APPS_MCP_SERVER_NAME] : [],
         ),
       );
     } catch (error) {
