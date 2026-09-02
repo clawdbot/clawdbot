@@ -229,6 +229,8 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/option-card.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/settings-controls.css",
     "ui/src/styles/settings.css",
     "ui/src/pages/activity/run-inspector.css",

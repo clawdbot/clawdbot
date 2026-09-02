@@ -1201,39 +1201,47 @@ describe("config cli", () => {
       });
     });
 
-    it("merges provider model arrays by id with --merge", async () => {
-      const resolved = {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              models: [
-                { id: "llama3.2", name: "Llama 3.2", contextWindow: 131072 },
-                { id: "qwen3", name: "Qwen 3" },
-              ],
+    it.each([
+      {
+        label: "the model list",
+        path: "models.providers.ollama.models",
+        value: '[{"id":"llama3.2","name":"Llama 3.2 latest"},{"id":"gemma4","name":"Gemma 4"}]',
+      },
+      {
+        label: "an ancestor object",
+        path: "models",
+        value:
+          '{"providers":{"ollama":{"models":[{"id":"llama3.2","name":"Llama 3.2 latest"},{"id":"gemma4","name":"Gemma 4"}]}}}',
+      },
+    ])(
+      "merges provider model arrays by id through $label with --merge",
+      async ({ path: configPath, value }) => {
+        const resolved = {
+          models: {
+            providers: {
+              ollama: {
+                api: "ollama",
+                models: [
+                  { id: "llama3.2", name: "Llama 3.2", contextWindow: 131072 },
+                  { id: "qwen3", name: "Qwen 3" },
+                ],
+              },
             },
           },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
+        } as unknown as OpenClawConfig;
+        setSnapshot(resolved, resolved);
 
-      await runConfigCommand([
-        "config",
-        "set",
-        "models.providers.ollama.models",
-        '[{"id":"llama3.2","name":"Llama 3.2 latest"},{"id":"gemma4","name":"Gemma 4"}]',
-        "--strict-json",
-        "--merge",
-      ]);
+        await runConfigCommand(["config", "set", configPath, value, "--strict-json", "--merge"]);
 
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = firstWrittenConfig();
-      expect(written.models?.providers?.ollama?.models).toEqual([
-        { id: "llama3.2", name: "Llama 3.2 latest", contextWindow: 131072 },
-        { id: "qwen3", name: "Qwen 3" },
-        { id: "gemma4", name: "Gemma 4" },
-      ]);
-    });
+        expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+        const written = firstWrittenConfig();
+        expect(written.models?.providers?.ollama?.models).toEqual([
+          { id: "llama3.2", name: "Llama 3.2 latest", contextWindow: 131072 },
+          { id: "qwen3", name: "Qwen 3" },
+          { id: "gemma4", name: "Gemma 4" },
+        ]);
+      },
+    );
 
     it("drops gateway.auth.password when switching mode to token", async () => {
       const resolved: OpenClawConfig = {
@@ -3761,6 +3769,38 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expect(mockResolveSecretRefValue).toHaveBeenCalledTimes(2);
       expectErrorIncludes("Dry run failed: 2 SecretRef assignment(s) could not be resolved.");
+    });
+
+    it("reports schema errors for deeply nested replacement values without an engine failure", async () => {
+      const resolved = {} as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+      const pathname = path.join(
+        os.tmpdir(),
+        `openclaw-config-patch-deep-replacement-${Date.now()}-${Math.random()
+          .toString(16)
+          .slice(2)}.json5`,
+      );
+      const nestedArray = "[".repeat(20_000) + "0" + "]".repeat(20_000);
+      fs.writeFileSync(pathname, `{agents:{defaults:{params:${nestedArray}}}}`, "utf8");
+      try {
+        await expect(
+          runConfigCommand([
+            "config",
+            "patch",
+            "--file",
+            pathname,
+            "--replace-path",
+            "agents.defaults.params",
+            "--dry-run",
+          ]),
+        ).rejects.toThrow(ExitError);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      const errors = mockError.mock.calls.flat().join("\n");
+      expect(errors).toContain("Dry run failed: config schema validation failed.");
+      expect(errors).not.toContain("Maximum call stack size exceeded");
     });
 
     it("rejects config patch --json without dry-run", async () => {

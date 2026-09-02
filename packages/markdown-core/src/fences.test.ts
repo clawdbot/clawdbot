@@ -1,6 +1,6 @@
 // Tests fenced-code-block span scanning used to keep chunk breaks out of code blocks.
 import { describe, expect, it } from "vitest";
-import { isSafeFenceBreak, parseFenceSpans } from "./fences.js";
+import { isSafeFenceBreak, parseFenceSpans, scanFenceSpans } from "./fences.js";
 
 describe("parseFenceSpans closing-fence rules", () => {
   it("treats a marker line with trailing text as code content, not a closing fence", () => {
@@ -41,5 +41,41 @@ describe("parseFenceSpans closing-fence rules", () => {
     const closed = "```\ncode\n```\nafter\n";
     const spans = parseFenceSpans(closed);
     expect(isSafeFenceBreak(spans, closed.indexOf("after") + 1)).toBe(true);
+  });
+
+  it.each(["\n", "\r\n"])("preserves raw UTF-16 offsets with %j line endings", (newline) => {
+    const prefix = `😀${newline}`;
+    const openLine = "  ````ts `metadata`";
+    const text = `${prefix}${openLine}${newline}code${newline} \`\`\`\`\` \t${newline}tail`;
+
+    expect(parseFenceSpans(text)).toEqual([
+      {
+        start: prefix.length,
+        end: text.lastIndexOf("\n"),
+        openLine,
+        marker: "````",
+        indent: "  ",
+      },
+    ]);
+  });
+
+  it.each(["\r", "\u2028", "\u2029"])("does not treat %j as a scanner line break", (separator) => {
+    expect(parseFenceSpans(`intro${separator}\`\`\`ts\ncode`)).toEqual([]);
+    expect(parseFenceSpans(`\`\`\`ts${separator}info\ncode`)).toEqual([]);
+  });
+
+  it("carries an open fence through empty input and a continued line without mutating state", () => {
+    const { state } = scanFenceSpans("  ~~~sh\nbody");
+    Object.freeze(state.open);
+    Object.freeze(state);
+    const continued = "~~~\nbody\n~~~~ ";
+    const span = { start: 0, openLine: "  ~~~sh", marker: "~~~", indent: "  " };
+
+    expect(scanFenceSpans("", state)).toEqual({ spans: [{ ...span, end: 0 }], state });
+    expect(scanFenceSpans(continued, state)).toEqual({
+      spans: [{ ...span, end: continued.length }],
+      state: { atLineStart: false },
+    });
+    expect(state).toMatchObject({ atLineStart: false, open: { openLine: "  ~~~sh" } });
   });
 });

@@ -229,14 +229,11 @@ function loadGatewaySessionLookupStoreUncached(
         const match = loadExact({
           ...(agentId ? { agentId } : {}),
           clone: false,
+          projection: options.projection,
           sessionKey,
           storePath,
         });
         if (match) {
-          if (options.projection === "list") {
-            delete match.entry.skillsSnapshot;
-            delete match.entry.systemPromptReport;
-          }
           store[match.sessionKey] = match.entry;
         }
       }
@@ -486,7 +483,11 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   if (explicitDeletedMainTarget) {
-    return includeDirectChildEntries(explicitDeletedMainTarget, params.includeStoreChildEntries);
+    return includeDirectChildEntries(
+      explicitDeletedMainTarget,
+      params.includeStoreChildEntries,
+      params.projection,
+    );
   }
 
   const requestedAgentId = normalizeOptionalString(params.agentId);
@@ -519,6 +520,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
         store,
       },
       params.includeStoreChildEntries,
+      params.projection,
     );
   }
   const { canonicalValidationError, storePath, store } = resolveGatewaySessionStoreLookup({
@@ -547,6 +549,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
         ...(canonicalValidationError ? { canonicalValidationError } : {}),
       },
       params.includeStoreChildEntries,
+      params.projection,
     );
   }
 
@@ -563,12 +566,14 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
       ...(canonicalValidationError ? { canonicalValidationError } : {}),
     },
     params.includeStoreChildEntries,
+    params.projection,
   );
 }
 
 function includeDirectChildEntries(
   target: GatewaySessionStoreTargetWithStore,
   include: boolean | undefined,
+  projection: SessionEntryListScope["projection"],
 ): GatewaySessionStoreTargetWithStore {
   if (!include) {
     return target;
@@ -579,6 +584,7 @@ function includeDirectChildEntries(
       for (const { sessionKey, entry } of listSessionChildEntriesReadOnly({
         agentId: target.agentId,
         clone: false,
+        projection,
         sessionKey: parentKey,
         storePath: target.storePath,
       })) {

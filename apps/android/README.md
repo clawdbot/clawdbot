@@ -271,6 +271,8 @@ pnpm openclaw gateway --port 18789 --verbose
 - Follow the first-run connection screen, or open **Settings → Gateway** to change a saved connection.
 - Scan a QR code, paste a setup code, or enter the Gateway manually.
 
+Gateway credentials and setup codes are masked and accept paste. The app requests password input with autocorrection disabled; this does not guarantee how a keyboard stores or learns from input.
+
 3. Approve pairing (on the gateway machine):
 
 ```bash
