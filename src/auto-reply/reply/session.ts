@@ -416,6 +416,7 @@ function resolveReplySessionRolloverState(
     reasoningLevel: entry.reasoningLevel,
     ttsAuto: entry.ttsAuto,
     responseUsage: entry.responseUsage,
+    streamingMode: entry.streamingMode,
     ...selectSessionModelOverride(preservedSelection),
     authProfileOverride: preservedSelection.authProfileOverride,
     authProfileOverrideSource: preservedSelection.authProfileOverrideSource,

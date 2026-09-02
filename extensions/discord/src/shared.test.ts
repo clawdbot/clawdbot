@@ -39,6 +39,29 @@ describe("createDiscordPluginBase", () => {
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
   });
 
+  it("declares the inherited preview-streaming mode so /stream is supported", () => {
+    const plugin = createDiscordPluginBase({ setupContract: {} as never });
+    const account = plugin.config.resolveAccount(
+      { channels: { discord: { streaming: { mode: "partial" } } } } as OpenClawConfig,
+      "default",
+    );
+    const defaultAccount = plugin.config.resolveAccount({} as OpenClawConfig, "default");
+
+    expect(plugin.streaming?.sessionModeDefault).toBe("off");
+    expect(plugin.streaming?.resolveSessionMode?.({ account: defaultAccount })).toEqual({
+      mode: "off",
+      source: "channel default",
+    });
+    expect(plugin.streaming?.resolveSessionMode?.({ account })).toEqual({
+      mode: "partial",
+      source: "channel config",
+    });
+    expect(plugin.streaming?.resolveSessionMode?.({ account, sessionMode: "block" })).toEqual({
+      mode: "block",
+      source: "session",
+    });
+  });
+
   it("hydrates announce delivery targets from stored session routing", () => {
     const plugin = createDiscordPluginBase({ setupContract: {} as never });
 

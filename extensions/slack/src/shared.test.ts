@@ -42,6 +42,52 @@ describe("createSlackPluginBase", () => {
     expect(plugin.security?.collectWarnings).toBeTypeOf("function");
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
   });
+
+  it("declares the inherited preview-streaming mode so /stream is supported", () => {
+    const plugin = createSlackPluginBase({
+      setupContract: {} as never,
+      setupWizard: {} as never,
+    });
+    const account = plugin.config.resolveAccount(
+      { channels: { slack: { streaming: { mode: "partial" } } } } as OpenClawConfig,
+      "default",
+    );
+    const defaultAccount = plugin.config.resolveAccount({} as OpenClawConfig, "default");
+
+    expect(plugin.streaming?.sessionModeDefault).toBe("progress");
+    expect(plugin.streaming?.resolveSessionMode?.({ account: defaultAccount })).toEqual({
+      mode: "progress",
+      source: "channel default",
+    });
+    expect(plugin.streaming?.resolveSessionMode?.({ account })).toEqual({
+      mode: "partial",
+      source: "channel config",
+    });
+    expect(plugin.streaming?.resolveSessionMode?.({ account, sessionMode: "block" })).toEqual({
+      mode: "block",
+      source: "session",
+    });
+  });
+
+  it.each([
+    [false, "off"],
+    [true, "partial"],
+    ["block", "block"],
+  ] as const)("inherits legacy streaming value %s for /stream", (streaming, mode) => {
+    const plugin = createSlackPluginBase({
+      setupContract: {} as never,
+      setupWizard: {} as never,
+    });
+    const account = plugin.config.resolveAccount(
+      { channels: { slack: { streaming } } } as unknown as OpenClawConfig,
+      "default",
+    );
+
+    expect(plugin.streaming?.resolveSessionMode?.({ account })).toEqual({
+      mode,
+      source: "channel config",
+    });
+  });
 });
 
 describe("setSlackChannelAllowlist", () => {

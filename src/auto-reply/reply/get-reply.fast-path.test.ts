@@ -814,6 +814,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
         sessionId: "existing-fast-reset-usage",
         updatedAt: Date.now(),
         responseUsage: "full",
+        streamingMode: "block",
       },
     });
 
@@ -832,6 +833,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.resetTriggered).toBe(true);
     expect(result.sessionEntry.responseUsage).toBe("full");
+    expect(result.sessionEntry.streamingMode).toBe("block");
   });
 
   it("preserves the exact multiline reset payload during fast bootstrap", () => {

@@ -10,11 +10,13 @@ describe("inheritSessionSelection", () => {
         updatedAt: 1,
         authProfileOverride: "openai:work",
         thinkingLevel: "ultra",
+        streamingMode: "progress",
       }),
     ).toMatchObject({
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
       thinkingLevel: "ultra",
+      streamingMode: "progress",
     });
 
     const automatic = inheritSessionSelection({

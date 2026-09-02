@@ -11,7 +11,7 @@ import type {
 import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { MarkdownTableMode, StreamingMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
@@ -341,10 +341,21 @@ export type ChannelMentionAdapter = {
   }) => string;
 };
 
-export type ChannelStreamingAdapter = {
+export type ChannelStreamingAdapter<ResolvedAccount = unknown> = {
   blockStreamingCoalesceDefaults?: {
     minChars: number;
     idleMs: number;
+  };
+  /**
+   * Opts the channel into `/stream` and declares the inherited mode used when
+   * neither account config nor a session override selects one. The channel's
+   * delivery path must honor `SessionEntry.streamingMode` when this is set.
+   */
+  sessionModeDefault?: StreamingMode;
+  /** Resolves the effective session mode without exposing the plugin's account shape to core. */
+  resolveSessionMode?: (params: { account: ResolvedAccount; sessionMode?: StreamingMode }) => {
+    mode: StreamingMode;
+    source: "session" | "channel config" | "channel default";
   };
 };
 

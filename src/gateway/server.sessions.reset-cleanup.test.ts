@@ -1058,6 +1058,7 @@ test("sessions.reset preserves explicit session preferences across session rollo
   await writeSingleLineSession(dir, "sess-main", "hello");
   const preferences = {
     responseUsage: "tokens",
+    streamingMode: "partial",
     pinnedAt: 123,
     label: "Operator session",
     category: "Operator group",

@@ -129,6 +129,37 @@ describe("channel-streaming", () => {
     );
   });
 
+  it("prefers session preview mode overrides before channel config", () => {
+    expect(
+      resolveChannelPreviewStreamMode({ streaming: { mode: "partial" } }, "off", {
+        sessionMode: "progress",
+      }),
+    ).toBe("progress");
+    expect(
+      resolveChannelPreviewStreamMode({ streaming: { mode: "partial" } }, "off", {
+        sessionMode: "bogus",
+      }),
+    ).toBe("partial");
+  });
+
+  it("uses one resolved mode for progress policy", () => {
+    const entry = {
+      streaming: {
+        mode: "partial" as const,
+        progress: { commentary: true, toolProgress: false },
+      },
+    };
+
+    expect(resolveChannelStreamingPreviewToolProgress(entry, true, "progress")).toBe(false);
+    expect(resolveChannelStreamingProgressCommentary(entry, false, "progress")).toBe(true);
+    expect(
+      resolveChannelStreamingSuppressDefaultToolProgressMessages(entry, {
+        draftStreamActive: true,
+        mode: "off",
+      }),
+    ).toBe(false);
+  });
+
   it("keeps block preview mode separate from block delivery", () => {
     expect(resolveChannelStreamingBlockEnabled({ streaming: { mode: "block" } })).toBeUndefined();
     expect(

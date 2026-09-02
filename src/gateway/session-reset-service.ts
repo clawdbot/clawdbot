@@ -1663,6 +1663,7 @@ export async function performGatewaySessionReset(params: {
             reasoningLevel: currentEntry?.reasoningLevel,
             elevatedLevel: currentEntry?.elevatedLevel,
             ttsAuto: currentEntry?.ttsAuto,
+            streamingMode: currentEntry?.streamingMode,
             execHost: params.execNode
               ? "node"
               : params.clearExecBinding

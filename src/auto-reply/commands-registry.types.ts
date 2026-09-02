@@ -69,6 +69,8 @@ export type ChatCommandDefinition = {
   nativeName?: string;
   nativeAliases?: string[];
   nativeProviders?: string[];
+  /** Channel-owned feature required before this command is advertised natively. */
+  nativeChannelCapability?: "sessionStreaming";
   description: string;
   /** Localized descriptions for native command surfaces that support them. */
   descriptionLocalizations?: Record<string, string>;

@@ -176,6 +176,15 @@ top-level boolean/string spellings are rewritten by `openclaw doctor --fix`).
 | `block`    | Preview updates in chunked/appended steps                             |
 | `progress` | Progress/status preview during generation, final answer at completion |
 
+Authorized senders can use `/stream status|off|partial|block|progress|default`
+on Telegram, Discord, and Slack to set a preview mode for the current session.
+The session override wins over channel config until `/stream default` removes
+it. `off` disables preview updates for the session; normal final delivery and
+channel block-delivery fallbacks are unchanged. `/streaming` is an alias, and
+text commands also accept `final` as a compatibility alias for `off`. Other
+channels report that the text command is unsupported and do not save an
+override; native command menus hide it unless the channel opts in.
+
 `streaming.mode: "block"` is a preview-streaming mode for edit-capable
 channels such as Discord and Telegram; it does not by itself enable channel
 block delivery there. Use `streaming.block.enabled` for normal block replies.
@@ -347,10 +356,10 @@ Supported surfaces:
   mode (see above).
 - Tool-progress edits follow the active preview streaming mode; they are
   skipped when preview streaming is `off` or when block streaming has taken
-  over the message. On Telegram, `streaming.mode: "off"` is final-only: generic
-  progress chatter is also suppressed instead of delivered as standalone status
-  messages, while approval prompts, media payloads, and errors still route
-  normally.
+  over the message. On Telegram, `streaming.mode: "off"` suppresses generic
+  progress chatter instead of delivering it as standalone status messages.
+  Normal final delivery, inherited block delivery, approval prompts, media
+  payloads, and errors still route normally.
 - To keep preview streaming but hide tool-progress lines, set
   `streaming.preview.toolProgress` or `streaming.progress.toolProgress` to
   `false` for that channel (both default `true`, and both are honored in every

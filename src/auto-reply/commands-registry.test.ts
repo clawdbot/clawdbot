@@ -578,6 +578,61 @@ describe("commands registry", () => {
     expect(model.description).toBe("Show or set the model; use -s, -a, or -g to choose scope.");
   });
 
+  it("registers stream mode as a first-class options command", () => {
+    const stream = requireChatCommand("stream");
+    expect(stream.nativeName).toBe("stream");
+    expect(stream.nativeAliases).toEqual(["streaming"]);
+    expect(stream.nativeChannelCapability).toBe("sessionStreaming");
+    expect(stream.textAliases).toEqual(["/stream", "/streaming"]);
+    expect(stream.category).toBe("options");
+    const modeArg = requireCommandArg(stream, "mode");
+    expect(modeArg.choices).toEqual(["status", "off", "partial", "block", "progress", "default"]);
+  });
+
+  it("publishes stream natively only for channels with session streaming support", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "discord",
+              capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+            }),
+            streaming: {
+              sessionModeDefault: "off",
+              resolveSessionMode: () => ({ mode: "off", source: "channel default" }),
+            },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "clickclack",
+          plugin: createChannelTestPluginBase({
+            id: "clickclack",
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    expect(
+      nativeNameSet(
+        listNativeCommandSpecsForConfig({ commands: { native: true } }, { provider: "discord" }),
+      ).has("stream"),
+    ).toBe(true);
+    expect(
+      nativeNameSet(
+        listNativeCommandSpecsForConfig({ commands: { native: true } }, { provider: "clickclack" }),
+      ).has("stream"),
+    ).toBe(false);
+    expect(findCommandByNativeName("stream", "discord")?.key).toBe("stream");
+    expect(findCommandByNativeName("streaming", "discord")?.key).toBe("stream");
+    expect(findCommandByNativeName("stream", "clickclack")).toBeUndefined();
+    expect(findCommandByNativeName("streaming", "clickclack")).toBeUndefined();
+  });
+
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);

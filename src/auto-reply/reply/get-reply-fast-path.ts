@@ -274,6 +274,7 @@ export function initFastReplySessionState(params: {
     reasoningLevel: existingEntry?.reasoningLevel,
     ttsAuto: existingEntry?.ttsAuto,
     responseUsage: existingEntry?.responseUsage,
+    streamingMode: existingEntry?.streamingMode,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
     ...(normalizeOptionalString(ctx.Provider)
       ? { channel: normalizeOptionalString(ctx.Provider) }

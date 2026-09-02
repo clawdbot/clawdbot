@@ -14,6 +14,7 @@ const THREAD_TS = "thread-1";
 const SAME_TEXT = "same reply";
 
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
+const getSessionEntryMock = vi.hoisted(() => vi.fn());
 const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(
   async () => undefined as { messageId?: string; channelId?: string } | undefined,
@@ -49,6 +50,8 @@ class TestSlackStreamNotDeliveredError extends Error {
 }
 let mockedNativeStreaming = false;
 let mockedBlockStreamingEnabled: boolean | undefined = false;
+let resolveBlockStreamingFromPreviewAvailability = false;
+let capturedPreviewAvailable: boolean | undefined;
 let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
 let mockedPinnedMainDmOwner: string | undefined;
 let capturedReplyOptions: GetReplyOptions | undefined;
@@ -790,7 +793,16 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
       const previousText = typeof previous === "string" ? previous.trim() : previous?.text.trim();
       return previousText === normalized ? lines : [...lines, line].slice(-params.maxLines);
     },
-    resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
+    resolveChannelStreamingBlockEnabled: (
+      _entry: unknown,
+      previewPolicy?: { previewAvailable?: boolean },
+    ) => {
+      capturedPreviewAvailable = previewPolicy?.previewAvailable;
+      if (resolveBlockStreamingFromPreviewAvailability) {
+        return previewPolicy?.previewAvailable !== true;
+      }
+      return mockedBlockStreamingEnabled;
+    },
     resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
     resolveChannelStreamingPreviewToolProgress: (entry?: {
       streaming?: { progress?: { toolProgress?: boolean }; preview?: { toolProgress?: boolean } };
@@ -907,6 +919,10 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
+vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
+  getSessionEntry: getSessionEntryMock,
+}));
+
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/string-coerce-runtime")>();
   const normalizeMockLowercaseString = (value?: string) => value?.toLowerCase();
@@ -947,6 +963,17 @@ vi.mock("../../sent-thread-cache.js", () => ({
 vi.mock("../../streaming-compat.js", () => ({
   resolveSlackStreamingMode: () => mockedSlackStreamingMode,
   resolveSlackNativeStreaming: () => mockedNativeStreaming,
+}));
+
+vi.mock("../../stream-mode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../stream-mode.js")>()),
+  resolveSlackStreamingConfig: (params?: {
+    sessionStreamingMode?: typeof mockedSlackStreamingMode;
+  }) => ({
+    mode: params?.sessionStreamingMode ?? mockedSlackStreamingMode,
+    nativeStreaming: mockedNativeStreaming,
+    draftMode: "append" as const,
+  }),
 }));
 
 vi.mock("../../streaming.js", () => ({
@@ -1169,11 +1196,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     removeSlackReactionMock.mockReset();
     logVerboseMock.mockReset();
     getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
+    getSessionEntryMock.mockReset().mockReturnValue(undefined);
     for (const value of Object.values(statusReactionControllerMock)) {
       value.mockClear();
     }
     mockedNativeStreaming = false;
     mockedBlockStreamingEnabled = false;
+    resolveBlockStreamingFromPreviewAvailability = false;
+    capturedPreviewAvailable = undefined;
     mockedSlackStreamingMode = "partial";
     mockedPinnedMainDmOwner = undefined;
     capturedReplyOptions = undefined;
@@ -1294,6 +1324,31 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
     expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps inherited blocks when no Slack preview transport can target the turn", async () => {
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "reply_payload_sending"),
+    });
+    mockedNativeStreaming = true;
+    mockedSlackStreamingMode = "partial";
+    mockedSlackIsThreadReply = false;
+    mockedReplyThreadTs = undefined;
+    resolveBlockStreamingFromPreviewAvailability = true;
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        message: { ts: undefined, event_ts: undefined, thread_ts: undefined },
+        ctxPayload: { MessageThreadId: undefined },
+        replyToMode: "off",
+      }),
+    );
+
+    expect(capturedPreviewAvailable).toBe(false);
+    expect(capturedReplyOptions?.disableBlockStreaming).toBe(false);
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to normal delivery when preview finalize fails", async () => {
@@ -1939,6 +1994,25 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("uses a session preview override ahead of Slack account config", async () => {
+    mockedSlackStreamingMode = "off";
+    getSessionEntryMock.mockReturnValue({ streamingMode: "partial" });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a session turn Slack previews off without suppressing final delivery", async () => {
+    mockedSlackStreamingMode = "partial";
+    getSessionEntryMock.mockReturnValue({ streamingMode: "off" });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
   it("stops refreshing Slack thread status once the turn has visible output", async () => {

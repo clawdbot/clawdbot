@@ -283,6 +283,19 @@ describe("streaming config resolution", () => {
     },
   );
 
+  it("lets an available session preview mode override the inherited block default", () => {
+    expect(
+      resolveChannelStreamingBlockEnabled(
+        {},
+        {
+          previewAvailable: true,
+          blockStreamingDefault: "on",
+          sessionStreamingMode: "partial",
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("keeps the inherited block default for off or invalid preview modes", () => {
     expect(
       resolveChannelStreamingBlockEnabled(

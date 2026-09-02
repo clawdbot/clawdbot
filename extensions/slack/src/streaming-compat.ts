@@ -58,8 +58,13 @@ export function resolveSlackStreamingMode(
   params: {
     streamMode?: unknown;
     streaming?: unknown;
+    sessionStreamingMode?: unknown;
   } = {},
 ): StreamingMode {
+  const sessionMode = parseStreamingMode(params.sessionStreamingMode);
+  if (sessionMode) {
+    return sessionMode;
+  }
   const parsedStreaming = parseStreamingMode(
     getChannelStreamingConfigObject(params)?.mode ?? params.streaming,
   );

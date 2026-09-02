@@ -49,6 +49,18 @@ describe("resolveSlackStreamingConfig", () => {
       nativeStreaming: true,
     });
   });
+
+  it("prefers a session streaming override before account config", () => {
+    expect(
+      resolveSlackStreamingConfig({
+        streaming: { mode: "partial" },
+        sessionStreamingMode: "progress",
+      }),
+    ).toEqual({
+      mode: "progress",
+      nativeStreaming: true,
+    });
+  });
 });
 
 describe("applyAppendOnlyStreamUpdate", () => {

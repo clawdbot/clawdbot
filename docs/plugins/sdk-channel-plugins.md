@@ -140,6 +140,19 @@ operation accepts visible final text and enforces its transport's caption and
 overflow rules. Core then holds final-mode streamed text for that operation and
 falls back to text when the voice payload is proven unsent.
 
+### Session preview-streaming overrides
+
+A channel that honors the persisted `/stream` session preference opts in with
+`plugin.streaming.sessionModeDefault`. Set it to the channel-owned mode used
+when `channels.<id>.streaming.mode` is unset, and implement the typed
+`resolveSessionMode({ account, sessionMode })` adapter beside it. Core passes
+the plugin's opaque resolved account back to that adapter, so it never assumes
+an account config shape. The channel's delivery path must read
+`SessionEntry.streamingMode` and apply it ahead of account configuration. Omit
+the fields when the channel cannot honor all four canonical modes (`off`,
+`partial`, `block`, and `progress`). Contract tests should prove the declared
+default, a configured account override, and a session override.
+
 The legacy `dispatchInboundReplyWithBase` helper remains available from the
 deprecated `openclaw/plugin-sdk/inbound-reply-dispatch` compatibility shim.
 Do not use it for new channel code; start with the `message` adapter, receipts,

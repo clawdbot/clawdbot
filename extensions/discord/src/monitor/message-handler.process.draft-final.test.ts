@@ -39,7 +39,7 @@ function registerHooks(...hooks: string[]) {
   });
 }
 
-async function runHookSafetyFinalReply(mode: (typeof PREVIEW_MODES)[number]) {
+async function runHookSafetyFinalReply(mode: "off" | (typeof PREVIEW_MODES)[number]) {
   dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
     await params?.dispatcher.sendFinalReply({ text: "final answer" });
     await params?.dispatcher.waitForIdle();
@@ -95,6 +95,23 @@ describe("processDiscordMessage provider preview hook safety", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
+  });
+
+  it("uses a session preview override ahead of Discord account config", async () => {
+    getSessionEntry.mockReturnValue({ streamingMode: "partial" });
+
+    await runHookSafetyFinalReply("off");
+
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a session turn Discord previews off without changing final delivery", async () => {
+    getSessionEntry.mockReturnValue({ streamingMode: "off" });
+
+    await runHookSafetyFinalReply("partial");
+
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("uses an explicit partial preview despite inherited block delivery", async () => {

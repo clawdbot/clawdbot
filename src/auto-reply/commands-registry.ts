@@ -6,7 +6,11 @@ import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
-import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  getLoadedChannelPlugin,
+  type ChannelPlugin,
+} from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -56,17 +60,21 @@ type NativeCommandProviderLookupOptions = {
   includeBundledChannelFallback?: boolean;
 };
 
-function createNativeCommandNameMapper(
-  provider?: string,
+function resolveNativeChannelPlugin(
+  provider: string | undefined,
   options?: NativeCommandProviderLookupOptions,
+) {
+  if (!provider) {
+    return undefined;
+  }
+  return options?.includeBundledChannelFallback === false
+    ? getLoadedChannelPlugin(provider)
+    : getChannelPlugin(provider);
+}
+
+function createNativeCommandNameMapper(
+  resolveNativeCommandName?: NonNullable<ChannelPlugin["commands"]>["resolveNativeCommandName"],
 ): (command: ChatCommandDefinition) => Array<{ name: string; normalizedName?: string }> {
-  // Registry state is lifecycle-owned, so resolve the adapter once per list or lookup operation.
-  const resolveNativeCommandName = !provider
-    ? undefined
-    : (options?.includeBundledChannelFallback === false
-        ? getLoadedChannelPlugin(provider)
-        : getChannelPlugin(provider)
-      )?.commands?.resolveNativeCommandName;
   return (command) => {
     const primary = command.nativeName
       ? (resolveNativeCommandName?.({
@@ -80,17 +88,30 @@ function createNativeCommandNameMapper(
   };
 }
 
-function supportsNativeProvider(command: ChatCommandDefinition, provider?: string): boolean {
-  if (!command.nativeProviders?.length) {
-    return true;
-  }
+function supportsNativeProvider(
+  command: ChatCommandDefinition,
+  provider?: string,
+  plugin?: ChannelPlugin,
+): boolean {
   const normalizedProvider = normalizeOptionalLowercaseString(provider);
-  if (!normalizedProvider) {
+  if (
+    command.nativeProviders?.length &&
+    (!normalizedProvider ||
+      !command.nativeProviders.some(
+        (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProvider,
+      ))
+  ) {
     return false;
   }
-  return command.nativeProviders.some(
-    (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProvider,
-  );
+  if (command.nativeChannelCapability === "sessionStreaming") {
+    // The default opts in; the resolver proves core can query the typed account
+    // contract before a native user can select a session override.
+    return (
+      plugin?.streaming?.sessionModeDefault !== undefined &&
+      plugin.streaming.resolveSessionMode !== undefined
+    );
+  }
+  return true;
 }
 
 function listNativeSpecsFromCommands(
@@ -98,11 +119,17 @@ function listNativeSpecsFromCommands(
   provider?: string,
   options?: NativeCommandProviderLookupOptions,
 ): NativeCommandSpec[] {
-  const mapNativeCommandNames = createNativeCommandNameMapper(provider, options);
+  // Registry state is lifecycle-owned, so resolve the adapter once per list operation.
+  const plugin = resolveNativeChannelPlugin(provider, options);
+  const mapNativeCommandNames = createNativeCommandNameMapper(
+    plugin?.commands?.resolveNativeCommandName,
+  );
   return commands
     .filter(
       (command) =>
-        command.scope !== "text" && command.nativeName && supportsNativeProvider(command, provider),
+        command.scope !== "text" &&
+        command.nativeName &&
+        supportsNativeProvider(command, provider, plugin),
     )
     .flatMap((command) => {
       return mapNativeCommandNames(command).map(({ name }, index) => {
@@ -195,11 +222,15 @@ export function findCommandByNativeName(
   if (!normalized) {
     return undefined;
   }
-  const mapNativeCommandNames = createNativeCommandNameMapper(provider, options);
+  // Registry state is lifecycle-owned, so resolve the adapter once per lookup operation.
+  const plugin = resolveNativeChannelPlugin(provider, options);
+  const mapNativeCommandNames = createNativeCommandNameMapper(
+    plugin?.commands?.resolveNativeCommandName,
+  );
   return getChatCommands().find(
     (command) =>
       command.scope !== "text" &&
-      supportsNativeProvider(command, provider) &&
+      supportsNativeProvider(command, provider, plugin) &&
       mapNativeCommandNames(command).some(({ normalizedName }) => normalizedName === normalized),
   );
 }

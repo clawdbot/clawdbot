@@ -6,6 +6,7 @@ import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackSetupContract, createSlackSetupWizardProxy } from "./setup-core.js";
 import { describeSlackSetupAccount, SLACK_CHANNEL } from "./setup-shared.js";
+import { resolveSlackStreamingMode } from "./streaming-compat.js";
 
 const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
   slackSetupWizard: (await import("./setup-surface.js")).slackSetupWizard,
@@ -41,6 +42,19 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   },
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+    sessionModeDefault: "progress",
+    resolveSessionMode: ({ account, sessionMode }) => {
+      const streaming = account.config.streaming;
+      const mode = resolveSlackStreamingMode({ streaming, sessionStreamingMode: sessionMode });
+      if (sessionMode) {
+        return { mode, source: "session" };
+      }
+      return streaming?.mode !== undefined ||
+        typeof streaming === "boolean" ||
+        typeof streaming === "string"
+        ? { mode, source: "channel config" }
+        : { mode: "progress", source: "channel default" };
+    },
   },
   reload: { configPrefixes: ["channels.slack"] },
   configSchema: SlackChannelConfigSchema,

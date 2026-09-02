@@ -218,6 +218,7 @@ plugins.
     | `/verbose on\|off\|full` | Toggle verbose output. Alias: `/v` |
     | `/trace on\|off` | Toggle plugin trace output for the current session |
     | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
+    | `/stream [status\|off\|partial\|block\|progress\|default]` | Show, set, or clear the current session's preview streaming mode on Telegram, Discord, and Slack. Alias: `/streaming` |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |

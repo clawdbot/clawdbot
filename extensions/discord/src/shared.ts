@@ -142,6 +142,16 @@ export function createDiscordPluginBase(params: {
     doctor: discordDoctor,
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+      sessionModeDefault: "off",
+      resolveSessionMode: ({ account, sessionMode }) => {
+        if (sessionMode) {
+          return { mode: sessionMode, source: "session" };
+        }
+        const mode = account.config.streaming?.mode;
+        return mode
+          ? { mode, source: "channel config" }
+          : { mode: "off", source: "channel default" };
+      },
     },
     reload: { configPrefixes: ["channels.discord"] },
     configSchema: DiscordChannelConfigSchema,

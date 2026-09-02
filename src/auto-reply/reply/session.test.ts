@@ -2154,6 +2154,7 @@ describe("initSessionState RawBody", () => {
         traceLevel: "high",
         reasoningLevel: "low",
         ttsAuto: "always",
+        streamingMode: "block",
         pinnedAt: 123,
       },
       expected: {
@@ -2162,8 +2163,17 @@ describe("initSessionState RawBody", () => {
         traceLevel: "high",
         reasoningLevel: "low",
         ttsAuto: "always",
+        streamingMode: "block",
         pinnedAt: 123,
       },
+      persisted: true,
+    },
+    {
+      name: "preserves the session stream mode across an implicit idle rollover",
+      slug: "stream-idle",
+      entry: { streamingMode: "partial" as const },
+      expected: { streamingMode: "partial" },
+      reset: { mode: "idle" as const, idleMinutes: 1 },
       persisted: true,
     },
     {
@@ -2233,7 +2243,10 @@ describe("initSessionState RawBody", () => {
         SessionKey: sessionKey,
       },
       cfg: {
-        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+        session: {
+          store: storePath,
+          reset: "reset" in scenario ? scenario.reset : ({ mode: "daily", atHour: 4 } as const),
+        },
       } as OpenClawConfig,
     });
 
@@ -4109,6 +4122,7 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       verboseLevel: "on",
       thinkingLevel: "high",
       reasoningLevel: "low",
+      streamingMode: "progress",
       label: "telegram-priority",
     } as const;
     const cases = await runExplicitResetCases({

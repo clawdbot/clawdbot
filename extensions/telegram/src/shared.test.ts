@@ -29,6 +29,31 @@ function resolveAccount(cfg: OpenClawConfig, accountId: string): ResolvedTelegra
   return telegramPluginBase.config.resolveAccount(cfg, accountId);
 }
 
+describe("createTelegramPluginBase streaming", () => {
+  it("declares the inherited preview-streaming mode so /stream is supported", () => {
+    const account = telegramPluginBase.config.resolveAccount(
+      { channels: { telegram: { streaming: { mode: "partial" } } } } as OpenClawConfig,
+      "default",
+    );
+    const defaultAccount = telegramPluginBase.config.resolveAccount(
+      {} as OpenClawConfig,
+      "default",
+    );
+
+    expect(telegramPluginBase.streaming?.sessionModeDefault).toBe("progress");
+    expect(telegramPluginBase.streaming?.resolveSessionMode?.({ account: defaultAccount })).toEqual(
+      { mode: "progress", source: "channel default" },
+    );
+    expect(telegramPluginBase.streaming?.resolveSessionMode?.({ account })).toEqual({
+      mode: "partial",
+      source: "channel config",
+    });
+    expect(
+      telegramPluginBase.streaming?.resolveSessionMode?.({ account, sessionMode: "block" }),
+    ).toEqual({ mode: "block", source: "session" });
+  });
+});
+
 describe("createTelegramPluginBase config duplicate token guard", () => {
   it("wires the top-level models menu adapter into the production plugin", () => {
     const channelData = telegramPluginBase.commands?.buildModelsMenuChannelData?.({

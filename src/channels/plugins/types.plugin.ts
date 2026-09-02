@@ -104,7 +104,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   doctor?: ChannelDoctorAdapter;
   bindings?: ChannelConfiguredBindingProvider;
   conversationBindings?: ChannelConversationBindingSupport;
-  streaming?: ChannelStreamingAdapter;
+  streaming?: ChannelStreamingAdapter<ResolvedAccount>;
   threading?: ChannelThreadingAdapter;
   message?: ChannelMessageAdapterShape;
   messaging?: ChannelMessagingAdapter;
