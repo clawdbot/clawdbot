@@ -1746,7 +1746,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
-          sparse-checkout: ".github/actions\n.github/zizmor.yml"
+          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts"
           persist-credentials: false
 
       - name: Resolve security diff base
@@ -1806,11 +1806,23 @@ jobs:
           else
             cp .ci-harness/.github/zizmor.yml "$trusted_policy"
           fi
+          # The key scanner is repo code, so pull requests run the exact-base
+          # copy: a candidate must not be able to neuter the guard that scans it.
+          trusted_scanner="$RUNNER_TEMP/detect-private-keys.mts"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            if ! git show "${BASE_SHA}:scripts/detect-private-keys.mts" > "$trusted_scanner" 2>/dev/null; then
+              rm -f "$trusted_scanner"
+              echo "::error title=trusted private-key scanner unavailable::Could not read scripts/detect-private-keys.mts from exact base ${BASE_SHA}; land the scanner on the base branch first."
+              exit 1
+            fi
+          else
+            cp .ci-harness/scripts/detect-private-keys.mts "$trusted_scanner"
+          fi
+          echo "PRIVATE_KEY_SCANNER_PATH=$trusted_scanner" >> "$GITHUB_ENV"
           cat > "$RUNNER_TEMP/security-fast-pre-commit.yaml" <<EOF
           repos:
             - repo: local
               hooks:
-                - { id: detect-private-key, name: detect private key, entry: detect-private-key, language: system, types: [text], exclude: '(^|/)(\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)' }
                 - id: zizmor
                   name: zizmor
                   entry: zizmor
@@ -1823,11 +1835,23 @@ jobs:
           EOF
           echo "PRE_COMMIT_CONFIG_PATH=$RUNNER_TEMP/security-fast-pre-commit.yaml" >> "$GITHUB_ENV"
 
-      - name: Install security scanners
-        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 pre-commit-hooks==6.0.0 zizmor==1.29.0
+      - name: Setup Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
+        run: |
+          set -euo pipefail
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
+      # First-party scan before any package install: the scan itself uses no
+      # network and no third-party hook code, so a PyPI outage cannot stop it.
+      # Node 24 comes from the runner tool cache; the shared helper downloads
+      # only on images that lack it.
       - name: Detect committed private keys
-        run: GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" --all-files detect-private-key
+        run: node "$PRIVATE_KEY_SCANNER_PATH"
+
+      - name: Install security scanners
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.29.0
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -1856,14 +1880,6 @@ jobs:
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
           GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 \
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
-
-      - name: Setup Node.js
-        env:
-          REQUESTED_NODE_VERSION: "24.x"
-        run: |
-          set -euo pipefail
-          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
-          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
