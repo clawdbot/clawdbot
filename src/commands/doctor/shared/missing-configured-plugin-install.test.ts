@@ -230,7 +230,7 @@ function mockBrokenBraveInstall(
     ...recordOverrides,
   });
   mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-  mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot("brave"));
+  mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot("brave", installDir));
   mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
     officialWebSearchPluginEntry({
       id: "brave",
@@ -408,7 +408,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         plugins: [{ id: "codex", packageVersion: "2026.5.6", channels: ["codex"] }],
         diagnostics:
           previousState === "damaged"
-            ? brokenPluginSnapshot("codex").diagnostics
+            ? brokenPluginSnapshot("codex", installDir).diagnostics
             : previousState === "stale-descriptor"
               ? [{ level: "error", pluginId: "codex", message: "without channelConfigs metadata" }]
               : [],
@@ -2801,8 +2801,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       plugins: [],
       diagnostics: [
-        ...brokenPluginSnapshot("brave").diagnostics,
-        ...brokenPluginSnapshot("discord").diagnostics,
+        ...brokenPluginSnapshot("brave", records.brave.installPath).diagnostics,
+        ...brokenPluginSnapshot("discord", records.discord.installPath).diagnostics,
       ],
     });
     mocks.updateNpmInstalledPlugins.mockResolvedValue({
@@ -3972,6 +3972,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         {
           level: "error",
           pluginId: "demo",
+          source: records.demo.installPath,
           message: "extension entry escapes package directory: ./index.ts",
         },
       ],
@@ -4386,7 +4387,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       clawhubUrl: "https://clawhub.ai",
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot(pluginId));
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot(pluginId, installDir));
     if (catalogKind === "provider") {
       mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
         officialWebSearchPluginEntry({

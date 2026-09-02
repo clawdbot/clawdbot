@@ -820,6 +820,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       compact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
     expect(jobOf("agentic-agents-core-runner-embedded")).toBeGreaterThanOrEqual(0);
     for (const prefix of [
+      "agentic-agents-embedded-base",
       "agentic-gateway-core",
       "core-runtime-media-ui",
       "core-unit-src-security",
@@ -928,6 +929,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         if (groups.length === 0) {
           continue;
         }
+        const jobs = groups.map((group) => plan.findIndex((shard) => shard.groups.includes(group)));
+        expect(new Set(jobs).size, `${owner.shardName}: split children stay separate`).toBe(
+          groups.length,
+        );
         const actual = groups.flatMap((group) => group.includePatterns ?? []);
         expect(new Set(actual).size, owner.shardName).toBe(actual.length);
         if (owner.includePatterns) {
@@ -1198,8 +1203,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "agentic-commands-doctor-sessions-cron-memory",
       "agentic-commands-doctor-sessions-cron-sqlite",
     ];
-    const commandShards = createNodeTestShards({ includeReleaseOnlyPluginShards: false }).filter(
-      (shard) => shard.configs.includes("test/vitest/vitest.commands.config.ts"),
+    const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const commandShards = base.filter((shard) =>
+      shard.configs.includes("test/vitest/vitest.commands.config.ts"),
     );
     const owners = new Map(
       commandShards
@@ -1253,6 +1259,69 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .filter((group) => ownerNames.includes(group.shard_name))
           .every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER),
       ).toBe(true);
+    }
+
+    const families = [ownerNames, [1, 2, 3].map((part) => `agentic-gateway-core-${part}`)];
+    const fixtureConfigs = new Set(
+      base
+        .filter((shard) => families.some((family) => family.includes(shard.shardName)))
+        .flatMap((shard) => shard.configs),
+    );
+    const originalShards = fullSuiteVitestShards.slice();
+    const fixtureShards = originalShards
+      .map((shard) => ({
+        ...shard,
+        projects: shard.projects.filter((config) => fixtureConfigs.has(config)),
+      }))
+      .filter((shard) => shard.projects.length > 0);
+    fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...fixtureShards);
+    try {
+      // Affordable descendants must also stay apart from their unsplit ancestors'
+      // siblings: an immediate-selector-only rule loses the Doctor/giant boundary.
+      const fixtureTimings = Object.fromEntries(
+        base
+          .filter((shard) => shard.configs.some((config) => fixtureConfigs.has(config)))
+          .map((shard) => [shard.shardName, 1]),
+      );
+      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
+        ...fixtureTimings,
+        ...Object.fromEntries(
+          families.flatMap((family) =>
+            family.map((name, index) => [
+              name,
+              index === 0 ? (profile === "github" ? 400 : 100) : 10,
+            ]),
+          ),
+        ),
+      }));
+      const nestedPlan = createNodeTestShardBundles({
+        compactMode: "pull-request",
+        includeReleaseOnlyPluginShards: false,
+        runnerBackend: "hybrid",
+      });
+      for (const family of families) {
+        const placements = nestedPlan.flatMap((job, jobIndex) =>
+          job.groups
+            .filter((group) => family.includes(group.shard_name.replace(/-hosted-\d+$/u, "")))
+            .map((group) => ({ group, jobIndex })),
+        );
+        expect(
+          placements.filter(({ group }) => group.shard_name.startsWith(`${family[0]}-hosted-`)),
+        ).toHaveLength(3);
+        expect(new Set(placements.map(({ jobIndex }) => jobIndex)).size, family[0]).toBe(
+          placements.length,
+        );
+        for (const name of family) {
+          const actual = placements
+            .filter(({ group }) => group.shard_name.replace(/-hosted-\d+$/u, "") === name)
+            .flatMap(({ group }) => group.includePatterns ?? []);
+          expect(actual.toSorted(), name).toEqual(
+            base.find((shard) => shard.shardName === name)?.includePatterns?.toSorted(),
+          );
+        }
+      }
+    } finally {
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
     }
   });
 

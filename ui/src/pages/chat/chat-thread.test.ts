@@ -314,6 +314,75 @@ describe("assistant commentary grouping", () => {
     expect(runBToolIndex).toBeLessThan(steerBIndex);
   });
 
+  it.each(
+    [
+      {
+        name: "independently unique boundaries",
+        boundaries: [{ afterBoundaryRunId: "a" }, { boundaryRunId: "c" }],
+        timestamp: 1_000,
+        orders: ["A B tool C", "A B tool C", "A B tool C"],
+      },
+      {
+        name: "ambiguous after boundary",
+        boundaries: [{ afterBoundaryRunId: "a", boundaryRunId: "c" }, { afterBoundaryRunId: "b" }],
+        timestamp: 0,
+        orders: ["tool A B C", "A tool B C", "A B tool C"],
+      },
+      {
+        name: "ambiguous before boundary",
+        boundaries: [{ boundaryRunId: "b" }, { afterBoundaryRunId: "a", boundaryRunId: "c" }],
+        timestamp: 1_000,
+        orders: ["A tool B C", "A tool B C", "A B tool C"],
+      },
+      {
+        name: "repeated equal boundaries remain ambiguous",
+        boundaries: [
+          { afterBoundaryRunId: "unloaded", boundaryRunId: "c" },
+          { afterBoundaryRunId: "unloaded", boundaryRunId: "c" },
+        ],
+        timestamp: 1_000,
+        orders: ["A B C tool", "A B tool C", "A B tool C"],
+      },
+    ].flatMap(({ name, boundaries, timestamp, orders }) =>
+      [undefined, "run-1", "run-2"].map((runId, index) => ({
+        name,
+        boundaries,
+        timestamp,
+        runId,
+        expectedOrder: orders[index]!.split(" "),
+      })),
+    ),
+  )(
+    "resolves $name independently for tool owner $runId",
+    ({ boundaries, timestamp, runId, expectedOrder }) => {
+      const paneId = `independent-tool-boundaries:${JSON.stringify([boundaries, runId])}`;
+      try {
+        const groups = messageGroups({
+          paneId,
+          messages: [
+            userMessage("A", 100, { __openclaw: { idempotencyKey: "a:user" } }),
+            userMessage("B", 200, { __openclaw: { idempotencyKey: "b:user" } }),
+            userMessage("C", 300, { __openclaw: { idempotencyKey: "c:user" } }),
+          ],
+          streamSegments: boundaries.map((boundary, index) => ({
+            text: "",
+            ts: 10,
+            runId: `run-${index + 1}`,
+            toolCallId: "shared-call",
+            ...boundary,
+          })),
+          toolMessages: [toolResultMessage("shared-call", "read", "output", timestamp, { runId })],
+        });
+
+        expect(
+          groups.map((group) => (group.role === "tool" ? "tool" : messageRecord(group).content)),
+        ).toEqual(expectedOrder);
+      } finally {
+        resetChatThreadState(paneId);
+      }
+    },
+  );
+
   it("keeps a post-steer tool segment and card after a textless steer", () => {
     const toolCallId = "call-after-steer";
     const items = buildCachedChatItems(
@@ -3569,14 +3638,22 @@ describe("buildCachedChatItems", () => {
     ]);
   });
 
-  it("keeps an unkeyed preamble from corrupting the accumulated prefix tracker", () => {
-    // A standalone (itemId-less) preamble whose text is not part of the
-    // cumulative run text must not become the prefix baseline — pre-fix the
-    // next cumulative snapshot re-rendered every earlier segment's text.
-    const items = buildCachedChatItems(
-      createProps({
+  it.each([false, true])(
+    "keeps cumulative text around an unkeyed preamble with persisted prefix=%s",
+    (persistedPrefix) => {
+      // A durable prefix hides only its row; an unrelated unkeyed preamble must
+      // neither replace that baseline nor revive it on later cumulative updates.
+      const paneId = `persisted-prefix:${persistedPrefix}`;
+      const input = createProps({
+        paneId,
+        messages: persistedPrefix ? [assistantMessage("First thought.", 1)] : [],
         streamSegments: [
-          { text: "First thought.", ts: 1, toolCallId: "call-1" },
+          {
+            text: "First thought.",
+            ts: 1,
+            toolCallId: "call-1",
+            ...(persistedPrefix ? { persisted: true } : {}),
+          },
           { text: "Standalone preamble", ts: 2 },
           { text: "First thought. After tool.", ts: 3, toolCallId: "call-2" },
         ],
@@ -3584,15 +3661,31 @@ describe("buildCachedChatItems", () => {
           chatMessage("toolResult", "Tool one", 2),
           chatMessage("toolResult", "Tool two", 4),
         ],
-      }),
-    );
-
-    expect(items.filter((item) => item.kind === "stream")).toMatchObject([
-      { text: "First thought." },
-      { text: "Standalone preamble" },
-      { text: "After tool." },
-    ]);
-  });
+        stream: "First thought. After tool. Continued.",
+        streamStartedAt: 5,
+      });
+      const streamTexts = (items: ReturnType<typeof buildCachedChatItems>) =>
+        items.flatMap((item) => (item.kind === "stream" ? [item.text] : []));
+      const precedingTexts = [
+        ...(persistedPrefix ? [] : ["First thought."]),
+        "Standalone preamble",
+        "After tool.",
+      ];
+      try {
+        const initial = buildCachedChatItems(input);
+        expect(streamTexts(initial)).toEqual([...precedingTexts, "Continued."]);
+        const next = { ...input, stream: "First thought. After tool. Continued. Again." };
+        const cached = buildCachedChatItems(next);
+        expect(cached).toBe(initial);
+        expect(streamTexts(cached)).toEqual([...precedingTexts, "Continued. Again."]);
+        expect(
+          streamTexts(buildCachedChatItems({ ...next, messages: [...next.messages] })),
+        ).toEqual([...precedingTexts, "Continued. Again."]);
+      } finally {
+        resetChatThreadState(paneId);
+      }
+    },
+  );
 
   it("deduplicates accumulated stream snapshots around tool cards", () => {
     const items = buildCachedChatItems(
@@ -3733,26 +3826,43 @@ describe("buildCachedChatItems", () => {
     ).toBe(true);
   });
 
-  it("keeps same-millisecond stream segments interleaved with their matching tool cards", () => {
-    const items = buildCachedChatItems(
-      createProps({
-        streamSegments: [
-          { text: "First tool.", ts: 2_000, toolCallId: "call-read" },
-          { text: "First tool. Second tool.", ts: 2_000, toolCallId: "call-list" },
-        ],
-        toolMessages: [
-          toolResultMessage("call-read", "read", "file contents", 1_000),
-          toolResultMessage("call-list", "list", "file list", 1_000),
-        ],
-      }),
-    );
+  it.each([false, true])(
+    "keeps same-millisecond segments interleaved with tools and mixed preambles=%s",
+    (mixedPreambles) => {
+      const items = buildCachedChatItems(
+        createProps({
+          streamSegments: [
+            { text: "First tool.", ts: 2_000, toolCallId: "call-read" },
+            { text: "First tool. Second tool.", ts: 2_000, toolCallId: "call-list" },
+            ...(mixedPreambles
+              ? [
+                  { text: "Unmatched preamble", ts: 2_000 },
+                  { text: "Keyed preamble", ts: 2_000, itemId: "keyed-preamble" },
+                ]
+              : []),
+          ],
+          toolMessages: [
+            toolResultMessage("call-read", "read", "file contents", 1_000),
+            toolResultMessage("call-list", "list", "file list", 1_000),
+          ],
+        }),
+      );
 
-    expect(items).toHaveLength(4);
-    expect(items[0]).toMatchObject({ kind: "stream", text: "First tool." });
-    expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
-    expect(items[2]).toMatchObject({ kind: "stream", text: "Second tool." });
-    expect(messageRecord(requireGroup(items[3])).toolCallId).toBe("call-list");
-  });
+      expect(items).toHaveLength(mixedPreambles ? 6 : 4);
+      expect(items[0]).toMatchObject({ kind: "stream", text: "First tool." });
+      expect(messageRecord(requireGroup(items[1])).toolCallId).toBe("call-read");
+      expect(items[2]).toMatchObject({ kind: "stream", text: "Second tool." });
+      expect(messageRecord(requireGroup(items[3])).toolCallId).toBe("call-list");
+      expect(items.slice(4)).toEqual(
+        mixedPreambles
+          ? [
+              expect.objectContaining({ kind: "stream", text: "Unmatched preamble" }),
+              expect.objectContaining({ kind: "stream", text: "Keyed preamble" }),
+            ]
+          : [],
+      );
+    },
+  );
 
   it("keeps a live tool card after its stream segment when an unkeyed preamble shifts indexes", () => {
     const items = buildCachedChatItems(

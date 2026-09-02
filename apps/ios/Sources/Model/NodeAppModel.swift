@@ -6219,7 +6219,7 @@ extension NodeAppModel {
                     .requestHistory(sessionKey: self.chatSessionKey)
             }
 
-            let items = WatchChatPresentation.makeItems(from: payload.messages ?? [])
+            let items = OpenClawChatHistoryPresentation.makeWatchItems(from: payload.messages ?? [])
             return WatchChatPreview(
                 items: items,
                 status: items.isEmpty
@@ -6610,7 +6610,7 @@ extension NodeAppModel {
                     return .sent
                 }
                 let history = try await appleReviewDemoChatTransport.requestHistory(sessionKey: sessionKey)
-                if let replyText = WatchChatPresentation.replyText(
+                if let replyText = OpenClawChatHistoryPresentation.replyText(
                     from: history.messages ?? [],
                     runID: response.runId,
                     submittedText: text,
@@ -6710,7 +6710,7 @@ extension NodeAppModel {
                     sessionKey: sessionKey,
                     inputRunIDs: inputRunIDs,
                     ifCurrentRoute: expectedRoute)
-                if let replyText = WatchChatPresentation.replyText(
+                if let replyText = OpenClawChatHistoryPresentation.replyText(
                     from: payload.messages ?? [],
                     runID: runId,
                     submittedText: submittedText,

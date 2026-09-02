@@ -6,7 +6,6 @@ import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./lib/bundled-plugin-build-entries.mjs";
-import { ensureRepoNodeModulesLink } from "./lib/local-check-runtime.mts";
 import { shouldBuildBundledCluster } from "./lib/optional-bundled-clusters.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
@@ -375,8 +374,19 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
     }
 
     writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-    if (hasExternalLocalDist) {
-      ensureRepoNodeModulesLink(path.join(pluginDir, "node_modules"), { cwd: distPluginDir });
+    const sourceNodeModules = path.resolve(pluginDir, "node_modules");
+    if (
+      hasExternalLocalDist &&
+      fs.existsSync(sourceNodeModules) &&
+      !fs.existsSync(distNodeModules)
+    ) {
+      // Published source builds move as a complete checkout; POSIX links must
+      // keep each plugin's dependency owner without retaining the build path.
+      const target =
+        process.platform === "win32"
+          ? sourceNodeModules
+          : path.relative(distPluginDir, sourceNodeModules);
+      fs.symlinkSync(target, distNodeModules, process.platform === "win32" ? "junction" : "dir");
     }
   }
 

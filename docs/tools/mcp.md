@@ -93,6 +93,10 @@ The same `docs` server, written straight into config:
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
+## Approvals
+
+Codex MCP tool approvals follow the session permission posture: the default full-permission posture does not prompt, while stricter modes check tools without safety annotations (`workspace` can use automatic review; `guarded` and `read-only` can prompt the operator). When offered, **Allow Always** remembers the tool, even when its arguments change. For servers configured through OpenClaw, this lasts for the current Codex session; Codex can persist the choice across sessions when the server is also saved in its native config. Override a server with `openclaw mcp configure <server> --approval approve|prompt|auto`; an explicit mode takes precedence over the posture-derived default. See [Codex tool approvals](/cli/mcp#codex-tool-approvals) for details and [Native approvals in Slack](/channels/slack#native-approvals-in-slack) for Slack button delivery.
+
 ## Troubleshooting
 
 ### The server appears in Settings but exposes no tools

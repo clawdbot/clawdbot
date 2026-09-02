@@ -1,10 +1,12 @@
-import { vi } from "vitest";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import { vi, type Mock } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
+import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { handleMessageEnd } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
+import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
+import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
 
 export function updateMessage(
   context: EmbeddedAgentSubscribeContext,
@@ -45,7 +47,7 @@ export function createMessageUpdateContext(
   const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
   const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
   const onPartialReply = params.onPartialReply as ((event: unknown) => void) | undefined;
-  return {
+  const ctx = {
     params: {
       runId: "run-1",
       session: { id: "session-1" },
@@ -54,34 +56,6 @@ export function createMessageUpdateContext(
         : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
-    },
-    state: {
-      deterministicApprovalPromptPending: false,
-      deterministicApprovalPromptSent: false,
-      currentSourceMessagingToolSentTextsNormalized: [],
-      currentSourceMessagingToolHeldPartial: undefined,
-      reasoningStreamOpen: false,
-      streamReasoning: false,
-      deltaBuffer: "",
-      thinkingTagStream: createThinkingTagStreamState(),
-      blockBuffer: "",
-      partialBlockState: {
-        thinking: false,
-        final: false,
-        inlineCode: createInlineCodeState(),
-      },
-      lastStreamedAssistant: undefined,
-      lastStreamedAssistantCleaned: undefined,
-      emittedAssistantUpdate: false,
-      shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
-      blockReplyBreak: "text_end",
-      assistantMessageIndex: 0,
-      lastAssistantStreamItemId: undefined,
-      assistantTexts: [],
-      pendingAssistantReplyDirectives: undefined,
-      pendingToolMediaTrustByUrl: new Map(),
-      toolAutoDeliveryMediaUrls: new Set(),
-      ...params.state,
     },
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
@@ -94,9 +68,15 @@ export function createMessageUpdateContext(
       ),
     emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
+    blockChunker: new EmbeddedBlockChunker(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
+    resetBlockReplyDirectives: vi.fn(),
+    resetPartialReplyDirectives: () => {
+      partialReplyDirectiveAccumulator.reset();
+      ctx.state.pendingAssistantReplyDirectives = undefined;
+    },
     emitAssistantStreamData: vi.fn(
       (
         data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0],
@@ -109,29 +89,31 @@ export function createMessageUpdateContext(
       },
     ),
   } as unknown as EmbeddedAgentSubscribeContext;
+  ctx.state = {
+    ...createEmbeddedAgentSubscribeState(ctx.params),
+    shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
+    ...params.state,
+  };
+  return ctx;
 }
 
 export function createMessageEndContext(
   params: {
     onAgentEvent?: ReturnType<typeof vi.fn>;
     onBlockReply?: ReturnType<typeof vi.fn>;
-    emitBlockReply?: ReturnType<typeof vi.fn>;
-    finalizeAssistantTexts?: ReturnType<typeof vi.fn>;
-    flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
-    consumeReplyDirectives?: ReturnType<typeof vi.fn>;
-    stripBlockTags?: ReturnType<typeof vi.fn>;
+    finalizeAssistantTexts?: Mock<EmbeddedAgentSubscribeContext["finalizeAssistantTexts"]>;
+    flushBlockReplyBuffer?: Mock<EmbeddedAgentSubscribeContext["flushBlockReplyBuffer"]>;
+    stripBlockTags?: Mock<EmbeddedAgentSubscribeContext["stripBlockTags"]>;
     warn?: ReturnType<typeof vi.fn>;
     builtinToolNames?: ReadonlySet<string>;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     enforceFinalTag?: boolean;
-    blockChunker?: { hasBuffered: () => boolean; reset: () => void };
+    bufferedText?: string;
     state?: Record<string, unknown>;
   } = {},
 ) {
-  // Message-end context starts with buffered assistant text so tests can assert
-  // final flushing, directive consumption, and source-reply behavior.
-  const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
-  return {
+  // Buffered cases seed the real source buffer; other cases exercise terminal-only delivery.
+  const ctx = {
     params: {
       runId: "run-1",
       session: { id: "session-1" },
@@ -142,58 +124,37 @@ export function createMessageEndContext(
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onBlockReply ? { onBlockReply: params.onBlockReply } : { onBlockReply: vi.fn() }),
     },
-    state: {
-      assistantTexts: [],
-      assistantTextBaseline: 0,
-      emittedAssistantUpdate: false,
-      deterministicApprovalPromptPending: false,
-      deterministicApprovalPromptSent: false,
-      messagingToolSentTexts: [],
-      messagingToolSentTextsNormalized: [],
-      currentSourceMessagingToolSentTextsNormalized: [],
-      currentSourceMessagingToolHeldPartial: undefined,
-      includeReasoning: false,
-      streamReasoning: false,
-      blockReplyBreak: "message_end",
-      deltaBuffer: "Need send.",
-      blockBuffer: "Need send.",
-      blockState: {
-        thinking: false,
-        final: false,
-        inlineCode: createInlineCodeState(),
-      },
-      partialBlockState: {
-        thinking: false,
-        final: false,
-        inlineCode: createInlineCodeState(),
-      },
-      lastStreamedAssistant: undefined,
-      lastStreamedAssistantCleaned: undefined,
-      lastReasoningSent: undefined,
-      reasoningStreamOpen: false,
-      pendingToolMediaTrustByUrl: new Map(),
-      toolAutoDeliveryMediaUrls: new Set(),
-      ...params.state,
-    },
     noteLastAssistant: vi.fn(),
     noteCompletedAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
-    stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
-    finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
-    emitAssistantStreamData: vi.fn(
-      (data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0]) => {
-        onAgentEvent?.({ stream: "assistant", data });
-      },
-    ),
-    emitBlockReply: params.emitBlockReply ?? vi.fn(),
-    consumeReplyDirectives: params.consumeReplyDirectives ?? vi.fn(() => ({ text: "Need send." })),
-    emitReasoningStream: vi.fn(),
-    flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
-    blockChunker: params.blockChunker ?? null,
+    blockChunker: new EmbeddedBlockChunker(),
   } as unknown as EmbeddedAgentSubscribeContext;
+  ctx.state = {
+    ...createEmbeddedAgentSubscribeState(ctx.params),
+    blockReplyBreak: "message_end",
+    deltaBuffer: "Need send.",
+    ...params.state,
+  };
+  ctx.blockChunker.append(params.bufferedText ?? "");
+  const delivery = createReplyDelivery(ctx);
+  ctx.emitAssistantStreamData = delivery.emitAssistantStreamData;
+  ctx.emitBlockReply = vi.fn(delivery.emitBlockReply);
+  ctx.finalizeAssistantTexts =
+    params.finalizeAssistantTexts ?? vi.fn(delivery.finalizeAssistantTexts);
+  const rendering = createStreamRendering({
+    ...ctx,
+    pendingBlockReplyTasks: delivery.pendingBlockReplyTasks,
+    pushAssistantText: delivery.pushAssistantText,
+    shouldSkipAssistantText: delivery.shouldSkipAssistantText,
+  });
+  Object.assign(ctx, rendering);
+  ctx.stripBlockTags = params.stripBlockTags ?? vi.fn(rendering.stripBlockTags);
+  ctx.flushBlockReplyBuffer =
+    params.flushBlockReplyBuffer ?? vi.fn(rendering.flushBlockReplyBuffer);
+  return ctx;
 }
 
 export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {

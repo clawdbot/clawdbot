@@ -17,86 +17,116 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("external plugin local dist build", () => {
-  it("retains each plugin's dependency owner and the shared host SDK", async () => {
-    const repoRoot = tempDirs.make("openclaw-external-plugin-owners-");
-    fs.writeFileSync(
-      path.join(repoRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "1.0.0",
-        type: "module",
-        exports: { "./plugin-sdk/probe": "./probe.js" },
-      }),
-    );
-    fs.writeFileSync(path.join(repoRoot, "probe.js"), "export const shared = {};\n");
-    for (const [pluginId, version] of [
-      ["first", "1.0.0"],
-      ["second", "2.0.0"],
-    ] as const) {
-      const packageDir = path.join(repoRoot, "extensions", pluginId);
-      const dependencyDir = path.join(packageDir, "node_modules", "private-dep");
-      fs.mkdirSync(dependencyDir, { recursive: true });
+  it.for([false, true])(
+    "retains each plugin's dependency owner and the shared host SDK (relocate=%s)",
+    async (relocate, context) => {
+      // Windows junctions remain absolute; release relocation uses POSIX symlinks.
+      if (relocate && process.platform === "win32") {
+        context.skip();
+      }
+      const repoRoot = fs.realpathSync(tempDirs.make("openclaw-external-plugin-owners-"));
       fs.writeFileSync(
-        path.join(packageDir, "package.json"),
+        path.join(repoRoot, "package.json"),
         JSON.stringify({
-          name: `@openclaw/${pluginId}`,
+          name: "openclaw",
           version: "1.0.0",
           type: "module",
-          dependencies: { "private-dep": version },
-          peerDependencies: { openclaw: "1.0.0" },
-          openclaw: {
-            extensions: ["./index.ts"],
-            build: { bundledDist: false },
-            release: { publishToNpm: true },
-          },
+          exports: { "./plugin-sdk/probe": "./probe.js" },
         }),
       );
-      fs.writeFileSync(
-        path.join(dependencyDir, "package.json"),
-        JSON.stringify({ name: "private-dep", version, type: "module", main: "index.js" }),
-      );
-      fs.writeFileSync(
-        path.join(dependencyDir, "index.js"),
-        `export default ${JSON.stringify(version)};\n`,
-      );
-      fs.symlinkSync(
-        repoRoot,
-        path.join(packageDir, "node_modules", "openclaw"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "index.ts"),
-        'export { default as version } from "private-dep";\nexport { shared } from "openclaw/plugin-sdk/probe";\n',
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({ id: pluginId, skills: ["./node_modules/private-dep"] }),
-      );
-    }
-    await buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" });
-    copyBundledPluginMetadata({ repoRoot, env: {} });
-    // Repeating postbuild must not remove source packages through the output link.
-    copyBundledPluginMetadata({ repoRoot, env: {} });
-    const entryUrl = (pluginId: string) =>
-      pathToFileURL(path.join(repoRoot, "dist", "extensions", pluginId, "index.js")).href;
-    const stagedDir = path.join(repoRoot, "staged", "first");
-    fs.cpSync(path.join(repoRoot, "dist", "extensions", "first"), stagedDir, { recursive: true });
-    const output = execFileSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "-e",
-        `
+      fs.writeFileSync(path.join(repoRoot, "probe.js"), "export const shared = {};\n");
+      for (const [pluginId, version] of [
+        ["first", "1.0.0"],
+        ["second", "2.0.0"],
+      ] as const) {
+        const packageDir = path.join(repoRoot, "extensions", pluginId);
+        const dependencyDir = path.join(packageDir, "node_modules", "private-dep");
+        fs.mkdirSync(dependencyDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(packageDir, "package.json"),
+          JSON.stringify({
+            name: `@openclaw/${pluginId}`,
+            version: "1.0.0",
+            type: "module",
+            dependencies: { "private-dep": version },
+            peerDependencies: { openclaw: "1.0.0" },
+            openclaw: {
+              extensions: ["./index.ts"],
+              build: { bundledDist: false },
+              release: { publishToNpm: true },
+            },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(dependencyDir, "package.json"),
+          JSON.stringify({ name: "private-dep", version, type: "module", main: "index.js" }),
+        );
+        fs.writeFileSync(
+          path.join(dependencyDir, "index.js"),
+          `export default ${JSON.stringify(version)};\n`,
+        );
+        fs.symlinkSync(
+          process.platform === "win32" ? repoRoot : "../../..",
+          path.join(packageDir, "node_modules", "openclaw"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        fs.writeFileSync(
+          path.join(packageDir, "index.ts"),
+          'export { default as version } from "private-dep";\nexport { shared } from "openclaw/plugin-sdk/probe";\n',
+        );
+        fs.writeFileSync(
+          path.join(packageDir, "openclaw.plugin.json"),
+          JSON.stringify({ id: pluginId, skills: ["./node_modules/private-dep"] }),
+        );
+      }
+      await buildExternalPluginLocalDist({ repoRoot, env: {}, logLevel: "silent" });
+      copyBundledPluginMetadata({ repoRoot, env: {} });
+      // Repeating postbuild must not remove source packages through the output link.
+      copyBundledPluginMetadata({ repoRoot, env: {} });
+      let runtimeRoot = repoRoot;
+      if (relocate) {
+        runtimeRoot = fs.realpathSync(tempDirs.make("openclaw-external-plugin-relocated-"));
+        fs.cpSync(repoRoot, runtimeRoot, { recursive: true, verbatimSymlinks: true });
+        fs.rmSync(repoRoot, { recursive: true });
+      }
+      const entryUrl = (pluginId: string) =>
+        pathToFileURL(path.join(runtimeRoot, "dist", "extensions", pluginId, "index.js")).href;
+      const stagedDir = path.join(runtimeRoot, "staged", "first");
+      fs.cpSync(path.join(runtimeRoot, "dist", "extensions", "first"), stagedDir, {
+        recursive: true,
+      });
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
       const first = await import(${JSON.stringify(entryUrl("first"))});
       const second = await import(${JSON.stringify(entryUrl("second"))});
       const staged = await import(${JSON.stringify(pathToFileURL(path.join(stagedDir, "index.js")).href)});
       console.log(JSON.stringify({ versions: [first.version, second.version, staged.version], shared: first.shared === second.shared && first.shared === staged.shared }));
     `,
-      ],
-      { encoding: "utf8" },
-    );
-    expect(JSON.parse(output)).toEqual({ versions: ["1.0.0", "2.0.0", "1.0.0"], shared: true });
-  });
+        ],
+        { encoding: "utf8" },
+      );
+      expect(JSON.parse(output)).toEqual({ versions: ["1.0.0", "2.0.0", "1.0.0"], shared: true });
+      for (const pluginId of ["first", "second"]) {
+        const runtimeModules = path.join(
+          runtimeRoot,
+          "dist",
+          "extensions",
+          pluginId,
+          "node_modules",
+        );
+        if (process.platform !== "win32") {
+          expect(path.isAbsolute(fs.readlinkSync(runtimeModules))).toBe(false);
+        }
+        expect(fs.realpathSync(runtimeModules)).toBe(
+          path.join(runtimeRoot, "extensions", pluginId, "node_modules"),
+        );
+      }
+    },
+  );
 
   it("selects every externalized first-party plugin behind a package exclusion", () => {
     const packageDirs = listExternalPluginLocalDistPackageDirs();

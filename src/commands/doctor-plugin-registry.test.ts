@@ -437,6 +437,7 @@ describe("maybeRepairPluginRegistryState", () => {
       packageName: "@openclaw/google-meet",
       bundledDist: undefined,
       missingEntry: false,
+      missingSourceEntry: false,
     },
     {
       name: "source-external",
@@ -444,6 +445,7 @@ describe("maybeRepairPluginRegistryState", () => {
       packageName: "@openclaw/external-demo",
       bundledDist: false,
       missingEntry: false,
+      missingSourceEntry: false,
     },
     {
       name: "partial catalog-owned external",
@@ -451,10 +453,19 @@ describe("maybeRepairPluginRegistryState", () => {
       packageName: "@openclaw/google-meet",
       bundledDist: undefined,
       missingEntry: true,
+      missingSourceEntry: false,
+    },
+    {
+      name: "healthy catalog-owned external beside a broken source copy",
+      pluginId: "google-meet",
+      packageName: "@openclaw/google-meet",
+      bundledDist: undefined,
+      missingEntry: false,
+      missingSourceEntry: true,
     },
   ])(
     "preserves installed $name plugin payload and records across repeated doctor repairs",
-    async ({ pluginId, packageName, bundledDist, missingEntry }) => {
+    async ({ pluginId, packageName, bundledDist, missingEntry, missingSourceEntry }) => {
       const stateDir = makeTempDir();
       const version = "2026.5.2";
       const bundledDir = path.join(stateDir, "source", "extensions", pluginId);
@@ -481,6 +492,12 @@ describe("maybeRepairPluginRegistryState", () => {
         version: "2026.5.3",
         bundledDist,
       });
+      if (missingSourceEntry) {
+        const manifestPath = path.join(bundledDir, "package.json");
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+        manifest.openclaw = { ...manifest.openclaw, extensions: ["./missing.js"] };
+        fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      }
       const config: OpenClawConfig = {
         plugins: { allow: [pluginId], entries: { [pluginId]: { enabled: true } } },
       };

@@ -41,9 +41,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.embeddedRunAuthPlanTestApi",
   ),
   "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
-  "src/agents/embedded-agent-subscribe.handlers.messages.update.ts": Symbol.for(
-    "openclaw.embeddedSubscribeMessagesTestApi",
-  ),
   "src/agents/embedded-agent-tool-media.ts": Symbol.for("openclaw.embeddedSubscribeToolsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
   "src/agents/media-generation-task-status-shared.ts": Symbol.for(

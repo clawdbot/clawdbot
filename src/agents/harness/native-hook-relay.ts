@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-capability.js";
 import {
   clearNativeHookRelayBridgesForTests,
@@ -199,6 +200,16 @@ function registerNativeHookRelayInternal(
       sessionId: params.sessionId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params.config ? { config: params.config } : {}),
+      deferMcpToolApprovals:
+        params.autoApproveMcpTools === true ||
+        Object.keys({ ...params.projectedMcpServers, ...params.config?.mcp?.servers }).some(
+          (serverName) =>
+            resolveProjectedMcpCodexToolApprovalMode(
+              serverName,
+              params.config?.mcp?.servers?.[serverName] ?? {},
+              params.projectedMcpServers?.[serverName],
+            ) !== undefined,
+        ),
       runId: params.runId,
       ...(params.channelId ? { channelId: params.channelId } : {}),
       ...(params.requester ? { requester: params.requester } : {}),

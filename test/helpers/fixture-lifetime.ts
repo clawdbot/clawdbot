@@ -32,18 +32,14 @@ export function createFixtureLifetime(ownerRoot?: string) {
     }
   }
 
-  function track<T>(completion: Promise<T>, cleanup = false): Promise<T> {
+  function admit<T>(body: Promise<T> | (() => Promise<T>), cleanup = false): Promise<T> {
+    // Register before scheduling callbacks, and observe late rejection even
+    // when Vitest has already rejected its separate timeout/cancellation promise.
     register();
+    const completion = typeof body === "function" ? Promise.resolve().then(body) : body;
     work.push({ completion, cleanup });
     void completion.catch(() => {});
     return completion;
-  }
-
-  function run<T>(body: () => Promise<T>): Promise<T> {
-    // Register before the callback's first await, and observe late rejection even
-    // when Vitest has already rejected its separate timeout/cancellation promise.
-    register();
-    return track(Promise.resolve().then(body));
   }
 
   async function drain() {
@@ -104,12 +100,9 @@ export function createFixtureLifetime(ownerRoot?: string) {
   }
 
   return {
-    run,
-    track,
-    verifyCleanup: (body: () => Promise<void>) => {
-      register();
-      return track(Promise.resolve().then(body), true);
-    },
+    run: <T>(body: () => Promise<T>) => admit(body),
+    track: <T>(completion: Promise<T>, cleanup = false) => admit(completion, cleanup),
+    verifyCleanup: (body: () => Promise<void>) => admit(body, true),
     createTempDir: (prefix: string, root = ownerRoot) => {
       register(root);
       return makeTempDir(roots, prefix, root);

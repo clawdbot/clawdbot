@@ -127,8 +127,8 @@ On the first identified connection, the Control UI uploads existing browser-loca
 When a remote project session starts before its repository finishes cloning, chat shows workspace preparation progress. If preparation fails, opening or reloading chat restores the session's failure summary. Correct the reported problem, then send a new message in the same session to retry preparation.
 
 Accepted browser messages, including initial prompts waiting for workspace
-preparation and follow-ups during a run, remain visible with a waiting notice
-until their own turn starts. Inputs accepted through `sessions_send` or the
+preparation and follow-ups during a run, remain visible as normal message bubbles
+until their own turn starts, without an additional receipt notice. Inputs accepted through `sessions_send` or the
 Gateway `agent` method use the same display. They are stored separately from the active model transcript. If
 cancellation or a Gateway restart interrupts that wait,
 the message stays readable with its recorded disposition and is never resent

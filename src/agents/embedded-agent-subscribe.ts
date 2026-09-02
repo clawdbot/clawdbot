@@ -270,7 +270,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   const blockChunking = params.blockReplyChunking;
-  const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
+  const blockChunker = new EmbeddedBlockChunker(blockChunking);
   // KNOWN: Provider streams are not strictly once-only or perfectly ordered.
   // `text_end` can repeat full content; late `text_end` can arrive after `message_end`.
   // Tests: `src/agents/embedded-agent-subscribe.test.ts` (e.g. late text_end cases).
@@ -371,13 +371,21 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   });
   const {
     consumePartialReplyDirectives,
-    consumeReplyDirectives,
     emitBlockChunk,
     emitReasoningStream,
     flushBlockReplyBuffer,
     resetAssistantMessageState,
+    resetBlockReplyDirectives,
+    resetPartialReplyDirectives,
     stripBlockTags,
   } = streamRendering;
+
+  const resetModelForCompactionRetry = () => {
+    // Keep prior usage until the retry records its own call or terminal error.
+    currentAttemptAssistant = undefined;
+    state.retryUsage = lastAssistantUsage ?? state.retryUsage;
+    lastAssistantUsage = undefined;
+  };
 
   const resetForCompactionRetry = () => {
     state.hadDeterministicSideEffect =
@@ -391,6 +399,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.acceptedSessionSpawns.length > 0 ||
       state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
+    state.lastAssistantTextMessageIndex = -1;
+    state.lastAssistantTextContentIndex = undefined;
+    state.lastAssistantTextItemId = undefined;
+    state.lastAssistantTextNormalized = undefined;
+    state.lastAssistantTextTrimmed = undefined;
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
@@ -422,15 +435,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
     clearDeferredAssistantEvents();
     clearDeferredBlockReplies();
-    state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
-    // Keep prior usage until the retry records its own call or terminal error.
-    currentAttemptAssistant = undefined;
-    state.retryUsage = lastAssistantUsage ?? state.retryUsage;
-    lastAssistantUsage = undefined;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);
@@ -512,9 +520,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     clearDeferredAssistantEvents,
     clearDeferredBlockReplies,
     emitReasoningStream,
-    consumeReplyDirectives,
     consumePartialReplyDirectives,
+    resetBlockReplyDirectives,
+    resetPartialReplyDirectives,
     resetAssistantMessageState,
+    resetModelForCompactionRetry,
     resetForCompactionRetry,
     finalizeAssistantTexts,
     trimMessagingToolSent,

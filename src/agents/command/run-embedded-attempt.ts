@@ -37,7 +37,6 @@ import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import {
-  isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
   resolveAgentRunErrorLifecycleFields,
 } from "../run-termination.js";
@@ -667,9 +666,10 @@ export async function runEmbeddedAgentAttempt(params: {
         );
         continue;
       }
-      const errorLifecycleFields = isAgentRunDirectAbortReason(err)
-        ? { aborted: true as const, stopReason: "aborted" as const }
-        : resolveAgentRunErrorLifecycleFields(err, params.opts.abortSignal);
+      const errorLifecycleFields = resolveAgentRunErrorLifecycleFields(
+        err,
+        params.opts.abortSignal,
+      );
       lifecycle.emitBasicError(
         err instanceof Error ? err : new Error("Agent run failed"),
         errorLifecycleFields,

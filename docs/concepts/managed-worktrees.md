@@ -46,7 +46,7 @@ Each `git worktree add` checkout during creation or snapshot restore has a five-
 
 ## Capacity and disk space
 
-OpenClaw allows up to 30 live managed worktrees per state directory. Manual and protected worktrees count toward this limit. Creating or restoring a checkout at the limit reports how to free a slot; it never evicts another session as part of creation. Reusing an existing valid checkout does not require a new slot.
+OpenClaw allows up to 100 live managed worktrees per state directory. Manual and protected worktrees count toward this limit. Creating or restoring a checkout at the limit reports how to free a slot; it never evicts another session as part of creation. Reusing an existing valid checkout does not require a new slot.
 
 Before allocating a checkout, OpenClaw checks its destination, Git metadata, source checkout, and state volumes. It keeps 10% of each volume free, with a minimum reserve of 4 GiB and a maximum of 16 GiB, plus twice the estimated Git checkout and provisioned-file size. An executable setup script requires additional room equal to the larger of 4 GiB or the current source checkout footprint excluding Git metadata. Space is checked again before provisioning/setup and after setup. An unavailable capacity reading stops allocation with an actionable error.
 
@@ -124,7 +124,7 @@ OpenClaw applies these cleanup rules:
 
 - At run end, it removes a worktree only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. Otherwise it only releases the activity lock.
 - Startup and hourly cleanup snapshot and remove unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Session worktrees whose owner is archived or absent are eligible immediately. Failed owner lookups preserve the checkout.
-- Cleanup also removes the least recently active eligible run-owned worktrees above the default limit of 30. Manual worktrees are never automatically removed, and protected worktrees can keep the total above the limit until they are released or explicitly cleaned up.
+- Cleanup also removes the least recently active eligible run-owned worktrees above the default limit of 100. Manual worktrees are never automatically removed, and protected worktrees can keep the total above the limit until they are released or explicitly cleaned up.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - A live OpenClaw process lock and any foreign or unrecognized git worktree lock protect a worktree from garbage collection.
 
