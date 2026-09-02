@@ -295,7 +295,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           return;
         }
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
-        const scopedTools = toolCache.resolve({
+        const scopedTools = await toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
           runtimePolicySessionKey: requestContext.runtimePolicySessionKey,
@@ -351,6 +351,13 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           groupSpace: requestContext.groupSpace,
           spawnedBy: requestContext.spawnedBy,
         });
+
+        // Node discovery awaited transport state; a closed grant must not publish its tools.
+        if (boundClientGrant && !boundClientGrant.isCurrent()) {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "unauthorized" }));
+          return;
+        }
 
         logMcpLoopbackTraffic("request", {
           batchSize: messages.length,

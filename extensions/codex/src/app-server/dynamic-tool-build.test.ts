@@ -54,7 +54,7 @@ import { createCodexTestModel } from "./test-support.js";
 const hoisted = vi.hoisted(() => ({
   normalizeAgentRuntimeTools: vi.fn(),
   resolveWebSearchToolPolicy: vi.fn(),
-  listNodes: vi.fn(),
+  loadNodeExecAvailability: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness", async (importOriginal) => {
@@ -75,12 +75,17 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
   return {
     ...actual,
-    listNodes: hoisted.listNodes,
     normalizeAgentRuntimeTools: (...args: Parameters<typeof actual.normalizeAgentRuntimeTools>) => {
       hoisted.normalizeAgentRuntimeTools(...args);
       return actual.normalizeAgentRuntimeTools(...args);
     },
   };
+});
+
+vi.mock("openclaw/plugin-sdk/node-selection-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/node-selection-runtime")>();
+  return { ...actual, loadNodeExecAvailability: hoisted.loadNodeExecAvailability };
 });
 
 let tempDir: string;
@@ -529,13 +534,10 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   beforeEach(async () => {
-    hoisted.listNodes.mockResolvedValue(
-      ["mac-mini", "worker-1", "bound-mac-mini"].map((nodeId) => ({
-        nodeId,
-        connected: true,
-        commands: ["system.run"],
-      })),
-    );
+    hoisted.loadNodeExecAvailability.mockResolvedValue({
+      cacheKey: "eligible",
+      isAvailable: () => true,
+    });
     hoisted.normalizeAgentRuntimeTools.mockClear();
     hoisted.resolveWebSearchToolPolicy.mockClear();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-tools-"));
@@ -1679,96 +1681,71 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shellTestToolNames(tools)).toEqual(testCase.expected);
   });
 
-  it.each([
-    { label: "no nodes", nodes: [], available: false },
-    {
-      label: "offline executor",
-      nodes: [{ nodeId: "worker", connected: false, commands: ["system.run"] }],
-      available: false,
-    },
-    {
-      label: "connected approval device",
-      nodes: [{ nodeId: "phone", connected: true, commands: [] }],
-      available: false,
-    },
-    {
-      label: "unknown capabilities",
-      nodes: [{ nodeId: "phone", connected: true }],
-      available: false,
-    },
-    {
-      label: "eligible executor",
-      nodes: [{ nodeId: "worker", connected: true, commands: ["system.run"] }],
-      available: true,
-    },
-    {
-      label: "multiple executors",
-      nodes: ["one", "two"].map((nodeId) => ({
-        nodeId,
-        connected: true,
-        commands: ["system.run"],
-      })),
-      available: true,
-    },
-    {
-      label: "offline binding beside eligible executor",
-      node: "phone",
-      nodes: [
-        { nodeId: "phone", connected: false, commands: [] },
-        { nodeId: "worker", connected: true, commands: ["system.run"] },
-      ],
-      available: false,
-    },
-    {
-      label: "eligible named binding",
-      node: "Build Worker",
-      nodes: [
-        {
-          nodeId: "worker",
-          displayName: "Build Worker",
-          connected: true,
-          commands: ["system.run"],
-        },
-      ],
-      available: true,
-    },
-    {
-      label: "ambiguous binding",
-      node: "Build Worker",
-      nodes: [
-        { nodeId: "phone", displayName: "Build Worker", connected: true, commands: [] },
-        {
-          nodeId: "worker",
-          displayName: "Build Worker",
-          connected: true,
-          commands: ["system.run"],
-        },
-      ],
-      available: false,
-    },
-  ])(
-    "gates node_exec on live execution eligibility: $label",
-    async ({ nodes, node, available }) => {
-      hoisted.listNodes.mockResolvedValue(nodes);
-      setOpenClawCodingToolsFactoryForTests(() => [
-        createRuntimeDynamicTool("exec"),
-        createRuntimeDynamicTool("message"),
-      ]);
-      const workspaceDir = path.join(tempDir, "workspace");
-      const params = createParams(path.join(tempDir, "eligibility.jsonl"), workspaceDir);
-      params.disableTools = false;
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      for (const host of ["auto", "node"] as const) {
-        params.execOverrides = { host, node };
-        const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+  it.each([false, true])("projects node exec when availability is %s", async (available) => {
+    hoisted.loadNodeExecAvailability.mockResolvedValue({
+      cacheKey: String(available),
+      isAvailable: () => available,
+    });
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "eligibility.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    for (const host of ["auto", "node"] as const) {
+      params.execOverrides = { host };
+      const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+        nativeToolSurfaceEnabled,
+      });
+      expect(tools.some((tool) => tool.name === "node_exec")).toBe(available);
+      expect(nativeToolSurfaceEnabled).toBe(host === "auto");
+    }
+  });
+
+  it("shares discovery across attempt catalogs but refreshes the next attempt", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("exec")]);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "catalog-discovery.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    hoisted.loadNodeExecAvailability.mockClear();
+    for (const available of [true, false]) {
+      hoisted.loadNodeExecAvailability.mockResolvedValue({
+        cacheKey: String(available),
+        isAvailable: () => available,
+      });
+      const nodeExecAvailability = {};
+      for (const ignoreRuntimePlan of [false, true]) {
         const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-          nativeToolSurfaceEnabled,
+          nodeExecAvailability,
+          ignoreRuntimePlan,
         });
         expect(tools.some((tool) => tool.name === "node_exec")).toBe(available);
-        expect(nativeToolSurfaceEnabled).toBe(host === "auto");
       }
-    },
-  );
+    }
+    expect(hoisted.loadNodeExecAvailability).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates cancellation during node discovery without publishing tools", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("exec")]);
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "cancel-discovery.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const runAbortController = new AbortController();
+    const reason = new Error("synthetic attempt cancelled");
+    hoisted.loadNodeExecAvailability.mockImplementationOnce(async (signal: AbortSignal) => {
+      expect(signal).toBe(runAbortController.signal);
+      runAbortController.abort(reason);
+      return { cacheKey: "eligible", isAvailable: () => true };
+    });
+    await expect(
+      buildDynamicToolsForTest(params, workspaceDir, { runAbortController }),
+    ).rejects.toBe(reason);
+  });
 
   it("exposes pinned node shell tools for node-targeted Codex app-server runs", async () => {
     const execTool = {

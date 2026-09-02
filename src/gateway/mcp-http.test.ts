@@ -99,6 +99,10 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
   })),
 );
 
+const loadNodeExecAvailabilityMock = vi.hoisted(() =>
+  vi.fn(async () => ({ cacheKey: "eligible", isAvailable: (): boolean => true })),
+);
+
 const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
@@ -131,6 +135,10 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: (...args: Parameters<typeof runBeforeToolCallHookMock>) =>
     runBeforeToolCallHookMock(...args),
+}));
+
+vi.mock("../agents/node-exec-availability.js", () => ({
+  loadNodeExecAvailability: loadNodeExecAvailabilityMock,
 }));
 
 vi.mock("./tool-resolution.js", () => ({
@@ -644,6 +652,9 @@ function makeMcpToolCacheParams(overrides: Partial<McpToolCacheParams> = {}): Mc
 }
 
 beforeEach(() => {
+  loadNodeExecAvailabilityMock
+    .mockReset()
+    .mockResolvedValue({ cacheKey: "eligible", isAvailable: () => true });
   logWarnMock.mockClear();
   sessionEntries.clear();
   resolveGatewayScopedToolsMock.mockClear();
@@ -1622,6 +1633,40 @@ describe("mcp loopback server", () => {
     },
   );
 
+  it("rejects a grant revoked while node availability is being resolved", async () => {
+    const entered = createDeferred();
+    const availability = createDeferred<{ cacheKey: string; isAvailable: () => boolean }>();
+    loadNodeExecAvailabilityMock.mockImplementationOnce(() => {
+      entered.resolve();
+      return availability.promise;
+    });
+    const { runtime } = await startLoopbackServerForTest();
+    const captureKey = "node-availability-revoked";
+    const grant = mintMcpLoopbackClientGrant({
+      context: {
+        sessionKey: "agent:main:node-availability",
+        senderIsOwner: true,
+        nodeExecAllowed: true,
+      },
+      runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext: await activeAdmission("node-availability-revoked"),
+      toolAuth: { store: { version: 1, profiles: {} } },
+    });
+    activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: runtime.ownerToken,
+      captureKey,
+    });
+    const response = sendLoopbackToolsList({
+      token: grant.token,
+      headers: { "x-openclaw-cli-capture-key": captureKey },
+    });
+    await entered.promise;
+    expect(revokeMcpLoopbackClientGrant(grant.token)).toBe(true);
+    availability.resolve({ cacheKey: "eligible", isAvailable: () => true });
+    expect((await response).status).toBe(401);
+  });
+
   it("carries callable personal Workshop authority outside cloned grant context", async () => {
     const { runtime } = await startLoopbackServerForTest();
     const admittedRunContext = await activeAdmission("run-library-grant");
@@ -1913,7 +1958,7 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps explicit non-owner and unknown-owner loopback cache entries separate", () => {
+  it("keeps explicit non-owner and unknown-owner loopback cache entries separate", async () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = makeMcpToolCacheParams({
       cfg: { session: { mainKey: "main" } } as never,
@@ -1937,21 +1982,21 @@ describe("mcp loopback server", () => {
       };
     });
 
-    const unknownFirst = cache.resolve({ ...baseParams, senderIsOwner: undefined });
-    const nonOwnerSecond = cache.resolve({ ...baseParams, senderIsOwner: false });
+    const unknownFirst = await cache.resolve({ ...baseParams, senderIsOwner: undefined });
+    const nonOwnerSecond = await cache.resolve({ ...baseParams, senderIsOwner: false });
     expect(unknownFirst.toolSchema.map((tool) => tool.name)).toContain("cron");
     expect(nonOwnerSecond.toolSchema.map((tool) => tool.name)).not.toContain("cron");
 
     const secondCache = new McpLoopbackToolCache();
-    const nonOwnerFirst = secondCache.resolve({ ...baseParams, senderIsOwner: false });
-    const unknownSecond = secondCache.resolve({ ...baseParams, senderIsOwner: undefined });
+    const nonOwnerFirst = await secondCache.resolve({ ...baseParams, senderIsOwner: false });
+    const unknownSecond = await secondCache.resolve({ ...baseParams, senderIsOwner: undefined });
     expect(nonOwnerFirst.toolSchema.map((tool) => tool.name)).not.toContain("cron");
     expect(unknownSecond.toolSchema.map((tool) => tool.name)).toContain("cron");
 
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
   });
 
-  it("keeps CLI node-exec capability and session defaults cache-bound", () => {
+  it("keeps CLI node-exec capability and session defaults cache-bound", async () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = makeMcpToolCacheParams();
     resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
@@ -1964,13 +2009,13 @@ describe("mcp loopback server", () => {
       };
     });
 
-    const withoutExec = cache.resolve({ ...baseParams, nodeExecAllowed: false });
-    const withExec = cache.resolve({
+    const withoutExec = await cache.resolve({ ...baseParams, nodeExecAllowed: false });
+    const withExec = await cache.resolve({
       ...baseParams,
       nodeExecAllowed: true,
       execSession: { execHost: "node", execNode: "mac-a" },
     });
-    cache.resolve({
+    await cache.resolve({
       ...baseParams,
       nodeExecAllowed: true,
       execSession: { execHost: "node", execNode: "mac-b" },
@@ -1981,7 +2026,7 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
   });
 
-  it("never reuses loopback tools across session permissions or effective exec modes", () => {
+  it("never reuses loopback tools across session permissions or effective exec modes", async () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = makeMcpToolCacheParams();
     resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => {
@@ -1996,29 +2041,31 @@ describe("mcp loopback server", () => {
       };
     });
 
-    const readOnly = cache.resolve({
+    const readOnly = await cache.resolve({
       ...baseParams,
       execSession: { permissionMode: "read-only" },
     });
-    const fullSession = cache.resolve({
+    const fullSession = await cache.resolve({
       ...baseParams,
       execSession: { permissionMode: "full" },
     });
-    const deniedOverride = cache.resolve({ ...baseParams, execOverrides: { mode: "deny" } });
-    const fullOverride = cache.resolve({ ...baseParams, execOverrides: { mode: "full" } });
+    const deniedOverride = await cache.resolve({ ...baseParams, execOverrides: { mode: "deny" } });
+    const fullOverride = await cache.resolve({ ...baseParams, execOverrides: { mode: "full" } });
 
     expect(readOnly.toolSchema.map((tool) => tool.name)).not.toContain("exec");
     expect(fullSession.toolSchema.map((tool) => tool.name)).toContain("exec");
     expect(deniedOverride.toolSchema.map((tool) => tool.name)).not.toContain("exec");
     expect(fullOverride.toolSchema.map((tool) => tool.name)).toContain("exec");
-    expect(cache.resolve({ ...baseParams, execSession: { permissionMode: "read-only" } })).toBe(
-      readOnly,
+    expect(
+      await cache.resolve({ ...baseParams, execSession: { permissionMode: "read-only" } }),
+    ).toBe(readOnly);
+    expect(await cache.resolve({ ...baseParams, execOverrides: { mode: "deny" } })).toBe(
+      deniedOverride,
     );
-    expect(cache.resolve({ ...baseParams, execOverrides: { mode: "deny" } })).toBe(deniedOverride);
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
   });
 
-  it("keeps model policy identity cache-bound", () => {
+  it("keeps model policy identity cache-bound", async () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = makeMcpToolCacheParams({
       nodeExecAllowed: true,
@@ -2032,22 +2079,22 @@ describe("mcp loopback server", () => {
       };
     });
 
-    const openAi = cache.resolve({
+    const openAi = await cache.resolve({
       ...baseParams,
       modelProvider: "openai",
       modelId: "gpt-5.5",
     });
-    const blockedAnthropic = cache.resolve({
+    const blockedAnthropic = await cache.resolve({
       ...baseParams,
       modelProvider: "anthropic",
       modelId: "claude-opus-4-7",
     });
-    const allowedAnthropic = cache.resolve({
+    const allowedAnthropic = await cache.resolve({
       ...baseParams,
       modelProvider: "anthropic",
       modelId: "claude-sonnet-4-6",
     });
-    cache.resolve({ ...baseParams, modelProvider: "openai", modelId: "gpt-5.5" });
+    await cache.resolve({ ...baseParams, modelProvider: "openai", modelId: "gpt-5.5" });
 
     expect(openAi.toolSchema.map((tool) => tool.name)).toContain("exec");
     expect(blockedAnthropic.toolSchema.map((tool) => tool.name)).not.toContain("exec");
@@ -2055,7 +2102,7 @@ describe("mcp loopback server", () => {
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps exec overrides and sender identities cache-bound", () => {
+  it("keeps exec overrides and sender identities cache-bound", async () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = makeMcpToolCacheParams({
       messageProvider: "discord",
@@ -2063,42 +2110,42 @@ describe("mcp loopback server", () => {
       nodeExecAllowed: true,
     });
 
-    cache.resolve(baseParams);
-    cache.resolve({ ...baseParams, execOverrides: { host: "gateway" } });
-    cache.resolve({ ...baseParams, senderName: "Guest Name" });
-    cache.resolve({ ...baseParams, senderUsername: "guest-user" });
-    cache.resolve({ ...baseParams, senderE164: "+15550001111" });
-    cache.resolve({ ...baseParams, groupId: "group-a" });
-    cache.resolve({ ...baseParams, groupChannel: "ops" });
-    cache.resolve({ ...baseParams, groupSpace: "guild-a" });
-    cache.resolve({ ...baseParams, spawnedBy: "agent:main:discord:channel:parent" });
-    cache.resolve({
+    await cache.resolve(baseParams);
+    await cache.resolve({ ...baseParams, execOverrides: { host: "gateway" } });
+    await cache.resolve({ ...baseParams, senderName: "Guest Name" });
+    await cache.resolve({ ...baseParams, senderUsername: "guest-user" });
+    await cache.resolve({ ...baseParams, senderE164: "+15550001111" });
+    await cache.resolve({ ...baseParams, groupId: "group-a" });
+    await cache.resolve({ ...baseParams, groupChannel: "ops" });
+    await cache.resolve({ ...baseParams, groupSpace: "guild-a" });
+    await cache.resolve({ ...baseParams, spawnedBy: "agent:main:discord:channel:parent" });
+    await cache.resolve({
       ...baseParams,
       runtimePolicySessionKey: "agent:main:discord:default:direct:guest",
     });
-    cache.resolve({ ...baseParams, agentId: "worker" });
-    cache.resolve(baseParams);
+    await cache.resolve({ ...baseParams, agentId: "worker", sessionKey: "agent:worker:main" });
+    await cache.resolve(baseParams);
 
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(11);
   });
 
-  it("keeps every elevated-exec authority field cache-bound", () => {
+  it("keeps every elevated-exec authority field cache-bound", async () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = makeMcpToolCacheParams({
       messageProvider: "discord",
       nodeExecAllowed: true,
     });
 
-    cache.resolve(baseParams);
-    cache.resolve({
+    await cache.resolve(baseParams);
+    await cache.resolve({
       ...baseParams,
       bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
     });
-    cache.resolve({
+    await cache.resolve({
       ...baseParams,
       bashElevated: { enabled: true, allowed: true, defaultLevel: "ask" },
     });
-    cache.resolve({
+    await cache.resolve({
       ...baseParams,
       bashElevated: {
         enabled: true,
@@ -2107,7 +2154,7 @@ describe("mcp loopback server", () => {
         fullAccessAvailable: true,
       },
     });
-    cache.resolve({
+    await cache.resolve({
       ...baseParams,
       bashElevated: {
         enabled: true,
@@ -2117,12 +2164,12 @@ describe("mcp loopback server", () => {
         fullAccessBlockedReason: "runtime",
       },
     });
-    cache.resolve(baseParams);
+    await cache.resolve(baseParams);
 
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(5);
   });
 
-  it("caps loopback tool cache cardinality by evicting oldest contexts", () => {
+  it("caps loopback tool cache cardinality by evicting oldest contexts", async () => {
     const cache = new McpLoopbackToolCache();
     const baseParams = makeMcpToolCacheParams({
       cfg: { session: { mainKey: "main" } } as never,
@@ -2135,20 +2182,20 @@ describe("mcp loopback server", () => {
     });
 
     for (let index = 0; index < 257; index += 1) {
-      cache.resolve({
+      await cache.resolve({
         ...baseParams,
         currentMessageId: `message-${index}`,
       });
     }
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(257);
 
-    cache.resolve({
+    await cache.resolve({
       ...baseParams,
       currentMessageId: "message-0",
     });
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(258);
 
-    cache.resolve({
+    await cache.resolve({
       ...baseParams,
       currentMessageId: "message-256",
     });
