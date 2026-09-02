@@ -13,6 +13,7 @@ import { codexControlRequest } from "./command-rpc.js";
 import { resolveCodexDefaultWorkspaceDir } from "./conversation-binding-data.js";
 import {
   discoverCodexMarketplacePlugins,
+  filterCodexMarketplacePlugins,
   type CodexAvailablePlugin,
 } from "./plugin-marketplace-discovery.js";
 
@@ -49,7 +50,7 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
     parameters: CodexPluginsParamsSchema,
     async execute(_toolCallId, rawParams) {
       const params = readRecord(rawParams) ?? {};
-      const query = typeof params.query === "string" ? params.query.trim().toLowerCase() : "";
+      const query = typeof params.query === "string" ? params.query : "";
       const marketplace =
         typeof params.marketplace === "string" ? params.marketplace.trim() : undefined;
       const limit =
@@ -84,15 +85,7 @@ export function createCodexPluginsTool(options: CodexPluginsToolOptions): AnyAge
             authProfileId: connection.clientAuthProfileId,
           }),
       });
-      const filtered = discovered.plugins.filter((plugin) => {
-        if (marketplace && plugin.marketplaceName !== marketplace) {
-          return false;
-        }
-        if (!query) {
-          return true;
-        }
-        return `${plugin.id} ${plugin.description ?? ""}`.toLowerCase().includes(query);
-      });
+      const filtered = filterCodexMarketplacePlugins(discovered.plugins, query, marketplace);
 
       return jsonResult({
         workspaceDir,

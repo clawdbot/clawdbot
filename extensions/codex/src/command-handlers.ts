@@ -70,6 +70,7 @@ import {
   resolveCommandAppServerScope,
 } from "./command-handler-scope.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
+import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
 
 export type { CodexCommandDepsOverride } from "./command-handler-deps.js";
@@ -124,6 +125,8 @@ export async function handleCodexSubcommand(
     const getAppServerScope = () =>
       (appServerScope ??= resolveCommandAppServerScope(deps, ctx, options.pluginConfig));
     return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo, {
+      withContext: (run) =>
+        withCodexPluginCommandContext({ deps, ctx, pluginConfig: options.pluginConfig }, run),
       workspaceDir: async () => {
         const data = readCodexConversationBindingData(await ctx.getCurrentConversationBinding());
         const workspaceDir =
