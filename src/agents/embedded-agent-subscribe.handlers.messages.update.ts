@@ -111,35 +111,31 @@ export function handleMessageUpdate(
   // ensure reasoning stream is properly isolated regardless of whether thinkingLevel was set explicitly
   // or via implicit fallback. This prevents reasoning leakage into visible message content.
   // See: issue #134662 - reasoning-capable models fall back to medium thinking without explicit negotiation.
-  // SAFETY: session shape is runtime-negotiated; catalog fields (provider/model/thinkingLevel) are optional at runtime.
-  const session = ctx.params.session as
-    | {
-        provider?: string;
-        model?: string;
-        thinkingLevel?: string;
-        modelCatalogEntry?: { reasoning?: boolean };
-      }
-    | undefined;
-  // SAFETY: catalog is injected by the gateway at runtime; not present in the static type.
-  const catalog = (
-    ctx.params as { catalog?: { provider: string; id: string; reasoning?: boolean }[] }
-  ).catalog;
+  // SAFETY: session/catalog shapes are runtime-negotiated; fields are optional at runtime.
+  const params = ctx.params as {
+    session?: {
+      provider?: string;
+      model?: string;
+      thinkingLevel?: string;
+      modelCatalogEntry?: { reasoning?: boolean };
+    };
+    catalog?: { provider: string; id: string; reasoning?: boolean }[];
+  };
+  const session = params.session;
+  const catalog = params.catalog;
   const modelHasReasoningCapability =
     session?.modelCatalogEntry?.reasoning === true ||
     (session?.provider &&
       session?.model &&
-      catalog?.find(
-        (entry: { provider: string; id: string; reasoning?: boolean }) =>
-          entry.provider === session!.provider && entry.id === session!.model,
-      )?.reasoning === true);
+      catalog?.find((entry) => entry.provider === session!.provider && entry.id === session!.model)
+        ?.reasoning === true);
   const thinkingEnabled = session?.thinkingLevel && session.thinkingLevel !== "off";
   // Use ctx.openReasoningStream if available (for test injection), otherwise use the imported function.
   // SAFETY: openReasoningStream is injected by test fixtures; not in the production type.
   const ctxOverride = ctx as { openReasoningStream?: typeof openReasoningStream };
+  const overrideFn = ctxOverride.openReasoningStream;
   const openReasoning: typeof openReasoningStream =
-    typeof ctxOverride.openReasoningStream === "function"
-      ? ctxOverride.openReasoningStream!
-      : openReasoningStream;
+    typeof overrideFn === "function" ? overrideFn : openReasoningStream;
   if (
     evtType === "text_start" &&
     modelHasReasoningCapability &&
