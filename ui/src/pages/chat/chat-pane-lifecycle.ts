@@ -425,6 +425,15 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));
     chatState.addCleanup(this.context.gateway.subscribe((next) => this.applyGatewaySnapshot(next)));
     chatState.addCleanup(
+      this.context.theme.subscribe(() => {
+        pageState.settings = {
+          ...this.context.theme.settings,
+          token: this.context.gateway.connection.token,
+        };
+        pageState.requestUpdate();
+      }),
+    );
+    chatState.addCleanup(
       this.context.agentSelection.subscribe((next) => {
         applySelectedChatAgent(this.state, this.agentId ?? next.selectedId);
         if (this.state) {
