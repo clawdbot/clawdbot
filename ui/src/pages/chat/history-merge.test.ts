@@ -17,6 +17,7 @@ import {
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
 } from "./history-merge.ts";
+import type { CompactionStatus } from "./tool-stream-contract.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
 const imageDataUrl = "data:image/png;base64,iVBORw0KGgo=";
@@ -104,6 +105,37 @@ function createAuthoritativeInitialMessage(sequence = 1) {
 }
 
 describe("pane-owned canonical session projection", () => {
+  it.each(["reset", "session", "branch"] as const)(
+    "retires the compaction marker's live state on %s changes",
+    (change) => {
+      const owner = {
+        sessionKey: "agent:main:one",
+        chatMessages: [] as unknown[],
+        compactionStatus: null as CompactionStatus | null,
+      };
+      const scope = { sessionKey: owner.sessionKey, activeLeafEntryId: "first" };
+      getChatSessionProjection(owner, scope);
+      owner.compactionStatus = {
+        phase: "complete",
+        runId: "compact-one",
+        startedAt: 1_000,
+        completedAt: 2_000,
+      };
+      reduceChatSessionProjection(
+        owner,
+        change === "reset" ? { type: "sessionReset" } : { type: "snapshotLoaded", messages: [] },
+        {
+          scope: {
+            ...scope,
+            ...(change === "session" ? { sessionKey: "agent:main:two" } : {}),
+            ...(change === "branch" ? { activeLeafEntryId: "other" } : {}),
+          },
+        },
+      );
+      expect(owner.compactionStatus).toBeNull();
+    },
+  );
+
   it("publishes run-only events without traversing the unchanged transcript", () => {
     const owner = { sessionKey: "agent:main:shared", chatMessages: [] as unknown[] };
     const initial = reduceChatSessionProjection(owner, {

@@ -16,24 +16,17 @@ import {
 } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-function expectCompactionCompleteAndAutoClears(host: ReturnType<typeof createHost>) {
+function expectCompactionCompleteAndRetained(host: ReturnType<typeof createHost>, itemId?: string) {
   expect(host.compactionStatus).toEqual({
+    ...(itemId ? { itemId } : {}),
     phase: "complete",
     runId: "run-1",
     startedAt: TOOL_STREAM_TEST_NOW,
     completedAt: TOOL_STREAM_TEST_NOW,
   });
-  const clearTimer = host.compactionClearTimer as unknown as {
-    hasRef?: unknown;
-    ref?: unknown;
-    unref?: unknown;
-  };
-  expect(typeof clearTimer.hasRef).toBe("function");
-  expect(typeof clearTimer.ref).toBe("function");
-  expect(typeof clearTimer.unref).toBe("function");
-
+  const status = host.compactionStatus;
   vi.advanceTimersByTime(5_000);
-  expect(host.compactionStatus).toBeNull();
+  expect(host.compactionStatus).toBe(status);
   expect(host.compactionClearTimer).toBeNull();
 }
 
@@ -660,9 +653,13 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     useToolStreamFakeTimers();
     const host = createHost();
 
-    handleAgentEvent(host, agentEvent("run-1", 1, "compaction", { phase: "start" }));
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "compaction", { phase: "start", itemId: "compact-1" }),
+    );
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "active",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -679,6 +676,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     );
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "retrying",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -689,6 +687,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     handleAgentEvent(host, agentEvent("run-2", 3, "lifecycle", { phase: "end" }));
 
     expect(host.compactionStatus).toEqual({
+      itemId: "compact-1",
       phase: "retrying",
       runId: "run-1",
       startedAt: TOOL_STREAM_TEST_NOW,
@@ -697,7 +696,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     handleAgentEvent(host, agentEvent("run-1", 4, "lifecycle", { phase: "end" }));
 
-    expectCompactionCompleteAndAutoClears(host);
+    expectCompactionCompleteAndRetained(host, "compact-1");
 
     vi.useRealTimers();
   });
@@ -927,7 +926,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "error", error: "boom" }));
 
-    expectCompactionCompleteAndAutoClears(host);
+    expectCompactionCompleteAndRetained(host);
 
     vi.useRealTimers();
   });
