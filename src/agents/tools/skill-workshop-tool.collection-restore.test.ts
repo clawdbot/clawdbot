@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { applySkillProposal, proposeCreateSkill } from "../../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
@@ -15,7 +16,7 @@ afterEach(async () => {
 });
 
 describe("skill_workshop collection restore", () => {
-  it("restores a canonical cleanup through the configured workspace alias", async () => {
+  it("restores a canonical cleanup into the Workshop directory", async () => {
     const testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-skill-collection-restore-state-",
@@ -48,18 +49,14 @@ describe("skill_workshop collection restore", () => {
       collection: [{ action: "drop", name: "duplicate", reason: "redundant" }],
     });
     const backupId = (reconciled.details as { backupId: string }).backupId;
-    const aliasParent = await tempDirs.make("openclaw-skill-collection-restore-alias-");
-    const workspaceAlias = path.join(aliasParent, "workspace-alias");
-    await fs.symlink(
-      workspaceDir,
-      workspaceAlias,
-      process.platform === "win32" ? "junction" : "dir",
+    const workshopSkillFile = path.join(
+      resolveWorkshopSkillsDir(testState.env),
+      "duplicate",
+      "SKILL.md",
     );
+    await expect(fs.access(workshopSkillFile)).rejects.toThrow();
 
-    const foregroundTool = createSkillWorkshopTool({
-      workspaceDir: workspaceAlias,
-      env: testState.env,
-    });
+    const foregroundTool = createSkillWorkshopTool({ workspaceDir, env: testState.env });
     const restored = await foregroundTool.execute("restore", { action: "restore_collection" });
     expect(restored).toMatchObject({
       content: [
@@ -71,8 +68,6 @@ describe("skill_workshop collection restore", () => {
       details: { backupId, restored: ["duplicate"], removed: [] },
     });
 
-    await expect(
-      fs.readFile(path.join(workspaceAlias, "skills", "duplicate", "SKILL.md"), "utf8"),
-    ).resolves.toContain("Duplicate procedure");
+    await expect(fs.readFile(workshopSkillFile, "utf8")).resolves.toContain("Duplicate procedure");
   });
 });
