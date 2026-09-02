@@ -22,6 +22,7 @@ import {
   type TranscriptsStore,
 } from "../../transcripts/store.js";
 import type { AnyAgentTool } from "./common.js";
+import { listPastTranscripts, showPastTranscript } from "./transcripts-tool-read.js";
 import {
   activeSessions,
   authorizeTranscriptSource,
@@ -52,22 +53,23 @@ const STATUS_SELECTOR_LIMIT = 3;
 const TranscriptsSchema = Type.Object(
   {
     action: Type.String({
-      description: "start, stop, status, import, or summarize.",
+      description: "start, stop, status, import, summarize, list, or show.",
     }),
     sessionId: Type.Optional(
       Type.String({
         minLength: 1,
         description:
-          "Raw ID for start/import. Legacy stop/summarize handle; prefer selector for an exact capture. Cannot be combined with selector.",
+          "Raw ID for start/import. Legacy stop/summarize/show handle; prefer selector for an exact capture. Cannot be combined with selector.",
       }),
     ),
     selector: Type.Optional(
       Type.String({
         minLength: 1,
         description:
-          "Exact dated capture selector returned by start/import/status. Only for stop/summarize; supply this or sessionId, never both. No raw-ID fallback.",
+          "Exact dated capture selector returned by start/import/status. Only for stop/summarize/show; supply this or sessionId, never both. No raw-ID fallback.",
       }),
     ),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 20 })),
     title: Type.Optional(Type.String({ minLength: 1 })),
     providerId: Type.Optional(Type.String({ minLength: 1 })),
     accountId: Type.Optional(Type.String({ minLength: 1 })),
@@ -300,7 +302,7 @@ export function createTranscriptsTool(options?: {
     name: "transcripts",
     label: "Transcripts",
     description:
-      "Start, stop, import, summarize, or inspect meeting transcript captures and historical notes.",
+      "Start, stop, import, summarize, or inspect meeting transcript captures; list past meetings and read their notes.",
     parameters: TranscriptsSchema,
     async execute(_toolCallId, rawParams, signal) {
       const config = resolveTranscriptsConfig(ctx.config?.transcripts);
@@ -309,11 +311,20 @@ export function createTranscriptsTool(options?: {
       }
       const params = asOptionalRecord(rawParams) ?? {};
       const action = readTranscriptStringParam(params, "action", { required: true, trim: true });
-      if (params.selector !== undefined && action !== "stop" && action !== "summarize") {
-        throw new Error("selector is only supported for stop or summarize.");
+      if (
+        params.selector !== undefined &&
+        action !== "stop" &&
+        action !== "summarize" &&
+        action !== "show"
+      ) {
+        throw new Error("selector is only supported for stop, summarize, or show.");
       }
       const store = createTranscriptsStore(ctx);
       switch (action) {
+        case "list":
+          return await listPastTranscripts({ ctx, store, rawParams: params });
+        case "show":
+          return await showPastTranscript({ ctx, store, rawParams: params });
         case "start":
           return await startTranscripts({ ctx, store, rawParams: params, abortSignal: signal });
         case "stop":

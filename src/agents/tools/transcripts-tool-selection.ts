@@ -34,12 +34,19 @@ function ownsTranscriptSession(
 export async function canAccessTranscriptSession(
   ctx: TranscriptsRuntimeContext,
   session: TranscriptSessionDescriptor,
-  action: "status" | "stop" | "summarize",
+  action: "status" | "stop" | "summarize" | "list" | "show",
 ): Promise<boolean> {
-  if (!ownsTranscriptSession(ctx, session)) {
+  const readOnly = action === "list" || action === "show";
+  if (!readOnly && !ownsTranscriptSession(ctx, session)) {
     return false;
   }
+  if (readOnly && ctx.caller?.kind === "operator") {
+    return true;
+  }
   const provider = resolveSourceProvider(session.source.providerId, ctx);
+  if (readOnly && (ctx.caller?.kind !== "channel" || !provider?.accessControl)) {
+    return false;
+  }
   if (!provider) {
     return ctx.caller?.kind === "operator";
   }
@@ -55,18 +62,19 @@ export async function resolveTranscriptToolSession(params: {
   ctx: TranscriptsRuntimeContext;
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
-  action: "stop" | "summarize";
+  action: "stop" | "summarize" | "show";
 }) {
   const explicit = params.rawParams.selector !== undefined;
   if (explicit === (params.rawParams.sessionId !== undefined)) {
-    throw new Error("Provide exactly one of selector or sessionId for stop or summarize.");
+    throw new Error("Provide exactly one of selector or sessionId for stop, summarize, or show.");
   }
   const value = readTranscriptStringParam(params.rawParams, explicit ? "selector" : "sessionId", {
     required: true,
     trim: true,
   });
   params.ctx.assertCallerActive?.();
-  const exactActive = explicit ? undefined : activeSessions.get(value);
+  const durableRead = params.action === "show";
+  const exactActive = explicit || durableRead ? undefined : activeSessions.get(value);
   const { qualified, unqualified } = params.store.matchSessionEntries(value);
   let entry: { session: TranscriptSessionDescriptor; selector: string } | undefined;
   // Current raw handles can span historical dates, but never another raw ID
@@ -101,9 +109,9 @@ export async function resolveTranscriptToolSession(params: {
     entry && activeCandidate && sameSessionIdentity(entry.session, activeCandidate.session)
       ? activeCandidate
       : undefined;
-  // A durable same-tuple rewrite cannot rebind an admitted capture's authority.
-  // Historical selection still authorizes the canonical stored source.
-  const session = selectedActive?.session ?? entry?.session;
+  // Reads authorize the durable descriptor that owns the notes. Mutations keep
+  // the admitted capture's authority even after a same-tuple durable rewrite.
+  const session = durableRead ? entry?.session : (selectedActive?.session ?? entry?.session);
   // Historical authorization and inference can outlive an entire reopen/stop.
   // Capture the durable input revision before either awaited operation.
   const historicalRevision =

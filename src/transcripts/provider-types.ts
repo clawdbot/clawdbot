@@ -154,7 +154,14 @@ export type TranscriptToolCaller =
       roleIds: readonly string[];
     };
 
-export type TranscriptToolAction = "import" | "start" | "status" | "stop" | "summarize";
+export type TranscriptToolAction =
+  | "import"
+  | "start"
+  | "status"
+  | "stop"
+  | "summarize"
+  | "list"
+  | "show";
 
 export type TranscriptSourceAccessControl = {
   /** Ingress channel whose trusted account owns this provider's account namespace. */
