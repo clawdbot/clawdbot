@@ -1954,6 +1954,7 @@ async function runLegacyStateMigrationSteps(
   steps: readonly LegacyStateMigrationStep[],
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void,
   shouldRun?: (step: LegacyStateMigrationStep) => boolean,
+  options?: { rethrowUnexpectedFailures?: boolean },
 ): Promise<{
   sources: MigrationMessages[];
   sharedSources: MigrationMessages[];
@@ -1996,6 +1997,9 @@ async function runLegacyStateMigrationSteps(
       entries.push({ id: step.id, result });
       receipts.push(receipt);
       onStepReceipt?.(receipt);
+      if (options?.rethrowUnexpectedFailures) {
+        throw error;
+      }
       sources.push(result);
       (step.phase === "shared" ? sharedSources : finalSources).push(result);
       halted = true;
@@ -2119,6 +2123,21 @@ export async function autoMigrateLegacyState(params: {
   // Doctor detect owner-only work and then silently build an automatic-only plan.
   const mode: LegacyStateMigrationMode =
     params.doctorOnlyStateMigrations === true ? "doctor" : "automatic";
+  const executionOptions = { rethrowUnexpectedFailures: mode === "automatic" };
+  const requireSafeAutomaticExecution = (execution: {
+    halted: boolean;
+    sources: readonly MigrationMessages[];
+  }): void => {
+    if (mode !== "automatic" || !execution.halted) {
+      return;
+    }
+    const warnings = execution.sources.flatMap((result) => result.warnings);
+    throw new Error(
+      formatStartupMigrationFailure(
+        warnings.length > 0 ? warnings : ["Legacy state migration was refused."],
+      ),
+    );
+  };
   const initialStateDir = resolveStateDir(env, homedir);
   const checkKey = `${path.resolve(initialStateDir)}\0${mode}`;
   if (autoMigrateChecked.has(checkKey)) {
@@ -2160,6 +2179,8 @@ export async function autoMigrateLegacyState(params: {
       }),
     ],
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
   const stateSchema = stateSchemaMigration.entries[0]?.result ?? {
     changes: [],
@@ -2192,6 +2213,8 @@ export async function autoMigrateLegacyState(params: {
       }),
     ],
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
   const configMachineState = configMachineStateMigration.entries[0]?.result ?? {
     changes: [],
@@ -2230,7 +2253,10 @@ export async function autoMigrateLegacyState(params: {
       }),
     ],
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
+  requireSafeAutomaticExecution(agentTargetDiscovery);
   const agentTargetResult = agentTargetDiscovery.entries[0]?.result ?? {
     changes: [],
     warnings: [],
@@ -2312,7 +2338,13 @@ export async function autoMigrateLegacyState(params: {
     if (!step) {
       return { changes: [], warnings: [] };
     }
-    const execution = await runLegacyStateMigrationSteps([step], params.onStepReceipt);
+    const execution = await runLegacyStateMigrationSteps(
+      [step],
+      params.onStepReceipt,
+      undefined,
+      executionOptions,
+    );
+    requireSafeAutomaticExecution(execution);
     preludeReceipts.push(...execution.receipts);
     preludeHalted ||= execution.halted;
     return execution.entries[0]?.result ?? { changes: [], warnings: [] };
@@ -2447,7 +2479,10 @@ export async function autoMigrateLegacyState(params: {
       }),
     ],
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
+  requireSafeAutomaticExecution(detectionExecution);
   preludeReceipts.push(...detectionExecution.receipts);
   if (detectionExecution.halted || !detected) {
     const completed = [
@@ -2495,7 +2530,10 @@ export async function autoMigrateLegacyState(params: {
   const eagerMigrations = await runLegacyStateMigrationSteps(
     migrationSteps.filter((step) => eagerMigrationStepIds.has(step.id)),
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
+  requireSafeAutomaticExecution(eagerMigrations);
   if (eagerMigrations.halted) {
     const completed = [
       stateSchema,
@@ -2581,7 +2619,9 @@ export async function autoMigrateLegacyState(params: {
       remainingMigrationSteps,
       params.onStepReceipt,
       (step) => step.id === "legacy-main-session-keys" || step.id === "acp-session-metadata",
+      executionOptions,
     );
+    requireSafeAutomaticExecution(fastPathMigrations);
     const alwaysRunSources = fastPathMigrations.sources;
     const completedSources = [
       ...initialMigrationSources,
@@ -2620,7 +2660,10 @@ export async function autoMigrateLegacyState(params: {
   const migrations = await runLegacyStateMigrationSteps(
     remainingMigrationSteps,
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
+  requireSafeAutomaticExecution(migrations);
   const completedSources = [
     ...initialMigrationSources,
     ...migrations.sharedSources,

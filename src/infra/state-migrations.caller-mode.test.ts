@@ -742,6 +742,36 @@ describe("legacy state migration caller mode", () => {
     expect(fs.existsSync(execPath)).toBe(true);
   });
 
+  it("records and rethrows unexpected automatic migration failures", async () => {
+    const fixture = await makeFixture();
+    const pluginDoctorConfig = Object.defineProperty({}, "meta", {
+      get() {
+        throw new Error("synthetic automatic migration failure");
+      },
+    }) as OpenClawConfig;
+    const emittedReceipts: LegacyStateMigrationStepReceipt[] = [];
+
+    await expect(
+      autoMigrateLegacyState({
+        cfg: {},
+        pluginDoctorConfig,
+        env: fixture.env,
+        homedir: () => fixture.homeDir,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        onStepReceipt: (receipt) => emittedReceipts.push(receipt),
+      }),
+    ).rejects.toThrow("synthetic automatic migration failure");
+
+    expect(emittedReceipts.map((receipt) => receipt.id)).toEqual([
+      "state-schema",
+      "config-machine-state",
+    ]);
+    expect(emittedReceipts.at(-1)).toMatchObject({
+      outcome: "refused",
+      refusal: { code: "step-threw", message: "synthetic automatic migration failure" },
+    });
+  });
+
   it("returns target-discovery refusal after a completed schema step", async () => {
     const fixture = await makeFixture();
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
