@@ -126,11 +126,11 @@ mainline_drift_requires_sync() {
   local mainline_base="$1"
   local prepared_head_sha="$2"
 
-  if ! git cat-file -e "${mainline_base}^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${mainline_base}^{commit}" 2>/dev/null; then
     echo "Mainline drift relevance: mainline base $mainline_base is missing locally; require sync."
     return 0
   fi
-  if ! git cat-file -e "${prepared_head_sha}^{commit}" 2>/dev/null; then
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${prepared_head_sha}^{commit}" 2>/dev/null; then
     echo "Mainline drift relevance: prepared head $prepared_head_sha is missing locally; require sync."
     return 0
   fi
@@ -217,7 +217,7 @@ merge_verify() {
 
     mark_pr_operation_side_effects_started
     git fetch origin "pull/$pr/head" >/dev/null 2>&1 || true
-    if git cat-file -e "${PREP_HEAD_SHA}^{commit}" 2>/dev/null && git cat-file -e "${pr_head_sha}^{commit}" 2>/dev/null; then
+    if GIT_NO_LAZY_FETCH=1 git cat-file -e "${PREP_HEAD_SHA}^{commit}" 2>/dev/null && GIT_NO_LAZY_FETCH=1 git cat-file -e "${pr_head_sha}^{commit}" 2>/dev/null; then
       echo "HEAD delta (expected...current):"
       git log --oneline --left-right "${PREP_HEAD_SHA}...${pr_head_sha}" | sed 's/^/  /' || true
     else
