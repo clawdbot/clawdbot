@@ -59,11 +59,12 @@ function resolvePluginToolPolicy(
         globalPolicy,
         agentPolicy: effective.agentPolicy,
         agentId: effective.agentId,
-      }).map((step) => ({
-        ...step,
-        // This bridge exposes only plugin tools, so core-tool entries are absent by design.
-        suppressUnavailableCoreToolWarning: true,
-      }))
+      }).map((step) =>
+        Object.assign({}, step, {
+          // This bridge exposes only plugin tools, so core-tool entries are absent by design.
+          suppressUnavailableCoreToolWarning: true,
+        }),
+      )
     : undefined;
   const policies = steps?.map((step) => step.policy) ?? [profilePolicy, globalPolicy];
   const toolAllowlist = collectExplicitAllowlist(policies);
