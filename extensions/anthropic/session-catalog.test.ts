@@ -1446,6 +1446,24 @@ describe("Claude session catalog", () => {
     expect((await listClaudeSessions(home, { forceRefresh: true }))[0]?.customGroup).toBe(
       "Changed",
     );
+    const armingSpies = (["lstat", "readdir"] as const).map((method) => vi.spyOn(fs, method));
+    await expectClaudeCatalogQuiescent(
+      home,
+      armingSpies,
+      (spy) =>
+        spy.mock.calls.filter(([target]) => typeof target === "string" && target.startsWith(home)),
+      await listLocalClaudeSessionPage({}, home),
+    );
+    await writeDesktopGroupStore(
+      home,
+      "cg-22222222-2222-2222-2222-222222222222",
+      "Normal poll update",
+      localSessionId,
+    );
+    now += 60_001;
+    expect((await listLocalClaudeSessionPage({}, home)).sessions[0]?.customGroup).toBe(
+      "Normal poll update",
+    );
   });
 
   it("retains the current Claude Desktop pull request when history is truncated", async () => {

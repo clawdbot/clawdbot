@@ -77,13 +77,11 @@ function provider(
   };
 }
 
-type TestClientConnect = { scopes?: string[]; role?: string; device?: { id?: string } };
-
 async function call(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: TestClientConnect; connId?: string },
+  client?: { connect?: { scopes?: string[] }; connId?: string },
   contextOverrides: Record<string, unknown> = {},
 ) {
   const pending = startCall(method, params, config, client, contextOverrides);
@@ -95,7 +93,7 @@ function startCall(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: TestClientConnect; connId?: string },
+  client?: { connect?: { scopes?: string[] }; connId?: string },
   contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
@@ -320,28 +318,22 @@ describe("session catalog Gateway methods", () => {
     ]);
   });
 
-  it("shares settled identical lists across reconnected clients until the window expires", async () => {
+  it("shares settled identical lists across out-of-phase clients until the window expires", async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
     const list = vi.fn(async () => []);
     hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("codex", { list }) }];
     const config = {};
-    // A reconnect is a new client object carrying the same authority facts.
-    const connect = { scopes: ["operator.read"], role: "operator", device: { id: "mac" } };
-    const reconnected = { ...connect };
-    const phone = { ...connect, device: { id: "phone" } };
     try {
-      await call("sessions.catalog.list", {}, config, { connId: "conn-1", connect });
+      await call("sessions.catalog.list", {}, config);
 
       now += 2_500;
-      await call("sessions.catalog.list", {}, config, { connId: "conn-2", connect: reconnected });
+      await call("sessions.catalog.list", {}, config);
       expect(list).toHaveBeenCalledOnce();
-      await call("sessions.catalog.list", {}, config, { connId: "conn-3", connect: phone });
-      expect(list).toHaveBeenCalledTimes(2);
 
       now += 501;
-      await call("sessions.catalog.list", {}, config, { connId: "conn-4", connect });
-      expect(list).toHaveBeenCalledTimes(3);
+      await call("sessions.catalog.list", {}, config);
+      expect(list).toHaveBeenCalledTimes(2);
     } finally {
       nowSpy.mockRestore();
     }

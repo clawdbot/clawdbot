@@ -308,9 +308,10 @@ and the Desktop session store for changes instead of re-reading them on every
 poll, so an unchanged tree costs no disk access and a change re-reads only the
 affected project directory. It re-reads the whole tree at most every five
 minutes as a backstop, and falls back to per-request scanning if the platform
-cannot provide a file watcher. The Gateway also shares one settled enumeration
-for three seconds across connections with identical authority, so a dashboard
-reconnect or a second tab does not start another scan.
+cannot provide a file watcher. Desktop metadata also refreshes every 60 seconds
+to pick up custom-group changes outside the watched session store.
+Gateway enumeration keeps each caller isolated;
+the plugin reuses its watched filesystem snapshot across those enumerations.
 
 Catalog visibility follows the authenticated Gateway profile. Admin connections
 see every discovered Claude row, and solo or shared-secret Gateways remain

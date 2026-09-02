@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import {
-  CLAUDE_SESSION_SCAN_HARD_TTL_MS,
   childDirectories,
   desktopSessionsDir,
   readJsonFile,
@@ -207,14 +206,12 @@ export async function readDesktopOverlay(
     return readDesktopOverlay(homeDir, forceRefresh);
   }
   const dirty = entry?.watch?.takeDirty();
-  // A live watch reports Desktop edits itself, so its backstop matches the tree's five-minute
-  // bound; uncertain or absent coverage keeps the shipped 60s Desktop refresh instead.
-  const backstopMs =
-    dirty instanceof Set ? CLAUDE_SESSION_SCAN_HARD_TTL_MS : CLAUDE_DESKTOP_SCAN_TTL_MS;
+  // Groups live in Local Storage outside this watch. Keep the 60s Desktop refresh even
+  // with clean session metadata; it must not invalidate the independent CLI scan.
   if (
     !forceRefresh &&
     entry &&
-    entry.refreshedAt + backstopMs > Date.now() &&
+    entry.refreshedAt + CLAUDE_DESKTOP_SCAN_TTL_MS > Date.now() &&
     !(dirty instanceof Set && dirty.size > 0)
   ) {
     setBoundedCache(desktopOverlays, homeDir, entry, 8, (evicted) => evicted.watch?.close());
