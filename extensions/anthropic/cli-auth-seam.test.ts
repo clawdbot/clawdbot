@@ -6,19 +6,29 @@ const { spawnSync } = vi.hoisted(() => ({
 
 vi.mock("node:child_process", () => ({ spawnSync }));
 
-const { probeClaudeCliAuthStatus } = await import("./cli-auth-seam.js");
+const { probeClaudeCliAuthStatus } = await import("./cli-auth-api.js");
 
 beforeEach(() => {
   spawnSync.mockReset();
 });
 
-it("asks Claude CLI to verify its own login", () => {
+it("asks Claude CLI for its active account and returns only safe display fields", () => {
   spawnSync.mockReturnValue({
     status: 0,
-    stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }),
+    stdout: JSON.stringify({
+      loggedIn: true,
+      authMethod: "claude.ai",
+      email: " account@example.test ",
+      orgId: "private-organization",
+      accessToken: "synthetic-access-token",
+    }),
   });
 
-  expect(probeClaudeCliAuthStatus()).toEqual({ status: "available" });
+  expect(probeClaudeCliAuthStatus()).toEqual({
+    status: "available",
+    authMethod: "claude.ai",
+    email: "account@example.test",
+  });
 
   expect(spawnSync).toHaveBeenCalledWith(
     "claude",
@@ -26,6 +36,36 @@ it("asks Claude CLI to verify its own login", () => {
     expect.objectContaining({ timeout: 3_000 }),
   );
 });
+
+it.each(["api_key", "api_key_helper", "oauth_token", "third_party", "none", "unknown-method"])(
+  "does not attribute an account email to %s authentication",
+  (authMethod) => {
+    spawnSync.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ loggedIn: true, authMethod, email: "inactive@example.test" }),
+    });
+
+    expect(probeClaudeCliAuthStatus()).toEqual({
+      status: "available",
+      ...(authMethod === "unknown-method" ? {} : { authMethod }),
+    });
+  },
+);
+
+it.each([null, " ", "account@example.test\nother", "a".repeat(321)])(
+  "keeps account availability when its email cannot be displayed: %j",
+  (email) => {
+    spawnSync.mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai", email }),
+    });
+
+    expect(probeClaudeCliAuthStatus()).toEqual({
+      status: "available",
+      authMethod: "claude.ai",
+    });
+  },
+);
 
 it("does not inspect Claude token storage when the CLI reports logout", () => {
   spawnSync.mockReturnValue({ status: 1, stdout: "" });

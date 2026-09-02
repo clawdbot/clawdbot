@@ -1,8 +1,23 @@
 import { spawnSync } from "node:child_process";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
 
-type ClaudeCliAuthStatus = { status: "available" } | { status: "missing" | "unreadable" };
+const CLAUDE_CLI_AUTH_METHODS = [
+  "claude.ai",
+  "api_key",
+  "api_key_helper",
+  "oauth_token",
+  "third_party",
+  "none",
+] as const;
+
+type ClaudeCliAuthStatus =
+  | {
+      status: "available";
+      authMethod?: (typeof CLAUDE_CLI_AUTH_METHODS)[number];
+      email?: string;
+    }
+  | { status: "missing" | "unreadable" };
 
 /** Ask Claude CLI whether its own login is usable without reading token material. */
 export function probeClaudeCliAuthStatus(params?: {
@@ -31,7 +46,13 @@ export function probeClaudeCliAuthStatus(params?: {
     if (!isRecord(parsed) || parsed.loggedIn !== true) {
       return { status: "missing" };
     }
-    return { status: "available" };
+    const authMethod = CLAUDE_CLI_AUTH_METHODS.find((method) => method === parsed.authMethod);
+    const email = authMethod === "claude.ai" ? normalizeOptionalString(parsed.email) : undefined;
+    return {
+      status: "available",
+      ...(authMethod ? { authMethod } : {}),
+      ...(email && email.length <= 320 && !/[\r\n]/u.test(email) ? { email } : {}),
+    };
   } catch {
     return { status: "unreadable" };
   }
