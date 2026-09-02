@@ -15,6 +15,7 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "../../scripts/lib/managed-child-process.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   runNodeStep,
   runNodeStepsInParallel,
@@ -84,6 +85,25 @@ fs.renameSync(pidPath + ".tmp", pidPath);
 }
 
 describe("managed-child-process", () => {
+  it("registers with the containing owner when the command creates its own TMP leaf", async () => {
+    const root = createTempDir("managed-command-owner-");
+    const owner = createVitestResourceOwner(root);
+    const tmp = path.join(root, "child-tmp");
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args: ["-e", "require('node:fs').mkdirSync(process.env.TMPDIR)"],
+      env: { ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+      shell: false,
+      stdio: "ignore",
+      onReady() {
+        expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+      },
+    });
+    expect(code).toBe(0);
+    expect(fs.existsSync(tmp)).toBe(true);
+    expect(() => owner.assertReleased()).not.toThrow();
+  });
+
   it.runIf(process.platform === "linux")(
     "accepts exited tooling descendants still awaiting reaping",
     async () => {
@@ -1005,6 +1025,8 @@ setInterval(() => {}, 1_000);
   });
 
   it("fails closed when Windows taskkill cannot verify timeout cleanup", async () => {
+    const root = createTempDir("managed-command-owner-");
+    const owner = createVitestResourceOwner(root);
     const originalSystemRoot = process.env.SystemRoot;
     const originalWindir = process.env.WINDIR;
     let childPid = 0;
@@ -1024,6 +1046,7 @@ setInterval(() => {}, 1_000);
           },
           platform: "win32",
           runTaskkill,
+          env: { ...process.env, TMPDIR: root, TMP: root, TEMP: root },
           shell: false,
           stdio: "ignore",
           timeoutMs: 200,
@@ -1044,6 +1067,7 @@ setInterval(() => {}, 1_000);
         },
       );
       await waitFor(() => !isProcessAlive(childPid));
+      expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
     } finally {
       restoreEnvValue("SystemRoot", originalSystemRoot);
       restoreEnvValue("WINDIR", originalWindir);
@@ -1180,6 +1204,10 @@ if (role === "leaf") {
       const dir = fs.mkdtempSync(
         path.join(fs.realpathSync(os.tmpdir()), "openclaw-managed-held-output-"),
       );
+      // This namespace owns the deliberate failed join and manual rescue. Pass
+      // it explicitly so concurrent rows never mutate shared worker environment.
+      const owner = createVitestResourceOwner(dir);
+      const env = { ...process.env, TMPDIR: dir, TMP: dir, TEMP: dir };
       const pidPath = path.join(dir, "escaped.pid");
       const parentPidPath = path.join(dir, "parent.pid");
       const failPath = path.join(dir, "fail");
@@ -1224,6 +1252,7 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
             ? runManagedCommand({
                 bin: process.execPath,
                 args,
+                env,
                 stdio: ["ignore", "pipe", "pipe"],
                 timeoutMs: mode === "timeout" ? 100 : undefined,
                 // This row verifies the full pipe-drain budget, not the default TERM grace.
@@ -1244,9 +1273,10 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
                 },
               })
             : runNodeStepsInParallel([
-                { label: "blocked", args, timeoutMs: 100, abortKillGraceMs: 100 },
+                { label: "blocked", args, env, timeoutMs: 100, abortKillGraceMs: 100 },
                 {
                   label: "primary",
+                  env,
                   args: [
                     "-e",
                     `setInterval(() => { if (require('node:fs').existsSync(${JSON.stringify(failPath)})) process.exit(2); }, 5);`,
@@ -1314,6 +1344,11 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
           await waitForDead(escapedPid, 2_000);
         }
         expectCase(isProcessAlive(escapedPid)).toBe(mode !== "normal drainage");
+        if (mode === "normal drainage") {
+          expectCase(() => owner.assertReleased()).not.toThrow();
+        } else {
+          expectCase(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        }
       } finally {
         fs.writeFileSync(failPath, "fail");
         abortController.abort();

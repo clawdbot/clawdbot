@@ -50,7 +50,6 @@ const sharedManagementActions = [
   "Pin session",
   "Mark as unread",
   "Rename…",
-  "Assign to me",
   "Assign to…",
   "Icon & color",
   "Fork conversation",
@@ -60,9 +59,7 @@ const sharedManagementActions = [
   "Archive session",
   "Delete…",
 ] as const;
-const compactManagementActions = sharedManagementActions.filter(
-  (label) => label !== "Assign to me",
-);
+const compactManagementActions = sharedManagementActions;
 
 suite.define(() => {
   it("shows, copies, and retires a credential-free exact continuation command", async () => {

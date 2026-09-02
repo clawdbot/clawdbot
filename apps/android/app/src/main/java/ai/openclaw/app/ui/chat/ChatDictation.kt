@@ -350,17 +350,22 @@ internal class ChatDictationController(
 internal fun dictationFailureForError(code: Int): ChatDictationFailure =
   when (code) {
     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> ChatDictationFailure.PermissionRequired
+
     SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> ChatDictationFailure.Busy
+
     SpeechRecognizer.ERROR_NETWORK,
     SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
     -> ChatDictationFailure.Network
+
     SpeechRecognizer.ERROR_NO_MATCH,
     SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
     -> ChatDictationFailure.NoSpeech
+
     SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
     SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
     SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
     -> ChatDictationFailure.Unavailable
+
     else -> ChatDictationFailure.Generic
   }
 

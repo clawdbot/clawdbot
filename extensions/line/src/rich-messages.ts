@@ -27,6 +27,7 @@ import {
   createDeviceControlCard,
   createMediaPlayerCard,
 } from "./flex-templates/media-control-cards.js";
+import { fitsLineFlexBubble } from "./flex-templates/message.js";
 import { createAgendaCard, createEventCard } from "./flex-templates/schedule-cards.js";
 import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
@@ -211,6 +212,9 @@ export function renderLinePresentation(
         contents: createActionCard(title, cardBody.join("\n") || "Choose an option.", buttons),
       }
     : undefined;
+  if (flexMessage && !fitsLineFlexBubble(flexMessage.contents)) {
+    return null;
+  }
   const text = renderMessagePresentationFallbackText({
     text: payload.text,
     presentation: { title: hasCard ? undefined : presentation.title, blocks: carriedBlocks },

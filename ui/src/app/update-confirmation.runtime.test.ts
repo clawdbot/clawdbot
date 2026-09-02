@@ -88,6 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.body.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
   document.body.replaceChildren();
   restoreDialogPolyfill();
   if (originalWebkit) {
@@ -167,7 +168,7 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
 });
 
-it("keeps the dialog open and narrates the install, the restart, and the failure", async () => {
+it("keeps the dialog open and narrates the install, the disconnect, and the failure", async () => {
   const stream = createProgressStream();
   const { settled, startGatewayUpdate } = startUpdate({
     watchUpdateProgress: stream.watchUpdateProgress,
@@ -184,7 +185,10 @@ it("keeps the dialog open and narrates the install, the restart, and the failure
   // The Gateway goes away mid-install; the dialog is mounted outside the shell
   // precisely so it can keep reporting through the disconnect.
   await stream.push({ busy: true, connected: false, failure: null });
-  expect(modal.textContent).toContain("The Gateway is restarting");
+  expect(modal.textContent).toContain("The Gateway disconnected during the update");
+  expect(modal.textContent).toContain("openclaw triage");
+  expect(modal.textContent).toContain("on the Gateway host");
+  expect(modal.textContent).toContain("local coding agent");
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
   await stream.push({

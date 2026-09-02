@@ -11,7 +11,7 @@ import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntry,
-  resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginInstallSources,
 } from "../plugins/official-external-plugin-catalog.js";
 import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
@@ -119,11 +119,7 @@ function formatMissingOfficialExternalPluginWarning(
   if (!catalogEntry) {
     return null;
   }
-  const install = resolveOfficialExternalPluginInstall(catalogEntry);
-  const npmSpec = install?.npmSpec?.trim();
-  const clawhubSpec = install?.clawhubSpec?.trim();
-  const installSpec =
-    install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
+  const installSpec = resolveOfficialExternalPluginInstallSources(catalogEntry)[0]?.spec;
   if (!installSpec) {
     return null;
   }

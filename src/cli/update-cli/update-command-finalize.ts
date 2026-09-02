@@ -132,7 +132,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
 
   const root = await resolveUpdateRoot();
   const target = { root, env: resolveServiceRefreshEnv(process.env, invocationCwd) };
-  await withUpdateFailureTriage(opts, target, () =>
+  await withUpdateFailureTriage({ ...opts, invocationCwd }, target, () =>
     withUpdateInProgressEnv(invocationCwd, () =>
       updateFinalizeCommandInternal(opts, root, timeoutMs, requestedChannel),
     ),
@@ -341,6 +341,10 @@ async function updateFinalizeCommandInternal(
     defaultRuntime.writeJson(result);
   } else if (result.status === "ok") {
     defaultRuntime.log(theme.muted("Update finalization completed."));
+  } else if (result.status === "warning") {
+    defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
+  } else {
+    defaultRuntime.log(theme.error("Update finalization failed."));
   }
   if (result.status === "error") {
     throw new UpdateCommandFailure({

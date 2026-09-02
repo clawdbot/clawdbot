@@ -21,7 +21,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-compatibility.js";
@@ -29,23 +29,10 @@ import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import { channelLabel } from "./runtime-label.js";
 import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
-type ChannelSetupPluginInstallModule = typeof import("../channel-setup/plugin-install.js");
-type OnboardChannelsModule = typeof import("../onboard-channels.js");
-
-const channelSetupPluginInstallLoader = createLazyImportLoader<ChannelSetupPluginInstallModule>(
+const loadChannelSetupPluginInstall = createLazyPromise(
   () => import("../channel-setup/plugin-install.js"),
 );
-const onboardChannelsLoader = createLazyImportLoader<OnboardChannelsModule>(
-  () => import("../onboard-channels.js"),
-);
-
-function loadChannelSetupPluginInstall(): Promise<ChannelSetupPluginInstallModule> {
-  return channelSetupPluginInstallLoader.load();
-}
-
-function loadOnboardChannels(): Promise<OnboardChannelsModule> {
-  return onboardChannelsLoader.load();
-}
+const loadOnboardChannels = createLazyPromise(() => import("../onboard-channels.js"));
 
 export type ChannelsAddOptions = {
   agent?: string;

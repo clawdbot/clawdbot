@@ -147,6 +147,7 @@ android {
   sourceSets {
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
+      assets.directories.add(rootProject.file("../../ui/public/provider-icons").path)
       assets.directories.add("../../shared/mermaid/assets")
       assets.directories.add(thirdPartyLicensesDir.path)
     }
@@ -321,6 +322,7 @@ kotlin {
 }
 
 ktlint {
+  version.set(libs.versions.ktlint.cli)
   android.set(true)
   ignoreFailures.set(false)
   filter {

@@ -7,6 +7,7 @@ import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { isRecord } from "../utils.js";
+import { resolvePluginInstallSources, type PluginInstallSource } from "./install-channel-specs.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
 import type {
   OfficialExternalChannelSecretContract,
@@ -1164,60 +1165,69 @@ function getFeedEntryCandidateSourceType(
   return resolveOfficialExternalPluginCatalogProfileConfig(config).sources[sourceRef]?.type;
 }
 
-function getPreferredFeedEntryInstallCandidate(params: {
+function resolveFeedEntryInstallSources(params: {
   entry: OfficialExternalPluginCatalogEntry;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-}): OfficialExternalPluginCatalogInstallCandidate | undefined {
-  const candidates = getFeedEntryInstallCandidates(params.entry).filter((candidate) =>
-    Boolean(normalizeOptionalString(candidate.package)),
-  );
-  return (
-    candidates.find(
-      (candidate) =>
-        normalizeOptionalString(candidate.sourceRef) ===
-        DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF,
-    ) ??
-    candidates.find(
-      (candidate) =>
-        normalizeOptionalString(candidate.sourceRef) ===
-        DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF,
-    ) ??
-    candidates.find((candidate) =>
-      Boolean(getFeedEntryCandidateSourceType(candidate, params.catalogConfig)),
-    )
-  );
+}): PluginInstallSource[] {
+  const candidates = getFeedEntryInstallCandidates(params.entry);
+  return (["npm", "clawhub"] as const).flatMap((source) => {
+    const candidate = candidates.find(
+      (entry) =>
+        getFeedEntryCandidateSourceType(entry, params.catalogConfig) === source &&
+        Boolean(normalizeOptionalString(entry.package)),
+    );
+    const spec = candidate && formatFeedInstallCandidateSpec(candidate);
+    if (!candidate || !spec) {
+      return [];
+    }
+    const expectedIntegrity =
+      source === "npm"
+        ? normalizeNpmExpectedIntegrity(candidate.integrity)
+        : normalizeClawHubSha256ExpectedIntegrity(candidate.integrity);
+    return [
+      {
+        source,
+        spec: source === "clawhub" ? `clawhub:${spec}` : spec,
+        ...(expectedIntegrity ? { expectedIntegrity } : {}),
+      },
+    ];
+  });
 }
 
 function resolveFeedEntryInstallCandidate(params: {
   entry: OfficialExternalPluginCatalogEntry;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
 }): PluginPackageInstall | null {
-  const candidate = getPreferredFeedEntryInstallCandidate(params);
-  if (!candidate) {
-    return null;
+  const source = resolveFeedEntryInstallSources(params)[0];
+  return source
+    ? {
+        ...(source.source === "npm" ? { npmSpec: source.spec } : { clawhubSpec: source.spec }),
+        defaultChoice: source.source,
+        ...(source.expectedIntegrity ? { expectedIntegrity: source.expectedIntegrity } : {}),
+      }
+    : null;
+}
+
+/** Source-specific catalog pins stay attached to the artifact they authenticate. */
+export function resolveOfficialExternalPluginInstallSources(
+  entry: OfficialExternalPluginCatalogEntry,
+  params?: {
+    catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+    resolvedInstall?: PluginPackageInstall | null;
+  },
+): PluginInstallSource[] {
+  const install =
+    params?.resolvedInstall === undefined
+      ? resolveOfficialExternalPluginInstall(entry, params)
+      : params.resolvedInstall;
+  if (!install) {
+    return [];
   }
-  const spec = formatFeedInstallCandidateSpec(candidate);
-  if (!spec) {
-    return null;
-  }
-  const sourceType = getFeedEntryCandidateSourceType(candidate, params.catalogConfig);
-  if (sourceType === "clawhub") {
-    const expectedIntegrity = normalizeClawHubSha256ExpectedIntegrity(candidate.integrity);
-    return {
-      clawhubSpec: `clawhub:${spec}`,
-      defaultChoice: "clawhub",
-      ...(expectedIntegrity ? { expectedIntegrity } : {}),
-    };
-  }
-  if (sourceType === "npm") {
-    const expectedIntegrity = normalizeNpmExpectedIntegrity(candidate.integrity);
-    return {
-      npmSpec: spec,
-      defaultChoice: "npm",
-      ...(expectedIntegrity ? { expectedIntegrity } : {}),
-    };
-  }
-  return null;
+  const candidates = resolveFeedEntryInstallSources({
+    entry,
+    catalogConfig: params?.catalogConfig,
+  });
+  return candidates.length > 0 ? candidates : resolvePluginInstallSources(install);
 }
 
 function normalizeClawHubSha256ExpectedIntegrity(value: unknown): string | undefined {
@@ -1331,15 +1341,13 @@ export function resolveOfficialExternalPluginInstall(
     return {
       ...candidateInstall,
       ...(install?.minHostVersion ? { minHostVersion: install.minHostVersion } : {}),
-      ...(install?.expectedIntegrity && !candidateInstall.expectedIntegrity
-        ? { expectedIntegrity: install.expectedIntegrity }
-        : {}),
       ...(install?.allowInvalidConfigRecovery === true ? { allowInvalidConfigRecovery: true } : {}),
     };
   }
   const hasFeedInstallCandidates = getFeedEntryInstallCandidateRecords(entry).length > 0;
   const npmSpec =
-    manifestNpmSpec ?? (hasFeedInstallCandidates ? undefined : normalizeOptionalString(entry.name));
+    manifestNpmSpec ??
+    (hasFeedInstallCandidates || clawhubSpec ? undefined : normalizeOptionalString(entry.name));
   const defaultChoice =
     normalizePluginInstallDefaultChoice(install?.defaultChoice) ??
     (npmSpec ? "npm" : clawhubSpec ? "clawhub" : localPath ? "local" : undefined);

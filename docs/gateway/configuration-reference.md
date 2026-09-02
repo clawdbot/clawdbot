@@ -442,6 +442,7 @@ See [Plugins](/tools/plugin).
       // dangerouslyAllowPrivateNetwork: true, // opt in only for trusted private-network access
       // allowPrivateNetwork: true, // legacy alias
       // allowedHostnames: ["*.example.com", "example.com", "localhost"],
+      // blockedHostnames: ["tracker.example.com", "*.ads.example.com"],
     },
     tabCleanup: {
       enabled: true,
@@ -499,6 +500,7 @@ See [Plugins](/tools/plugin).
 - In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 - In strict mode, use the wildcard-aware `ssrfPolicy.allowedHostnames` for exact-host and pattern exceptions.
+- `ssrfPolicy.blockedHostnames` denies exact hosts and `*.example.com` subdomains before DNS and allow rules, including private-network exceptions. Wildcards exclude the apex; add `example.com` separately to block it. Empty or unset adds no denials.
 - Remote profiles are attach-only (start/stop/reset disabled).
 - `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
@@ -1920,6 +1922,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
 - `webhookToken`: bearer token used for automation webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhookSsrfPolicy`: shared outbound SSRF policy for primary, completion, failure-destination, and failure-alert webhooks. Private/internal targets are blocked when omitted. Prefer exact `allowedHostnames`; use `dangerouslyAllowPrivateNetwork: true` only for trusted private-network receivers. The narrow fake-IP proxy flags are `allowRfc2544BenchmarkRange` and `allowIpv6UniqueLocalRange`.
+- `webhookSsrfPolicy.blockedHostnames`: denies exact hosts and wildcard subdomains before DNS and all allow rules. `*.example.com` excludes the apex; add `example.com` separately to block it. Empty or unset adds no denials.
 
 The `cron` block is strict; `cron.enabled`, `cron.skipMissedJobs`, `cron.triggers`, `cron.webhookToken`,
 `cron.webhookSsrfPolicy`, `cron.sessionRetention`, and `cron.failureAlert` are the only accepted keys. The

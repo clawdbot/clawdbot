@@ -678,6 +678,23 @@ console.log(JSON.stringify({
     }
   });
 
+  it("preserves mixed-width graphemes after a soft wrap", () => {
+    const out = renderTable({
+      border: "ascii",
+      padding: 0,
+      columns: [{ key: "V", header: "V", minWidth: 4, maxWidth: 4 }],
+      rows: [{ V: "a 表👩‍💻e\u0301काﾊﾞ後 xyz" }],
+    });
+
+    expect(out.trimEnd().split("\n").slice(3, -1)).toEqual([
+      "|a   |",
+      "|表👩‍💻|",
+      "|e\u0301का |",
+      "|ﾊﾞ後|",
+      "|xyz |",
+    ]);
+  });
+
   it("keeps borders aligned when a wide grapheme lands in a narrow cell", () => {
     // A width-2 CJK/emoji glyph in a column whose content width is 1 cannot be
     // wrapped, so padCell must clamp it instead of overflowing the cell and

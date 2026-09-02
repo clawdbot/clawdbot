@@ -41,7 +41,7 @@ function buildRenderedSkillsPrompt(params: {
   includeLimitNote?: boolean;
 }): string {
   // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
-  // The production-renderer parity test in src/agents/code-mode.test.ts enforces this coupling.
+  // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
   const truncated = params.skills.length < params.total;
   const limitNote =
     params.includeLimitNote === false
@@ -109,8 +109,6 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     return undefined;
   };
 
-  const fitsFull = (skills: Skill[], includeLimitNote = true): boolean =>
-    renderWithinLimit(skills, { kind: "full" }, includeLimitNote) !== undefined;
   const fitsCompact = (
     skills: Skill[],
     descriptionMaxChars: number,
@@ -119,9 +117,10 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     renderWithinLimit(skills, { kind: "compact", descriptionMaxChars }, includeLimitNote) !==
     undefined;
 
-  if (fitsFull(skillsForPrompt)) {
+  const fullPrompt = renderWithinLimit(skillsForPrompt, { kind: "full" });
+  if (fullPrompt !== undefined) {
     return {
-      prompt: renderWithinLimit(skillsForPrompt, { kind: "full" }) ?? "",
+      prompt: fullPrompt,
       skills: skillsForPrompt,
     };
   }

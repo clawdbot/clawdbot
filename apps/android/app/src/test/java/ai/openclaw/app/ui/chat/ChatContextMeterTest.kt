@@ -10,6 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 class ChatContextMeterTest {
   @Test
@@ -88,10 +89,45 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun contextMeterDoesNotDisplayStaleTokenUsage() {
+  fun contextMeterKeepsApproximateWidthForStaleTokenUsage() {
     val usage = ChatContextUsage(totalTokens = 82_000L, totalTokensFresh = false, contextTokens = 100_000L)
 
-    assertNull(contextMeterWidth(usage))
+    assertEquals(0.82f, contextMeterWidth(usage))
+  }
+
+  @Test
+  fun contextSummaryMarksStaleUsage() {
+    val fresh =
+      requireNotNull(
+        chatContextSummary(
+          ChatContextUsage(totalTokens = 109_800L, totalTokensFresh = true, contextTokens = 272_000L),
+          Locale.US,
+        ),
+      )
+    val stale =
+      requireNotNull(
+        chatContextSummary(
+          ChatContextUsage(totalTokens = 82_000L, totalTokensFresh = false, contextTokens = 100_000L),
+          Locale.US,
+        ),
+      )
+
+    assertEquals("109.8k / 272k \u00b7 40%", fresh.detail)
+    assertFalse(fresh.approximate)
+    assertEquals("~82k / 100k \u00b7 ~82%", stale.detail)
+    assertTrue(stale.approximate)
+  }
+
+  @Test
+  fun contextDetailsFormatGatewayUsageWithoutInventingData() {
+    assertEquals("18.4k", formatContextUsageTokens(18_420L, Locale.US))
+    assertEquals("\u2014", formatContextUsageTokens(null, Locale.US))
+    assertEquals("\u00240.0063", formatContextEstimatedCost(0.0063))
+    assertEquals("\u00240.063", formatContextEstimatedCost(0.063))
+    assertEquals("\u00241.25", formatContextEstimatedCost(1.25))
+    assertEquals("\u2014", formatContextEstimatedCost(null))
+    assertEquals("\u2014", formatContextEstimatedCost(Double.NaN))
+    assertEquals("\u2014", formatContextEstimatedCost(-0.5))
   }
 
   @Test

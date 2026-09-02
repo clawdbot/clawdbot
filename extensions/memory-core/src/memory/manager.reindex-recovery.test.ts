@@ -9,9 +9,12 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import { tryAcquireMemoryReindexLock, waitForMemoryReindexLock } from "./manager-reindex-lock.js";
+import type { EmbeddingProvider } from "./embeddings.js";
+import { resetMemoryDatabase } from "./manager-db.js";
+import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
 
@@ -24,7 +27,7 @@ type ReindexHarness = {
   cache: { enabled: boolean; maxEntries?: number };
   writeMeta: (meta: MemoryIndexMeta) => void;
   providerKey: string | null;
-  provider: null;
+  provider: EmbeddingProvider | null;
   dirty: boolean;
   memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
@@ -68,7 +71,7 @@ describe("memory manager reindex recovery", () => {
     sources?: Array<"memory" | "sessions">;
     cacheEnabled?: boolean;
   }): OpenClawConfig {
-    return {
+    return isolateMemoryManagerTestConfig({
       memory: {
         search: {
           provider: params.provider ?? "openai",
@@ -85,7 +88,7 @@ describe("memory manager reindex recovery", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    };
+    });
   }
 
   async function openManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
@@ -99,14 +102,6 @@ describe("memory manager reindex recovery", () => {
     }
     manager = result.manager as unknown as MemoryIndexManager;
     return manager;
-  }
-
-  function acquireTestReindexLock(databasePath: string) {
-    const lock = tryAcquireMemoryReindexLock(databasePath);
-    if (!lock) {
-      throw new Error("expected test to acquire the memory reindex lock");
-    }
-    return lock;
   }
 
   it("restores retry state after a shadow full reindex fails late", async () => {
@@ -129,7 +124,7 @@ describe("memory manager reindex recovery", () => {
       throw new Error("late reindex failure");
     };
 
-    await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
+    await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
       "late reindex failure",
     );
 
@@ -155,7 +150,7 @@ describe("memory manager reindex recovery", () => {
       throw new Error("late clean reindex failure");
     };
 
-    await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
+    await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
       "late clean reindex failure",
     );
 
@@ -186,7 +181,7 @@ describe("memory manager reindex recovery", () => {
       throw new Error("late shadow failure");
     };
 
-    await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
+    await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
       "late shadow failure",
     );
     expect(
@@ -329,12 +324,11 @@ describe("memory manager reindex recovery", () => {
 
   it("rejects a full reindex while another process owns the build lock", async () => {
     const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
-    const harness = memoryManager as unknown as ReindexHarness;
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const lock = acquireTestReindexLock(databasePath);
+    const lock = await waitForMemoryReindexLock(databasePath);
 
     try {
-      await expect(harness.runInPlaceReindex({ reason: "test", force: true })).rejects.toThrow(
+      await expect(memoryManager.sync({ reason: "test", force: true })).rejects.toThrow(
         /another reindex is active/,
       );
     } finally {
@@ -342,10 +336,70 @@ describe("memory manager reindex recovery", () => {
     }
   });
 
+  it("refuses reset during incremental embeddings, then clears and rebuilds their writes", async () => {
+    const memoryPath = path.join(memoryDir, "alpha.md");
+    await fs.writeFile(memoryPath, "published alpha");
+    const memoryManager = await openManager(createCfg({ sources: ["memory"], cacheEnabled: true }));
+    await memoryManager.sync({ reason: "cli", force: true });
+    const harness = memoryManager as unknown as ReindexHarness;
+    const provider = harness.provider;
+    if (!provider) {
+      throw new Error("expected the test embedding provider");
+    }
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const reset = () =>
+      resetMemoryDatabase({ targetDb: harness.db, dbPath: databasePath, workspaceDir });
+    let releaseEmbedding = () => {};
+    let markEmbeddingStarted = () => {};
+    const embeddingGate = new Promise<void>((resolve) => {
+      releaseEmbedding = resolve;
+    });
+    const embeddingStarted = new Promise<void>((resolve) => {
+      markEmbeddingStarted = resolve;
+    });
+    vi.spyOn(provider, "embedBatch").mockImplementationOnce(async (inputs) => {
+      markEmbeddingStarted();
+      await embeddingGate;
+      return inputs.map(() => [0, 1, 0]);
+    });
+    await fs.writeFile(memoryPath, "incremental beta");
+    harness.dirty = true;
+    const activeSync = memoryManager.sync({ reason: "session-delta" });
+    try {
+      await embeddingStarted;
+      await expect(reset()).rejects.toMatchObject({ code: "SQLITE_BUSY" });
+      expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+        { text: "published alpha" },
+      ]);
+    } finally {
+      releaseEmbedding();
+      await activeSync;
+    }
+
+    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+      { text: "incremental beta" },
+    ]);
+    await expect(reset()).resolves.toBe(true);
+    for (const table of ["memory_index_sources", "memory_index_chunks", "memory_embedding_cache"]) {
+      expect(harness.db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
+        count: 0,
+      });
+    }
+    await memoryManager.sync({ reason: "cli" });
+    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
+      { text: "incremental beta" },
+    ]);
+    expect(
+      harness.db.prepare("SELECT COUNT(*) AS count FROM memory_embedding_cache").get(),
+    ).toEqual({
+      count: 1,
+    });
+  });
+
   it("waits for the build lock without blocking the event loop", async () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const lock = acquireTestReindexLock(databasePath);
+    const lock = await waitForMemoryReindexLock(databasePath);
     let timerFired = false;
     let lockReleased = false;
 

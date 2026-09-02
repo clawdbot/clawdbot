@@ -86,6 +86,43 @@ function failedHistory(): ChatHistoryResult {
 }
 
 describe("chat history in-flight assistant recovery", () => {
+  it("retires an interrupted run from authoritative history after missing its live terminal", async () => {
+    const active = activeHistory("run-interrupted");
+    const interrupted: ChatHistoryResult = {
+      messages: [],
+      sessionInfo: {
+        ...active.sessionInfo!,
+        hasActiveRun: false,
+        activeRunIds: [],
+        lastRunId: "run-interrupted",
+        status: "killed",
+      },
+      pendingInputs: {
+        items: [
+          {
+            id: "input-interrupted-before-turn",
+            runId: "queued-input",
+            acceptedAt: 1,
+            state: "interrupted",
+            message: { role: "user", content: "Open a PR to fix it" },
+          },
+        ],
+        total: 1,
+      },
+    };
+    const request = vi.fn().mockResolvedValueOnce(active).mockResolvedValueOnce(interrupted);
+    const state = createState(active);
+    state.client = { request } as unknown as GatewayBrowserClient;
+
+    await loadChatHistory(state);
+    expect(state.chatRunId).toBe("run-interrupted");
+
+    await loadChatHistory(state);
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
   it.each(["chat.startup", "chat.history"] as const)(
     "recovers a failure missed before route subscription through %s",
     async (method) => {

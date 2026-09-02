@@ -435,6 +435,14 @@ export function resolveAgentWorkspaceDir(
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
 
+/** Resolves the configured task directory without changing the agent workspace. */
+export function resolveAgentRunCwd(cfg: OpenClawConfig, agentId: string): string | undefined {
+  const cwd =
+    normalizeOptionalString(resolveAgentEntry(cfg, agentId)?.cwd) ??
+    normalizeOptionalString(cfg.agents?.defaults?.cwd);
+  return cwd ? stripNullBytes(resolveUserPath(cwd)) : undefined;
+}
+
 /** How a resolved agent workspace should be provisioned by the lifecycle owner. */
 export type AgentWorkspaceProvisioning = "standard" | "runtime-managed-implicit";
 

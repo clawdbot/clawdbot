@@ -10,15 +10,18 @@ import ai.openclaw.app.PendingAssistantAutoSend
 import ai.openclaw.app.R
 import ai.openclaw.app.SHARED_AUDIO_DOCUMENT_MIME_TYPES
 import ai.openclaw.app.SHARED_VIDEO_MIME_TYPES
+import ai.openclaw.app.SessionCatalog
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatDiffStat
+import ai.openclaw.app.chat.ChatFastMode
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
@@ -47,11 +50,11 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.operatorScopesAllowAdmin
+import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
-import ai.openclaw.app.ui.AgentPicker
-import ai.openclaw.app.ui.AgentPickerState
-import ai.openclaw.app.ui.agentPickerState
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
+import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -60,7 +63,8 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
-import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.ProviderBrandIcon
+import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.design.sessionColor
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
@@ -68,6 +72,7 @@ import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.relativeSessionTime
 import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
 import ai.openclaw.app.ui.sessionPresentationTitle
+import ai.openclaw.app.ui.sidebarCatalogHosts
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -97,6 +102,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -105,26 +111,32 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.GppMaybe
 import androidx.compose.material.icons.filled.HourglassEmpty
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.Policy
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
@@ -140,6 +152,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -235,16 +248,16 @@ internal enum class ChatComposerPrimaryAction {
   Send,
 }
 
-/** Live Talk owns its voice control independently of the primary run/send action. */
+/** Drafts keep their Send action while admission waits; active Talk owns its separate voice control. */
 internal fun resolveChatComposerPrimaryAction(
   talkActive: Boolean,
   runActive: Boolean,
-  sendEnabled: Boolean,
+  hasContent: Boolean,
 ): ChatComposerPrimaryAction =
   when {
     runActive -> ChatComposerPrimaryAction.Stop
     talkActive -> ChatComposerPrimaryAction.None
-    sendEnabled -> ChatComposerPrimaryAction.Send
+    hasContent -> ChatComposerPrimaryAction.Send
     else -> ChatComposerPrimaryAction.StartTalk
   }
 
@@ -288,7 +301,6 @@ fun ChatScreen(
   showSidebarButton: Boolean,
   onOpenSidebar: () -> Unit,
   onToggleTalk: () -> Unit,
-  onOpenSessions: () -> Unit,
   onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
   onOpenProvidersModels: () -> Unit = onOpenGatewaySettings,
@@ -301,6 +313,10 @@ fun ChatScreen(
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val operatorScopes by viewModel.operatorScopes.collectAsState()
+  val permissionSettingsAvailable by viewModel.chatPermissionSettingsAvailable.collectAsState()
+  val canWriteSessionSettings = operatorScopesAllowWrite(operatorScopes)
+  val canAdminSessionSettings = operatorScopesAllowAdmin(operatorScopes)
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val selectionGeneration by viewModel.chatSelectionGeneration.collectAsState()
@@ -338,6 +354,7 @@ fun ChatScreen(
   val modelFavorites by viewModel.modelFavorites.collectAsState()
   val modelRecents by viewModel.modelRecents.collectAsState()
   val selectedModelRef by viewModel.chatSelectedModelRef.collectAsState()
+  val pendingSessionSettingsKeys by viewModel.chatPendingSessionSettingsKeys.collectAsState()
   val micEnabled by viewModel.micEnabled.collectAsState()
   val micIsListening by viewModel.micIsListening.collectAsState()
   val micCooldown by viewModel.micCooldown.collectAsState()
@@ -358,6 +375,21 @@ fun ChatScreen(
         mainSessionKey = mainSessionKey,
       )
     }
+  val fastMode = (activeSession?.effectiveFastMode ?: activeSession?.fastMode ?: ChatFastMode.Off).isEnabled
+  val modelSelectionLocked = activeSession?.modelSelectionLocked == true
+  val permissionModePending = activeSession?.permissionModePending == true
+  val sessionSettingsPending = sessionKey in pendingSessionSettingsKeys
+  val fastModeProviderSupported =
+    fastModeProviderSupportedForSelection(
+      selectedModelRef = selectedModelRef,
+      sessionModelProvider = activeSession?.modelProvider,
+      catalog = modelCatalog,
+    )
+  val fastModeSupported =
+    fastModeSupportedForSelection(
+      providerSupported = fastModeProviderSupported,
+      hasConfiguredFastModeOverride = activeSession?.fastMode != null,
+    )
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
   val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
@@ -382,7 +414,11 @@ fun ChatScreen(
       messages = messages,
     )
   val activeAgentId = sessionAgentId
-  val workspaceGit = gatewayAgents.firstOrNull { it.id == sessionAgentId }?.workspaceGit == true
+  val activeAgent = gatewayAgents.firstOrNull { it.id == activeAgentId }
+  val headerCatalogState by viewModel.sessionCatalogState.collectAsState()
+  val activeSessionTitle = chatHeaderSessionTitle(activeSession) { nativeString("New chat") }
+  val activeProjectLabel = chatHeaderProjectLabel(sessionKey = sessionKey, catalogs = headerCatalogState.catalogs)
+  val workspaceGit = activeAgent?.workspaceGit == true
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
   val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
@@ -439,10 +475,14 @@ fun ChatScreen(
       )
     }
   val selectedModelLabel =
-    selectedModelRef?.let { selected ->
-      modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
-        ?: selected.substringAfterLast('/')
-    } ?: nativeString("Model")
+    if (modelSelectionLocked) {
+      if (activeSession.agentRuntimeId == "codex") nativeString("Native Codex model") else nativeString("Locked session model")
+    } else {
+      selectedModelRef?.let { selected ->
+        modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
+          ?: selected.substringAfterLast('/')
+      } ?: nativeString("Model")
+    }
   val modelUnavailableReason =
     selectedChatModelSendBlockingReason(
       gatewayReady = healthOk,
@@ -569,13 +609,17 @@ fun ChatScreen(
 
   val shareImportNotice =
     when (attachmentNotices[composerOwner]) {
-      ChatComposerAttachmentNotice.Attachment ->
+      ChatComposerAttachmentNotice.Attachment -> {
         NativeText.Resource(source = "Could not stage an attachment for sending.", formatArgs = emptyList())
-      ChatComposerAttachmentNotice.Image ->
+      }
+
+      ChatComposerAttachmentNotice.Image -> {
         nativeText("Some shared images were omitted or could not be added.")
-      null ->
+      }
+
+      null -> {
         when {
-          sendMessageTooLong ->
+          sendMessageTooLong -> {
             joinedNativeText(
               separator = " ",
               parts =
@@ -584,9 +628,17 @@ fun ChatScreen(
                   verbatimText("${input.length}/$CHAT_COMPOSER_MAX_SEND_CHARS"),
                 ),
             )
-          sendCheckpointFull -> chatOutboxQueueFailureText()
-          else -> null
+          }
+
+          sendCheckpointFull -> {
+            chatOutboxQueueFailureText()
+          }
+
+          else -> {
+            null
+          }
         }
+      }
     }
 
   LaunchedEffect(chatDraft, composerOwner, mainSessionKey) {
@@ -660,11 +712,12 @@ fun ChatScreen(
   }
 
   val newChatEnabled =
-    canStartNewChat(
-      pendingRunCount = pendingRunCount,
-      hasQueuedMessage = pendingAssistantAutoSend != null,
-      gatewayReady = healthOk && !gatewayOffline,
-    )
+    !modelSelectionLocked &&
+      canStartNewChat(
+        pendingRunCount = pendingRunCount,
+        hasQueuedMessage = pendingAssistantAutoSend != null,
+        gatewayReady = healthOk && !gatewayOffline,
+      )
 
   val startNewChat: (Boolean) -> Unit = { worktree ->
     if (newChatEnabled) {
@@ -681,70 +734,39 @@ fun ChatScreen(
         .padding(vertical = 10.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    Column(
-      modifier = Modifier.padding(horizontal = 16.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      ChatHeader(
-        sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
-        sessionColor = sessions.firstOrNull { it.key == sessionKey }?.color,
-        showSidebarButton = showSidebarButton,
-        onOpenSidebar = onOpenSidebar,
-        healthOk = healthOk,
-        pendingRunCount = pendingRunCount,
-        newChatEnabled = newChatEnabled,
-        workspaceGit = workspaceGit,
-        branches = sessionBranches,
-        branchesLoading = sessionBranchesLoading,
-        branchSwitchEnabled =
-          outboxPresentationRestored && pendingRunCount == 0 && !sessionBranchSwitching && currentSessionOutboxItems.isEmpty(),
-        onNewChat = {
-          startNewChat(false)
-        },
-        onNewChatInWorktree = { startNewChat(true) },
-        onRefresh = {
-          viewModel.refreshChat()
-          viewModel.refreshChatSessions(limit = 100)
-        },
-        onOpenDashboard = { onOpenDashboard(sessionKey) },
-        onOpenBackgroundTasks = { showBackgroundTasks = true },
-        onOpenBranchSwitcher = {
-          showBranchSwitcher = true
-          scope.launch { viewModel.refreshChatSessionBranches() }
-        },
+    ChatHeader(
+      activeAgent = activeAgent,
+      projectLabel = activeProjectLabel,
+      sessionTitle = activeSessionTitle,
+      sessionColor = activeSession?.color,
+      showSidebarButton = showSidebarButton,
+      onOpenSidebar = onOpenSidebar,
+      healthOk = healthOk,
+      pendingRunCount = pendingRunCount,
+      newChatEnabled = newChatEnabled,
+      workspaceGit = workspaceGit,
+      branches = sessionBranches,
+      branchesLoading = sessionBranchesLoading,
+      branchSwitchEnabled =
+        outboxPresentationRestored && pendingRunCount == 0 && !sessionBranchSwitching && currentSessionOutboxItems.isEmpty(),
+      onNewChatInWorktree = { startNewChat(true) },
+      onRefresh = {
+        viewModel.refreshChat()
+        viewModel.refreshChatSessions(limit = 100)
+      },
+      onOpenDashboard = { onOpenDashboard(sessionKey) },
+      onOpenBackgroundTasks = { showBackgroundTasks = true },
+      onOpenBranchSwitcher = {
+        showBranchSwitcher = true
+        scope.launch { viewModel.refreshChatSessionBranches() }
+      },
+    )
+
+    errorText?.takeIf { it.isNotBlank() }?.let { error ->
+      ChatNotice(
+        title = nativeString("Chat needs attention"),
+        body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
       )
-
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        ChatAgentSelector(
-          activeAgentId = activeAgentId,
-          agents = gatewayAgents,
-          onSelectAgent = viewModel::selectChatAgent,
-          modifier = Modifier.weight(1f),
-        )
-
-        ChatSessionSwitcher(
-          sessionKey = sessionKey,
-          sessions = sessions,
-          mainSessionKey = mainSessionKey,
-          onSelectSession = { entry ->
-            viewModel.switchChatSession(entry.key, entry.ownerAgentId)
-            viewModel.refreshChatSessions(limit = 100)
-          },
-          onOpenSessions = onOpenSessions,
-          modifier = Modifier.weight(1f),
-        )
-      }
-
-      errorText?.takeIf { it.isNotBlank() }?.let { error ->
-        ChatNotice(
-          title = nativeString("Chat needs attention"),
-          body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
-        )
-      }
     }
 
     ChatMessageList(
@@ -827,15 +849,10 @@ fun ChatScreen(
       modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
     )
 
-    progressCard?.let { card ->
-      Box(modifier = Modifier.padding(horizontal = 16.dp)) {
-        ProgressCardPill(card = card)
-      }
-    }
-
-    ChatSwarmProgress(groups = swarmGroups, modifier = Modifier.padding(horizontal = 16.dp))
+    ChatSwarmProgress(groups = swarmGroups)
 
     ChatComposer(
+      progressCard = progressCard,
       value = input,
       onValueChange = {
         sendMessageTooLong = false
@@ -846,9 +863,23 @@ fun ChatScreen(
       thinkingLevel = thinkingLevel,
       thinkingOptions = thinkingLevelSelection.options,
       thinkingSupported = thinkingSupported,
+      thinkingLevelEnabled = canAdminSessionSettings,
+      fastMode = fastMode,
+      fastModeEnabled =
+        chatFastModeControlEnabled(
+          supported = fastModeSupported,
+          adminAuthorized = canAdminSessionSettings,
+          connected = gatewayConnectionDisplay.isConnected,
+          gatewayAvailable = healthOk,
+          loading = historyLoading,
+          sending = sendInFlight,
+          activeRun = pendingRunCount > 0,
+          streaming = streamingAssistantText != null,
+          settingsMutationPending = sessionSettingsPending,
+        ),
       contextUsage = contextUsage,
       selectedModelLabel = selectedModelLabel,
-      modelPickerEnabled = gatewayConnectionDisplay.isConnected,
+      modelPickerEnabled = gatewayConnectionDisplay.isConnected && canWriteSessionSettings,
       healthOk = healthOk,
       gatewayOffline = gatewayOffline,
       offlineStatus = offlineStatus,
@@ -864,6 +895,13 @@ fun ChatScreen(
       },
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
+      onFastModeChange = { enabled ->
+        viewModel.setChatSessionFastMode(
+          sessionKey = sessionKey,
+          enabled = enabled,
+          clearOverride = !fastModeProviderSupported,
+        )
+      },
       onOpenModelPicker = { showModelPicker = true },
       onPickImages = {
         if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
@@ -984,7 +1022,25 @@ fun ChatScreen(
       sections = modelSections,
       favorites = modelFavorites.toSet(),
       selectedModelLabel = selectedModelLabel,
+      modelSelectionLocked = modelSelectionLocked,
       contextUsage = contextUsage,
+      permissionMode = activeSession?.permissionMode,
+      permissionModePending = permissionModePending,
+      permissionPickerEnabled =
+        permissionSettingsAvailable &&
+          !activeSession?.sessionId.isNullOrBlank() &&
+          gatewayConnectionDisplay.isConnected &&
+          canWriteSessionSettings &&
+          !permissionModePending &&
+          !sessionSettingsPending,
+      permissionUnavailableReason =
+        when {
+          !permissionSettingsAvailable -> nativeString("Update the Gateway to change session permissions.")
+          activeSession?.sessionId.isNullOrBlank() -> nativeString("Refresh this chat before changing permissions.")
+          else -> null
+        },
+      canSelectFullPermission = canAdminSessionSettings,
+      onPermissionModeChange = { mode -> viewModel.setChatSessionPermissionMode(sessionKey, mode) },
       onDismiss = { showModelPicker = false },
       onSelect = { modelRef ->
         viewModel.setChatSessionModel(sessionKey = sessionKey, modelRef = modelRef)
@@ -1022,148 +1078,33 @@ fun ChatScreen(
   }
 }
 
-@Composable
-private fun ChatAgentSelector(
-  activeAgentId: String,
-  agents: List<GatewayAgentSummary>,
-  onSelectAgent: (String) -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val state = chatAgentPickerState(activeAgentId = activeAgentId, agents = agents)
-  if (!shouldShowChatAgentPicker(state)) return
-  AgentPicker(state = state, onSelectAgent = onSelectAgent, modifier = modifier)
-}
-
-internal fun chatAgentPickerState(
-  activeAgentId: String,
-  agents: List<GatewayAgentSummary>,
-) = agentPickerState(agents = agents, selectedAgentId = activeAgentId, fallbackToFirst = false)
-
-internal fun shouldShowChatAgentPicker(state: AgentPickerState): Boolean = state.agents.isNotEmpty() && (state.agents.size > 1 || state.selected == null)
-
-internal data class ChatSessionPickerState(
-  val choices: List<ChatSessionEntry>,
-  val selected: ChatSessionEntry?,
-  val hasMore: Boolean,
-)
-
-internal fun chatSessionPickerState(
-  sessionKey: String,
-  sessions: List<ChatSessionEntry>,
-  mainSessionKey: String,
-  nowMs: Long = System.currentTimeMillis(),
-): ChatSessionPickerState {
-  val allChoices =
-    resolveSessionChoices(
-      currentSessionKey = sessionKey,
-      sessions = sessions,
-      mainSessionKey = mainSessionKey,
-      nowMs = nowMs,
-    )
-  val choices =
-    compactSessionChoices(
-      choices = allChoices,
-      currentSessionKey = sessionKey,
-      mainSessionKey = mainSessionKey,
-    )
-  return ChatSessionPickerState(
-    choices = choices,
-    selected = choices.firstOrNull { isActiveSessionChoice(it.key, sessionKey, mainSessionKey) } ?: choices.firstOrNull(),
-    hasMore = hasAdditionalSessionChoices(sessions, choices, mainSessionKey),
-  )
-}
-
-@Composable
-private fun ChatSessionSwitcher(
-  sessionKey: String,
-  sessions: List<ChatSessionEntry>,
-  mainSessionKey: String,
-  onSelectSession: (ChatSessionEntry) -> Unit,
-  onOpenSessions: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  val state = remember(sessionKey, sessions, mainSessionKey) { chatSessionPickerState(sessionKey, sessions, mainSessionKey) }
-  val selected = state.selected ?: return
-  if (state.choices.size <= 1 && !state.hasMore) return
-  var expanded by remember { mutableStateOf(false) }
-
-  Box(modifier = modifier) {
-    Surface(
-      onClick = { expanded = true },
-      modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
-      shape = RoundedCornerShape(ClawTheme.radii.pill),
-      color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
-      contentColor = ClawTheme.colors.text,
-      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
-    ) {
-      Row(
-        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-      ) {
-        Text(
-          text = chatSessionChipText(entry = selected, mainSessionKey = mainSessionKey),
-          modifier = Modifier.weight(1f),
-          style = ClawTheme.type.caption,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        Icon(
-          imageVector = Icons.Default.KeyboardArrowDown,
-          contentDescription = null,
-          modifier = Modifier.size(18.dp),
-        )
-      }
-    }
-
-    DropdownMenu(
-      expanded = expanded,
-      onDismissRequest = { expanded = false },
-      containerColor = ClawTheme.colors.surfaceRaised,
-    ) {
-      state.choices.forEach { entry ->
-        val active = isActiveSessionChoice(entry.key, sessionKey, mainSessionKey)
-        DropdownMenuItem(
-          text = {
-            Text(
-              text = chatSessionChipText(entry = entry, mainSessionKey = mainSessionKey),
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
-          },
-          trailingIcon = {
-            if (active) {
-              Icon(imageVector = Icons.Default.Check, contentDescription = null)
-            }
-          },
-          onClick = {
-            expanded = false
-            onSelectSession(entry)
-          },
-        )
-      }
-      if (state.hasMore) {
-        DropdownMenuItem(
-          text = { Text(text = nativeString("All"), maxLines = 1) },
-          leadingIcon = { Icon(imageVector = Icons.Default.MoreHoriz, contentDescription = null) },
-          onClick = {
-            expanded = false
-            onOpenSessions()
-          },
-        )
-      }
-    }
-  }
-}
-
 internal fun canStartNewChat(
   pendingRunCount: Int,
   hasQueuedMessage: Boolean,
   gatewayReady: Boolean,
 ): Boolean = gatewayReady && pendingRunCount == 0 && !hasQueuedMessage
 
+internal fun chatHeaderSessionTitle(
+  session: ChatSessionEntry?,
+  unnamedTitle: () -> String,
+): String = session?.let { sessionPresentationTitle(it, unnamedTitle) } ?: unnamedTitle()
+
+internal fun chatHeaderProjectLabel(
+  sessionKey: String,
+  catalogs: List<SessionCatalog>,
+): String? {
+  val normalizedKey = sessionKey.trim().takeIf(String::isNotEmpty) ?: return null
+  return sidebarCatalogHosts(catalogs)
+    .asSequence()
+    .flatMap { it.workspaces.asSequence() }
+    .firstOrNull { workspace -> workspace.sessions.any { it.sessionKey == normalizedKey } }
+    ?.label
+}
+
 @Composable
 private fun ChatHeader(
+  activeAgent: GatewayAgentSummary?,
+  projectLabel: String?,
   sessionTitle: String,
   sessionColor: String?,
   showSidebarButton: Boolean,
@@ -1175,7 +1116,6 @@ private fun ChatHeader(
   branches: List<SessionBranch>,
   branchesLoading: Boolean,
   branchSwitchEnabled: Boolean,
-  onNewChat: () -> Unit,
   onNewChatInWorktree: () -> Unit,
   onRefresh: () -> Unit,
   onOpenDashboard: () -> Unit,
@@ -1184,11 +1124,23 @@ private fun ChatHeader(
 ) {
   var actionsMenuExpanded by remember { mutableStateOf(false) }
   val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
-  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+  val statusLabel =
+    when {
+      pendingRunCount > 0 -> nativeString("Working")
+      healthOk -> nativeString("Ready")
+      else -> nativeString("Offline")
+    }
+  val statusColor =
+    when {
+      pendingRunCount > 0 -> ClawTheme.colors.warning
+      healthOk -> ClawTheme.colors.success
+      else -> ClawTheme.colors.danger
+    }
+
+  Box(modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget)) {
+    Box(
+      modifier = Modifier.align(Alignment.CenterStart).size(ClawTheme.spacing.touchTarget),
+      contentAlignment = Alignment.Center,
     ) {
       if (showSidebarButton) {
         HeaderIcon(
@@ -1197,132 +1149,136 @@ private fun ChatHeader(
           onClick = onOpenSidebar,
         )
       }
-      OpenClawMascot(modifier = Modifier.size(25.dp))
-      Text(
-        text = nativeString("OpenClaw"),
-        style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
-        color = ClawTheme.colors.text,
-        modifier = Modifier.weight(1f),
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-      )
-      ModelPill(
-        text =
-          when {
-            pendingRunCount > 0 -> nativeString("Working")
-            healthOk -> nativeString("Ready")
-            else -> nativeString("Offline")
+    }
+    Row(
+      modifier =
+        Modifier
+          .align(Alignment.CenterStart)
+          .fillMaxWidth()
+          .padding(start = 52.dp, end = 52.dp)
+          .clearAndSetSemantics {
+            contentDescription = listOfNotNull(projectLabel, sessionTitle, statusLabel).joinToString(", ")
           },
-        status =
-          when {
-            pendingRunCount > 0 -> ClawStatus.Warning
-            healthOk -> ClawStatus.Success
-            else -> ClawStatus.Danger
-          },
-      )
-      HeaderIcon(icon = Icons.Default.Add, contentDescription = nativeString("New chat"), enabled = newChatEnabled, onClick = onNewChat)
-      Box {
-        HeaderIcon(
-          icon = Icons.Default.MoreVert,
-          contentDescription = nativeString("Chat actions"),
-          onClick = { actionsMenuExpanded = true },
-        )
-        DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
-          DropdownMenuItem(
-            text = { Text(nativeString("Refresh chat")) },
-            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onRefresh()
-            },
-          )
-          if (branches.size > 1) {
-            DropdownMenuItem(
-              text = { Text(nativeString("Switch branch")) },
-              leadingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
-              enabled = branchSwitchEnabled && !branchesLoading,
-              onClick = {
-                actionsMenuExpanded = false
-                onOpenBranchSwitcher()
-              },
-            )
-          }
-          DropdownMenuItem(
-            text = { Text(nativeString("Dashboard")) },
-            leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onOpenDashboard()
-            },
-          )
-          DropdownMenuItem(
-            text = { Text(nativeString("Background tasks")) },
-            leadingIcon = { Icon(Icons.Default.HourglassEmpty, contentDescription = null) },
-            onClick = {
-              actionsMenuExpanded = false
-              onOpenBackgroundTasks()
-            },
-          )
-          if (workspaceGit) {
-            DropdownMenuItem(
-              text = { Text(newChatInWorktreeLabel) },
-              enabled = newChatEnabled,
-              onClick = {
-                actionsMenuExpanded = false
-                onNewChatInWorktree()
-              },
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+      val resolvedSessionColor = ClawTheme.colors.sessionColor(sessionColor)
+      val avatarFallback =
+        activeAgent
+          ?.emoji
+          ?.trim()
+          ?.takeIf(String::isNotEmpty)
+          ?: activeAgent
+            ?.name
+            ?.trim()
+            ?.firstOrNull()
+            ?.uppercaseChar()
+            ?.toString()
+          ?: "O"
+      Box(
+        modifier =
+          Modifier
+            .size(30.dp)
+            .background(resolvedSessionColor ?: Color.Transparent, CircleShape),
+        contentAlignment = Alignment.Center,
+      ) {
+        ClawAgentAvatar(
+          source = activeAgent?.let(::agentAvatarSource),
+          size = 26.dp,
+        ) {
+          Box(
+            modifier = Modifier.size(26.dp).background(ClawTheme.colors.surfaceRaised, CircleShape),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = avatarFallback,
+              style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
+              color = ClawTheme.colors.text,
+              maxLines = 1,
             )
           }
         }
       }
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-      Text(text = nativeString("Chat"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, maxLines = 1)
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        ClawTheme.colors.sessionColor(sessionColor)?.let { color ->
-          Box(modifier = Modifier.size(7.dp).background(color, CircleShape).clearAndSetSemantics {})
+      Column(modifier = Modifier.weight(1f)) {
+        projectLabel?.let { project ->
+          Text(
+            text = project,
+            style = ClawTheme.type.caption.copy(fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Normal),
+            color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
         }
-        Text(
-          text = sessionTitle,
-          style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
-          color = ClawTheme.colors.textMuted,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = sessionTitle,
+            style = ClawTheme.type.title.copy(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+            color = ClawTheme.colors.text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+          )
+          Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
+        }
       }
     }
-  }
-}
-
-@Composable
-private fun ModelPill(
-  text: String,
-  status: ClawStatus,
-) {
-  val borderColor =
-    if (status == ClawStatus.Warning) {
-      ClawTheme.colors.warning
-    } else {
-      ClawTheme.colors.border
+    Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+      HeaderIcon(
+        icon = Icons.Default.MoreVert,
+        contentDescription = nativeString("Chat actions"),
+        onClick = { actionsMenuExpanded = true },
+      )
+      DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
+        DropdownMenuItem(
+          text = { Text(nativeString("Refresh chat")) },
+          leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+          onClick = {
+            actionsMenuExpanded = false
+            onRefresh()
+          },
+        )
+        if (branches.size > 1) {
+          DropdownMenuItem(
+            text = { Text(nativeString("Switch branch")) },
+            leadingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+            enabled = branchSwitchEnabled && !branchesLoading,
+            onClick = {
+              actionsMenuExpanded = false
+              onOpenBranchSwitcher()
+            },
+          )
+        }
+        DropdownMenuItem(
+          text = { Text(nativeString("Dashboard")) },
+          leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
+          onClick = {
+            actionsMenuExpanded = false
+            onOpenDashboard()
+          },
+        )
+        DropdownMenuItem(
+          text = { Text(nativeString("Background tasks")) },
+          leadingIcon = { Icon(Icons.Default.HourglassEmpty, contentDescription = null) },
+          onClick = {
+            actionsMenuExpanded = false
+            onOpenBackgroundTasks()
+          },
+        )
+        if (workspaceGit) {
+          DropdownMenuItem(
+            text = { Text(newChatInWorktreeLabel) },
+            enabled = newChatEnabled,
+            onClick = {
+              actionsMenuExpanded = false
+              onNewChatInWorktree()
+            },
+          )
+        }
+      }
     }
-  Surface(
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
-    color =
-      when (status) {
-        ClawStatus.Success -> ClawTheme.colors.successSoft
-        ClawStatus.Warning -> ClawTheme.colors.warningSoft
-        ClawStatus.Danger -> ClawTheme.colors.dangerSoft
-        ClawStatus.Neutral -> ClawTheme.colors.surfaceRaised
-      },
-    contentColor = ClawTheme.colors.textMuted,
-    border = BorderStroke(1.dp, borderColor),
-  ) {
-    Text(
-      text = text,
-      modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.5.dp),
-      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
-      maxLines = 1,
-    )
   }
 }
 
@@ -1454,12 +1410,12 @@ private fun ChatMessageList(
               .padding(bottom = chatReaderListBottomInset(readerScroll.showJumpToLatest)),
           state = readerScroll.listState,
           reverseLayout = true,
-          verticalArrangement = Arrangement.spacedBy(5.dp),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
           contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
         ) {
           itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
             when (item) {
-              is ChatTimelineItem.Message ->
+              is ChatTimelineItem.Message -> {
                 ChatBubble(
                   messageId = item.message.id,
                   entryId = item.message.entryId,
@@ -1481,20 +1437,26 @@ private fun ChatMessageList(
                   senderLabel = item.message.senderLabel,
                   disclosure = { disclosure(item.message) },
                 )
-              is ChatTimelineItem.OutboxCommand ->
+              }
+
+              is ChatTimelineItem.OutboxCommand -> {
                 ChatOutboxBubble(
                   item = item.item,
                   onRetry = { onRetryOutbox(item.item.id) },
                   onDelete = { onDeleteOutbox(item.item.id) },
                 )
-              is ChatTimelineItem.RecoveryOutboxCommand ->
+              }
+
+              is ChatTimelineItem.RecoveryOutboxCommand -> {
                 ChatOutboxBubble(
                   item = item.item,
                   retryEnabled = false,
                   onRetry = { onRetryOutbox(item.item.id) },
                   onDelete = { onDeleteOutbox(item.item.id) },
                 )
-              is ChatTimelineItem.OutboxRecoveryHeader ->
+              }
+
+              is ChatTimelineItem.OutboxRecoveryHeader -> {
                 ChatNotice(
                   title = nativeString("Messages to recover"),
                   body =
@@ -1503,18 +1465,36 @@ private fun ChatMessageList(
                       item.count,
                     ),
                 )
-              is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
-              is ChatTimelineItem.SubagentActivity ->
+              }
+
+              is ChatTimelineItem.PendingTools -> {
+                ToolBubble(toolCalls = item.toolCalls)
+              }
+
+              is ChatTimelineItem.SubagentActivity -> {
                 SubagentActivityRows(
                   activities = item.activities,
                   moreWorkingCount = item.moreWorkingCount,
                 )
-              is ChatTimelineItem.QuestionPrompt ->
+              }
+
+              is ChatTimelineItem.QuestionPrompt -> {
                 ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
-              is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
-              is ChatTimelineItem.SystemNotice -> ChatSystemNoticeRow(item)
-              is ChatTimelineItem.SystemDivider -> ChatSystemDividerRow(item)
-              is ChatTimelineItem.StreamingAssistant ->
+              }
+
+              is ChatTimelineItem.TurnRecapSummary -> {
+                ChatTurnRecapRow(item.recap)
+              }
+
+              is ChatTimelineItem.SystemNotice -> {
+                ChatSystemNoticeRow(item)
+              }
+
+              is ChatTimelineItem.SystemDivider -> {
+                ChatSystemDividerRow(item)
+              }
+
+              is ChatTimelineItem.StreamingAssistant -> {
                 ChatBubble(
                   messageId = null,
                   entryId = null,
@@ -1534,6 +1514,8 @@ private fun ChatMessageList(
                   loadImageArtifact = loadImageArtifact,
                   loadMediaArtifact = loadMediaArtifact,
                 )
+              }
+
               ChatTimelineItem.Thinking -> {
                 val run = workingRun
                 if (run != null) {
@@ -1810,14 +1792,23 @@ internal fun ChatBubble(
   val displayableContent =
     content.filter { part ->
       when (part.type) {
-        "text" -> !part.text.isNullOrBlank()
+        "text" -> {
+          !part.text.isNullOrBlank()
+        }
+
         "image" -> {
           val visible = visibleImageCount < 4
           visibleImageCount += 1
           visible
         }
-        "canvas" -> normalizedRole == "assistant" && part.widget != null
-        else -> part.type == "file" || part.isAudioAttachment() || part.isVideoAttachment()
+
+        "canvas" -> {
+          normalizedRole == "assistant" && part.widget != null
+        }
+
+        else -> {
+          part.type == "file" || part.isAudioAttachment() || part.isVideoAttachment()
+        }
       }
     }
   val omittedImageCount = (visibleImageCount - 4).coerceAtLeast(0)
@@ -1850,32 +1841,32 @@ internal fun ChatBubble(
       onToggleListen = toggleListen,
       modifier =
         Modifier
-          .fillMaxWidth(if (isUser) 0.78f else 0.94f)
+          .fillMaxWidth(chatBubbleWidthFraction(isUser))
           .semantics(mergeDescendants = true) { contentDescription = speaker },
     ) {
       Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(7.dp),
-        color = if (isUser) ClawTheme.colors.accentSoft else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
+        shape = RoundedCornerShape(if (isUser) CHAT_BUBBLE_CORNER_RADIUS_DP.dp else 0.dp),
+        color = if (isUser) ClawTheme.colors.userMessageSurface else Color.Transparent,
         contentColor = ClawTheme.colors.text,
-        border =
-          BorderStroke(
-            1.dp,
-            when {
-              isUser -> ClawTheme.colors.accentBorder
-              live -> ClawTheme.colors.borderStrong
-              else -> ClawTheme.colors.border.copy(alpha = 0.45f)
-            },
-          ),
-        tonalElevation = 1.dp,
-        shadowElevation = 2.dp,
+        border = null,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
       ) {
-        Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(
+          modifier =
+            if (isUser) {
+              Modifier.padding(horizontal = 11.dp, vertical = 8.dp)
+            } else {
+              Modifier.padding(vertical = 4.dp)
+            },
+          verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
           caption?.let {
             Text(
               text = it,
-              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
-              color = ClawTheme.colors.text,
+              style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp, fontWeight = FontWeight.Medium),
+              color = ClawTheme.colors.textMuted,
             )
           }
           if (collapsibleUserText && messageText.isNotBlank()) {
@@ -1888,37 +1879,56 @@ internal fun ChatBubble(
           }
           displayableContent.forEach { part ->
             when {
-              part.type == "text" && !collapsibleUserText -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
-              part.type == "text" -> Unit
-              part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
+              part.type == "text" && !collapsibleUserText -> {
+                ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+              }
+
+              part.type == "text" -> {}
+
+              part.isAudioAttachment() && part.hasPlayableMediaArtifact() -> {
                 ChatAudioPlayerCard(
                   content = part,
                   playbackBlocked = inlineMediaPlaybackBlocked,
                   loadMedia = loadMediaArtifact,
                 )
-              part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
+              }
+
+              part.isVideoAttachment() && part.hasPlayableMediaArtifact() -> {
                 ChatVideoPlayerCard(
                   content = part,
                   playbackBlocked = inlineMediaPlaybackBlocked,
                   loadMedia = loadMediaArtifact,
                 )
-              part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
-              part.type == "image" && !part.base64.isNullOrBlank() ->
+              }
+
+              part.isAudioAttachment() || part.isVideoAttachment() -> {
+                ChatMediaAttachmentLabel(content = part)
+              }
+
+              part.type == "image" && !part.base64.isNullOrBlank() -> {
                 ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
-              part.type == "image" && !part.artifactId.isNullOrBlank() ->
+              }
+
+              part.type == "image" && !part.artifactId.isNullOrBlank() -> {
                 ChatManagedImage(
                   artifactId = part.artifactId,
                   label = part.alt?.takeIf(String::isNotBlank) ?: part.fileName ?: nativeString("Image"),
                   resolverReady = inlineWidgetResolverReady,
                   loadImage = loadImageArtifact,
                 )
-              part.type == "canvas" && normalizedRole == "assistant" ->
+              }
+
+              part.type == "canvas" && normalizedRole == "assistant" -> {
                 ChatInlineWidget(
                   preview = checkNotNull(part.widget),
                   resolverReady = inlineWidgetResolverReady,
                   resolveResource = resolveInlineWidgetResource,
                 )
-              else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              }
+
+              else -> {
+                Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              }
             }
           }
           if (omittedImageCount > 0) {
@@ -1941,9 +1951,9 @@ internal fun ChatBubble(
           timestampMs?.let {
             Text(
               text = formatChatTimestamp(it),
-              style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
-              color = ClawTheme.colors.textMuted,
-              modifier = Modifier.align(Alignment.End),
+              style = ClawTheme.type.caption.copy(fontSize = 11.5.sp, lineHeight = 14.sp, fontWeight = FontWeight.Normal),
+              color = ClawTheme.colors.textSubtle,
+              modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start),
             )
           }
         }
@@ -1951,6 +1961,10 @@ internal fun ChatBubble(
     }
   }
 }
+
+internal fun chatBubbleWidthFraction(isUser: Boolean): Float = if (isUser) 0.78f else 1f
+
+internal const val CHAT_BUBBLE_CORNER_RADIUS_DP = 24
 
 @Composable
 private fun FullChatSpeechIndicator(
@@ -2003,13 +2017,18 @@ private fun ChatUserMessageText(
   if (preview != null && !expanded) {
     Text(
       text = preview,
-      style = ClawTheme.type.body,
+      style = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
       color = ClawTheme.colors.text,
     )
   } else {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
       textParts.forEach { text ->
-        ChatMarkdown(text = text, textColor = ClawTheme.colors.text, isStreaming = false)
+        ChatMarkdown(
+          text = text,
+          textColor = ClawTheme.colors.text,
+          isStreaming = false,
+          bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+        )
       }
     }
   }
@@ -2026,7 +2045,12 @@ private fun ChatText(
   textColor: Color,
   isStreaming: Boolean,
 ) {
-  ChatMarkdown(text = text, textColor = textColor, isStreaming = isStreaming)
+  ChatMarkdown(
+    text = text,
+    textColor = textColor,
+    isStreaming = isStreaming,
+    bodyStyle = ClawTheme.type.body.copy(fontWeight = FontWeight.Normal),
+  )
 }
 
 @Composable
@@ -2194,89 +2218,161 @@ private fun ChatNotice(
   }
 }
 
+internal fun progressCardIsComplete(
+  card: ChatProgressCard,
+  hasActiveRun: Boolean,
+): Boolean =
+  if (card.steps.isEmpty()) {
+    !hasActiveRun
+  } else {
+    card.steps.all { it.status == ChatPlanStepStatus.Completed }
+  }
+
 @Composable
-private fun ProgressCardPill(card: ChatProgressCard) {
-  var expanded by rememberSaveable { mutableStateOf(false) }
+private fun ProgressCardPill(
+  card: ChatProgressCard,
+  hasActiveRun: Boolean,
+  modifier: Modifier = Modifier,
+) {
   val steps = card.steps
   val currentStep =
     steps.firstOrNull { it.status == ChatPlanStepStatus.InProgress }
       ?: steps.firstOrNull { it.status == ChatPlanStepStatus.Pending }
       ?: steps.lastOrNull { it.status == ChatPlanStepStatus.Completed }
   val completedCount = steps.count { it.status == ChatPlanStepStatus.Completed }
+  val currentPosition =
+    if (steps.isNotEmpty() && completedCount == steps.size) {
+      steps.size
+    } else {
+      (steps.indexOf(currentStep) + 1).coerceAtLeast(1)
+    }
+  val complete = progressCardIsComplete(card, hasActiveRun)
+  var expanded by rememberSaveable { mutableStateOf(false) }
+  LaunchedEffect(complete) {
+    if (complete) expanded = false
+  }
+  val activityTime = relativeSessionTime(card.updatedAt.takeIf { it > 0L } ?: System.currentTimeMillis())
+  val activityLabel =
+    if (complete) {
+      nativeString("Completed \$activityTime", activityTime)
+    } else {
+      nativeString("Updated \$activityTime", activityTime)
+    }
+  val expandedActivityLabel =
+    if (steps.isEmpty()) {
+      activityLabel
+    } else {
+      nativeString("\$activityLabel \u00b7 \$currentPosition/\${steps.size}", activityLabel, currentPosition, steps.size)
+    }
 
-  Surface(
-    onClick = { expanded = !expanded },
-    modifier = Modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
-    color = ClawTheme.colors.canvas,
-    contentColor = ClawTheme.colors.text,
-  ) {
-    Column(
-      modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+  Column(modifier = modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+    Surface(
+      onClick = { expanded = !expanded },
+      modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
+      shape = RoundedCornerShape(0.dp),
+      color = Color.Transparent,
+      contentColor = ClawTheme.colors.text,
     ) {
       Row(
+        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 15.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        currentStep?.let { PlanStepMarker(status = it.status) }
-        Text(
-          text = currentStep?.step ?: nativeString("Progress note"),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.text,
-          modifier = Modifier.weight(1f),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        if (steps.isNotEmpty()) {
+        if (expanded) {
           Text(
-            text = "$completedCount/${steps.size}",
-            style = ClawTheme.type.caption,
+            text = nativeString("Task progress"),
+            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+            color = ClawTheme.colors.text,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          Text(
+            text = expandedActivityLabel,
+            style = ClawTheme.type.caption.copy(fontSize = 12.sp, fontWeight = FontWeight.Medium),
             color = ClawTheme.colors.textMuted,
             maxLines = 1,
           )
-        }
-        Icon(
-          imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-          contentDescription = if (expanded) nativeString("Collapse progress card") else nativeString("Expand progress card"),
-          modifier = Modifier.size(16.dp),
-          tint = ClawTheme.colors.textSubtle,
-        )
-      }
-
-      if (expanded) {
-        HorizontalDivider(color = ClawTheme.colors.border)
-        Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-          card.markdown?.let { markdown ->
-            ChatMarkdown(
-              text = markdown,
-              textColor = ClawTheme.colors.text,
-              isStreaming = false,
-            )
-          }
-          steps.forEach { step ->
-            val textColor =
-              when (step.status) {
-                ChatPlanStepStatus.Completed -> ClawTheme.colors.textMuted
-                ChatPlanStepStatus.InProgress -> ClawTheme.colors.primary
-                ChatPlanStepStatus.Pending -> ClawTheme.colors.textSubtle
-              }
-            val textStyle =
-              when (step.status) {
-                ChatPlanStepStatus.InProgress -> ClawTheme.type.label
-                else -> ClawTheme.type.caption
-              }
-            Row(
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-              PlanStepMarker(status = step.status)
-              Text(
-                text = step.step,
-                style = textStyle,
-                color = textColor,
+        } else {
+          when {
+            complete -> {
+              Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = nativeString("Completed"),
+                modifier = Modifier.size(14.dp),
+                tint = ClawTheme.colors.success,
               )
             }
+
+            currentStep != null -> {
+              PlanStepMarker(status = currentStep.status)
+            }
+
+            else -> {
+              Box(modifier = Modifier.width(14.dp))
+            }
+          }
+          Text(
+            text = currentStep?.step ?: nativeString("Progress note"),
+            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
+            color = ClawTheme.colors.text,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          if (steps.isNotEmpty()) {
+            Text(
+              text = nativeString("\$currentPosition/\${steps.size}", currentPosition, steps.size),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+              maxLines = 1,
+            )
+          }
+        }
+        Icon(
+          imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+          contentDescription = if (expanded) nativeString("Collapse progress card") else nativeString("Expand progress card"),
+          modifier = Modifier.size(18.dp),
+          tint = ClawTheme.colors.textMuted,
+        )
+      }
+    }
+
+    if (expanded) {
+      Column(
+        modifier =
+          Modifier
+            .weight(1f, fill = false)
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(start = 12.dp, end = 16.dp, bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        card.markdown?.let { markdown ->
+          ChatMarkdown(
+            text = markdown,
+            textColor = ClawTheme.colors.text,
+            isStreaming = false,
+          )
+        }
+        steps.forEach { step ->
+          val textColor =
+            when (step.status) {
+              ChatPlanStepStatus.Completed -> ClawTheme.colors.textMuted
+              ChatPlanStepStatus.InProgress -> ClawTheme.colors.text
+              ChatPlanStepStatus.Pending -> ClawTheme.colors.textSubtle
+            }
+          val textStyle =
+            when (step.status) {
+              ChatPlanStepStatus.InProgress -> ClawTheme.type.label
+              else -> ClawTheme.type.caption
+            }
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            PlanStepMarker(status = step.status)
+            Text(text = step.step, style = textStyle, color = textColor)
           }
         }
       }
@@ -2288,28 +2384,37 @@ private fun ProgressCardPill(card: ChatProgressCard) {
 private fun PlanStepMarker(status: ChatPlanStepStatus) {
   Box(modifier = Modifier.width(14.dp), contentAlignment = Alignment.Center) {
     when (status) {
-      ChatPlanStepStatus.Completed ->
+      ChatPlanStepStatus.Completed -> {
         Text(
           text = "✓",
           style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Bold),
           color = ClawTheme.colors.success,
         )
-      ChatPlanStepStatus.InProgress ->
+      }
+
+      ChatPlanStepStatus.InProgress -> {
         Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.primary, CircleShape))
-      ChatPlanStepStatus.Pending ->
+      }
+
+      ChatPlanStepStatus.Pending -> {
         Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.textSubtle, CircleShape))
+      }
     }
   }
 }
 
 @Composable
 private fun ChatComposer(
+  progressCard: ChatProgressCard?,
   value: String,
   onValueChange: (String) -> Unit,
   attachments: List<PendingAttachment>,
   thinkingLevel: String,
   thinkingOptions: List<ChatThinkingLevelOption>,
   thinkingSupported: Boolean,
+  thinkingLevelEnabled: Boolean,
+  fastMode: Boolean,
+  fastModeEnabled: Boolean,
   contextUsage: ChatContextUsage,
   selectedModelLabel: String,
   modelPickerEnabled: Boolean,
@@ -2324,6 +2429,7 @@ private fun ChatComposer(
   onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
+  onFastModeChange: (Boolean) -> Unit,
   onOpenModelPicker: () -> Unit,
   onPickImages: () -> Unit,
   onPickAudioOrDocument: () -> Unit,
@@ -2353,13 +2459,14 @@ private fun ChatComposer(
     }
   val dictationActive =
     dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
+  val hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty()
   // Offline sends queue durably too (text, images, and voice notes), so the gate is identical
   // to the connected one; admission errors keep the draft when the durable queue refuses it.
   val sendEnabled =
     chatComposerSendEnabled(
       voiceNoteState = voiceNoteState,
       pendingRunCount = pendingRunCount,
-      hasContent = value.trim().isNotEmpty() || attachments.isNotEmpty(),
+      hasContent = hasContent,
       shareStaging = shareStaging,
       sendInFlight = sendInFlight,
       dictationActive = dictationActive,
@@ -2405,6 +2512,15 @@ private fun ChatComposer(
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
+    progressCard?.let { card ->
+      ProgressCardPill(
+        card = card,
+        hasActiveRun = pendingRunCount > 0,
+        // Keep the editor and run controls visible when progress expands above the keyboard.
+        modifier = Modifier.weight(1f, fill = false),
+      )
+    }
+
     if (shouldShowSlashCommandMenu(value)) {
       SlashCommandPanel(
         commands = slashCommands,
@@ -2441,6 +2557,7 @@ private fun ChatComposer(
           onToggleTalk = onToggleTalk,
           runActive = pendingRunCount > 0,
           onAbort = onAbort,
+          hasContent = hasContent,
           sendEnabled = sendEnabled,
           onSend = onSend,
           selectedModelLabel = selectedModelLabel,
@@ -2449,6 +2566,10 @@ private fun ChatComposer(
           thinkingLevel = thinkingLevel,
           thinkingOptions = thinkingOptions,
           thinkingSupported = thinkingSupported,
+          thinkingLevelEnabled = thinkingLevelEnabled,
+          fastMode = fastMode,
+          fastModeEnabled = fastModeEnabled,
+          onFastModeChange = onFastModeChange,
           onThinkingLevelChange = onThinkingLevelChange,
           contextUsage = contextUsage,
           modifier = Modifier.weight(1f),
@@ -2473,9 +2594,18 @@ private fun ChatComposer(
 private fun ChatThinkingLevelPicker(
   options: List<ChatThinkingLevelOption>,
   selectedId: String,
+  thinkingSupported: Boolean,
+  thinkingLevelEnabled: Boolean,
+  fastMode: Boolean,
+  fastModeEnabled: Boolean,
   onSelect: (String) -> Unit,
+  onFastModeChange: (Boolean) -> Unit,
 ) {
   var expanded by rememberSaveable { mutableStateOf(false) }
+  val enabled = (thinkingSupported && thinkingLevelEnabled) || fastModeEnabled
+  LaunchedEffect(enabled) {
+    if (!enabled) expanded = false
+  }
   val normalizedSelected = selectedId.trim().lowercase(Locale.US)
   val languageTag = currentAppLanguage().languageTag
   val selectedIndex = options.indexOfFirst { it.id.trim().lowercase(Locale.US) == normalizedSelected }
@@ -2489,19 +2619,23 @@ private fun ChatThinkingLevelPicker(
       options.size == 1 -> 1f
       else -> selectedIndex.toFloat() / options.lastIndex
     }
-  val color = ClawTheme.colors.textMuted
+  val color = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   Box {
     Surface(
       onClick = { expanded = true },
+      enabled = enabled,
       modifier =
         Modifier.size(ClawTheme.spacing.touchTarget).semantics {
           contentDescription = description
-          stateDescription = selectedLabel
+          stateDescription = chatThinkingChipStateDescription(fastMode, selectedId, options, languageTag)
         },
       shape = CircleShape,
       color = Color.Transparent,
     ) {
       Box(contentAlignment = Alignment.Center) {
+        if (fastMode) {
+          Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(10.dp), tint = color)
+        }
         Canvas(modifier = Modifier.size(18.dp)) {
           val strokeWidth = 1.5.dp.toPx()
           // The dial omits its bottom arc; center the visible ink with the other controls.
@@ -2520,9 +2654,10 @@ private fun ChatThinkingLevelPicker(
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = ClawTheme.colors.surfaceRaised) {
       Text(text = selectedLabel, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = ClawTheme.type.caption, color = color)
       HorizontalDivider(color = ClawTheme.colors.border)
-      options.forEachIndexed { index, option ->
+      options.filter { thinkingSupported }.forEachIndexed { index, option ->
         DropdownMenuItem(
           text = { Text(chatThinkingOptionLabel(option, languageTag)) },
+          enabled = thinkingLevelEnabled,
           modifier = Modifier.semantics { selected = index == selectedIndex },
           trailingIcon = { if (index == selectedIndex) Icon(Icons.Default.Check, contentDescription = null) },
           onClick = {
@@ -2531,6 +2666,23 @@ private fun ChatThinkingLevelPicker(
           },
         )
       }
+      HorizontalDivider(color = ClawTheme.colors.border)
+      DropdownMenuItem(
+        text = {
+          Column {
+            Text(nativeString("Fast mode"))
+            Text(nativeString("Faster responses, higher usage of limits."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+        },
+        leadingIcon = { Icon(Icons.Default.Bolt, contentDescription = null) },
+        trailingIcon = { if (fastMode) Icon(Icons.Default.Check, contentDescription = null) },
+        enabled = fastModeEnabled,
+        modifier = Modifier.semantics { selected = fastMode },
+        onClick = {
+          expanded = false
+          onFastModeChange(!fastMode)
+        },
+      )
     }
   }
 }
@@ -2545,6 +2697,7 @@ private fun BranchSwitcherSheet(
 ) {
   ModalBottomSheet(
     onDismissRequest = onDismiss,
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     containerColor = ClawTheme.colors.surface,
     contentColor = ClawTheme.colors.text,
   ) {
@@ -2618,14 +2771,27 @@ private fun ChatModelPickerSheet(
   sections: ChatModelPickerSections,
   favorites: Set<String>,
   selectedModelLabel: String,
+  modelSelectionLocked: Boolean,
   contextUsage: ChatContextUsage,
+  permissionMode: ChatPermissionMode?,
+  permissionModePending: Boolean,
+  permissionPickerEnabled: Boolean,
+  permissionUnavailableReason: String?,
+  canSelectFullPermission: Boolean,
+  onPermissionModeChange: (ChatPermissionMode?) -> Unit,
   onDismiss: () -> Unit,
   onSelect: (String?) -> Unit,
   onOpenProviders: () -> Unit,
   onToggleFavorite: (String) -> Unit,
 ) {
+  var permissionMenuExpanded by remember { mutableStateOf(false) }
+  LaunchedEffect(permissionPickerEnabled) {
+    if (!permissionPickerEnabled) permissionMenuExpanded = false
+  }
   ModalBottomSheet(
     onDismissRequest = onDismiss,
+    // IME dismissal can remove a partial-height anchor while the selector opens.
+    sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     containerColor = ClawTheme.colors.surface,
     contentColor = ClawTheme.colors.text,
   ) {
@@ -2636,10 +2802,53 @@ private fun ChatModelPickerSheet(
       item {
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
           Text(text = selectedModelLabel, style = ClawTheme.type.label, color = ClawTheme.colors.text)
-          contextMeterWidth(contextUsage)?.let { fraction ->
-            Text(text = contextMeterDescription(fraction), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          if (modelSelectionLocked) {
+            Text(text = nativeString("Model selection is locked for this session."), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+          chatContextSummary(contextUsage)?.let { summary ->
+            Text(text = nativeString("Context: \$detail", summary.detail), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+          Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            ChatContextStat(label = nativeString("Input"), value = formatContextUsageTokens(contextUsage.inputTokens), modifier = Modifier.weight(1f))
+            ChatContextStat(label = nativeString("Output"), value = formatContextUsageTokens(contextUsage.outputTokens), modifier = Modifier.weight(1f))
+            ChatContextStat(label = nativeString("Est. cost"), value = formatContextEstimatedCost(contextUsage.estimatedCostUsd), modifier = Modifier.weight(1f))
           }
         }
+      }
+      item {
+        Box {
+          Surface(
+            onClick = { permissionMenuExpanded = true },
+            enabled = permissionPickerEnabled,
+            modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget),
+            color = Color.Transparent,
+          ) {
+            Row(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+              ChatPermissionIcon(mode = permissionMode, contentDescription = null, modifier = Modifier.size(20.dp))
+              Text(nativeString("Permissions"), style = ClawTheme.type.body, modifier = Modifier.weight(1f))
+              Text(
+                text = if (permissionModePending) nativeString("Applying permissions…") else chatPermissionModeLabel(permissionMode),
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+              )
+              Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+            }
+          }
+          ChatPermissionMenu(
+            expanded = permissionMenuExpanded,
+            selectedMode = permissionMode,
+            canSelectFull = canSelectFullPermission,
+            onDismissRequest = { permissionMenuExpanded = false },
+            onSelect = onPermissionModeChange,
+          )
+        }
+        permissionUnavailableReason?.let { reason ->
+          Text(reason, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp))
+        }
+      }
+      if (modelSelectionLocked) return@LazyColumn
+      item {
+        HorizontalDivider(color = ClawTheme.colors.border)
       }
       item {
         Surface(
@@ -2659,9 +2868,9 @@ private fun ChatModelPickerSheet(
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
       }
       listOf(
-        "Pinned" to sections.pinned,
-        "Recent" to sections.recent,
-        "Models" to sections.remaining,
+        nativeString("Pinned") to sections.pinned,
+        nativeString("Recent") to sections.recent,
+        nativeString("Models") to sections.remaining,
       ).forEach { (title, models) ->
         if (models.isNotEmpty()) {
           item(key = "section-$title") {
@@ -2709,7 +2918,9 @@ private fun ChatModelPickerRow(
         GatewayModelUnavailableReason.MissingAuth,
         GatewayModelUnavailableReason.AuthFailed,
         -> nativeString("Authentication needed")
+
         GatewayModelUnavailableReason.Cooldown -> nativeString("Unavailable")
+
         null -> nativeString("Unavailable")
       }
     }
@@ -2731,17 +2942,18 @@ private fun ChatModelPickerRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      ProviderBrandIcon(provider = model.provider, size = 24.dp)
+      Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Text(
           text = model.name,
-          style = ClawTheme.type.body,
+          style = ClawTheme.type.body.copy(fontWeight = FontWeight.Medium),
           color = if (unavailable) ClawTheme.colors.textMuted else ClawTheme.colors.text,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
         Text(
           text = listOfNotNull(model.provider, availabilityLabel).joinToString(" · "),
-          style = ClawTheme.type.caption,
+          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Normal),
           color = if (unavailable) ClawTheme.colors.warning else ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
@@ -2846,6 +3058,44 @@ private fun ChatOfflineNotice(
   }
 }
 
+internal data class ChatPermissionOption(
+  val mode: ChatPermissionMode?,
+  val label: String,
+  val description: String,
+)
+
+internal fun chatPermissionOptions(): List<ChatPermissionOption> =
+  listOf(
+    ChatPermissionOption(null, nativeString("Default"), nativeString("Follow the agent's configured policy.")),
+    ChatPermissionOption(
+      ChatPermissionMode.ReadOnly,
+      nativeString("Read only"),
+      nativeString("Read-only access; native tool approval rules still apply."),
+    ),
+    ChatPermissionOption(
+      ChatPermissionMode.Guarded,
+      nativeString("Guarded"),
+      nativeString("Human review for requests beyond the session's access."),
+    ),
+    ChatPermissionOption(
+      ChatPermissionMode.Workspace,
+      nativeString("Workspace"),
+      nativeString("AI review, with human fallback, for additional access."),
+    ),
+    ChatPermissionOption(
+      ChatPermissionMode.Full,
+      nativeString("Full access"),
+      nativeString("Run without approval prompts, subject to host and tool policy."),
+    ),
+  )
+
+internal fun chatPermissionModeLabel(mode: ChatPermissionMode?): String = chatPermissionOptions().first { it.mode == mode }.label
+
+internal fun canSelectChatPermissionMode(
+  mode: ChatPermissionMode?,
+  canSelectFull: Boolean,
+): Boolean = mode != ChatPermissionMode.Full || canSelectFull
+
 @Composable
 private fun ChatInputPill(
   value: String,
@@ -2862,6 +3112,7 @@ private fun ChatInputPill(
   onToggleTalk: () -> Unit,
   runActive: Boolean,
   onAbort: () -> Unit,
+  hasContent: Boolean,
   sendEnabled: Boolean,
   onSend: () -> Unit,
   selectedModelLabel: String,
@@ -2870,6 +3121,10 @@ private fun ChatInputPill(
   thinkingLevel: String,
   thinkingOptions: List<ChatThinkingLevelOption>,
   thinkingSupported: Boolean,
+  thinkingLevelEnabled: Boolean,
+  fastMode: Boolean,
+  fastModeEnabled: Boolean,
+  onFastModeChange: (Boolean) -> Unit,
   onThinkingLevelChange: (String) -> Unit,
   contextUsage: ChatContextUsage,
   modifier: Modifier = Modifier,
@@ -2959,8 +3214,17 @@ private fun ChatInputPill(
             onClick = onOpenModelPicker,
             modifier = Modifier.weight(1f, fill = false),
           )
-          if (thinkingSupported) {
-            ChatThinkingLevelPicker(options = thinkingOptions, selectedId = thinkingLevel, onSelect = onThinkingLevelChange)
+          if (thinkingSupported || fastModeEnabled || fastMode) {
+            ChatThinkingLevelPicker(
+              options = thinkingOptions,
+              selectedId = thinkingLevel,
+              thinkingSupported = thinkingSupported,
+              thinkingLevelEnabled = thinkingLevelEnabled,
+              fastMode = fastMode,
+              fastModeEnabled = fastModeEnabled,
+              onSelect = onThinkingLevelChange,
+              onFastModeChange = onFastModeChange,
+            )
           }
         }
         if (talkActive) {
@@ -2974,8 +3238,8 @@ private fun ChatInputPill(
             onStartVoiceNote = onStartVoiceNote,
           )
         }
-        when (resolveChatComposerPrimaryAction(talkActive = talkActive, runActive = runActive, sendEnabled = sendEnabled)) {
-          ChatComposerPrimaryAction.Send -> SendButton(onClick = onSend)
+        when (resolveChatComposerPrimaryAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
+          ChatComposerPrimaryAction.Send -> SendButton(enabled = sendEnabled, onClick = onSend)
           ChatComposerPrimaryAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
           ChatComposerPrimaryAction.Stop -> StopButton(onClick = onAbort)
           ChatComposerPrimaryAction.None -> Unit
@@ -2983,6 +3247,177 @@ private fun ChatInputPill(
       }
     }
   }
+}
+
+@Composable
+private fun ChatPermissionIcon(
+  mode: ChatPermissionMode?,
+  contentDescription: String?,
+  modifier: Modifier = Modifier,
+) {
+  val icon =
+    when (mode) {
+      null -> Icons.Default.Security
+      ChatPermissionMode.ReadOnly -> Icons.Default.GppMaybe
+      ChatPermissionMode.Guarded -> Icons.Default.Policy
+      ChatPermissionMode.Workspace -> Icons.Default.AdminPanelSettings
+      ChatPermissionMode.Full -> Icons.Default.Shield
+    }
+  Icon(icon, contentDescription = contentDescription, modifier = modifier)
+}
+
+@Composable
+private fun ChatPermissionMenu(
+  expanded: Boolean,
+  selectedMode: ChatPermissionMode?,
+  canSelectFull: Boolean,
+  onDismissRequest: () -> Unit,
+  onSelect: (ChatPermissionMode?) -> Unit,
+) {
+  val options = chatPermissionOptions()
+  DropdownMenu(
+    expanded = expanded,
+    onDismissRequest = onDismissRequest,
+    modifier = Modifier.widthIn(min = 280.dp, max = 380.dp),
+    shape = RoundedCornerShape(24.dp),
+  ) {
+    Text(
+      text = nativeString("PERMISSIONS"),
+      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+      color = ClawTheme.colors.textMuted,
+      modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+    )
+    Column(
+      modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+      verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      options.forEach { option ->
+        val selected = option.mode == selectedMode
+        val selectable = canSelectChatPermissionMode(option.mode, canSelectFull)
+        DropdownMenuItem(
+          text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+              Text(
+                text = option.label,
+                style = ClawTheme.type.body.copy(fontWeight = FontWeight.Medium),
+              )
+              Text(
+                text = option.description,
+                style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Normal),
+                color = ClawTheme.colors.textMuted,
+              )
+              if (!selectable) {
+                Text(
+                  text = nativeString("Full access requires operator.admin access."),
+                  style = ClawTheme.type.caption,
+                  color = ClawTheme.colors.warning,
+                )
+              }
+            }
+          },
+          leadingIcon = {
+            ChatPermissionIcon(mode = option.mode, contentDescription = null, modifier = Modifier.size(18.dp))
+          },
+          trailingIcon = {
+            when {
+              !selectable -> Icon(Icons.Default.Lock, contentDescription = nativeString("Requires operator.admin"))
+              selected -> Icon(Icons.Default.Check, contentDescription = nativeString("Selected"))
+            }
+          },
+          modifier = Modifier.heightIn(min = 68.dp).semantics { this.selected = selected },
+          contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+          enabled = selectable,
+          onClick = {
+            onSelect(option.mode)
+            onDismissRequest()
+          },
+        )
+      }
+    }
+  }
+}
+
+internal data class ChatContextSummary(
+  val fraction: Float,
+  val percent: Int,
+  val approximate: Boolean,
+  val detail: String,
+)
+
+internal fun chatContextSummary(
+  usage: ChatContextUsage,
+  locale: Locale = Locale.getDefault(),
+): ChatContextSummary? {
+  val fraction = contextMeterWidth(usage) ?: return null
+  val used = usage.totalTokens?.takeIf { it >= 0L } ?: return null
+  val context = usage.contextTokens?.takeIf { it > 0L } ?: return null
+  val approximate = usage.totalTokensFresh == false
+  val approximation = if (approximate) "~" else ""
+  val percent = (fraction * 100).roundToInt()
+  return ChatContextSummary(
+    fraction = fraction,
+    percent = percent,
+    approximate = approximate,
+    detail = "$approximation${formatCompactTokenCount(used, locale)} / ${formatCompactTokenCount(context, locale)} \u00b7 $approximation$percent%",
+  )
+}
+
+internal fun formatContextUsageTokens(
+  value: Long?,
+  locale: Locale = Locale.getDefault(),
+): String = value?.takeIf { it >= 0L }?.let { formatCompactTokenCount(it, locale) } ?: "\u2014"
+
+internal fun formatContextEstimatedCost(value: Double?): String {
+  val cost = value?.takeIf { it.isFinite() && it >= 0.0 } ?: return "\u2014"
+  val format =
+    when {
+      cost == 0.0 -> "%.2f"
+      cost < 0.01 -> "%.4f"
+      cost < 1.0 -> "%.3f"
+      else -> "%.2f"
+    }
+  return "\u0024" + String.format(Locale.US, format, cost)
+}
+
+@Composable
+private fun ChatContextStat(
+  label: String,
+  value: String,
+  modifier: Modifier = Modifier,
+) {
+  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+    Text(
+      text = value,
+      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+      color = ClawTheme.colors.text,
+    )
+  }
+}
+
+internal fun chatThinkingChipStateDescription(
+  fastMode: Boolean,
+  thinkingLevel: String,
+  thinkingOptions: List<ChatThinkingLevelOption>,
+  languageTag: String? = null,
+): String {
+  val normalizedLevel = thinkingLevel.trim().ifEmpty { "off" }
+  val selectedOption =
+    thinkingOptions.firstOrNull { it.id.trim().equals(normalizedLevel, ignoreCase = true) }
+      ?: ChatThinkingLevelOption(id = normalizedLevel, label = normalizedLevel)
+  val selectedLabel = chatThinkingOptionLabel(selectedOption, languageTag)
+  val fastModeState =
+    if (fastMode) {
+      nativeString("On")
+    } else {
+      nativeString("Off")
+    }
+  return nativeString(
+    "\$selectedLabel, \$fastModeLabel: \$fastModeState",
+    selectedLabel,
+    nativeString("Fast mode"),
+    fastModeState,
+  )
 }
 
 @Composable
@@ -2994,7 +3429,7 @@ private fun ChatComposerModelPicker(
   modifier: Modifier = Modifier,
 ) {
   val description = nativeString("Model")
-  val contextDescription = contextMeterWidth(contextUsage)?.let(::contextMeterDescription)
+  val contextDescription = chatContextSummary(contextUsage)?.let { nativeString("Context: \$detail", it.detail) }
   Surface(
     onClick = onClick,
     enabled = enabled,
@@ -3157,33 +3592,6 @@ private fun AttachmentChip(
   }
 }
 
-private fun currentSessionTitle(
-  sessionKey: String,
-  sessions: List<ChatSessionEntry>,
-): String {
-  val entry = sessions.firstOrNull { it.key == sessionKey } ?: return nativeString("New chat")
-  val name = sessionPresentationTitle(entry) { nativeString("New chat") }
-  return friendlySessionName(name)
-}
-
-internal fun chatSessionChipText(
-  entry: ChatSessionEntry,
-  mainSessionKey: String,
-): String {
-  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
-  if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return nativeString("Main")
-  val name =
-    sessionPresentationTitle(entry) {
-      entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
-    }
-  return friendlySessionName(name)
-}
-
-internal fun selectedChatAgentId(
-  mainSessionKey: String,
-  gatewayDefaultAgentId: String?,
-): String = resolveAgentIdFromMainSessionKey(mainSessionKey) ?: gatewayDefaultAgentId ?: "main"
-
 private fun isActiveSessionChoice(
   choiceKey: String,
   sessionKey: String,
@@ -3198,6 +3606,9 @@ internal data class ChatContextUsage(
   val totalTokens: Long?,
   val totalTokensFresh: Boolean?,
   val contextTokens: Long?,
+  val inputTokens: Long? = null,
+  val outputTokens: Long? = null,
+  val estimatedCostUsd: Double? = null,
 )
 
 internal fun resolveChatContextUsage(
@@ -3217,19 +3628,26 @@ internal fun resolveChatContextUsage(
     totalTokens = entry?.totalTokens,
     totalTokensFresh = entry?.totalTokensFresh,
     contextTokens = entry?.contextTokens,
+    inputTokens = entry?.inputTokens,
+    outputTokens = entry?.outputTokens,
+    estimatedCostUsd = entry?.estimatedCostUsd,
   )
 }
 
 @Composable
-private fun SendButton(onClick: () -> Unit) {
+private fun SendButton(
+  enabled: Boolean,
+  onClick: () -> Unit,
+) {
   Surface(
     onClick = onClick,
+    enabled = enabled,
     modifier = Modifier.size(ClawTheme.spacing.touchTarget),
     shape = CircleShape,
     color = Color.Transparent,
-    contentColor = ClawTheme.colors.primaryText,
+    contentColor = if (enabled) ClawTheme.colors.primaryText else ClawTheme.colors.textSubtle,
   ) {
-    Box(modifier = Modifier.padding(8.dp).background(ClawTheme.colors.primary, CircleShape), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.padding(8.dp).background(if (enabled) ClawTheme.colors.primary else ClawTheme.colors.surfacePressed, CircleShape), contentAlignment = Alignment.Center) {
       Icon(imageVector = Icons.Default.ArrowUpward, contentDescription = nativeString("Send"), modifier = Modifier.size(20.dp))
     }
   }
@@ -3249,13 +3667,10 @@ internal fun userFacingChatError(
 }
 
 internal fun contextMeterWidth(usage: ChatContextUsage): Float? {
-  if (usage.totalTokensFresh == false) return null
   val total = usage.totalTokens?.takeIf { it >= 0L } ?: return null
   val context = usage.contextTokens?.takeIf { it > 0L } ?: return null
   return (total.toDouble() / context.toDouble()).coerceIn(0.0, 1.0).toFloat()
 }
-
-private fun contextMeterDescription(fraction: Float): String = nativeString("Context \${contextPercent}% used", (fraction * 100).roundToInt())
 
 internal fun chatThinkingSupported(
   selection: ChatThinkingLevelSelection,
@@ -3266,6 +3681,27 @@ internal fun chatThinkingSupported(
   } else {
     fallbackSupported
   }
+
+internal fun chatFastModeControlEnabled(
+  supported: Boolean,
+  adminAuthorized: Boolean,
+  connected: Boolean,
+  gatewayAvailable: Boolean,
+  loading: Boolean,
+  sending: Boolean,
+  activeRun: Boolean,
+  streaming: Boolean,
+  settingsMutationPending: Boolean,
+): Boolean =
+  supported &&
+    adminAuthorized &&
+    connected &&
+    gatewayAvailable &&
+    !loading &&
+    !sending &&
+    !activeRun &&
+    !streaming &&
+    !settingsMutationPending
 
 internal fun chatThinkingOptionLabel(
   option: ChatThinkingLevelOption,

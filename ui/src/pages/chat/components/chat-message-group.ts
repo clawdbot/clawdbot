@@ -395,7 +395,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     normalizedRole === "user" &&
     Boolean(
       (footerActionDetails?.replyTarget && opts.onReply) ||
-      opts.onRewind ||
+      (opts.onRewind && !opts.rewindDisabled) ||
       footerActionDetails?.markdown,
     );
   const userFooterActions = hasUserFooterActions
@@ -407,9 +407,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           ${footerActionDetails?.replyTarget && opts.onReply
             ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
             : nothing}
-          ${opts.onRewind
-            ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
-            : nothing}
+          ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
           ${footerActionDetails?.markdown
             ? renderMessageActionButtons(footerActionDetails, {})
             : nothing}

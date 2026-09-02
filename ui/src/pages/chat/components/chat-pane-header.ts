@@ -8,6 +8,7 @@ import type {
 } from "../../../app/native-gateways.runtime.ts";
 import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import type { ApplicationPlacementStartupStatus } from "../../../app/session-placement-startup.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
@@ -79,6 +80,7 @@ type ChatPaneHeaderProps = {
   sessionMenuAction: TemplateResult | typeof nothing;
   placementMoving?: boolean;
   placementRestarting?: boolean;
+  placementStartupStatus?: Pick<ApplicationPlacementStartupStatus, "phase" | "targetKind"> | null;
   placementMoveDisabledReason?: string;
   placementReclaimDisabledReason?: string;
   placementRestartDisabledReason?: string;

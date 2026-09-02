@@ -1,5 +1,5 @@
 // Child fixture: keep registration, finalization, JSON routing, and terminal writers real;
-// replace filesystem/plugin work and emit deterministic doctor diagnostics.
+// replace filesystem/plugin work and emit synthetic Doctor and fresh-triage diagnostics.
 import fs from "node:fs/promises";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
@@ -18,6 +18,9 @@ export async function doctorCommand() {
     console.log(JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }));
     return;
   }
+  if (process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION !== '0') {
+    throw new Error('Update Doctor unexpectedly allowed gateway activation');
+  }
   intro('OpenClaw doctor');
   note('Doctor panel diagnostic', 'Repair');
   if (!process.argv.includes('--no-workspace-suggestions')) note('Doctor workspace diagnostic', 'Workspace');
@@ -27,10 +30,38 @@ export async function doctorCommand() {
   ${scenario === "doctor-error" ? "throw new Error('Doctor repair failed');" : ""}
 }
 `;
-const doctorEntry = path.join(root, "doctor.mjs");
+const installedEntry = path.join(root, "installed-cli.mjs");
 await fs.writeFile(
-  doctorEntry,
-  `${doctorSource}\ntry { await doctorCommand(); } catch (error) { console.error(error.message); process.exitCode = 1; }\n`,
+  installedEntry,
+  `
+import fs from 'node:fs/promises';
+import path from 'node:path';
+${doctorSource}
+async function triageCommand() {
+  const contextIndex = process.argv.indexOf('--update-result');
+  if (contextIndex < 0) throw new Error('Missing update failure artifact');
+  await fs.readFile(process.argv[contextIndex + 1], 'utf8');
+  const promptPath = path.join(process.env.OPENCLAW_STATE_DIR, 'logs', 'support', 'triage-fixture-prompt.md');
+  await fs.mkdir(path.dirname(promptPath), { recursive: true });
+  await fs.writeFile(promptPath, 'Synthetic update failure debugging prompt.\\n');
+  const suggestedCommands = ['openclaw triage --run'];
+  if (process.argv.includes('--json')) {
+    console.log(JSON.stringify({ promptPath, bundlePath: null, bundleError: null, findings: { error: 0, warning: 0, info: 0 }, detectedAgents: [], suggestedCommands }));
+  } else {
+    console.log('Debugging prompt: ' + promptPath);
+    console.log('Ready-to-run agent handoffs:');
+    for (const command of suggestedCommands) console.log('  ' + command);
+  }
+}
+try {
+  if (process.argv[2] === 'doctor') await doctorCommand();
+  else if (process.argv[2] === 'triage') await triageCommand();
+  else throw new Error('Unexpected installed CLI command: ' + process.argv[2]);
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+}
+`,
 );
 const snapshotSource = `
 const config = { update: { channel: 'dev' }, plugins: { enabled: false } };
@@ -54,11 +85,11 @@ const stubs = new Map<string, string>([
   ],
   [
     sourceUrl("./update-cli/update-command-plugins.ts"),
-    `export const updatePluginsAfterCoreUpdate = async () => ({status: ${JSON.stringify(scenario === "plugin-error" ? "error" : "ok")}, changed: false, warnings: [], sync: {changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: []}, npm: {changed: false, outcomes: []}, integrityDrifts: []});`,
+    `export const updatePluginsAfterCoreUpdate = async () => ({status: ${JSON.stringify(scenario?.endsWith("plugin-error") ? "error" : scenario?.endsWith("plugin-warning") ? "warning" : "ok")}, changed: false, warnings: [], sync: {changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: []}, npm: {changed: false, outcomes: []}, integrityDrifts: []});`,
   ],
   [
     sourceUrl("../daemon/gateway-entrypoint.ts"),
-    `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(doctorEntry)};`,
+    `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
 registerHooks({
@@ -78,22 +109,29 @@ const { Command } = await import("commander");
 const { registerUpdateCli } = await import("./update-cli.js");
 const { defaultRuntime } = await import("../runtime.js");
 const { formatCliJsonFailure } = await import("./failure-output.js");
+const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
 const { enableConsoleCapture } = await import("../logging/console.js");
 const { withConsoleLogsRoutedToStderrForJson, applyResolvedCommandOutputMode } =
   await import("./json-output-mode.js");
 const { isCommandJsonOutputMode } = await import("./program/json-mode.js");
 process.argv = [process.execPath, path.join(root, "openclaw.mjs"), ...args];
 enableConsoleCapture();
-await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
-  const program = new Command().name("openclaw");
-  program.hook("preAction", (_root, command) => {
-    applyResolvedCommandOutputMode(isCommandJsonOutputMode(command));
-  });
-  registerUpdateCli(program);
-  try {
-    await program.parseAsync(process.argv);
-  } catch (error) {
+await runCliWithExitFinalization({
+  run: () =>
+    withConsoleLogsRoutedToStderrForJson(
+      process.argv,
+      async () => {
+        const program = new Command().name("openclaw");
+        program.hook("preAction", (_root, command) => {
+          applyResolvedCommandOutputMode(isCommandJsonOutputMode(command));
+        });
+        registerUpdateCli(program);
+        await program.parseAsync(process.argv);
+      },
+      { retainRoutingUntilProcessExit: true },
+    ),
+  onError: (error) => {
     defaultRuntime.writeJson(formatCliJsonFailure(error));
     process.exitCode = 1;
-  }
+  },
 });

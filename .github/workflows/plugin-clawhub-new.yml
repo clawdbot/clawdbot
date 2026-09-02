@@ -48,7 +48,8 @@ on:
         type: boolean
 
 concurrency:
-  group: plugin-clawhub-new-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  # Validation gets its own slot; real publication remains serialized by target.
+  group: plugin-clawhub-new-${{ inputs.dry_run && format('dry-run-{0}', github.run_id) || github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -550,7 +551,6 @@ jobs:
             package_slug="${package_name#@openclaw/}"
             output_dir="${artifact_root}/packages/${package_slug}"
             mkdir -p "${output_dir}"
-            node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${package_dir}"
             OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR="${output_dir}" \
               PACKAGE_TAG="${package_tag}" \
               bash .release-harness/scripts/plugin-clawhub-publish.sh --pack "${package_dir}"

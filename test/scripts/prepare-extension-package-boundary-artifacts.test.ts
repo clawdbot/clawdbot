@@ -9,6 +9,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   createPrefixedOutputWriter,
   parseMode,
@@ -310,7 +311,14 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const signal = AbortSignal.any([contextSignal, controller.signal]);
       const observationFailure = new Error("drain observation failed");
       const originalNow = Date.now;
-      const rootDir = createTempDir("openclaw-boundary-abort-drain-");
+      // Only the injected fixture-write failure owns a separate namespace.
+      // Real step claims and their cleanup failures still belong to the outer fixture.
+      const retainedOwner =
+        mode === "cleanup write failure"
+          ? createVitestResourceOwner(createTempDir("boundary-cleanup-owner-"))
+          : undefined;
+      const driverFixture = retainedOwner ? createFixtureLifetime(retainedOwner.root) : fixture;
+      const rootDir = driverFixture.createTempDir("openclaw-boundary-abort-drain-");
       let descendantPid = 0;
       let command: ReturnType<typeof runNodeStepsInParallel> | undefined;
       let outcome: Promise<unknown> | undefined;
@@ -318,7 +326,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       let joined = false;
       let requiredRescue = false;
       let heldAtRescue = false;
-      const driver = fixture.run(async () => {
+      const driver = driverFixture.run(async () => {
         const readyPath = path.join(rootDir, "descendant.ready");
         const drainedPath = path.join(rootDir, "descendant.drained");
         const failPath = path.join(rootDir, "fail");
@@ -410,7 +418,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
               });
             });
           }
-          await fixture.verifyCleanup(async () => {
+          await driverFixture.verifyCleanup(async () => {
             try {
               fs.writeFileSync(mode === "cleanup write failure" ? rootDir : failPath, "fail");
             } finally {
@@ -434,8 +442,9 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       if (mode === "cleanup write failure") {
         expect(error).toHaveProperty("code", "EISDIR");
         try {
-          await expect(fixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
+          await expect(driverFixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
           expect(fs.existsSync(rootDir)).toBe(true);
+          expect(() => retainedOwner!.assertReleased()).toThrow("Unreleased Vitest resource claim");
         } finally {
           // Only the injected filesystem failure is disposable, after the real join.
           fs.rmSync(rootDir, { recursive: true, force: true });

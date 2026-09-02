@@ -2,6 +2,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { linePlugin } from "./channel.js";
+import { createActionCard } from "./flex-templates/basic-cards.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import {
   createLineQuickReply,
@@ -111,6 +112,53 @@ describe("LINE rich-message boundaries", () => {
     expect(createLineQuickReply(line.quickReplyItems as never)).toMatchObject({
       items: [{ action: { type: "postback", data: "deny" } }],
     });
+  });
+
+  it.each([
+    { name: "exact byte limit", character: "x", extraBytes: 0, fits: true },
+    { name: "one byte over", character: "x", extraBytes: 1, fits: false },
+    { name: "multibyte overflow", character: "界", extraBytes: 1, fits: false },
+  ])("preserves the answer and controls at the Flex $name", ({ character, extraBytes, fits }) => {
+    const title = "Size boundary";
+    const action = {
+      type: "postback",
+      label: "Continue",
+      data: "next",
+      displayText: "Continue",
+    } as const;
+    const overhead =
+      Buffer.byteLength(
+        JSON.stringify(createActionCard(title, "x", [{ label: "Continue", action }])),
+        "utf8",
+      ) - 1;
+    const text = character.repeat(
+      Math.ceil((30_000 - overhead + extraBytes) / Buffer.byteLength(character, "utf8")),
+    );
+    const prepared = prepareLineReplyPayload({
+      text: "Full answer:",
+      presentation: {
+        title,
+        blocks: [
+          { type: "text", text },
+          {
+            type: "buttons",
+            buttons: [{ label: "Continue", action: { type: "callback", value: "next" } }],
+          },
+        ],
+      },
+    });
+
+    expect(prepared.presentation).toBeUndefined();
+    if (fits) {
+      const line = prepared.channelData?.line as { flexMessage: { contents: unknown } };
+      expect(Buffer.byteLength(JSON.stringify(line.flexMessage.contents), "utf8")).toBe(30_000);
+      expect(prepared.text).toBe("Full answer:");
+    } else {
+      expect(prepared.channelData?.line).toBeUndefined();
+      expect(prepared.text).toContain("Full answer:");
+      expect(prepared.text).toContain(text);
+      expect(prepared.text).toContain("Continue");
+    }
   });
 
   it("keeps fallback text when only quick replies render", () => {

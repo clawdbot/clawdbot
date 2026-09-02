@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { LegacyConfigIssue } from "../config/types.js";
+import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import {
   listActiveDegradedPlugins,
   setActiveDegradedPlugins,
@@ -858,6 +859,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledWith({
       config: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
+      log: expect.any(Object),
     });
   });
 
@@ -876,24 +878,65 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledWith({
       config: { gateway: { mode: "local", port: 19091 } },
       env: process.env,
+      log: expect.any(Object),
       doctorOnlyStateMigrations: true,
     });
   });
 
-  it("blocks gateway readiness when state migration warnings outlive the startup checkpoint", async () => {
-    needsStateMigrationCheckpoint.mockReturnValue(true);
-    needsStartupMigrationCheckpoint.mockReturnValue(false);
+  it.each([false, true])(
+    "allows warning-only startup with checkpoint required=%s",
+    async (required) => {
+      needsStateMigrationCheckpoint.mockReturnValue(true);
+      needsStartupMigrationCheckpoint.mockReturnValue(required);
+      autoMigrateLegacyStateDir.mockResolvedValueOnce({
+        migrated: false,
+        skipped: false,
+        changes: [],
+        warnings: ["Left legacy config health state in place."],
+      });
+
+      await expect(runDoctorConfigPreflight(startupCheckpointOptions)).resolves.toBeDefined();
+
+      expect(readStartupMigrationWarning()).toContain("Left legacy config health state in place.");
+      expect(readStartupMigrationWarning()).toContain(
+        'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
+      );
+      expect(note.mock.calls.filter(([, title]) => title === "Doctor warnings")).toHaveLength(0);
+      expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
+      expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+      expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
+      await runDoctorConfigPreflight(startupCheckpointOptions);
+      expect(readStartupMigrationWarning()).toContain("Left legacy config health state in place.");
+    },
+  );
+
+  it("bounds and redacts startup warnings while preserving the Doctor follow-up", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    const credential = "sk-" + "syntheticfixture".repeat(4);
     autoMigrateLegacyStateDir.mockResolvedValueOnce({
       migrated: false,
       skipped: false,
       changes: [],
-      warnings: ["Left legacy config health state in place."],
+      warnings: [`Detector token ${credential} ${"details ".repeat(1000)}`],
     });
+    await runDoctorConfigPreflight(startupCheckpointOptions);
+    const warning = readStartupMigrationWarning();
+    expect(warning).not.toContain(credential);
+    expect(warning?.length).toBeLessThan(2200);
+    expect(warning).toContain("… (see startup log)");
+    expect(warning).toContain(
+      'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
+    );
+  });
+
+  it("refuses startup and releases the lease when a migration errors", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    autoMigrateLegacyState.mockRejectedValueOnce(new Error("Canonical state cannot be read"));
 
     await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-      "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
+      "Canonical state cannot be read",
     );
-
+    expect(recordSuccessfulStateMigrations).not.toHaveBeenCalled();
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
     expect(startupMigrationLeaseRelease).toHaveBeenCalledOnce();
   });

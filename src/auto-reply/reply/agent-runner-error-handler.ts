@@ -18,6 +18,7 @@ import {
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
 } from "../../agents/failover/user-copy.js";
+import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -149,6 +150,34 @@ export async function handleAgentExecutionError(params: {
     outcome: "error",
     error: message,
   });
+  // The exhausted preflight is deliberate, even if its diagnostic cause looks
+  // like HTTP/overload. Settle delivery and normal diagnostic policy without replay.
+  if (isAgentHarnessPreflightError(err)) {
+    const externalReply = buildExternalRunFailureReply(
+      { message, error: err },
+      {
+        includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+        isHeartbeat: turn.isHeartbeat,
+      },
+    );
+    const text = resolveExternalRunFailureTextForConversation({
+      text: params.shouldSurfaceToControlUi
+        ? renderControlUiAgentFailureCopy(message)
+        : externalReply.text,
+      visibleReplyDelivered: await turn.resolveVisibleReplyDelivery?.(),
+      sessionCtx: turn.sessionCtx,
+      isGenericRunnerFailure: externalReply.isGenericRunnerFailure,
+      cfg: turn.followupRun.run.config,
+    });
+    takePendingLifecycleTerminal().emit("error", err);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    return {
+      kind: "final",
+      payload: markAgentRunFailureReplyPayload({ text }),
+      postCompactionModelFailure,
+    };
+  }
   const failoverFacts = resolveReplyFailoverFacts(err, message);
   const fallbackAttempts = isFailoverError(err) ? err.attempts : undefined;
   const hasFallbackAttempts = Boolean(fallbackAttempts?.length);

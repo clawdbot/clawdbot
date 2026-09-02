@@ -57,12 +57,26 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
     code === "ERR_REQUIRE_ESM_RACE_CONDITION" ||
+    code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" ||
+    code === "ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING" ||
+    code === "ERR_UNKNOWN_FILE_EXTENSION" ||
     isMissingTargetModuleError(candidate, modulePath)
   );
 }
 
 /** Attempts native require before falling back to source transform paths. */
 export function tryNativeRequireJavaScriptModule(
+  moduleSpecifier: string,
+  options: Parameters<typeof tryNativeRequireModule>[1] = {},
+): { ok: true; moduleExport: unknown } | { ok: false } {
+  if (!isJavaScriptModulePath(toNativeRequirePath(moduleSpecifier))) {
+    return { ok: false };
+  }
+  return tryNativeRequireModule(moduleSpecifier, options);
+}
+
+/** Loads prepared host aliases, including source SDK paths supported by the runtime. */
+export function tryNativeRequireModule(
   moduleSpecifier: string,
   options: {
     allowWindows?: boolean;
@@ -75,7 +89,11 @@ export function tryNativeRequireJavaScriptModule(
     return { ok: false };
   }
   const modulePath = toNativeRequirePath(moduleSpecifier);
-  if (!isJavaScriptModulePath(modulePath)) {
+  if (
+    /\.[cm]?tsx?$/iu.test(modulePath) &&
+    !process.features.typescript &&
+    typeof nodeRequire.extensions?.[path.extname(modulePath)] !== "function"
+  ) {
     return { ok: false };
   }
   let resolvedPath = modulePath;

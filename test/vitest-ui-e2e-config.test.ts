@@ -51,8 +51,18 @@ function timingFile(fileSeconds: Record<string, number>, perFileOverheadSeconds 
   });
 }
 
-function specifications(paths: string[]): TestSpecification[] {
-  return paths.map((moduleId) => ({ moduleId }) as TestSpecification);
+function specifications(
+  paths: string[],
+  options: { name?: string; projectWorkers?: number | null; rootWorkers?: number } = {},
+): TestSpecification[] {
+  const project = {
+    config: {
+      maxWorkers: options.projectWorkers === null ? undefined : (options.projectWorkers ?? 1),
+    },
+    name: options.name ?? "fixture",
+    vitest: { config: { maxWorkers: options.rootWorkers ?? 1 } },
+  };
+  return paths.map((moduleId) => ({ moduleId, project }) as TestSpecification);
 }
 
 function temporaryFiles(sizes: number[]): TestSpecification[] {
@@ -67,15 +77,21 @@ function temporaryFiles(sizes: number[]): TestSpecification[] {
   );
 }
 
-async function partition(files: TestSpecification[], count = 11) {
+async function partitionSpecifications(files: TestSpecification[], count = 11) {
   const { UiE2eSequencer } = await import("./vitest/vitest.ui-e2e.sequencer.ts");
   return Promise.all(
     Array.from({ length: count }, async (_, index) => {
       const sequencer = new UiE2eSequencer({
         config: { shard: { count, index: index + 1 } },
       } as never);
-      return (await sequencer.shard(files)).map((file) => file.moduleId);
+      return sequencer.shard(files);
     }),
+  );
+}
+
+async function partition(files: TestSpecification[], count = 11) {
+  return (await partitionSpecifications(files, count)).map((shard) =>
+    shard.map((file) => file.moduleId),
   );
 }
 
@@ -125,13 +141,69 @@ describe("Control UI E2E Vitest sharding", () => {
     ]);
   });
 
+  it("balances both project phases by their effective worker count", async () => {
+    const fixtureFiles = temporaryFiles([400, 200, 200, 100]);
+    const [bundledLarge, bundledSmall, serialLarge, serialSmall] = fixtureFiles.map(
+      (file) => file.moduleId,
+    );
+    const rawSeconds = new Map<string, number>([
+      [bundledLarge!, 10],
+      [bundledSmall!, 10],
+      [serialLarge!, 10],
+      [serialSmall!, 20],
+    ]);
+    useTimings(
+      timingFile(
+        Object.fromEntries(
+          [...rawSeconds].map(([file, seconds]) => [path.relative(repoRoot, file), seconds]),
+        ),
+        0,
+      ),
+    );
+    const bundled = specifications([bundledLarge!, bundledSmall!], {
+      name: "ui-e2e-bundled",
+      projectWorkers: null,
+      rootWorkers: 2,
+    });
+    const serial = specifications([serialLarge!, serialSmall!], {
+      name: "ui-e2e-serial",
+      projectWorkers: 1,
+      rootWorkers: 2,
+    });
+    const shards = await partitionSpecifications([...bundled, ...serial], 2);
+    const workerCount = (file: TestSpecification) =>
+      (file.project.config.maxWorkers ?? file.project.vitest.config.maxWorkers)!;
+
+    expect(
+      shards.map((shard) =>
+        shard.reduce((sum, file) => sum + rawSeconds.get(file.moduleId)! / workerCount(file), 0),
+      ),
+    ).toEqual([20, 20]);
+    expect(
+      shards
+        .flat()
+        .map((file) => file.moduleId)
+        .toSorted(),
+    ).toEqual(fixtureFiles.map((file) => file.moduleId).toSorted());
+    expect(new Set(shards.flat()).size).toBe(fixtureFiles.length);
+    expect(shards.flat().filter((file) => file.project.name === "ui-e2e-serial")).toHaveLength(2);
+  });
+
   it("assigns every discovered file once with committed timings, ignoring stale keys", async () => {
     const committed = fs.readFileSync(timingPath, "utf8");
-    const files = specifications(
-      fs
-        .globSync("ui/src/**/*.e2e.test.ts", { cwd: repoRoot })
-        .map((file) => path.join(repoRoot, file)),
-    );
+    const discovered = fs.globSync("ui/src/**/*.e2e.test.ts", { cwd: repoRoot });
+    const { uiE2eSerialTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
+    const serial = new Set(uiE2eSerialTestFiles);
+    const files = [
+      ...specifications(
+        discovered.filter((file) => !serial.has(file)).map((file) => path.join(repoRoot, file)),
+        { name: "ui-e2e-bundled", projectWorkers: null, rootWorkers: 2 },
+      ),
+      ...specifications(
+        discovered.filter((file) => serial.has(file)).map((file) => path.join(repoRoot, file)),
+        { name: "ui-e2e-serial", projectWorkers: 1, rootWorkers: 2 },
+      ),
+    ];
     expect(files.length).toBeGreaterThan(0);
     useTimings(committed);
     const original = await partition(files);

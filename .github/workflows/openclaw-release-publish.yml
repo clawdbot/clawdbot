@@ -131,6 +131,10 @@ jobs:
       focused_release_evidence_workflow_full_ref: ${{ steps.focused_run.outputs.workflow_full_ref }}
       focused_release_evidence_workflow_sha: ${{ steps.focused_run.outputs.workflow_sha }}
       windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}
+      prepared_docker_run_id: ${{ steps.full_manifest.outputs.prepared_docker_run_id }}
+      prepared_docker_run_attempt: ${{ steps.full_manifest.outputs.prepared_docker_run_attempt }}
+      prepared_docker_artifact_name: ${{ steps.full_manifest.outputs.prepared_docker_artifact_name }}
+      prepared_docker_manifest_sha256: ${{ steps.full_manifest.outputs.prepared_docker_manifest_sha256 }}
     steps:
       - name: Validate inputs
         env:
@@ -381,12 +385,43 @@ jobs:
           echo "installer_digests=${approved_installer_digests}" >> "$GITHUB_OUTPUT"
           echo "- Windows Node source release: prevalidated \`${WINDOWS_NODE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Fetch exact release and trusted tooling ancestry
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          # SDK and focused evidence need complete history, not every repository ref.
+          git fetch --no-tags --filter=blob:none --unshallow origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}" "${WORKFLOW_SHA}"
+
+      - name: Checkout trusted release validation tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-validation-tooling
+          fetch-depth: 1
+          sparse-checkout: scripts
+          persist-credentials: false
+
       - name: Download OpenClaw npm preflight manifest
         id: preflight_artifact
         if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -444,17 +479,25 @@ jobs:
           preflight_head_branch="$(jq -r '.head_branch // ""' <<<"$preflight_run")"
           preflight_conclusion="$(jq -r '.conclusion // ""' <<<"$preflight_run")"
           preflight_event="$(jq -r '.event // ""' <<<"$preflight_run")"
-          preflight_path="$(jq -r '.path // ""' <<<"$preflight_run")"
+          preflight_path="$(jq -r '.path // "" | split("@")[0]' <<<"$preflight_run")"
           if [[ ! "$preflight_head_sha" =~ ^[a-f0-9]{40}$ ]]; then
             echo "OpenClaw npm preflight run must have an exact head SHA." >&2
             exit 1
+          fi
+          full_release_preflight=false
+          if [[ "$preflight_path" == ".github/workflows/full-release-validation.yml" ]]; then
+            if [[ "$PREFLIGHT_RUN_ID" != "$FULL_RELEASE_VALIDATION_RUN_ID" || ( -n "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" && "$preflight_attempt" != "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" ) ]]; then
+              echo "FRV npm preflight must come from the exact selected full release run and attempt." >&2
+              exit 1
+            fi
+            full_release_preflight=true
           fi
           extended_stable_preflight=false
           expected_extended_stable_branch=""
           if [[ "$RELEASE_TAG" =~ ^v([0-9]{4})\.([1-9][0-9]*)\. ]]; then
             expected_extended_stable_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"
           fi
-          if [[ "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$preflight_head_branch" == "$expected_extended_stable_branch" ]]; then
+          if [[ "$full_release_preflight" != "true" && "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$preflight_head_branch" == "$expected_extended_stable_branch" ]]; then
             extended_stable_preflight=true
           fi
           active_branch_preflight=false
@@ -463,12 +506,7 @@ jobs:
           fi
           protected_release_publish_preflight=false
           if [[ "$preflight_head_branch" == release-publish/* ]]; then
-            producer_tooling="${RUNNER_TEMP}/preflight-producer-tooling"
-            mkdir -p "${producer_tooling}/lib"
-            for source in npm-preflight-tooling-identity.mjs release-tooling-identity.mjs lib/record-shared.mjs; do
-              gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/${source}?ref=${WORKFLOW_SHA}" \
-                --jq .content | base64 --decode > "${producer_tooling}/${source}"
-            done
+            producer_tooling="${GITHUB_WORKSPACE}/.release-validation-tooling/scripts"
             node "${producer_tooling}/npm-preflight-tooling-identity.mjs" \
               --repository "$GITHUB_REPOSITORY" \
               --workflow-ref "$preflight_head_branch" \
@@ -477,17 +515,18 @@ jobs:
               --publisher-sha "$WORKFLOW_SHA"
             protected_release_publish_preflight=true
           fi
-          if [[ "$preflight_head_branch" != "main" && "$active_branch_preflight" != "true" && "$extended_stable_preflight" != "true" && "$protected_release_publish_preflight" != "true" ]]; then
+          if [[ "$preflight_head_branch" != "main" && "$active_branch_preflight" != "true" && "$extended_stable_preflight" != "true" && "$protected_release_publish_preflight" != "true" && "$full_release_preflight" != "true" ]]; then
             echo "OpenClaw npm preflight run must come from main, the active protected release branch, or a verified protected release-publish tag." >&2
             exit 1
           fi
-          if [[ "$preflight_conclusion" != "success" || "$preflight_event" != "workflow_dispatch" || "$preflight_path" != ".github/workflows/openclaw-npm-release.yml" ]]; then
-            echo "OpenClaw npm preflight evidence must come from a successful OpenClaw NPM Release workflow dispatch." >&2
+          if [[ "$preflight_conclusion" != "success" || "$(jq -r '.status' <<<"$preflight_run")" != "completed" || "$preflight_event" != "workflow_dispatch" || ( "$preflight_path" != ".github/workflows/openclaw-npm-release.yml" && "$full_release_preflight" != "true" ) ]]; then
+            echo "OpenClaw npm preflight evidence requires a successful NPM Release or exact Full Release Validation dispatch." >&2
             exit 1
           fi
           echo "head_sha=${preflight_head_sha}" >> "$GITHUB_OUTPUT"
           echo "head_branch=${preflight_head_branch}" >> "$GITHUB_OUTPUT"
           echo "run_attempt=${preflight_attempt}" >> "$GITHUB_OUTPUT"
+          echo "workflow_path=${preflight_path}" >> "$GITHUB_OUTPUT"
           sdk_evidence_dir="${RUNNER_TEMP}/openclaw-plugin-sdk-api-evidence"
           rm -rf "$sdk_evidence_dir"
           mkdir -p "$sdk_evidence_dir"
@@ -531,54 +570,6 @@ jobs:
           run-id: ${{ inputs.full_release_validation_run_id }}
           github-token: ${{ github.token }}
 
-      - name: Download trusted release validation tooling
-        if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WORKFLOW_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          tooling_dir="${RUNNER_TEMP}/release-validation-tooling"
-          mkdir -p "${tooling_dir}/lib"
-          for source in npm-preflight-tooling-identity.mjs release-tooling-identity.mjs; do
-            gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/${source}?ref=${WORKFLOW_SHA}" \
-              --jq .content | base64 --decode > "${tooling_dir}/${source}"
-          done
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/validate-full-release-validation-evidence.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/validate-full-release-validation-evidence.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/release-ci-summary.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/release-ci-summary.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/full-release-validation-policy.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/full-release-validation-policy.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/full-release-candidate-contract.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/full-release-candidate-contract.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/canonical-json.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/lib/canonical-json.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/plain-gh.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/lib/plain-gh.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/plugin-sdk-api-release-evidence.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/plugin-sdk-api-release-evidence.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/validate-authorized-beta-focused-evidence.mts?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/validate-authorized-beta-focused-evidence.mts"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/verify-authorized-beta-focused-candidate.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/verify-authorized-beta-focused-candidate.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/authorized-beta-focused-policy.json?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/authorized-beta-focused-policy.json"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/record-shared.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/lib/record-shared.mjs"
-          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/upgrade-survivor-policy.mjs?ref=${WORKFLOW_SHA}" \
-            --jq .content | base64 --decode > "${tooling_dir}/lib/upgrade-survivor-policy.mjs"
-
-      - name: Checkout release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: refs/tags/${{ inputs.tag }}
-          fetch-depth: 0
-          filter: blob:none
-          sparse-checkout: package.json
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
       - name: Resolve checked-out release ref
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -587,11 +578,13 @@ jobs:
         id: manifest
         if: ${{ inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '' }}
         env:
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_WORKFLOW_PATH: ${{ steps.preflight_artifact.outputs.workflow_path }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: ${{ inputs.plugin_sdk_api_acknowledgement }}
-          PLUGIN_SDK_API_VALIDATOR: ${{ runner.temp }}/release-validation-tooling/plugin-sdk-api-release-evidence.mjs
+          PLUGIN_SDK_API_VALIDATOR: ${{ github.workspace }}/.release-validation-tooling/scripts/plugin-sdk-api-release-evidence.mjs
           PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_artifact.outputs.head_sha }}
           PREFLIGHT_WORKFLOW_BRANCH: ${{ steps.preflight_artifact.outputs.head_branch }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
@@ -610,7 +603,12 @@ jobs:
           if [[ "$PREFLIGHT_WORKFLOW_BRANCH" == release-publish/* ]]; then
             producer_full_ref="refs/tags/${PREFLIGHT_WORKFLOW_BRANCH}"
           fi
-          node "${RUNNER_TEMP}/release-validation-tooling/npm-preflight-tooling-identity.mjs" \
+          qualification_args=(--workflow-path "$PREFLIGHT_WORKFLOW_PATH")
+          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" ]]; then
+            qualification_args+=(--full-release-manifest "${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json")
+          fi
+          node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/npm-preflight-tooling-identity.mjs" \
+            "${qualification_args[@]}" \
             --manifest "$manifest" \
             --repository "$GITHUB_REPOSITORY" \
             --workflow-full-ref "$producer_full_ref" \
@@ -619,7 +617,6 @@ jobs:
             --run-attempt "$PREFLIGHT_RUN_ATTEMPT"
           release_tag="$(jq -r '.releaseTag // ""' "$manifest")"
           release_sha="$(jq -r '.releaseSha // ""' "$manifest")"
-          npm_dist_tag="$(jq -r '.npmDistTag // ""' "$manifest")"
           tarball_name="$(jq -r '.tarballName // ""' "$manifest")"
           tarball_sha256="$(jq -r '.tarballSha256 // ""' "$manifest")"
           if [[ "$release_tag" != "$RELEASE_TAG" ]]; then
@@ -630,10 +627,7 @@ jobs:
             echo "Preflight manifest SHA mismatch: expected $EXPECTED_SHA, got $release_sha" >&2
             exit 1
           fi
-          if [[ "$npm_dist_tag" != "$RELEASE_NPM_DIST_TAG" ]]; then
-            echo "Preflight manifest npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $npm_dist_tag" >&2
-            exit 1
-          fi
+          node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/openclaw-npm-extended-stable-release.mjs" verify-preflight-channel < "$manifest"
           immutable_sdk_evidence="${RUNNER_TEMP}/openclaw-plugin-sdk-api-evidence/plugin-sdk-api-release-evidence.json"
           if [[ ! -f "$immutable_sdk_evidence" ]]; then
             echo "Immutable Plugin SDK API evidence artifact is missing." >&2
@@ -655,7 +649,7 @@ jobs:
           if [[ "$RELEASE_TAG" =~ ^v([0-9]{4})\.([1-9][0-9]*)\. ]]; then
             expected_extended_stable_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"
           fi
-          if [[ "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$PREFLIGHT_WORKFLOW_BRANCH" == "$expected_extended_stable_branch" && "$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA" ]]; then
+          if [[ "$PREFLIGHT_WORKFLOW_PATH" != ".github/workflows/full-release-validation.yml" && "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$PREFLIGHT_WORKFLOW_BRANCH" == "$expected_extended_stable_branch" && "$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA" ]]; then
             extended_stable_preflight=true
           fi
           if [[ "$extended_stable_preflight" != "true" ]] && ! git merge-base --is-ancestor "$PREFLIGHT_WORKFLOW_SHA" "$WORKFLOW_SHA"; then
@@ -664,6 +658,7 @@ jobs:
           fi
           node "$PLUGIN_SDK_API_VALIDATOR" \
             --manifest "$manifest" \
+            --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
             --head "$EXPECTED_SHA" \
             --acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
             --current-selector-ref "$current_selector_ref" \
@@ -686,6 +681,7 @@ jobs:
         id: full_manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && (inputs.publish_openclaw_npm || inputs.plugin_publish_scope == 'all-publishable' || inputs.preflight_run_id != '' || inputs.full_release_validation_run_id != '') }}
         env:
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ steps.full_run.outputs.attempt }}
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           RELEASE_TAG: ${{ inputs.tag }}
@@ -696,8 +692,8 @@ jobs:
           TRUSTED_WORKFLOW_REF: ${{ github.ref_name }}
           TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
           RUN_JSON_FILE: ${{ runner.temp }}/full-release-validation-run.json
-          VALIDATOR_FILE: ${{ runner.temp }}/release-validation-tooling/validate-full-release-validation-evidence.mjs
-          STRICT_VALIDATOR_FILE: ${{ runner.temp }}/release-validation-tooling/release-ci-summary.mjs
+          VALIDATOR_FILE: ${{ github.workspace }}/.release-validation-tooling/scripts/validate-full-release-validation-evidence.mjs
+          STRICT_VALIDATOR_FILE: ${{ github.workspace }}/.release-validation-tooling/scripts/release-ci-summary.mjs
         run: |
           set -euo pipefail
           manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
@@ -761,6 +757,15 @@ jobs:
             exit 1
           fi
           echo "release_profile=$release_profile" >> "$GITHUB_OUTPUT"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { preparedDockerEvidenceFromFullRelease } from './.release-validation-tooling/scripts/docker-release-artifacts.mjs';
+          const env = process.env;
+          const prepared = env.RELEASE_TAG.includes('-alpha.') ? null : preparedDockerEvidenceFromFullRelease({ manifest: JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8')), sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
+          if (prepared) {
+            appendFileSync(env.GITHUB_OUTPUT, `prepared_docker_run_id=${prepared.preparedRunId}\nprepared_docker_run_attempt=${prepared.preparedRunAttempt}\nprepared_docker_artifact_name=${prepared.preparedArtifactName}\nprepared_docker_manifest_sha256=${prepared.preparedManifestSha256}\n`);
+          }
+          NODE
 
       - name: Resolve focused release evidence run
         id: focused_run
@@ -855,7 +860,7 @@ jobs:
             --source-digest "${PRODUCER_WORKFLOW_SHA}" \
             --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
             --deny-self-hosted-runners
-          tooling_dir="${RUNNER_TEMP}/release-validation-tooling"
+          tooling_dir="${GITHUB_WORKSPACE}/.release-validation-tooling/scripts"
           node "${tooling_dir}/verify-authorized-beta-focused-candidate.mjs" \
             --repository-root . \
             --validator "${tooling_dir}/validate-authorized-beta-focused-evidence.mts" \
@@ -1740,7 +1745,7 @@ jobs:
             upload_release_evidence_assets
             append_release_proof_to_github_release
             if [[ "${failed}" == "0" ]]; then
-              echo "- GitHub release: kept draft until Docker publication succeeds" >> "$GITHUB_STEP_SUMMARY"
+              echo "- GitHub release: kept draft until required publication checks complete" >> "$GITHUB_STEP_SUMMARY"
             else
               echo "- GitHub release: left as draft because a required publish child failed" >> "$GITHUB_STEP_SUMMARY"
             fi
@@ -1792,11 +1797,15 @@ jobs:
   publish_docker:
     name: Publish Docker images
     needs: [resolve_release_target, publish, verify_core_npm_registry]
-    if: ${{ always() && ((inputs.publish_openclaw_npm && needs.publish.result == 'success') || (inputs.publish_docker_only && needs.verify_core_npm_registry.result == 'success')) }}
+    if: ${{ always() && !contains(inputs.tag, '-alpha.') && ((inputs.publish_openclaw_npm && needs.publish.result == 'success') || (inputs.publish_docker_only && needs.verify_core_npm_registry.result == 'success')) }}
     uses: ./.github/workflows/docker-release.yml
     with:
       tag: ${{ inputs.tag }}
       release_sha: ${{ needs.resolve_release_target.outputs.sha }}
+      prepared_run_id: ${{ needs.resolve_release_target.outputs.prepared_docker_run_id }}
+      prepared_run_attempt: ${{ needs.resolve_release_target.outputs.prepared_docker_run_attempt }}
+      prepared_artifact_name: ${{ needs.resolve_release_target.outputs.prepared_docker_artifact_name }}
+      prepared_manifest_sha256: ${{ needs.resolve_release_target.outputs.prepared_docker_manifest_sha256 }}
       focused_release_evidence_run_id: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && inputs.focused_release_evidence_run_id || '' }}
       focused_release_evidence_run_attempt: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
       focused_release_evidence_workflow_full_ref: ${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}
@@ -1828,7 +1837,7 @@ jobs:
   finalize_github_release:
     name: Finalize GitHub release
     needs: [publish, publish_docker]
-    if: ${{ always() && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' }}
+    if: ${{ always() && inputs.publish_openclaw_npm && needs.publish.result == 'success' && (needs.publish_docker.result == 'success' || (contains(inputs.tag, '-alpha.') && needs.publish_docker.result == 'skipped')) }}
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:

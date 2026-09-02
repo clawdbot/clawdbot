@@ -1002,6 +1002,7 @@ describe("chat run error", () => {
       ],
       placementStartup: {
         sessionKey: "main",
+        targetKind: "profile",
         phase: "failed",
         startedAt: 1,
         retryable: true,
@@ -1047,6 +1048,7 @@ describe("chat run error", () => {
         ],
         placementStartup: {
           sessionKey: "agent:main:startup",
+          targetKind: "profile",
           phase: "failed",
           startedAt: 1,
           retryable: true,
@@ -1164,6 +1166,7 @@ describe("chat run error", () => {
     const container = renderChatView({
       placementStartup: {
         sessionKey: "agent:main:startup",
+        targetKind: "profile",
         phase: "failed",
         startedAt: 1,
         error: "⚠️ Provisioning failed\n  Final diagnostic line  ",

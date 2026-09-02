@@ -255,7 +255,12 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       import {syncBuiltinESMExports} from 'node:module';
       import {setTimeout as tick} from 'node:timers/promises';
       import {inspectManagedProcessGroup} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/managed-child-process.mts")).href)};
+      import {createVitestResourceOwner} from ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-resource-ownership.mts")).href)};
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
+      // Only the deliberately escaped writer has a fixture-owned namespace.
+      // Other compiler failures must still retain the outer runner's claims.
+      const resources=mode==='uncertain output'?createVitestResourceOwner(directory):undefined;
+      if(resources) Object.assign(process.env,{TMPDIR:directory,TMP:directory,TEMP:directory});
       const file=name=>path.join(directory,name);
       fs.writeFileSync(file('input'),'compiler input');
       const spawn=cp.spawn;
@@ -309,6 +314,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             if(mode==='uncertain output') {
               assert.equal(fs.existsSync(generation),true);
               process.kill(leafPid,0);
+              assert.throws(()=>resources.assertReleased(),/Unreleased Vitest resource claim/);
               fs.writeFileSync(file('leaf-release'),'release');
               while(!fs.existsSync(file('leaf-read'))) await tick(5);
               assert.equal(fs.readFileSync(file('leaf-read'),'utf8'),'retained input');
@@ -322,6 +328,11 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         child.kill('SIGTERM');
         await completion.catch(()=>{});
         await owner.dispose().catch(()=>{});
+        assert.equal(inspectManagedProcessGroup(child,{errorPolicy:'indeterminate'}),'dead');
+        if(compiler) {
+          assert.equal(closed,true);
+          assert.equal(inspectManagedProcessGroup(compiler,{errorPolicy:'indeterminate'}),'dead');
+        }
         if(fs.existsSync(file('leaf-pid'))) {
           leafPid=Number(fs.readFileSync(file('leaf-pid'),'utf8'));
           try {process.kill(leafPid,'SIGKILL');} catch(error) {if(error.code!=='ESRCH') throw error;}
@@ -334,7 +345,15 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       }
     `,
         );
-        const result = await node([driver]);
+        const command = node([driver]);
+        await workerArtifacts.fixtureLifetime.verifyCleanup(async () => {
+          const result = await command;
+          // Driver death must not turn its private pending claims into disposable inputs.
+          expect(result.stdout.split("\n")).toContain(
+            JSON.stringify({ mode, cleanup: "joined", generationRemoved: true }),
+          );
+        });
+        const result = await command;
         console.log(result.stdout);
         expect(result.code, result.stderr + result.stdout).toBe(0);
       }),

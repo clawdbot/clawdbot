@@ -212,6 +212,49 @@ describe("startSshPortForward", () => {
     await tunnel.stop();
   });
 
+  it.each(["term", "kill"] as const)(
+    "keeps every stop caller pending until the child exits after %s",
+    async (exitAfter) => {
+      spawnFakeSshListening();
+      const tunnel = await startSshPortForward({
+        target: "me@example.com:2222",
+        localPortPreferred: await getFreePort(),
+        remotePort: 18789,
+        timeoutMs: 1000,
+      });
+      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
+        killed: boolean;
+        kill: (signal?: string) => boolean;
+      };
+      const signals: string[] = [];
+      child.kill = (signal = "SIGTERM") => {
+        child.killed = true;
+        signals.push(signal);
+        return true;
+      };
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const settled: number[] = [];
+      const waits = [
+        tunnel.stop().then(() => settled.push(1)),
+        tunnel.stop().then(() => settled.push(2)),
+      ];
+      try {
+        await vi.advanceTimersByTimeAsync(exitAfter === "kill" ? 1500 : 0);
+        expect(signals).toEqual(exitAfter === "kill" ? ["SIGTERM", "SIGKILL"] : ["SIGTERM"]);
+        expect(settled).toEqual([]);
+        child.emit("exit", null, exitAfter === "kill" ? "SIGKILL" : "SIGTERM");
+        await Promise.all(waits);
+        expect(settled).toHaveLength(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        child.emit("exit", null, "SIGTERM");
+        child.emit("close", null, "SIGTERM");
+        await Promise.all(waits);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("rejects with the spawn error when ssh binary is missing", async () => {
     vi.useFakeTimers();
     const spawnError = new Error("ENOENT: no such file or directory, spawn /usr/bin/ssh");

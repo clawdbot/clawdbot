@@ -4,6 +4,7 @@ import {
   createSubsystemLogger,
   resolveAgentWorkspaceDir,
   resolveMemorySearchConfig,
+  resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
@@ -43,6 +44,7 @@ import {
   resolveMemoryIndexManagerCacheKey,
   type MemoryIndexManagerPurpose,
 } from "./manager-registry.js";
+import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
@@ -381,11 +383,20 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
 
       const runGeneration = async (keywordOnly: boolean) => {
-        this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
+        // Reset must not overtake embeddings awaiting their final incremental writes.
+        // All sync generations own the existing maintenance lease through cleanup.
+        const lock = await waitForMemoryReindexLock(
+          resolveUserPath(this.settings.store.databasePath),
+        );
         try {
-          await this.runSync(params);
+          this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
+          try {
+            await this.runSync(params);
+          } finally {
+            this.endSyncProviderGeneration();
+          }
         } finally {
-          this.endSyncProviderGeneration();
+          lock.release();
         }
       };
       try {

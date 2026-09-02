@@ -77,7 +77,7 @@ const C1_OSC = "\u009d";
 const C1_ST = "\u009c";
 const BEL = "\u0007";
 
-type AnsiToken = { kind: "ansi"; value: string; width: number } | { kind: "char"; value: string };
+type AnsiToken = { kind: "ansi" | "char"; value: string; width: number };
 
 // Keep this order when closing and reopening styles at cell wrap boundaries.
 const SGR_CATEGORIES = [
@@ -296,7 +296,7 @@ function wrapLine(text: string, width: number): string[] {
       continue;
     }
     for (const grapheme of splitGraphemes(segment.value)) {
-      tokens.push({ kind: "char", value: grapheme });
+      tokens.push({ kind: "char", value: grapheme, width: 0 });
     }
   }
 
@@ -317,10 +317,7 @@ function wrapLine(text: string, width: number): string[] {
   const bufToString = (slice?: AnsiToken[]) => (slice ?? buf).map((t) => t.value).join("");
 
   const bufVisibleWidth = (slice: AnsiToken[]) =>
-    slice.reduce(
-      (acc, token) => acc + (token.kind === "char" ? visibleWidth(token.value) : token.width),
-      0,
-    );
+    slice.reduce((acc, token) => acc + token.width, 0);
 
   const pushLine = (value: string) => {
     const cleaned = value.replace(/\s+$/, "");
@@ -328,20 +325,6 @@ function wrapLine(text: string, width: number): string[] {
       return;
     }
     lines.push(cleaned);
-  };
-
-  const trimLeadingSpaces = (tokensLocal: AnsiToken[]) => {
-    while (true) {
-      const firstCharIndexLocal = tokensLocal.findIndex((token) => token.kind === "char");
-      if (firstCharIndexLocal < 0) {
-        return;
-      }
-      const firstChar = tokensLocal[firstCharIndexLocal];
-      if (!firstChar || !isSpaceChar(firstChar.value)) {
-        return;
-      }
-      tokensLocal.splice(firstCharIndexLocal, 1);
-    }
   };
 
   const flushAt = (breakAt: number | null) => {
@@ -369,9 +352,10 @@ function wrapLine(text: string, width: number): string[] {
       return;
     }
 
+    // breakAt follows the latest break character (including spaces/tabs), or is buf.length.
+    // The retained suffix therefore has no leading space tokens to trim.
     const rest = buf.slice(breakAt);
     pushLine(`${bufToString(left)}${closeOsc8}${closeSgr}`);
-    trimLeadingSpaces(rest);
     if (openOsc8) {
       rest.unshift({ kind: "ansi", value: openOsc8, width: 0 });
     }
@@ -420,14 +404,15 @@ function wrapLine(text: string, width: number): string[] {
       flushAt(buf.length);
       continue;
     }
-    const charWidth = visibleWidth(ch);
-    makeRoomFor(charWidth);
+    // Soft-wrap remainders reuse the width measured when each token entered the buffer.
+    token.width = visibleWidth(ch);
+    makeRoomFor(token.width);
     if (bufVisible === 0 && isSpaceChar(ch)) {
       continue;
     }
 
     buf.push(token);
-    bufVisible += charWidth;
+    bufVisible += token.width;
     if (isBreakChar(ch)) {
       lastBreakIndex = buf.length;
     }

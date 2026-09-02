@@ -528,7 +528,10 @@ export const en: TranslationMap & {
       waitingForIdle: "Waiting for active work",
     },
     dialog: {
-      restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
+      disconnected:
+        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
+      restarting:
+        "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
     },
     channel: {},
     installKind: {},
@@ -545,7 +548,7 @@ export const en: TranslationMap & {
       "The update outcome is unknown. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
     triage: {
       hostHint:
-        "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host. Diagnose the cause before retrying.",
+        "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     },
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
@@ -985,7 +988,7 @@ export const en: TranslationMap & {
     ownerYou: "{name} (You)",
     withParticipant: "with {name}",
     withMoreParticipants: "+{count} more",
-    assignToMe: "Assign to me",
+    assignToMe: "Me",
     assignTo: "Assign to…",
     filterControls: "Session filters",
     filters: "Filters",
@@ -3093,6 +3096,8 @@ export const en: TranslationMap & {
     tryAgain: "Try again",
     loading: "Loading plugins…",
     searching: "Searching ClawHub…",
+    searchResultCountOne: "{count} result",
+    searchResultCount: "{count} results",
     fromClawHub: "From ClawHub",
     noClawHubResultsBody: "ClawHub has no results for “{query}”.",
     noDiscoverMatchTitle: "Nothing to discover matches",
