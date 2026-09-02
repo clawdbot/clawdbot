@@ -161,6 +161,31 @@ afterEach(() => {
 });
 
 describe("Slack Web API routing", () => {
+  it("omits the empty body emitted by auth.test", async () => {
+    for (const key of TEST_ENV_KEYS) {
+      delete process.env[key];
+    }
+    const globalFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, team_id: "TMOCK", user_id: "UMOCK" }), {
+        status: 200,
+      }),
+    );
+    try {
+      const client = createSlackWebClient("xoxb-empty-body-proof", {
+        retryConfig: { retries: 0 },
+        timeout: 1000,
+      });
+
+      await expect(client.auth.test()).resolves.toMatchObject({ ok: true });
+      expect(globalFetch).toHaveBeenCalledOnce();
+      const init = globalFetch.mock.calls[0]?.[1];
+      expect(init).toMatchObject({ method: "POST" });
+      expect(init).not.toHaveProperty("body");
+    } finally {
+      globalFetch.mockRestore();
+    }
+  });
+
   it("retries two transient startup auth failures", async () => {
     const fetchMock = vi
       .fn()
