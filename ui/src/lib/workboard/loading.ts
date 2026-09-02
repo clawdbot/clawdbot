@@ -123,6 +123,7 @@ async function loadWorkboardInternal(
       let preserveLifecycleTaskRefreshFailure = false;
       let nextTaskRefreshError: string | null = null;
       let nextUnfilteredCursor: string | null | undefined;
+      let rejectedUnfilteredCursor: string | undefined;
       if (taskLinkState.cards.length > 0) {
         const preparedTaskSummaries = taskLinkState.cards.flatMap((card) => {
           const task = previousTasksByCardId.get(card.id);
@@ -188,6 +189,7 @@ async function loadWorkboardInternal(
             taskRefreshError = confirmationResult.error;
           }
           nextUnfilteredCursor = pollResult?.nextUnfilteredCursor;
+          rejectedUnfilteredCursor = pollResult?.rejectedUnfilteredCursor;
           applyTaskSummariesToState(taskLinkState, taskSummaries, { missingTaskIds });
           preserveLifecycleTaskRefreshFailure =
             params.taskRefresh === "linked" &&
@@ -212,10 +214,24 @@ async function loadWorkboardInternal(
       if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
         return false;
       }
+      if (
+        rejectedUnfilteredCursor &&
+        runtime.defaultTaskDiscoveryCursor === rejectedUnfilteredCursor
+      ) {
+        delete runtime.defaultTaskDiscoveryCursor;
+      }
       if (params.taskRefresh === "linked" && shouldDeferWorkboardLiveRefresh(state)) {
+        if (rejectedUnfilteredCursor && nextTaskRefreshError) {
+          setWorkboardLifecycleTaskRefreshFailed(state, true, {
+            host: params.host,
+            requestUpdate: params.requestUpdate,
+          });
+          state.lifecycleTaskRefreshError = nextTaskRefreshError;
+          state.lastRefreshError = nextTaskRefreshError;
+        }
         return false;
       }
-      if (nextUnfilteredCursor !== undefined) {
+      if (!rejectedUnfilteredCursor && nextUnfilteredCursor !== undefined) {
         if (nextUnfilteredCursor) {
           runtime.defaultTaskDiscoveryCursor = nextUnfilteredCursor;
         } else {
