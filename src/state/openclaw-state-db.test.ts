@@ -1688,6 +1688,82 @@ describe("openclaw state database", () => {
     ).toEqual({ review_id: "review-v15", backup_id: "backup-v15" });
   });
 
+  it("upgrades a v15 store without Workshop tables before creating their v16 schema", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE skill_workshop_proposal_events;
+      DROP TABLE skill_workshop_proposal_rollbacks;
+      DROP TABLE skill_workshop_collection_reviews;
+      DROP TABLE skill_workshop_proposals;
+      PRAGMA foreign_keys = ON;
+      PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const migrated = openOpenClawStateDatabase(options);
+    expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(16);
+    for (const tableName of ["skill_workshop_proposals", "skill_workshop_collection_reviews"]) {
+      expect(
+        migrated.db
+          .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+          .get(tableName),
+      ).toEqual({ name: tableName });
+    }
+    expect(migrated.db.prepare("PRAGMA table_info(skill_workshop_proposals)").all()).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "workspace_dir" }),
+        expect.objectContaining({ name: "claim_released_time" }),
+      ]),
+    );
+    expect(
+      migrated.db.prepare("PRAGMA table_info(skill_workshop_collection_reviews)").all(),
+    ).not.toEqual(expect.arrayContaining([expect.objectContaining({ name: "workspace_dir" })]));
+  });
+
+  it("rejects a v15 store missing a stable table through runtime open and Doctor repair", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = materializeCurrentStateDatabase(stateDir);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const damaged = new DatabaseSync(databasePath);
+    damaged.exec(`
+      DROP TABLE apns_registration_tombstones;
+      PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
+    `);
+    damaged.close();
+
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      "missing table apns_registration_tombstones",
+    );
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("missing table apns_registration_tombstones")],
+    });
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'apns_registration_tombstones'",
+          )
+          .get(),
+      ).toBeUndefined();
+      expect(readSqliteNumberPragma(after, "user_version")).toBe(15);
+    } finally {
+      after.close();
+    }
+  });
+
   it("resolves under the shared state database directory", () => {
     const stateDir = createTempStateDir();
 

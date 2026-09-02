@@ -240,6 +240,11 @@ export const openClawStateMigrationAssertions = new Map([
     (database: DatabaseSync, options: { pathname: string }) =>
       assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 14 }),
   ],
+  [
+    15,
+    (database: DatabaseSync, options: { pathname: string }) =>
+      assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 15 }),
+  ],
 ]);
 
 export function markCurrentStateSchemaVersion(
