@@ -487,6 +487,25 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       accountId: "ops",
       config: { token: "changed" },
     });
+    for (const [channelEnabled, accountEnabled, expected] of [
+      [true, false, false],
+      [true, true, true],
+      [true, undefined, true],
+      [false, true, false],
+      [undefined, false, false],
+    ] as const) {
+      const current = createExternalChannelTestConfig({
+        pluginDir,
+        channels: {
+          "external-chat": {
+            enabled: channelEnabled,
+            accounts: { ops: { enabled: accountEnabled } },
+          },
+        },
+      });
+      const account = second?.config.resolveAccount(current, "ops");
+      expect(second?.config.isEnabled?.(account, current)).toBe(expected);
+    }
     expect(
       pluginIds(
         listReadOnlyChannelPluginsForConfig(
@@ -497,50 +516,6 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     ).not.toContain("external-chat");
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
-  });
-
-  it("honors named account enablement in manifest-only inventory", () => {
-    const { pluginDir } = writeExternalSetupChannelPlugin({
-      manifestChannelConfig: true,
-    });
-    const metadataSnapshot = resolvePluginMetadataSnapshot({
-      config: createExternalChannelTestConfig({ pluginDir }),
-    });
-    const resolveEnabled = (channels: Record<string, Record<string, unknown>>) => {
-      const cfg = createExternalChannelTestConfig({ pluginDir, channels });
-      const plugin = listReadOnlyChannelPluginsForConfig(cfg, { metadataSnapshot }).find(
-        (entry) => entry.id === "external-chat",
-      );
-      expect(plugin).toBeDefined();
-      const account = plugin!.config.resolveAccount(cfg, "ops");
-      expect(plugin!.config.isEnabled).toBeDefined();
-      return plugin!.config.isEnabled!(account, cfg);
-    };
-
-    expect(
-      resolveEnabled({
-        "external-chat": {
-          enabled: true,
-          accounts: { ops: { enabled: false } },
-        },
-      }),
-    ).toBe(false);
-    expect(
-      resolveEnabled({
-        "external-chat": {
-          enabled: true,
-          accounts: { ops: { enabled: true } },
-        },
-      }),
-    ).toBe(true);
-    expect(
-      resolveEnabled({
-        "external-chat": {
-          enabled: true,
-          accounts: { ops: {} },
-        },
-      }),
-    ).toBe(true);
   });
 
   it("reevaluates persisted auth without replacing manifest adapters or loading channel runtime", () => {
