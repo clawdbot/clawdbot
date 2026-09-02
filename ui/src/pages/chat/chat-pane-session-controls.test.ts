@@ -270,6 +270,51 @@ describe("chat pane composer controls", () => {
     );
   });
 
+  it("patches an identity-less session while its first identity materializes", async () => {
+    const patchResult = createDeferred<Record<string, never>>();
+    const patch = vi.fn(() => patchResult.promise);
+    const key = "agent:main:first-materialization";
+    const selectedSession = { key, kind: "direct" as const, permissionMode: "guarded" as const };
+    const state = {
+      connected: true,
+      connectionEpoch: 1,
+      client: {},
+      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
+      sessionKey: key,
+      sessionsResult: { defaults: {}, sessions: [selectedSession] },
+      chatModelCatalog: [],
+      chatModelSwitchPromises: {},
+    } as unknown as ChatPageHost;
+    const controls = renderChatPaneComposerControls({
+      state,
+      selectedSession,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    });
+
+    expect(controls.permissionPicker.disabled).toBe(false);
+    const selection = controls.permissionPicker.onSelect("workspace");
+    await vi.waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        key,
+        { permissionMode: "workspace" },
+        expect.objectContaining({ expectedSessionId: undefined }),
+      ),
+    );
+    state.sessionsResult = {
+      defaults: {},
+      sessions: [{ ...selectedSession, permissionMode: "workspace", sessionId: "materialized" }],
+    } as ChatPageHost["sessionsResult"];
+    patchResult.resolve({});
+    await selection;
+
+    expect(state.chatError).toBeNull();
+  });
+
   it.each([
     {
       label: "successful update after switching sessions",

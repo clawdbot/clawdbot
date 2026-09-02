@@ -33,7 +33,7 @@ type SessionActionCallbacks = Pick<
 >;
 
 type PendingPermissionChange = {
-  expectedSessionId: string;
+  expectedSessionId?: string;
   nextMode: ChatPermissionPickerProps["mode"];
   ownsSelection: () => boolean;
   pending: boolean;
@@ -208,19 +208,14 @@ export function renderChatPaneComposerControls(params: {
     permissionPicker: {
       canSelectFull,
       defaultMode: agentDefaultPermissionMode,
-      disabled: !permissionAccess.allowed || !expectedSessionId,
-      disabledReason: !permissionAccess.allowed
-        ? permissionAccess.reason
-        : !expectedSessionId
-          ? t("mcpServers.sessionUnavailable")
-          : undefined,
+      disabled: !permissionAccess.allowed,
+      disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
       mode: currentChange ? currentChange.nextMode : selectedSession?.permissionMode,
       pending: permissionPending,
       onSelect: async (permissionMode) => {
         const activeChange = permissionChanges.get(permissionScopeKey);
         if (
           !permissionAccess.allowed ||
-          !expectedSessionId ||
           !ownsSelection() ||
           selectedSession?.permissionModePending ||
           (activeChange?.pending && activeChange.ownsSelection())

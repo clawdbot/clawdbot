@@ -569,9 +569,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
 
   const refreshReplacementResult = (agentId?: string | null): Promise<SessionRefreshOutcome> => {
     const options = { ...lastListOptions };
-    const normalizedAgentId = agentId?.trim();
-    if (normalizedAgentId) {
-      options.agentId = normalizedAgentId;
+    if (agentId?.trim()) {
+      options.agentId = agentId.trim();
     }
     const previousOutcomeRevision = refreshOutcomeRevision;
     return refreshInternal({ ...options, force: true }, false).then(() =>
@@ -580,7 +579,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   };
   const refreshReplacement = (agentId?: string | null) =>
     refreshReplacementResult(agentId).then(() => undefined);
-
   return {
     primaryList: () => primaryList,
     get requestRevision() {
@@ -652,6 +650,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     },
     refreshReplacement,
     refreshReplacementResult,
+    invalidateForegroundPublication: () => void ++foregroundPublicationGeneration,
     /** The row as currently published. The archived/all sidebars render their
      * own snapshot, so a displayed row can be absent from the primary state.
      * Lists refresh independently, so when both hold the row the primary one

@@ -39,6 +39,7 @@ type SessionMutationsHost = {
   redecorateLists: () => void;
   notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
   clearThink: (key: string, agentId?: string | null) => void;
+  claimPermissionProjection: (key: string, agentId?: string | null) => () => boolean;
   retirePullRequestSummary: (key: string) => void;
 };
 
@@ -243,6 +244,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let modelPatchStarted = false;
     let modelPatchRevision = 0;
     const modelPatchToken = Symbol("session-model-patch");
+    let ownsPermissionProjection = () => true;
     const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
     const startModelPatch = () => {
       if (!managesModelOverride || modelPatchStarted || !ownsModelOverride()) {
@@ -373,6 +375,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
         }
       }
       startOptimisticPatch();
+      if (Object.hasOwn(patchParams, "permissionMode")) {
+        ownsPermissionProjection = host.claimPermissionProjection(key, options.agentId);
+      }
       const result = await requestSessionPatch(scope.client, key, patchParams, options);
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);
@@ -382,6 +387,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
         host.clearThink(normalizedKey, options.agentId);
       }
       if (Object.hasOwn(patchParams, "permissionMode")) {
+        if (!ownsPermissionProjection()) {
+          settleOptimisticPatch(true);
+          return result;
+        }
         // The successful RPC is the first durable acknowledgement; events may
         // drop and the follow-up list may fail, so record its fenced fact now.
         patchRowLocal(
@@ -441,6 +450,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
           return (await reconcileConfirmedPreviousConnection(scope, options.agentId))
             ? result
             : null;
+        }
+        if (Object.hasOwn(patchParams, "permissionMode") && !ownsPermissionProjection()) {
+          settleOptimisticPatch(true);
+          return result;
         }
       }
       settleOptimisticPatch(true);
