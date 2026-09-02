@@ -370,6 +370,11 @@ Sidebar visibility belongs to the current tab and is not remembered across tabs,
 Pending approvals also contribute an attention chip above the sidebar footer;
 select it to open the owning Approvals page.
 
+When an approval appears inline in a different session, **Approval requested by session**
+uses the requesting session's loaded title, not the open conversation's title. If that
+metadata is unavailable, the normal session-name fallback remains until it loads.
+This label does not change which request the approval buttons resolve.
+
 ## What it can do (today)
 
 <AccordionGroup>
