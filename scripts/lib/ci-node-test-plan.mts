@@ -200,7 +200,7 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // their file partitions, runner classes, and profile-specific estimates.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-export const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
+const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
@@ -2703,23 +2703,28 @@ function createCompactNodeTestShardBundles(
       const pretestBuildMode = mergeVitestPretestBuildModes(
         bin.map((group) => group.pretestBuildMode),
       );
+      // Keep logical classes and packing stable. The runner admits overlap only
+      // after measuring capacity; exclusive and runtime-building jobs stay serial.
+      const planConcurrency =
+        (options.runnerBackend ?? "blacksmith") === "blacksmith" &&
+        bin.length > 1 &&
+        !isExclusiveCompactGroup(firstGroup) &&
+        !firstGroup.requiresDist &&
+        !pretestBuildMode
+          ? 2
+          : 1;
       compactJobs.push({
         checkName,
         groups: bin,
         ...(pretestBuildMode ? { pretestBuildMode } : {}),
         requiresDist: firstGroup.requiresDist,
-        runner,
+        runner: planConcurrency === 2 ? EXTRA_LARGE_NODE_TEST_RUNNER : runner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
         // Whole-config groups run entire suites; keep their generous timeout.
         ...(bin.some((group) => !group.includePatterns)
           ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
           : {}),
-        // Every compact bin runs its plans serially. Overlapping two Vitest
-        // runs on one runner starves timing-sensitive tests on both runner
-        // classes (worker-startup timeouts on 4 vCPU, UI-animation and
-        // lock-timing flakes on 8 vCPU), and the packed weights are
-        // contention-inflated so serializing is roughly wall-neutral.
-        planConcurrency: 1,
+        planConcurrency,
         predictedSeconds: estimateBinSeconds(bin),
       });
     }

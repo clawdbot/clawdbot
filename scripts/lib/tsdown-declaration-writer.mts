@@ -146,6 +146,10 @@ export async function writeTsdownDeclarations(
         if (!state) {
           params.inputSignature([]);
         }
+        // Record the lookup before compilation replaces the signature and cache record.
+        console.error(
+          `[${label}] ${name}: cache ${state?.fresh ? "hit" : "miss"} (${state?.reason ?? "disabled"})`,
+        );
         return { name, output: groupOutput, required, identity, plan, step, params, state };
       });
       const required = prepared.flatMap((group) => group.required);

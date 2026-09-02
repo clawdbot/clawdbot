@@ -10393,14 +10393,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   );
 
   it.each([
-    ["pull_request", "compact", "blacksmith", 130],
-    ["pull_request", "precise", "github", 130],
-    ["push", "compact", "hybrid", 80],
+    ["pull_request", "compact", "blacksmith", 120],
+    ["pull_request", "precise", "github", 120],
+    ["push", "compact", "hybrid", 64],
     ["workflow_dispatch", "compact", "blacksmith", null],
   ] as const)(
     "bounds the final Node matrix for %s %s plans",
     (eventName, selection, runnerProfile, limit) => {
-      for (const count of [limit ?? 130, (limit ?? 130) + 1]) {
+      for (const count of [limit ?? 120, (limit ?? 120) + 1]) {
         const hasFallback = eventName === "pull_request" && selection === "compact";
         const nodeTestShards = Array.from({ length: count - Number(hasFallback) }, (_, index) => ({
           checkName: `node-admission-${index}`,

@@ -1498,7 +1498,7 @@ jobs:
               }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
-          const nodeMatrixLimit = compactPlanMode === "pull-request" ? 130 : 80;
+          const nodeMatrixLimit = compactPlanMode === "pull-request" ? 120 : 64;
           if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
             throw new Error(
               `Canonical ${eventName} Node matrix has ${nodeTestNonDistShards.length} jobs, exceeding limit ${nodeMatrixLimit}`,
@@ -3169,6 +3169,16 @@ jobs:
             [[ -f "$runner" ]]
           fi
           node --import tsx "$runner"
+
+      - &runner_memory_peak_step
+        name: Record runner memory peak
+        if: always()
+        shell: bash
+        run: |
+          # This includes setup and every child process, not just the test step.
+          if peak_memory="$(cat /sys/fs/cgroup/memory.peak 2>/dev/null)"; then
+            echo "runner cgroup peak memory bytes=$peak_memory"
+          fi
 
       - name: Save docs i18n Go cache
         if: always() && matrix.requires_go == true && needs.preflight.outputs.cache_write_allowed == 'true' && steps.docs-i18n-go-cache.outputs.cache-hit != 'true'
@@ -5210,6 +5220,10 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || runner.environment != 'self-hosted' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
 
+      - name: Report runner resources
+        run: |
+          node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+
       - name: Run changed Docker seed owner lanes
         env:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
@@ -5218,6 +5232,8 @@ jobs:
           OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
         run: pnpm test:docker:all
+
+      - *runner_memory_peak_step
 
   ci-gate:
     permissions:

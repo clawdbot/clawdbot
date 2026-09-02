@@ -547,7 +547,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(groupNames(updated)).toEqual(groupNames(fallback));
 
       // Two complete, compatible configs share setup without changing either
-      // process envelope. Keep the native profile as an unchanged control.
+      // process envelope. Only Blacksmith requests capacity for overlapping plans.
       const fixtureConfigs = [
         "test/vitest/vitest.hooks.config.ts",
         "test/vitest/vitest.secrets.config.ts",
@@ -572,7 +572,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             shard_name: shardName,
           })),
         );
-        expect(packed[0]?.planConcurrency).toBe(1);
+        expect(packed[0]?.planConcurrency).toBe(profile === "blacksmith" ? 2 : 1);
+        expect(packed[0]?.runner).toBe(
+          profile === "blacksmith" ? EXTRA_LARGE_NODE_TEST_RUNNER : base[0]?.runner,
+        );
         expect(packed[0]?.predictedSeconds).toBe(profile === "hybrid" ? 122 : 140);
       } finally {
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
@@ -588,11 +591,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       runnerBackend: "hybrid",
     };
     const fallback = createNodeTestShardBundles(options);
+    expect(
+      fallback
+        .filter((shard) => !shard.requiresDist)
+        .every((shard) => (shard.predictedSeconds ?? Infinity) <= 210),
+    ).toBe(true);
     // Runtime consumers retain their build floor without unrelated Doctor work.
     // The complete CLI catalog still leaves its slow gateway files alone.
     expect(
       fallback
         .filter((shard) => !shard.requiresDist)
+        .filter((shard) =>
+          shard.groups.some((group) => isExclusiveCompactShardName(group.shard_name)),
+        )
         .filter((shard) => !((shard.predictedSeconds ?? Infinity) <= 150))
         .map((shard) => ({
           groups: shard.groups.map((group) => group.shard_name),
@@ -638,7 +649,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
     );
     expect(tail?.predictedSeconds).toBeGreaterThanOrEqual(140);
-    expect(tail?.predictedSeconds).toBeLessThanOrEqual(150);
+    expect(tail?.predictedSeconds).toBeLessThanOrEqual(210);
   });
 
   it.each([
@@ -850,6 +861,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             true,
           );
           expect(plan.some((shard) => shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)).toBe(false);
+          expect(plan.every((shard) => shard.planConcurrency === 1)).toBe(true);
         }
         const cliProcessJobs = plan.filter((shard) =>
           shard.groups.some((group) =>
@@ -915,7 +927,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(
       compact.every((shard) =>
         shard.groups.every(
-          (group) => group.requiresDist === shard.requiresDist && group.runner === shard.runner,
+          (group) =>
+            group.requiresDist === shard.requiresDist && group.runner === shard.groups[0]?.runner,
         ),
       ),
     ).toBe(true);
@@ -943,9 +956,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Cheap stripes may legally co-locate in one bin; only existence matters.
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
-    // Spawn/signal-timing suites never mix with regular groups, and every
-    // compact bin runs serially: overlapping Vitest runs flake timing-
-    // sensitive tests on both runner classes.
+    // Timing-sensitive and runtime-building jobs stay serial. Ordinary Blacksmith
+    // bins may overlap only with the larger capacity request; logical groups stay intact.
     for (const shard of [
       ...pullRequestCompact,
       ...githubPullRequestCompact,
@@ -956,8 +968,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ).length;
       if (exclusiveCount > 0) {
         expect(exclusiveCount).toBe(shard.groups.length);
+        expect(shard.planConcurrency).toBe(1);
       }
-      expect(shard.planConcurrency).toBe(1);
+      if (shard.planConcurrency === 2) {
+        expect(pullRequestCompact).toContain(shard);
+        expect(shard.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
+        expect(shard.groups.length).toBeGreaterThan(1);
+        expect(shard.pretestBuildMode).toBeUndefined();
+        expect(shard.requiresDist).toBe(false);
+      } else {
+        expect(shard.planConcurrency).toBe(1);
+        expect(shard.runner).toBe(shard.groups[0]?.runner);
+      }
     }
     expect(
       pullRequestCompact.filter((shard) =>
@@ -1122,7 +1144,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const startupCoreJob = compact.find((shard) =>
       shard.groups.some((group) => group.shard_name === "agentic-control-plane-startup-core"),
     );
-    expect(startupCoreJob?.runner).toBe(DEFAULT_NODE_TEST_RUNNER);
+    expect(startupCoreJob?.runner).toBe(
+      startupCoreJob?.planConcurrency === 2
+        ? EXTRA_LARGE_NODE_TEST_RUNNER
+        : DEFAULT_NODE_TEST_RUNNER,
+    );
     expect(
       startupCoreJob?.groups.find(
         (group) => group.shard_name === "agentic-control-plane-startup-core",
@@ -1150,8 +1176,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(largeJobs.length + smallJobs.length + extraLargeJobs.length + distJobs.length).toBe(
       compact.length,
     );
-    expect(largeJobs.every((shard) => shard.runner === DEFAULT_NODE_TEST_RUNNER)).toBe(true);
-    expect(smallJobs.every((shard) => shard.runner === BUNDLED_NODE_TEST_RUNNER)).toBe(true);
+    expect(
+      largeJobs.every((shard) =>
+        shard.groups.every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER),
+      ),
+    ).toBe(true);
+    expect(
+      smallJobs.every((shard) =>
+        shard.groups.every((group) => group.runner === BUNDLED_NODE_TEST_RUNNER),
+      ),
+    ).toBe(true);
     expect(extraLargeJobs[0]?.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
     for (const shard of [
       ...compact,
@@ -1619,18 +1653,18 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
     const runtimeParts = placements.filter(({ group }) => group.pretestBuildMode === "runtime");
     expect(runtimeParts).toHaveLength(1);
+    expect(runtimeParts[0]?.job.planConcurrency).toBe(1);
     expect(runtimeParts[0]?.group.includePatterns).toEqual(doctorRuntimeTargets);
     expect(placements.some(({ group }) => group.pretestBuildMode === undefined)).toBe(true);
     expect(placements.flatMap(({ group }) => group.includePatterns ?? []).toSorted()).toEqual(
       doctor.includePatterns?.toSorted(),
     );
     expect(new Set(placements.map(({ jobIndex }) => jobIndex)).size).toBe(placements.length);
-    for (const { group, job } of placements) {
+    for (const { group } of placements) {
       expect(group.configs).toEqual(doctor.configs);
       expect(group.env).toEqual(doctor.env);
       expect(group.requiresDist).toBe(doctor.requiresDist);
       expect(group.runner).toBe(BUNDLED_NODE_TEST_RUNNER);
-      expect(job.planConcurrency).toBe(1);
     }
   });
 
@@ -2551,9 +2585,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           .map(({ runner: _runner, ...group }) => group)
           .toSorted((a, b) => a.shard_name.localeCompare(b.shard_name));
       expect(policies(after)).toEqual(policies(before));
-      expect(after.every((shard) => shard.planConcurrency === 1 && shard.groups.length <= 10)).toBe(
-        true,
-      );
+      expect(
+        after.every(
+          (shard) =>
+            shard.groups.length <= 10 &&
+            (shard.planConcurrency === 1 ||
+              (runnerBackend === "blacksmith" &&
+                shard.planConcurrency === 2 &&
+                shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)),
+        ),
+      ).toBe(true);
       expect(after.length).toBeLessThanOrEqual(80);
     },
   );

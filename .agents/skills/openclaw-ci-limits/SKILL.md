@@ -198,8 +198,8 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   holding a superseded run open after workflow cancellation.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 2,
   and Android at 2. Every compact profile has an enforced 80-row budget, plugin
-  fallback has a 50-row budget, and the final Node matrix enforces 80 push or
-  130 PR rows, including precise plans. Excess inventory fails preflight.
+  fallback has a 50-row budget, and the final Node matrix enforces 64 push or
+  120 PR rows, including precise plans. Excess inventory fails preflight.
 - Windows keeps two disjoint file inventories. Jobs requesting the existing
   Blacksmith class admit at most two project processes with one Vitest worker
   each; hosted fallbacks remain serial. Runtime preparation completes before
@@ -216,9 +216,9 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   hosted image; do not require a failed first attempt to select that capacity.
   The current non-Node inventory is 85 rows, or 86 for historical UI targets.
   Excluding those four hosted rows leaves at most 82 potentially eligible jobs.
-  The enforced Node caps therefore give 162 registrations per main run and
-  212 per PR: `4 × 162 + 21 × 212 = 5,100` in the retained peak arrival
-  envelope. The old 19-arrival estimate is obsolete. The remaining 900 below
+  The enforced Node caps therefore give 146 registrations per main run and
+  202 per PR: `4 × 146 + 21 × 202 = 4,826` in the retained peak arrival
+  envelope. The old 19-arrival estimate is obsolete. The remaining 1,174 below
   the 6,000 reference target must cover adjacent repositories, releases and
   carryover; the bounded 2026-09-02 census did not prove that upper bound.
   Treat a single PR concurrency trial separately from a global rollout.
@@ -244,6 +244,14 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
   outliers reuse the existing file splitter. Preserve serial execution, worker
   pins and complete timing-history floors; no blanket increase in sharding.
+- Blacksmith compact bins with multiple ordinary groups request the existing
+  32-vCPU class and two child slots while retaining their logical names, 200/276s
+  packing and complete inventories. Exclusive groups and jobs with runtime
+  preparation stay serial. The canonical shard executor admits two CI children
+  only with at least eight available CPUs and 24 GiB actual memory; otherwise it
+  admits one. Inner project parallelism stays one and each child keeps two
+  Vitest workers. Hosted and hybrid plans remain serial. This adds no jobs;
+  elapsed time, peak memory and cleanup still need native proof.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
