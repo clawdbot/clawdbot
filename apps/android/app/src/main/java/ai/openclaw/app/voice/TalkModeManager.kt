@@ -489,6 +489,18 @@ class TalkModeManager internal constructor(
   @Volatile private var realtimeOutputTurnId: String? = null
   private val realtimeOutputCancellationMutex = Mutex()
 
+  /**
+   * Orders the cancellation fence against realtime frame submission.
+   *
+   * The append worker reads the fence, encodes the frame and hands it to the socket; without this
+   * the fence could be raised between the read and the handoff, and a frame that passed the check
+   * would leave the app after cancellation had begun, attributed to a turn being torn down. Held
+   * by the worker across check-and-submit and by the canceller while it raises the fence, so a
+   * fence, once raised, is ordered after every frame that had already passed the check and before
+   * every frame that had not.
+   */
+  private val realtimeSubmissionMutex = Mutex()
+
   @Volatile
   private var realtimePlaybackEndsAtMs = 0L
 
@@ -1481,29 +1493,32 @@ class TalkModeManager internal constructor(
     realtimeAppendJob =
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         for (frame in audioFrames) {
-          if (!shouldSubmitDequeuedRealtimeFrame(sessionId)) continue
-          val audioBase64 = Base64.encodeToString(frame, Base64.NO_WRAP)
-          val params =
-            buildJsonObject {
-              put("sessionId", JsonPrimitive(sessionId))
-              put("audioBase64", JsonPrimitive(audioBase64))
-              put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
+          // Check and submit under one lock: see [realtimeSubmissionMutex].
+          realtimeSubmissionMutex.withLock {
+            if (!shouldSubmitDequeuedRealtimeFrame(sessionId)) return@withLock
+            val audioBase64 = Base64.encodeToString(frame, Base64.NO_WRAP)
+            val params =
+              buildJsonObject {
+                put("sessionId", JsonPrimitive(sessionId))
+                put("audioBase64", JsonPrimitive(audioBase64))
+                put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
+              }
+            try {
+              sendGatewayRequestFrame(
+                "talk.session.appendAudio",
+                params.toString(),
+                timeoutMs = 8_000,
+              ) { error ->
+                Log.w(tag, "realtime appendAudio failed: ${error.message}")
+                failRealtimeRelay(sessionId, error.message)
+              }
+              // After the call returns, not before it: a send that threw never reached the socket.
+              observeRealtimeFrameEnqueued()
+            } catch (err: Throwable) {
+              if (err is CancellationException) throw err
+              Log.w(tag, "realtime appendAudio failed: ${err.message ?: err::class.simpleName}")
+              failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "request failed")
             }
-          try {
-            sendGatewayRequestFrame(
-              "talk.session.appendAudio",
-              params.toString(),
-              timeoutMs = 8_000,
-            ) { error ->
-              Log.w(tag, "realtime appendAudio failed: ${error.message}")
-              failRealtimeRelay(sessionId, error.message)
-            }
-            // After the call returns, not before it: a send that threw never reached the socket.
-            observeRealtimeFrameEnqueued()
-          } catch (err: Throwable) {
-            if (err is CancellationException) throw err
-            Log.w(tag, "realtime appendAudio failed: ${err.message ?: err::class.simpleName}")
-            failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "request failed")
           }
         }
       }
@@ -3681,7 +3696,9 @@ class TalkModeManager internal constructor(
       sessionId ?: return@withLock true
       turnId ?: return@withLock false
       val clear = CompletableDeferred<String?>()
-      pendingRealtimeOutputClear = clear
+      // Raised under the submission lock, so a frame that already passed the check reaches the
+      // socket before this fence exists, and none that had not can pass it afterwards.
+      realtimeSubmissionMutex.withLock { pendingRealtimeOutputClear = clear }
       try {
         val params =
           buildJsonObject {

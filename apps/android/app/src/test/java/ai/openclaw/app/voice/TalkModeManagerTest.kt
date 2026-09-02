@@ -43,6 +43,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
@@ -1346,6 +1347,109 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun cancellationFenceWaitsForAnInFlightSubmission() =
+    runBlocking {
+      // The boundary the review found unordered: the append worker checks the fence, encodes, and
+      // hands the frame to the socket, while the canceller raises the fence on another thread. A
+      // fence raised inside that window would let a frame that had passed the check leave the app
+      // after cancellation had begun. Both sides now go through one lock, so the canceller waits
+      // for a checked frame to reach the socket, and only then raises the fence and asks the
+      // Gateway to cancel.
+      val app = RuntimeEnvironment.getApplication()
+      val connected = CompletableDeferred<Unit>()
+      val cancelRequested = CompletableDeferred<Unit>()
+      val server = MockWebServer()
+      server.enqueue(
+        MockResponse().withWebSocketUpgrade(
+          object : WebSocketListener() {
+            override fun onOpen(
+              webSocket: WebSocket,
+              response: Response,
+            ) {
+              webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"fence-test","ts":1700000000123}}""")
+            }
+
+            override fun onMessage(
+              webSocket: WebSocket,
+              text: String,
+            ) {
+              val request = Json.parseToJsonElement(text).jsonObject
+              if (request["type"]?.jsonPrimitive?.content != "req") return
+              val id = request.getValue("id").jsonPrimitive.content
+              when (request.getValue("method").jsonPrimitive.content) {
+                // Deliberately never answered, so the canceller stays parked behind its fence.
+                "talk.session.cancelOutput" -> cancelRequested.complete(Unit)
+
+                "connect" -> webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""")
+
+                else -> webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":{}}""")
+              }
+            }
+          },
+        ),
+      )
+      server.start()
+      val sessionJob = SupervisorJob()
+      val managerJob = SupervisorJob()
+      val session =
+        GatewaySession(
+          scope = CoroutineScope(sessionJob + Dispatchers.Default),
+          identityStore = testDeviceIdentityStore(app),
+          deviceAuthStore = DeviceAuthStore(SecurePrefs(app, app.getSharedPreferences("talk-fence-${System.nanoTime()}", 0))),
+          onConnected = { connected.complete(Unit) },
+          onDisconnected = {},
+          onEvent = { _, _ -> },
+        )
+      val manager = createManager(scope = CoroutineScope(managerJob + Dispatchers.Default), session = session)
+      try {
+        session.connect(
+          endpoint =
+            GatewayEndpoint(
+              stableId = "manual|127.0.0.1|${server.port}",
+              name = "Fence test",
+              host = "127.0.0.1",
+              port = server.port,
+              tlsEnabled = false,
+            ),
+          token = "test-token",
+          bootstrapToken = null,
+          password = null,
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.admin"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client = GatewayClientInfo("openclaw-android", "Android fence test", "1.0.0-test", "android", "ui", "fence-test", "android", "test"),
+            ),
+        )
+        withTimeout(5_000) { connected.await() }
+        setPrivateField(manager, "realtimeSessionId", "relay-1")
+        setPrivateField(manager, "realtimeOutputTurnId", "turn-1")
+        val submission = readPrivateField(manager, "realtimeSubmissionMutex") as Mutex
+
+        // A frame has passed the fence check and is on its way to the socket.
+        submission.lock()
+        manager.stopTts()
+        delay(300)
+
+        assertNull("the fence must not be raised while a checked frame is still being submitted", readPrivateField(manager, "pendingRealtimeOutputClear"))
+        assertFalse("cancelOutput must not reach the Gateway ahead of that frame", cancelRequested.isCompleted)
+
+        submission.unlock()
+        withTimeout(5_000) { cancelRequested.await() }
+
+        assertTrue("with the submission finished, the canceller raised the fence and sent cancelOutput", readPrivateField(manager, "pendingRealtimeOutputClear") != null)
+      } finally {
+        managerJob.cancel()
+        session.disconnectAndJoin()
+        sessionJob.cancelAndJoin()
+        server.shutdown()
+      }
+    }
+
+  @Test
   fun pushToTalkPauseWaitsForRealtimeCaptureJobs() =
     runTest {
       val manager = createManager()
@@ -2428,6 +2532,7 @@ class TalkModeManagerTest {
     talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    session: GatewaySession? = null,
     isConnected: () -> Boolean = { true },
     onBeforeSpeak: suspend () -> Unit = {},
     onAfterSpeak: suspend () -> Unit = {},
@@ -2438,8 +2543,8 @@ class TalkModeManagerTest {
     realtimeAudioSinkFactory: RealtimeAudioSinkFactory = RealtimeAudioSinkFactory.AudioTrackBacked,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
-    val session =
-      GatewaySession(
+    val gatewaySession =
+      session ?: GatewaySession(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
         identityStore = testDeviceIdentityStore(app),
         deviceAuthStore = DeviceAuthStore(SecurePrefs(app, app.getSharedPreferences("talk-mode-test-${System.nanoTime()}", 0))),
@@ -2450,7 +2555,7 @@ class TalkModeManagerTest {
     return TalkModeManager(
       context = app,
       scope = scope,
-      session = session,
+      session = gatewaySession,
       isConnected = isConnected,
       onBeforeSpeak = onBeforeSpeak,
       onAfterSpeak = onAfterSpeak,
