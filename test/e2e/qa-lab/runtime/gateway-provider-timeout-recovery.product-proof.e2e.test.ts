@@ -203,17 +203,17 @@ describe.runIf(process.env.OPENCLAW_PROVIDER_TIMEOUT_RECOVERY_PROOF === "1")(
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,
           runtimeEnvPatch: {
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_CHANNELS: "1",
             OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           },
-          mutateConfig: ({ plugins: _plugins, ...config }) => {
+          mutateConfig: (config) => {
             const providerConfig = config.models?.providers?.["mock-openai"];
             if (!providerConfig) {
               throw new Error("mock-openai provider is missing from QA gateway config");
             }
             return {
               ...config,
+              plugins: { enabled: false },
               diagnostics: { enabled: true },
               agents: {
                 ...config.agents,

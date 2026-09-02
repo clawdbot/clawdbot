@@ -1,5 +1,13 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTempDir } from "../../test/helpers/temp-dir.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
+import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
+import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
 import {
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,
@@ -7,15 +15,15 @@ import {
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
 import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
+import {
+  makePluginMetadataIndex as makeIndex,
+  makePluginMetadataManifestRegistry as makeManifestRegistry,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import {
-  loadPluginManifestRegistryCore,
-  type PluginManifestRecord,
-  type PluginManifestRegistry,
-} from "./manifest-registry.js";
+import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   createPluginCache,
   getPluginCache,
@@ -29,6 +37,7 @@ import {
   resolvePluginMetadataSnapshot,
   restorePluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 const { loadPluginRegistrySnapshotWithMetadata, loadPluginManifestRegistryForInstalledIndex } =
   vi.hoisted(() => {
@@ -57,54 +66,6 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
       loadPluginManifestRegistryForInstalledIndex(params),
   };
 });
-
-function makeIndex(pluginId = "demo"): InstalledPluginIndex {
-  const rootDir = `/plugins/${pluginId}`;
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
-    generatedAtMs: 1,
-    installRecords: {},
-    diagnostics: [],
-    plugins: [
-      {
-        pluginId,
-        manifestPath: `${rootDir}/openclaw.plugin.json`,
-        manifestHash: `${pluginId}-manifest`,
-        rootDir,
-        origin: "global",
-        enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
-        compat: [],
-      },
-    ],
-  };
-}
-
-function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
-  const plugin: PluginManifestRecord = {
-    id: pluginId,
-    name: pluginId,
-    channels: [],
-    providers: [pluginId],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    commandAliases: [{ name: `${pluginId}-command` }],
-    rootDir: `/plugins/${pluginId}`,
-    source: `/plugins/${pluginId}/index.js`,
-    manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
-    origin: "global",
-  };
-  return { plugins: [plugin], diagnostics: [] };
-}
 
 describe("plugin metadata snapshot", () => {
   beforeEach(() => {
@@ -167,6 +128,51 @@ describe("plugin metadata snapshot", () => {
       env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_STATE_DIR: "/unselected-state" },
     });
     expect(registry).toBe(snapshot.manifestRegistry);
+  });
+
+  it("refreshes snapshots for the selected environment's discovery policy", async () => {
+    const roots: string[] = [];
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", makeTempDir(roots, "openclaw-metadata-process-"));
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: makeTempDir(roots, "openclaw-metadata-selected-"),
+      };
+      const config = {};
+      writeConfigMachineState("plugins.bundledDiscovery", "compat", { env });
+      clearBundledDiscoveryModeMemo();
+      const index = makeIndex();
+      index.policyHash = resolveInstalledPluginIndexPolicyHash(config, env);
+      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+        source: "persisted",
+        snapshot: index,
+        diagnostics: [],
+      });
+
+      const first = loadPluginMetadataSnapshot({ config, env });
+      expect(first.index.plugins.map((plugin) => plugin.enabled)).toEqual([true]);
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(first);
+
+      // Doctor updates machine policy and the persisted inventory without changing env paths.
+      writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env });
+      clearBundledDiscoveryModeMemo();
+      index.policyHash = resolveInstalledPluginIndexPolicyHash(config, env);
+      index.plugins = index.plugins.map((plugin) => ({ ...plugin, enabled: false }));
+
+      const refreshed = loadPluginMetadataSnapshot({ config, env });
+      expect(refreshed.index.plugins.map((plugin) => plugin.enabled)).toEqual([false]);
+      expect(refreshed.policyHash).toBe(index.policyHash);
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(refreshed);
+
+      writeConfigMachineState("plugins.bundledDiscovery", "compat");
+      clearBundledDiscoveryModeMemo();
+      expect(loadPluginMetadataSnapshot({ config, env })).toBe(refreshed);
+      expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    } finally {
+      envSnapshot.restore();
+      await Promise.all(roots.map(removeBundledDiscoveryStateRoot));
+    }
   });
 
   it("publishes the complete prepared cache and keeps fresh operations outside boot scopes", () => {
@@ -758,6 +764,103 @@ describe("plugin metadata snapshot", () => {
     },
   );
 
+  it("reuses prepared model normalization policies without enumerating declarations", () => {
+    const enumeratePolicies = vi.fn(Reflect.ownKeys);
+    const snapshot = restorePluginMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "first",
+            providers: ["demo"],
+            modelIdNormalization: {
+              providers: { " Demo ": { aliases: { latest: "first-model" } } },
+            },
+          },
+          {
+            id: "last",
+            providers: ["demo"],
+            modelIdNormalization: {
+              providers: new Proxy(
+                { demo: { aliases: { latest: "middle-model", "middle-model": "final-model" } } },
+                { ownKeys: (target) => enumeratePolicies(target) },
+              ),
+            },
+          },
+        ],
+      }),
+    );
+    enumeratePolicies.mockClear();
+
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "demo/latest" } } },
+      models: {
+        providers: {
+          demo: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1",
+            models: [
+              {
+                id: "latest",
+                name: "Latest",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1024,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        for (let repeat = 0; repeat < 4; repeat += 1) {
+          expect(
+            normalizeProviderModelIdWithManifest({
+              provider: " DEMO ",
+              context: { provider: "demo", modelId: "latest" },
+            }),
+          ).toBe("middle-model");
+          expect(
+            normalizeProviderModelIdWithManifest({
+              provider: "missing",
+              context: { provider: "missing", modelId: "latest" },
+            }),
+          ).toBeUndefined();
+          expect(resolveDefaultModelForAgent({ cfg })).toEqual({
+            provider: "demo",
+            model: "final-model",
+          });
+          expect(buildConfiguredModelCatalog({ cfg })).toMatchObject([
+            { provider: "demo", id: "middle-model" },
+          ]);
+        }
+        const context = { provider: "demo", modelId: "latest" };
+        expect(
+          normalizeProviderModelIdWithManifest({ provider: "demo", context, plugins: [] }),
+        ).toBeUndefined();
+        const providers = { demo: { aliases: { latest: "explicit-model" } } };
+        const plugins = [{ modelIdNormalization: { providers } }];
+        expect(normalizeProviderModelIdWithManifest({ provider: "demo", context, plugins })).toBe(
+          "explicit-model",
+        );
+        plugins.splice(0, 1, {
+          modelIdNormalization: {
+            providers: { demo: { aliases: { latest: "changed-explicit-model" } } },
+          },
+        });
+        expect(normalizeProviderModelIdWithManifest({ provider: "demo", context, plugins })).toBe(
+          "changed-explicit-model",
+        );
+      },
+      { trustConfigIdentity: true },
+    );
+
+    expect(enumeratePolicies).not.toHaveBeenCalled();
+  });
+
   it("prepares normalized CLI ownership, provider endpoint, and request facts", () => {
     const index = makeIndex();
     const registry = makeManifestRegistry();
@@ -819,11 +922,23 @@ describe("plugin metadata snapshot", () => {
         diagnostics: [],
       });
 
+      const registry = makeManifestRegistry();
+      registry.plugins = registry.plugins.map((plugin) => ({
+        ...plugin,
+        modelIdNormalization: { providers: { demo: { aliases: { raw: "prepared-model" } } } },
+      }));
+      loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
       const loaded = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
       const { normalizePluginId: _normalizePluginId, ...transfer } = loaded;
       const snapshot = worker ? restorePluginMetadataSnapshot(structuredClone(transfer)) : loaded;
       expect(snapshot.normalizePluginId(" DEMO ")).toBe("demo");
       expect(snapshot.owners.providers.get("demo")).toEqual(["demo"]);
+      expect(snapshot.owners.modelIdNormalizationPolicies.get("demo")).toEqual({
+        aliases: { raw: "prepared-model" },
+      });
+      expect(() =>
+        (snapshot.owners.modelIdNormalizationPolicies as Map<string, unknown>).clear(),
+      ).toThrow("Plugin metadata snapshots are immutable");
       expect(() => (snapshot.owners.providers as Map<string, string[]>).set("other", [])).toThrow(
         "Plugin metadata snapshots are immutable",
       );

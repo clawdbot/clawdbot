@@ -23,6 +23,7 @@ import {
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
+import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
 
 export type OpenClawVitestPool = "forks" | "threads";
 
@@ -160,7 +161,7 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
-  plugins: [createStateSchemaInlinePlugin(repoRoot)],
+  plugins: [createStateSchemaInlinePlugin(repoRoot), compiledSubprocessesPlugin()],
   resolve: {
     alias: [
       {
@@ -179,14 +180,21 @@ export const sharedVitestConfig = {
       },
       {
         find: "discord-api-types/v10",
-        replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
+        replacement: path.join(
+          repoRoot,
+          "extensions",
+          "discord",
+          "test",
+          "discord-api-types-v10-runtime.ts",
+        ),
       },
       {
         find: "discord-api-types/payloads/v10",
         replacement: path.join(
           repoRoot,
+          "extensions",
+          "discord",
           "test",
-          "vitest",
           "discord-api-types-payloads-v10-runtime.ts",
         ),
       },
@@ -366,6 +374,7 @@ export const sharedVitestConfig = {
           "model-catalog-normalize.ts",
         ),
       },
+      sourcePackageAlias("model-catalog-core", "model-catalog-pricing"),
       {
         find: "@openclaw/model-catalog-core/model-catalog-types",
         replacement: path.join(

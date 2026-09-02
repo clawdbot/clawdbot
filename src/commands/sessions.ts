@@ -345,7 +345,11 @@ export async function sessionsCommand(
   const classifyCliProvider = prepareCliProviderClassifier(cfg);
   const activeSince = activeMinutes === undefined ? undefined : Date.now() - activeMinutes * 60_000;
   const sessionEntries = targets.flatMap((target) => {
-    return listSessionEntriesReadOnly({ agentId: target.agentId, storePath: target.storePath })
+    return listSessionEntriesReadOnly({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      projection: "list",
+    })
       .filter(
         ({ entry }) =>
           activeSince === undefined ||

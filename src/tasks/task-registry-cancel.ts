@@ -153,6 +153,7 @@ export async function cancelTaskById(params: {
         await getAcpSessionManager().cancelSession({
           cfg: params.cfg,
           sessionKey: childSessionKey,
+          agentId: task.agentId,
           reason: params.reason?.trim() || "task-cancel",
           expectedRunId: task.runId,
           ...(managedBacking?.runtime === "acp"

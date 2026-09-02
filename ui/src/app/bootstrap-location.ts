@@ -10,7 +10,6 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
-import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import type { ApplicationGateway } from "./context.ts";
 import { waitForGatewayClient } from "./gateway-readiness.ts";
 
@@ -18,6 +17,16 @@ type ReleasedSessionQuery = {
   face: BoardFace;
   sessionKey: string;
 };
+
+// Saved selection only fills an implicit landing. Agent paths remain explicit,
+// even when first-run setup is eligible to run on that same path.
+function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
+  return (
+    !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
+    (routeIdFromPath(location.pathname, basePath) === null ||
+      /^\/chat\/?$/u.test(location.pathname.slice(basePath.length)))
+  );
+}
 
 function resolvePersistedAgentId(
   selectedAgentId: string | null | undefined,
@@ -110,7 +119,7 @@ export function normalizeInitialApplicationLocation(
   fallbackAgentId: string,
   mainKey?: string | null,
 ) {
-  if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
+  if (!isPersistedSessionLanding(location, basePath) || !sessionKey.trim()) {
     return location;
   }
   const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId.trim();
@@ -134,7 +143,7 @@ export async function resolveInitialApplicationLocation(params: {
   if (releasedLocation) {
     return releasedLocation;
   }
-  if (!isDefaultChatLanding(params.location, params.basePath, routeIdFromPath)) {
+  if (!isPersistedSessionLanding(params.location, params.basePath)) {
     return params.location;
   }
   // Explicit routes must start immediately; only the implicit session landing

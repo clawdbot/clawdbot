@@ -5,12 +5,17 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import {
+  isHiddenAssistantStreamText,
+  shouldHideAssistantChatMessage,
+} from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import {
   readSessionChangedEvent,
   type SessionChangedResult,
 } from "../../lib/sessions/reconcile.ts";
 import {
+  resolveUiConversationIdentity,
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -19,15 +24,10 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
+import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
 import { sleep } from "./chat-history-retry.ts";
-import {
-  chatScopedEventSessionMatches,
-  isHiddenAssistantStreamText,
-  loadChatBranches,
-  loadChatHistory,
-  retireChatBranchRequests,
-  shouldHideAssistantChatMessage,
-} from "./chat-history.ts";
+import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
   refreshPullRequestsForStreamedLinks,
@@ -45,7 +45,6 @@ import {
   refreshSessionWorkspace,
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
-import { resolveStoredChatOutboxScope } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
@@ -62,7 +61,8 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { readTerminalReplyRecoveryState } from "./terminal-reply-recovery.ts";
-import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
+import { handleSessionOperationEvent } from "./tool-stream-status.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
 const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
@@ -592,8 +592,7 @@ export function handlePageGatewayEvent(
       const shouldRecoverMissingTerminal = Boolean(
         recoveryRunId &&
         recoveryScope &&
-        getChatSessionProjection(state, state.chatMessages, recoveryScope).runs[recoveryRunId]
-          ?.status === "completed",
+        getChatSessionProjection(state, recoveryScope).runs[recoveryRunId]?.status === "completed",
       );
       const recoveryOwnership =
         shouldRecoverMissingTerminal && payload
@@ -633,7 +632,7 @@ export function handlePageGatewayEvent(
     }
     // A cold Blob read may finish after another connection or retry takes over.
     // Apply the terminal only after its complete user turn owns independent bytes.
-    const scope = resolveStoredChatOutboxScope(
+    const scope = resolveUiConversationIdentity(
       state,
       terminalPayload.sessionKey,
       isUiGlobalSessionKey(terminalPayload.sessionKey)

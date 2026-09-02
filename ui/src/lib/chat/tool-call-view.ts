@@ -189,12 +189,8 @@ function resolveInsertionDiff(
   return lines.length > 0 ? { lines } : null;
 }
 
-function resolvePatchData(args: Record<string, unknown> | null) {
-  return parsePatchView(args);
-}
-
 function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | null {
-  const patch = resolvePatchData(args);
+  const patch = parsePatchView(args);
   if (!patch) {
     return null;
   }
@@ -254,7 +250,7 @@ function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined 
 export function resolveToolCallTargetPaths(name: string, args?: unknown): string[] {
   const record = asRecord(args);
   if (PATCH_TOOL_NAMES.has(normalizeKey(name))) {
-    return resolvePatchData(record)?.paths ?? [];
+    return parsePatchView(record)?.paths ?? [];
   }
   const path = resolvePathArg(record);
   return path ? [path] : [];
@@ -267,7 +263,7 @@ export function resolveToolCallFileOperations(
   if (!PATCH_TOOL_NAMES.has(normalizeKey(name))) {
     return undefined;
   }
-  return resolvePatchData(asRecord(args))?.fileOperations;
+  return parsePatchView(asRecord(args))?.fileOperations;
 }
 
 export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
@@ -442,7 +438,7 @@ function buildToolCallView(
         readNonBlankString(args.query) ??
         readNonBlankString(args.glob))
       : undefined;
-    const path = resolvePathArg(args) ?? (args ? readNonBlankString(args.path) : undefined);
+    const path = resolvePathArg(args);
     if (!pattern && !path) {
       return { kind: "generic" };
     }

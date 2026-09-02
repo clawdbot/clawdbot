@@ -1,7 +1,6 @@
 {
   "$comment": "Gateway events each mobile client intentionally does not handle yet, with a one-line reason. Consumed by scripts/check-protocol-event-coverage.mjs (pnpm check:protocol-coverage). Adding a gateway event without a client handler requires either handling it or adding an entry here; the check also fails when an entry goes stale (event removed or now handled).",
   "ios": {
-    "chat.metadata.changed": "iOS has no model-availability auth gate; chat transport refreshes metadata capabilities during swarm bootstrap, while model choices load on demand.",
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the iOS app.",
     "device.pair.changed": "Device label projection refresh is a Control UI surface; iOS does not render the Gateway Devices page.",

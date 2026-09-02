@@ -6,6 +6,7 @@ read_when:
   - You need to update a preference without leaving contradictory history
   - You are deciding whether something belongs in USER.md or MEMORY.md
   - You want verified GitHub identity and optional commit credit on your Gateway profile
+  - You want to connect a personal or shared GitHub account for publication
 ---
 
 `USER.md` is the optional user-model artifact in an agent workspace. It stores stable preferences, communication style, relationships, and active-project context as directives that can guide future sessions.
@@ -20,9 +21,11 @@ GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve
 
 For new profiles or an unset display name, OpenClaw prefers the public name from the verified GitHub account, falling back to the sign-in provider's name when GitHub has none. A saved name is upgraded only when it exactly matches the current canonical GitHub login, including case. All other saved names remain unchanged, including custom names and previously adopted full names. This takes effect on the next successful identity sync through sign-in, reconnect, or a Profile refresh that retries the lookup; existing profiles are not renamed in a background migration.
 
-The **GitHub account** row is read-only. Generic trusted proxies, token, password, and unauthenticated connections cannot claim a GitHub account, and agent or tool GitHub credentials are never used for this identity. The forwarded Cloudflare Access assertion is connection-scoped: OpenClaw does not persist, export, log, or expose it to the UI or model.
+The **GitHub account** row is read-only. Generic trusted proxies, token, password, and unauthenticated connections cannot claim a GitHub account, and agent or tool GitHub credentials are never used for this identity. Public GitHub account lookups use the Gateway's configured `gateway.controlUi.github.token`, or its process `GH_TOKEN` / `GITHUB_TOKEN` when no credential is configured, to avoid the smaller anonymous API quota. That credential authenticates the API request only; the sign-in provider still determines the person's identity. The forwarded Cloudflare Access assertion is connection-scoped: OpenClaw does not persist, export, log, or expose it to the UI or model.
 
-Identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup; a Cloudflare or GitHub rate limit or network failure returns retryable unavailability without exposing a mutable alias or erasing a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
+When [operator roles](/gateway/operator-scopes#named-operator-roles) are configured, identity verification completes before the WebSocket connection is admitted. If verification is unavailable, the connection returns a retryable profile-verification error with recovery guidance; GitHub rate limits are identified explicitly. A verified Cloudflare email and immutable account ID can reuse their existing profile during a retryable GitHub outage. First-time users must complete verification before receiving role-based access.
+
+Without operator roles, identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup; a Cloudflare or GitHub rate limit or network failure returns retryable unavailability without exposing a mutable alias or erasing a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
 
 Public commit metadata is a separate choice. **Git co-author credit** defaults on for verified accounts. It adds the verified account's public GitHub noreply address to commits created from shared sessions; OpenClaw never requests or stores a private GitHub email for this feature. Signing in as a different numeric GitHub account resets the choice to that default, so one account cannot inherit another account's explicit opt-out.
 
@@ -31,6 +34,32 @@ When your authenticated profile has prompted a session before an agent run, comm
 OpenClaw supplies exact trailers and the ordered contributor list in the model context for that turn and instructs coding agents to retain them through amendments, rebases, and squash commits so credit reaches the final commit merged to the default branch. The Gateway publication broker enforces the same credit directly in its generated commits and pull requests. When the Gateway exposes an external HTTPS session URL, pull requests end with a link to that exact team session. The trailers are not exported through the process or shell environment. Direct Git commands remain ordinary shell execution: OpenClaw does not replace `git` or install repository hooks, so agent instructions and post-commit verification remain their enforcement boundary.
 
 Turning **Git co-author credit** off stops attribution for future runs. It does not rewrite commits that already contain the public trailer.
+
+## GitHub connections
+
+Open **Settings → Profile → GitHub connections** to connect **My GitHub** without changing the shared **System GitHub** account. Both accounts and their connection status remain visible together. Connecting a credential does not change your verified GitHub sign-in identity, display name, avatar, Git co-author credit preference, or OpenClaw permissions.
+
+My GitHub requires an authenticated, durable Gateway profile. An identified operator with `operator.read` can manage only their own connection, even without administrative or general write access. Token/password access alone does not identify a person and cannot create a personal connection. System and per-agent connection changes still require `operator.admin`.
+
+1. Choose **For me** and connect GitHub. For identified administrators, this is the default purpose; **For the system** is an explicit alternative.
+2. Open the displayed `github.com/login/device` link yourself and approve the one-time code. The Gateway verifies the account and keeps the credentials out of browser responses and agent context.
+3. Check the connected account before using it. Personal connections use device authorization; the existing PAT alternative remains available for admin-managed shared connections.
+
+### Publish with your account
+
+For an idle session with a reconciled local worktree, **Publish PR** shows the account that will publish. Keep the effective shared account, or explicitly select **My GitHub**. If the agent has its own override, the shared choice identifies that override rather than calling it the System account. Publication requires `operator.write` and current access to modify the session; connecting your account alone does not grant either permission.
+
+Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, repository previews and discovery, and cloud-worker execution keep their existing credential behavior. Finish and reclaim remote work before publishing it with your personal connection. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
+
+The Gateway binds personal publication to your authenticated profile, the selected account, and the accepted worktree snapshot. Another participant's message cannot switch that account or authorize later work using your connection. If the account becomes unavailable or the workspace changes, publication stops with a recovery action instead of falling back to System or native credentials.
+
+After a Gateway restart, unfinished personal publication requires your explicit confirmation before it continues. Confirmation reuses the original request and checks for an already-created commit, pushed branch, or pull request so a lost response does not blindly repeat the action. A changed connection or incompatible workspace requires a new, explicitly selected action.
+
+### Disconnect and reconnect
+
+Disconnecting My GitHub removes its usable local credentials and prevents unfinished personal work from using that connection. Reconnecting creates a new selection, even for the same GitHub account; old requests do not acquire the new authorization automatically. Disconnecting does not rewrite published commits or revoke the application grant on GitHub. Revoke that grant separately in GitHub's application settings when needed.
+
+Personal connections share the Gateway's existing trusted-host boundary. They prevent another participant from using your connection through the personal GitHub API; they do not isolate credentials from administrators or code with unrestricted access to the Gateway OS account. See [Operator scopes](/gateway/operator-scopes) and [Gateway security](/gateway/security).
 
 ## Profile appearance preferences
 

@@ -632,6 +632,7 @@ export function createSessionsSpawnTool(
           {
             agentSessionKey: opts?.agentSessionKey,
             requesterTurnRunId: opts?.requesterTurnRunId,
+            requesterThinkingLevel: opts?.requesterThinkingLevel,
             completionOwnerKey: opts?.completionOwnerKey,
             agentChannel: opts?.agentChannel,
             agentAccountId: opts?.agentAccountId,

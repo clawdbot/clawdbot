@@ -74,16 +74,19 @@ async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
+  signal?: AbortSignal;
   timeoutMs?: number;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
   return await dispatchSubagentAnnounceAgent(params.agentParams, {
+    cancelOnDeadline: true,
     expectFinal: params.expectFinal,
     forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
       params.agentParams.inputProvenance,
     ),
     operatorRoleActor: { kind: "system" },
     delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
+    signal: params.signal,
     timeoutMs: params.timeoutMs,
     resolveGatewayContext: params.resolveGatewayContext,
   });
@@ -391,6 +394,7 @@ export async function sendSubagentAnnounceDirectly(params: {
                   }
                 : undefined,
             expectFinal: true,
+            signal: params.signal,
             timeoutMs: announceTimeoutMs,
             resolveGatewayContext: params.resolveGatewayContext,
           });
@@ -564,7 +568,18 @@ export async function sendSubagentAnnounceDirectly(params: {
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
       (!params.requireVisibleReply &&
-        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload));
+        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload)) ||
+      // Nested requesters and internal sessions observe the final in their transcript.
+      // Unresolved external origins still require delivery evidence.
+      (!requiresMessageToolDelivery &&
+        hasVisibleNonSilentGatewayPayload &&
+        directAnnounceResult?.deliveryStatus?.status !== "suppressed" &&
+        (params.requesterIsSubagent ||
+          [effectiveDirectOrigin, requesterSessionOrigin].every((origin) =>
+            origin?.channel
+              ? normalizeMessageChannel(origin.channel) === INTERNAL_MESSAGE_CHANNEL
+              : !origin?.to,
+          )));
     const acceptsIntentionalSilentCompletion =
       hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (

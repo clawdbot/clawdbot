@@ -1,5 +1,4 @@
 import { html, nothing } from "lit";
-import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import {
   agentRunFrameActiveStatusParts,
@@ -21,7 +20,6 @@ import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 type MessageGroupRenderOptions = Parameters<typeof renderMessageGroup>[1];
 
 type AgentRunFrameOptions = {
-  questionPrompts: ReadonlyMap<string, QuestionPrompt>;
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroup) => MessageGroupRenderOptions;
   isWorkExpanded: (key: string) => boolean;
@@ -32,10 +30,7 @@ type AgentRunFrameOptions = {
 export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions) {
   const statusParts = agentRunFrameActiveStatusParts(frame);
   if (statusParts) {
-    return renderStreamGroup(statusParts, {
-      ...opts.streamOptions,
-      questionPrompts: opts.questionPrompts,
-    });
+    return renderStreamGroup(statusParts, opts.streamOptions);
   }
   const groups = agentRunFrameGroups(frame);
   const firstAssistant = groups.find((group) => group.role === "assistant");

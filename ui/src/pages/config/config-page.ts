@@ -43,6 +43,7 @@ import {
 import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -88,6 +89,8 @@ import {
   type ConfigViewState,
 } from "./view.ts";
 
+registerSettingsEnglish();
+
 export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
@@ -114,6 +117,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "communications:talk": { routeId: "talk", keepSection: true },
+  "appearance:wizard": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
@@ -1102,6 +1106,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
+        onUpdateChecksChange: (enabled) =>
+          runtimeConfig.patchForm(["update", "checkOnStart"], enabled),
         onAutomaticUpdatesChange: (enabled) =>
           runtimeConfig.patchForm(["update", "auto", "enabled"], enabled),
         onUpdateNow: () =>

@@ -76,6 +76,7 @@ export type QaGatewayChildParams = {
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   forcedRuntime?: RuntimeId;
+  codexMockAutoCompactTokenLimit?: number;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
@@ -201,6 +202,7 @@ export async function prepareQaGatewayChild(
     providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
+    autoCompactTokenLimit: params.codexMockAutoCompactTokenLimit,
   });
   const resolvedProvider = getQaProvider(providerMode);
   const liveProviderIds = resolvedProvider.usesModelProviderPlugins

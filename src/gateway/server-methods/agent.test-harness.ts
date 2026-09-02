@@ -305,7 +305,7 @@ vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: mocks.emitAgentEvent,
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
   getAgentRunContext: vi.fn(() => undefined),
-  hasProjectedAgentRunForSession: vi.fn(() => false),
+  resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   isAgentEventLifecycleGenerationCurrent: (generation: string) =>
     generation === mocks.lifecycleGeneration,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
@@ -316,7 +316,7 @@ vi.mock("../../infra/agent-run-registry.js", () => ({
   claimAgentRunContext: mocks.registerAgentRunContext,
   clearAgentRunContext: mocks.clearAgentRunContext,
   getAgentRunContext: vi.fn(() => undefined),
-  hasProjectedAgentRunForSession: vi.fn(() => false),
+  resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   registerAgentRunContext: mocks.registerAgentRunContext,
 }));
 
@@ -614,6 +614,7 @@ function resetSessionAccessorMocks() {
       : options.message;
     return message
       ? {
+          state: "queued",
           inputId: "test-user-turn",
           message,
           run: (operation) => operation(),

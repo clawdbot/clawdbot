@@ -197,6 +197,108 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun lockedParentRejectsGenericForkAndWorktreeChats() =
+    runTest {
+      for (action in listOf("fork", "worktree")) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            respond("sessions.create", """{"key":"agent:main:dashboard:child"}""")
+            respond(
+              "chat.history",
+              """{"sessionId":"locked-parent","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"locked-parent","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+            )
+            respond("sessions.list", """{"sessions":[]}""")
+          }
+        controller.load("main")
+        runCurrent()
+
+        val accepted =
+          if (action == "fork") {
+            controller.forkSession("main", ownerAgentId = "main") != null
+          } else {
+            controller.startNewChatAwait(worktree = action == "worktree")
+          }
+
+        assertFalse("$action must not create a child of a locked parent", accepted)
+        assertTrue(requests.none { it.first == "sessions.create" })
+        assertTrue("The rejected action needs a visible explanation", !controller.errorText.value.isNullOrBlank())
+        assertEquals("main", controller.sessionKey.value)
+      }
+    }
+
+  @Test
+  fun parentActionsRecheckLockBeforeTransportEnqueue() =
+    runTest {
+      for (fork in listOf(false, true)) {
+        val transportStarted = CompletableDeferred<Unit>()
+        val releaseTransport = CompletableDeferred<Unit>()
+        val creates = mutableListOf<String?>()
+
+        suspend fun request(
+          method: String,
+          paramsJson: String?,
+          withEnqueue: (() -> Unit) -> Unit = { it() },
+        ): String {
+          if (method == "sessions.create") {
+            transportStarted.complete(Unit)
+            releaseTransport.await()
+          }
+          withEnqueue { if (method == "sessions.create") creates += paramsJson }
+          return when (method) {
+            "sessions.create" -> {
+              """{"key":"agent:main:dashboard:child"}"""
+            }
+
+            "chat.history" -> {
+              """{"sessionId":"lineage-parent","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"lineage-parent","modelSelectionLocked":false}}"""
+            }
+
+            "sessions.list" -> {
+              """{"sessions":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+
+        val controller =
+          createChatController(
+            captureRequestLease = {
+              GatewaySession.RequestLease(endpointStableId = "") { method, paramsJson, _, withEnqueue ->
+                request(method, paramsJson, withEnqueue)
+              }
+            },
+          ) { method, paramsJson -> request(method, paramsJson) }
+        controller.load("main")
+        runCurrent()
+        val pending =
+          async {
+            if (fork) {
+              controller.forkSession("main", ownerAgentId = "main") != null
+            } else {
+              controller.startNewChatAwait(worktree = true)
+            }
+          }
+
+        try {
+          transportStarted.await()
+          controller.handleGatewayEvent(
+            "sessions.changed",
+            """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+          )
+        } finally {
+          releaseTransport.complete(Unit)
+        }
+
+        assertFalse("A newly locked parent must reject fork=$fork before enqueue", pending.await())
+        assertTrue("No child-create request may reach the transport", creates.isEmpty())
+        assertEquals("main", controller.sessionKey.value)
+      }
+    }
+
+  @Test
   fun startNewChatRetriesWithoutParentLifecycleAgainstOlderGateway() =
     runTest {
       var createCalls = 0
@@ -234,6 +336,35 @@ class ChatControllerCommandControlsTest {
       assertTrue(creates[1].second.orEmpty().contains("\"agentId\":\"main\""))
       assertFalse(creates.any { it.second.orEmpty().contains("\"label\"") })
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+    }
+
+  @Test
+  fun newSessionCreatesRootSessionFromLockedParentForSelectedAgent() =
+    runTest {
+      for (catalogId in listOf(null, "codex")) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+            respond(
+              "chat.history",
+              """{"sessionId":"locked-session","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"locked-session","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+            )
+            respond("health", "{}")
+            respond("sessions.list", """{"sessions":[]}""")
+          }
+        controller.handleGatewayEvent("health", null)
+        controller.load("main")
+        advanceUntilIdle()
+
+        assertTrue("New session must work with catalog=$catalogId", controller.startNewChatAwait(catalogId = catalogId))
+
+        val create = json.parseToJsonElement(requests.single { it.first == "sessions.create" }.second.orEmpty()).jsonObject
+        assertEquals(setOfNotNull("agentId", catalogId?.let { "catalogId" }), create.keys)
+        assertEquals(JsonPrimitive("main"), create["agentId"])
+        assertEquals(catalogId?.let(::JsonPrimitive), create["catalogId"])
+        assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+        assertEquals(null, controller.errorText.value)
+      }
     }
 
   @Test
@@ -847,10 +978,22 @@ class ChatControllerCommandControlsTest {
               controller.switchSession("agent:main:dashboard:other")
               """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
             }
-            "chat.history" -> """{"sessionId":"other-session","messages":[]}"""
-            "health" -> "{}"
-            "sessions.list" -> """{"sessions":[]}"""
-            else -> "{}"
+
+            "chat.history" -> {
+              """{"sessionId":"other-session","messages":[]}"""
+            }
+
+            "health" -> {
+              "{}"
+            }
+
+            "sessions.list" -> {
+              """{"sessions":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)

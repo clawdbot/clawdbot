@@ -79,6 +79,7 @@ COPY patches ./patches
 COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
 COPY scripts/lib/guard-inventory-utils.mjs ./scripts/lib/guard-inventory-utils.mjs
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
+COPY scripts/lib/package-lifecycle-marker.mjs ./scripts/lib/package-lifecycle-marker.mjs
 COPY scripts/docker/verify-native-addons.sh ./scripts/docker/verify-native-addons.sh
 
 COPY --from=workspace-deps /out/packages/ ./packages/
@@ -231,7 +232,7 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 
 WORKDIR /app
 
-# Install runtime system utilities missing from bookworm-slim.
+# Install missing runtime utilities and the OpenMP library required by llama-server.
 # `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
@@ -245,7 +246,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssh-client openssl procps python3 tini && \
+      ca-certificates curl git hostname libgomp1 lsof openssh-client openssl procps python3 tini && \
     update-ca-certificates
 
 # Keep npm as an operator-facing capability while replacing the base image's

@@ -139,6 +139,56 @@ export function buildCodexMcpServersConfig(config: BundleMcpConfig): CodexMcpSer
   );
 }
 
+/** Side questions need bundle policy without provisioning transports or plugin data directories. */
+export function loadCodexBundleMcpApprovalConfig(
+  params: Pick<LoadCodexBundleMcpThreadConfigParams, "workspaceDir" | "cfg" | "toolOverrides">,
+): CodexMcpServersConfig {
+  const { config } = loadEnabledBundleMcpConfig(params);
+  const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
+  const selected = selectCodexBundleMcpConfig(
+    { mcpServers: { ...config.mcpServers, ...configuredMcp } },
+    configuredMcp,
+    params.toolOverrides,
+  );
+  const { staticServers } = partitionMcpServersByConnectionScope(selected.mcpServers);
+  return Object.fromEntries(
+    Object.keys(staticServers).map((name) => [
+      name,
+      {
+        default_tools_approval_mode:
+          resolveProjectedMcpCodexToolApprovalMode(name, configuredMcp[name] ?? {}) ??
+          resolveProjectedMcpCodexToolApprovalMode(name, config.mcpServers[name] ?? {}),
+      },
+    ]),
+  );
+}
+
+function selectCodexBundleMcpConfig(
+  config: BundleMcpConfig,
+  configuredMcp: ReturnType<typeof normalizeConfiguredMcpServers>,
+  toolOverrides: LoadCodexBundleMcpThreadConfigParams["toolOverrides"],
+): BundleMcpConfig {
+  const serverOverrides = toolOverrides?.mcpServers;
+  return {
+    mcpServers: Object.fromEntries(
+      Object.entries(config.mcpServers)
+        .filter(([name]) => {
+          const override =
+            serverOverrides && Object.hasOwn(serverOverrides, name)
+              ? serverOverrides[name]
+              : undefined;
+          return (
+            override !== false && (override === true || configuredMcp[name]?.enabled !== false)
+          );
+        })
+        .map(([name, server]) => [
+          name,
+          applyCodexSessionMcpToolDenials(name, server, toolOverrides),
+        ]),
+    ),
+  };
+}
+
 function stableJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(stableJsonValue);
@@ -184,24 +234,11 @@ export function loadCodexBundleMcpThreadConfigCore(
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
   const serverOverrides = params.toolOverrides?.mcpServers;
-  const effectiveConfig: BundleMcpConfig = {
-    mcpServers: Object.fromEntries(
-      Object.entries(bundleMcp.config.mcpServers)
-        .filter(([name]) => {
-          const override =
-            serverOverrides && Object.hasOwn(serverOverrides, name)
-              ? serverOverrides[name]
-              : undefined;
-          return (
-            override !== false && (override === true || configuredMcp[name]?.enabled !== false)
-          );
-        })
-        .map(([name, server]) => [
-          name,
-          applyCodexSessionMcpToolDenials(name, server, params.toolOverrides),
-        ]),
-    ),
-  };
+  const effectiveConfig = selectCodexBundleMcpConfig(
+    bundleMcp.config,
+    configuredMcp,
+    params.toolOverrides,
+  );
   const enabledConfiguredMcp = Object.fromEntries(
     Object.entries(configuredMcp).filter(([name, server]) => {
       const override =
@@ -223,6 +260,11 @@ export function loadCodexBundleMcpThreadConfigCore(
   const userStaticServerNames = Object.keys(userStaticServers).toSorted((left, right) =>
     left.localeCompare(right),
   );
+  if (params.preparationOnly && Object.keys(bundleMcp.prepareDataDirsByServer ?? {}).length) {
+    throw new Error(
+      "Native fork preparation cannot provision plugin data directories. Complete plugin setup before retrying.",
+    );
+  }
   const preparedDataDirs = prepareOwnedBundleMcpDataDirs({
     config: effectiveConfig,
     prepareDataDirsByServer: bundleMcp.prepareDataDirsByServer ?? {},

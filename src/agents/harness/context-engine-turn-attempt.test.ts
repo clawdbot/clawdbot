@@ -123,7 +123,6 @@ async function createAcceptedTurnFixture(params: {
       sessionIdUsed: target.sessionId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
-      sessionFile: `sqlite://${target.sessionId}`,
       promptError: false,
       aborted: false,
       yieldAborted: false,
@@ -158,7 +157,6 @@ describe("accepted context-engine turn finalization", () => {
       },
       sessionIdUsed: admission.sessionId,
       sessionKey: admission.sessionKey,
-      sessionFile: admission.storePath,
       promptError: false,
       aborted: false,
       yieldAborted: false,
@@ -282,7 +280,6 @@ describe("accepted context-engine turn finalization", () => {
       sessionIdUsed: target.sessionId,
       sessionKey: target.sessionKey,
       sessionTarget: target,
-      sessionFile: "sqlite://accepted-turn",
       promptError: false,
       aborted: false,
       yieldAborted: false,
@@ -415,30 +412,62 @@ describe("accepted context-engine turn finalization", () => {
       ),
     ).toMatchObject({ state: "blocked", failure: "non-descendant" });
 
-    const abortedAdmission = {
-      ...admission,
-      logicalTurnId: "logical-turn-3",
-    };
-    enqueueContextEngineTurnIntent({
-      admission: abortedAdmission,
-      database,
-      engineId: "test",
-      isHeartbeat: false,
+    for (const flag of ["aborted", "promptError", "yieldAborted"] as const) {
+      const rejectedAdmission = { ...admission, logicalTurnId: `logical-turn-${flag}` };
+      enqueueContextEngineTurnIntent({
+        admission: rejectedAdmission,
+        database,
+        engineId: "test",
+        isHeartbeat: false,
+      });
+      await finalizeAcceptedContextEngineTurn({
+        facts: {
+          ...baseFacts,
+          [flag]: true,
+          boundary: { ...baseFacts.boundary, admission: rejectedAdmission },
+        },
+        lease,
+        warn,
+      });
+      expect(commitTurn, flag).toHaveBeenCalledOnce();
+      expect(
+        database.db
+          .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
+          .get(rejectedAdmission.logicalTurnId),
+      ).toBeUndefined();
+    }
+  });
+
+  it.each([
+    { name: "physical session", change: { sessionIdUsed: "other-session" } },
+    { name: "caller key", change: { sessionKey: "other-key" } },
+    { name: "target agent", change: { sessionTarget: { agentId: "other-agent" } } },
+    { name: "target session", change: { sessionTarget: { sessionId: "other-session" } } },
+    { name: "target key", change: { sessionTarget: { sessionKey: "other-key" } } },
+    { name: "terminal session", terminal: { sessionId: "other-session" } },
+    { name: "terminal key", terminal: { sessionKey: "other-key" } },
+    { name: "terminal agent", terminal: { agentId: "other-agent" } },
+    { name: "terminal store", terminal: { storePath: "other-store" } },
+  ])("does not commit a candidate with mismatched $name", async ({ change, terminal }) => {
+    const { facts } = await createAcceptedTurnFixture({
+      answer: "answer",
+      logicalTurnId: "mismatched-turn",
+      prefix: [],
+      sessionId: "physical-session",
     });
+    const { commitTurn, lease } = createDurableLease();
+    const warn = vi.fn();
     await finalizeAcceptedContextEngineTurn({
       facts: {
-        ...baseFacts,
-        aborted: true,
-        boundary: { ...baseFacts.boundary, admission: abortedAdmission },
+        ...facts,
+        ...change,
+        boundary: { ...facts.boundary, terminal: { ...facts.boundary.terminal, ...terminal } },
       },
       lease,
       warn,
     });
-    expect(
-      database.db
-        .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
-        .get(abortedAdmission.logicalTurnId),
-    ).toBeUndefined();
+    expect(commitTurn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("target changed after admission"));
   });
 
   it("commits a small accepted turn when the historical prefix exceeds the accepted-turn cap", async () => {

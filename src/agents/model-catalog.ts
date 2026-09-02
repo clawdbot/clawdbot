@@ -451,8 +451,9 @@ export async function buildPreparedModelCatalogSnapshot(
   try {
     const workspaceDir = params.workspaceDir;
     const manifestMetadataSnapshot = params.metadataSnapshot;
-    const manifestPlugins = manifestMetadataSnapshot.plugins;
-    const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
+    const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({
+      manifestPlugins: manifestMetadataSnapshot,
+    });
     const normalizeProvider =
       createPreparedModelCatalogProviderNormalizer(manifestMetadataSnapshot);
     const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
@@ -547,7 +548,7 @@ export async function buildPreparedModelCatalogSnapshot(
     logStage("manifest-models-merged", `entries=${models.length}`);
     const configuredModels = buildConfiguredModelCatalog({
       cfg,
-      manifestPlugins,
+      manifestPlugins: manifestMetadataSnapshot,
     });
     logStage("configured-models-prepared", `entries=${models.length}`);
 

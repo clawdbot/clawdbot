@@ -326,6 +326,7 @@ type DiscordTextSendParams = {
   maxChars?: number;
   onResult?: DiscordSendProgress;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 };
 
 async function sendDiscordText(params: DiscordTextSendParams) {
@@ -345,6 +346,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     maxChars,
     onResult,
     onPlatformSendDispatch,
+    assertPlatformSendAuthorized,
   } = params;
   const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars });
   if (!chunks.length) {
@@ -378,6 +380,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     const result = (await request(
       async () => {
         await onPlatformSendDispatch?.();
+        assertPlatformSendAuthorized?.();
         return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
       },
       "text",
@@ -439,6 +442,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     maxChars,
     onResult,
     onPlatformSendDispatch,
+    assertPlatformSendAuthorized,
   } = params;
   const media = await loadWebMedia(
     mediaUrl,
@@ -485,6 +489,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     res = (await request(
       async () => {
         await onPlatformSendDispatch?.();
+        assertPlatformSendAuthorized?.();
         return createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body });
       },
       "media",
@@ -510,6 +515,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       maxChars,
       onResult,
       onPlatformSendDispatch,
+      assertPlatformSendAuthorized,
     });
   }
   await onResult?.(res, "media", reply?.messageId);
@@ -533,6 +539,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       maxChars,
       onResult,
       onPlatformSendDispatch,
+      assertPlatformSendAuthorized,
     });
     for (const id of followup.platformMessageIds) {
       if (id) {

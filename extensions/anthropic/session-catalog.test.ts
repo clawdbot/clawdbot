@@ -431,7 +431,7 @@ async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
 function message(
   sessionId: string,
   type: "user" | "assistant",
-  text: string,
+  text: string | Record<string, unknown>[],
   index: number,
 ): Record<string, unknown> {
   return {
@@ -442,7 +442,7 @@ function message(
     isSidechain: false,
     message: {
       role: type,
-      content: [{ type: "text", text }],
+      content: typeof text === "string" ? [{ type: "text", text }] : text,
       ...(type === "assistant" ? { model: "claude-opus-4-8" } : {}),
     },
   };
@@ -2390,7 +2390,7 @@ describe("Claude session catalog", () => {
     expect(openSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("reads newest transcript messages first by page while returning each page chronologically", async () => {
+  it("reads newest-first transcript pages without overlapping older history", async () => {
     const home = await createHome();
     const sessionId = "transcript-session";
     const oldUser = await writeLongPagedTranscript({ home, sessionId });
@@ -2405,19 +2405,111 @@ describe("Claude session catalog", () => {
     );
     expect(older.items.map((item) => item.text)).toEqual(["old assistant", oldUser]);
     expect(older.nextCursor).toBeUndefined();
-    await expect(
-      readLocalClaudeTranscriptPage(
-        { threadId: sessionId, limit: 1, cursor: ` ${latest.nextCursor} ` },
-        home,
-      ),
-    ).rejects.toThrow("transcript cursor is invalid");
-    await expect(
-      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: " ", limit: 1 }, home),
-    ).rejects.toThrow("transcript cursor is invalid");
-    await expect(
-      readLocalClaudeTranscriptPage({ threadId: sessionId, cursor: null, limit: 1 }, home),
-    ).rejects.toThrow("transcript cursor is invalid");
+    for (const cursor of [` ${latest.nextCursor} `, " ", null]) {
+      await expect(
+        readLocalClaudeTranscriptPage({ threadId: sessionId, cursor, limit: 1 }, home),
+      ).rejects.toThrow("transcript cursor is invalid");
+    }
   });
+
+  it.each(["gateway:local", "node:paired"])(
+    "pages mixed blocks without overlap on %s",
+    async (hostId) => {
+      const home = await createHome();
+      process.env.CLAUDE_CONFIG_DIR = path.join(home, ".claude");
+      const sessionId = "mixed-block-session";
+      await writeProject({
+        home,
+        entries: [{ sessionId, summary: "Mixed blocks", isSidechain: false }],
+        transcripts: {
+          [sessionId]: (
+            [
+              [
+                "user",
+                [
+                  { type: "text", text: "Original request" },
+                  { type: "text", text: "Oldest continuation 🦞" },
+                ],
+              ],
+              [
+                "user",
+                [
+                  { type: "tool_result", tool_use_id: "call-1", content: "Private tool output" },
+                  { type: "text", text: "Continue the task" },
+                ],
+              ],
+              [
+                "assistant",
+                [
+                  { type: "text", text: "I will check" },
+                  { type: "thinking", thinking: "Private reasoning" },
+                  {
+                    type: "tool_use",
+                    id: "call-2",
+                    name: "read",
+                    input: { file: "private.txt", padding: "x".repeat(3 * 1024 * 1024) },
+                  },
+                ],
+              ],
+              [
+                "assistant",
+                [
+                  { type: "text", text: "Public continuation" },
+                  { type: "thinking", thinking: "x".repeat(2 * 1024 * 1024) },
+                ],
+              ],
+            ] satisfies Array<["user" | "assistant", Record<string, unknown>[]]>
+          ).map(([role, content], index) => message(sessionId, role, content, index + 1)),
+        },
+      });
+      const runtime = createPluginRuntimeMock();
+      runtime.nodes.list = vi.fn(async () => ({
+        nodes: [{ nodeId: "paired", connected: true, commands: [CLAUDE_SESSION_READ_COMMAND] }],
+      }));
+      runtime.nodes.invoke = vi.fn(async ({ params }) => ({
+        payloadJSON: JSON.stringify(await readLocalClaudeTranscriptPage(params, home)),
+      }));
+      const provider = captureCatalogProvider(runtime);
+      const request = { hostId, threadId: sessionId, limit: 1 };
+      const oversized = await provider.read(request);
+      expect(oversized.items.map(({ type, truncated }) => ({ type, truncated }))).toEqual([
+        { type: "other", truncated: true },
+      ]);
+      expect(oversized.items[0]?.raw).toBeUndefined();
+      let cursor = oversized.nextCursor;
+      const items = [];
+      for (const limit of [1, 2, 3, 1]) {
+        expect(cursor).toEqual(expect.any(String));
+        const page = await provider.read({ ...request, cursor, limit });
+        expect(page.items.length).toBeLessThanOrEqual(limit);
+        items.push(...page.items);
+        cursor = page.nextCursor;
+        if (items.length === 1) {
+          expect(page.items[0]?.text?.length).toBeLessThanOrEqual(1_000_000);
+          expect(page.items[0]?.truncated).toBe(true);
+          await expect(
+            provider.read({ ...request, cursor: cursor?.replace(/^block:\d+:/u, "block:999:") }),
+          ).rejects.toThrow("transcript cursor is invalid");
+          await fs.appendFile(
+            path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+            `${JSON.stringify(message(sessionId, "assistant", "Appended reply", 5))}\n`,
+          );
+          expect((await provider.read(request)).items[0]?.text).toBe("Appended reply");
+        }
+      }
+      expect(items.map(({ type, text }) => [type, text])).toEqual([
+        ["toolCall", expect.stringContaining("private.txt")],
+        ["reasoning", "Private reasoning"],
+        ["agentMessage", "I will check"],
+        ["userMessage", "Continue the task"],
+        ["toolResult", "Private tool output"],
+        ["userMessage", "Oldest continuation 🦞"],
+        ["userMessage", "Original request"],
+      ]);
+      expect(new Set(items.map((item) => item.id)).size).toBe(items.length);
+      expect(cursor).toBeUndefined();
+    },
+  );
 
   it("rejects malformed provider read cursors before paired-node I/O", async () => {
     const listNodes = vi.fn(async () => ({ nodes: [] }));
@@ -2425,7 +2517,16 @@ describe("Claude session catalog", () => {
       nodes: { list: listNodes },
     } as unknown as PluginRuntime);
 
-    for (const cursor of ["", " wrapped ", "x".repeat(257)]) {
+    for (const cursor of [
+      "",
+      " wrapped ",
+      "x".repeat(257),
+      "block:0",
+      "block:-1:x",
+      "block:1.5:x",
+      "block:9007199254740992:x",
+      "block:1: ",
+    ]) {
       await expect(
         provider.read({
           hostId: "node:node-a",

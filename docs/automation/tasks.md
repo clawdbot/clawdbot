@@ -177,6 +177,10 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 
 **Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
+Notifications retain the recorded requester agent, even when another agent executes
+the task. With `session.scope: "global"`, queued updates and heartbeat wakes stay
+with that requester; another agent sharing the `global` session key cannot consume them.
+
 When `gateway.publicOrigin` is configured and the Control UI is enabled,
 direct channel notifications include an `Inspect` link to the task's own
 session. Session-queued notifications do not include this link.
@@ -284,6 +288,7 @@ openclaw tasks notify <lookup> state_changes
     | `cancel_stuck`         | warn       | Cancel requested over 5 minutes ago, no active child tasks, still nonterminal |
     | `missing_linked_tasks` | warn/error | Stale managed flow with no linked tasks or wait state                       |
     | `blocked_task_missing` | warn       | Blocked flow points at a task id that no longer exists                      |
+    | `inconsistent_timestamps` | warn    | Flow timestamps are not in chronological order                              |
 
   </Accordion>
   <Accordion title="tasks maintenance">

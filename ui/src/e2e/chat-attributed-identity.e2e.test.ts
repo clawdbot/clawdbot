@@ -1,8 +1,8 @@
-// Control UI E2E tests cover attributed chat identity placement.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, type Locator, type Page } from "playwright/test";
-import { it } from "vitest";
+import { beforeEach, it } from "vitest";
+// Control UI E2E tests cover attributed chat identity placement.
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,16 +11,19 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-function resolveArtifactDir(): string | undefined {
-  return process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined;
-}
+let proofArtifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  proofArtifactDir = parent
+    ? createControlUiE2eArtifactDir("chat-attributed-identity", parent)
+    : undefined;
+});
 
 async function captureProof(page: Page, name: string) {
-  const artifactDir = resolveArtifactDir();
+  const artifactDir = proofArtifactDir;
   if (!artifactDir) {
     return;
   }
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.screenshot({
     animations: "disabled",
     path: path.join(artifactDir, name),
@@ -66,10 +69,7 @@ function expectStableNamePosition(
 
 suite.define(() => {
   it("uses one avatar placement and keeps shared-thread authors readable", async () => {
-    const artifactDir = resolveArtifactDir();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir
@@ -446,10 +446,10 @@ suite.define(() => {
   });
 
   it("keeps an attributed failed send in the transcript with one-line retry metadata", async () => {
-    const artifactDir = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_BUBBLE_DELIVERY_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("bubble-delivery", artifactRoot)
+      : undefined;
     const context = await suite.browser.newContext({ viewport: { height: 760, width: 1180 } });
     const page = await context.newPage();
     const sender = {
@@ -554,10 +554,7 @@ suite.define(() => {
   });
 
   it("keeps missing local-viewer avatar initials through a live rerender", async () => {
-    const artifactDir = resolveArtifactDir();
-    if (artifactDir) {
-      await fs.mkdir(artifactDir, { recursive: true });
-    }
+    const artifactDir = proofArtifactDir;
     const context = await suite.browser.newContext({
       viewport: { height: 760, width: 1180 },
       ...(artifactDir

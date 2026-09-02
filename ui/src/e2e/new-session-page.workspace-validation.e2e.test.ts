@@ -101,7 +101,7 @@ async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
 }
 
 suite.define(() => {
-  it("preserves a selected workspace worktree when branch rediscovery is unavailable", async () => {
+  it("blocks a selected workspace worktree when branch rediscovery is unavailable until cleared", async () => {
     await withNewSessionPage(BASE_CONTEXT, async (page) => {
       const gateway = await installMockGateway(page, {
         workspace: WORKSPACE,
@@ -142,13 +142,20 @@ suite.define(() => {
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("keep this task isolated");
-      await page.getByRole("button", { name: "Start session" }).click();
+      const start = page.getByRole("button", { name: "Start session" });
+      await expect.poll(() => start.isDisabled()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await trigger.click();
+      await worktree.click();
+      await expect.poll(() => trigger.count()).toBe(0);
+      await page.keyboard.press("Escape");
+      await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         agentId: "main",
         message: "keep this task isolated",
-        worktree: true,
       });
+      expect(create.params).not.toHaveProperty("worktree");
     });
   });
 

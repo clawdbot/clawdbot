@@ -4,6 +4,7 @@
  */
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { formatError } from "./server-utils.js";
+import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
 type TalkConnectionCleanupKind = "browser-control" | "realtime-relay" | "transcription-relay";
 
@@ -12,6 +13,7 @@ type UnifiedTalkSessionRecord =
       kind: "realtime-relay";
       connId: string;
       relaySessionId: string;
+      sessionTarget: PreparedTalkSessionTarget;
     }
   | {
       kind: "transcription-relay";
@@ -86,6 +88,23 @@ export function getUnifiedTalkSession(sessionId: string): UnifiedTalkSessionReco
     throw new Error("Unknown Talk session");
   }
   return session;
+}
+
+/** Retains the realtime relay's admitted target without reinterpreting current defaults. */
+export function resolveUnifiedTalkSessionTarget(sessionId: string, connId: string | undefined) {
+  const session = unifiedTalkSessions.get(sessionId);
+  if (session?.kind !== "realtime-relay") {
+    return undefined;
+  }
+  requireUnifiedTalkSessionConn(session, connId);
+  const target = session.sessionTarget;
+  return {
+    target,
+    isCurrent: () =>
+      unifiedTalkSessions.get(sessionId) === session &&
+      session.connId === connId &&
+      session.sessionTarget === target,
+  };
 }
 
 /** Removes a Talk session id after the concrete backend closes. */

@@ -1,10 +1,10 @@
 // Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { getShellConfig } from "../../agents/shell-utils.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -233,8 +233,14 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     let ownershipExtinct = false;
     let stdout = "";
     let stderr = "";
-    let stdoutListener = input.onStdout;
-    let stderrListener = input.onStderr;
+    // Forced settlement (kill-wait fallback, Windows forced close) resolves the
+    // result while inherited pipes stay open, and callers finalize their own
+    // output state from that terminal result. One fence closes every output path
+    // together: a late chunk reaches no listener, capture buffer, or output clock.
+    let outputDetached = false;
+    const detachOutput = () => {
+      outputDetached = true;
+    };
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     let forceKillTimer: NodeJS.Timeout | null = null;
@@ -306,24 +312,17 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     };
 
     try {
-      if (input.mode === "child" && input.argv.length === 0) {
+      if (input.mode !== "anchored-shell" && input.argv.length === 0) {
         throw new Error("spawn argv cannot be empty");
       }
       const adapter =
         input.mode === "pty"
-          ? await (async () => {
-              const { shell, args: shellArgs } = getShellConfig();
-              const ptyCommand = input.ptyCommand.trim();
-              if (!ptyCommand) {
-                throw new Error("PTY command cannot be empty");
-              }
-              return await createPtyAdapter({
-                shell,
-                args: [...shellArgs, ptyCommand],
-                cwd: input.cwd,
-                env: input.env,
-              });
-            })()
+          ? await createPtyAdapter({
+              shell: expectDefined(input.argv[0], "spawn executable"),
+              args: input.argv.slice(1),
+              cwd: input.cwd,
+              env: input.env,
+            })
           : input.mode === "anchored-shell"
             ? await createChildAdapter({
                 anchoredShellCommand: input.command,
@@ -332,6 +331,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               })
             : await createChildAdapter({
                 argv: input.argv,
+                argv0: input.argv0,
                 cwd: input.cwd,
                 env: input.env,
                 exactEnv: input.exactEnv,
@@ -377,6 +377,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       const settleResult = () => {
         resultSettled = true;
         clearResultTimers();
+        detachOutput();
         if (ownershipExtinct) {
           adapter.dispose();
         } else if (!adapter.waitForExtinction) {
@@ -435,27 +436,36 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         );
       }
 
-      const onRawOutput = (listener?: (chunk: Buffer) => void) =>
-        listener &&
-        ((chunk: Buffer) => {
-          listener(chunk);
-          touchOutput();
-        });
+      const withOutputFence =
+        <Chunk>(deliver: (chunk: Chunk) => void, recordsOutput = true) =>
+        (chunk: Chunk) => {
+          if (outputDetached) {
+            return;
+          }
+          if (recordsOutput) {
+            touchOutput();
+          }
+          deliver(chunk);
+        };
       const rawInput = input.mode === "child" ? input : undefined;
-      adapter.onStdout((chunk) => {
-        if (captureOutput) {
-          stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
-        }
-        stdoutListener?.(chunk);
-        touchOutput();
-      }, onRawOutput(rawInput?.onStdoutRaw));
-      adapter.onStderr((chunk) => {
-        if (captureOutput) {
-          stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
-        }
-        stderrListener?.(chunk);
-        touchOutput();
-      }, onRawOutput(rawInput?.onStderrRaw));
+      adapter.onStdout(
+        withOutputFence((chunk: string) => {
+          if (captureOutput) {
+            stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
+          }
+          input.onStdout?.(chunk);
+        }, !rawInput?.onStdoutRaw),
+        rawInput?.onStdoutRaw && withOutputFence(rawInput.onStdoutRaw),
+      );
+      adapter.onStderr(
+        withOutputFence((chunk: string) => {
+          if (captureOutput) {
+            stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
+          }
+          input.onStderr?.(chunk);
+        }, !rawInput?.onStderrRaw),
+        rawInput?.onStderrRaw && withOutputFence(rawInput.onStderrRaw),
+      );
 
       const waitPromise = (async (): Promise<RunExit> => {
         const result = await adapter.wait();
@@ -515,10 +525,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },
-        detachOutput: () => {
-          stdoutListener = undefined;
-          stderrListener = undefined;
-        },
+        detachOutput,
       };
 
       active.set(runId, {

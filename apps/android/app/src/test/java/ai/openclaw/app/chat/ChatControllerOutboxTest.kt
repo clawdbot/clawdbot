@@ -20,6 +20,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -342,9 +344,22 @@ class ChatControllerOutboxTest {
     val historyAgentIds = mutableListOf<String?>()
     var echoDeliveredSendsInHistory = true
     private val deliveredSends = mutableListOf<DeliveredSend>()
+    private val sessionSettings = mutableMapOf<Pair<String?, String?>, JsonObject>()
     var historyMessagesJson = "[]"
     val historyMessagesByAgent = mutableMapOf<String, String>()
     var metadataModelsJson = "[]"
+
+    fun captureRequestLease(gatewayScope: ChatCacheScope?): GatewaySession.RequestLease? {
+      if (!online) return null
+      return GatewaySession.RequestLease(
+        endpointStableId = gatewayScope?.gatewayId.orEmpty(),
+        isCurrentImpl = { online },
+      ) { method, paramsJson, _, withEnqueue ->
+        if (!online) throw GatewayRequestNotEnqueued("offline")
+        withEnqueue {}
+        request(method, paramsJson)
+      }
+    }
 
     suspend fun request(
       method: String,
@@ -382,6 +397,7 @@ class ChatControllerOutboxTest {
           }
           response
         }
+
         "chat.history" -> {
           val params =
             runCatching {
@@ -405,18 +421,42 @@ class ChatControllerOutboxTest {
             }
           val explicitJson = requestedAgentId?.let(historyMessagesByAgent::get) ?: historyMessagesJson
           val explicit = (json.parseToJsonElement(explicitJson) as JsonArray).map { it.toString() }
-          """{"sessionId":"session-1","messages":[${(explicit + echoed).joinToString(",")}]}"""
+          val sessionInfo =
+            buildJsonObject {
+              put("key", JsonPrimitive(requestedKey))
+              put("agentId", JsonPrimitive(requestedAgentId))
+              put("sessionId", JsonPrimitive("session-1"))
+              sessionSettings[requestedAgentId to requestedKey]?.forEach { (key, value) -> put(key, value) }
+            }
+          """{"sessionId":"session-1","sessionInfo":$sessionInfo,"messages":[${(explicit + echoed).joinToString(",")}]}"""
         }
-        "chat.metadata" -> """{"commands":[],"models":$metadataModelsJson}"""
+
+        "chat.metadata" -> {
+          """{"commands":[],"models":$metadataModelsJson}"""
+        }
+
         "sessions.patch" -> {
           settingsPatchStarted?.complete(Unit)
           settingsPatchGate?.await()
           if (settingsPatchFailures.isNotEmpty()) {
             settingsPatchFailures.removeAt(0)?.let { throw it }
           }
+          val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+          val owner = (params["agentId"] as? JsonPrimitive)?.content to (params["key"] as? JsonPrimitive)?.content
+          val settings = sessionSettings[owner].orEmpty().toMutableMap()
+          params["model"]?.let {
+            val model = (it as JsonPrimitive).contentOrNull
+            settings["modelProvider"] = JsonPrimitive(model?.substringBefore('/'))
+            settings["model"] = JsonPrimitive(model?.substringAfter('/'))
+          }
+          params["thinkingLevel"]?.let { settings["thinkingLevel"] = it }
+          sessionSettings[owner] = JsonObject(settings)
           "{}"
         }
-        else -> "{}"
+
+        else -> {
+          "{}"
+        }
       }
     }
   }
@@ -430,6 +470,7 @@ class ChatControllerOutboxTest {
       scope = scope,
       json = json,
       requestGateway = gateway::request,
+      captureRequestLease = gateway::captureRequestLease,
       cacheScope = { ChatCacheScope(gatewayId = "gateway-test", connectionGeneration = 1L) },
       currentDefaultAgentId = { "main" },
       commandOutbox = outbox,
@@ -452,6 +493,7 @@ class ChatControllerOutboxTest {
         scope = scope,
         json = json,
         requestGateway = gateway::request,
+        captureRequestLease = gateway::captureRequestLease,
         cacheScope = cacheScope,
         currentDefaultAgentId = currentDefaultAgentId,
         currentDefaultAgentRevision = currentDefaultAgentRevision,

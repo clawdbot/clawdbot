@@ -6,6 +6,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { z } from "zod";
 import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
@@ -187,6 +188,8 @@ export async function readQaJsonBody(
     await readRequestBodyWithLimit(req, {
       maxBytes: options?.maxBytes ?? QA_HTTP_JSON_MAX_BODY_BYTES,
       timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
+      // Defer destruction so writeQaRequestBodyLimitError can answer before the close.
+      destroyOnLimit: false,
     })
   ).trim();
   if (!text) {
@@ -226,11 +229,21 @@ export function dispatchQaHttpRequest(res: ServerResponse, task: () => Promise<v
   });
 }
 
-export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown): boolean {
+export async function writeQaRequestBodyLimitError(
+  req: IncomingMessage,
+  res: ServerResponse,
+  error: unknown,
+): Promise<boolean> {
   if (!isRequestBodyLimitError(error)) {
     return false;
   }
-  writeError(res, error.statusCode, requestBodyErrorToText(error.code));
+  await sendHttpRequestRejection(
+    req,
+    res,
+    error.statusCode,
+    JSON.stringify({ error: requestBodyErrorToText(error.code) }),
+    "application/json; charset=utf-8",
+  );
   return true;
 }
 
@@ -453,7 +466,7 @@ export async function handleQaBusRequest(params: {
         return true;
     }
   } catch (error) {
-    if (writeQaRequestBodyLimitError(params.res, error)) {
+    if (await writeQaRequestBodyLimitError(params.req, params.res, error)) {
       return true;
     }
     writeError(params.res, 400, error);

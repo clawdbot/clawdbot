@@ -1,3 +1,4 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -5,6 +6,11 @@ import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
+import {
+  formatStartupMigrationFailure,
+  recordStartupMigrationWarnings,
+} from "../infra/state-migrations.messages.js";
+import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   migrationCheckpointIdentitiesMatch,
@@ -17,7 +23,6 @@ import {
   runStartupUpgradeConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
 import {
-  formatStartupMigrationFailure,
   throwStartupMigrationIdentityChanged,
   throwStartupMigrationRefusal,
 } from "./doctor-startup-migration-refusal.js";
@@ -80,20 +85,11 @@ export async function completeStartupMigrationPreflight(params: {
     });
   }
   if (params.gatewayStartupCheckpointRequired) {
-    if (params.startupMigrationWarnings.length > 0) {
-      throwStartupMigrationRefusal(
-        formatStartupMigrationFailure({
-          warnings: [...params.startupMigrationWarnings],
-          blockers: [],
-        }),
-      );
-    }
     if (params.shouldRecordStartupCheckpoint && !params.snapshot.valid) {
       throwStartupMigrationRefusal(
-        formatStartupMigrationFailure({
-          warnings: [],
-          blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-        }),
+        formatStartupMigrationFailure([
+          'OpenClaw config is invalid; run "openclaw doctor --fix" before startup.',
+        ]),
       );
     }
     setActiveDegradedPlugins([]);
@@ -133,8 +129,10 @@ export async function completeStartupMigrationPreflight(params: {
         }
       }
     }
+    recordStartupMigrationWarnings(params.startupMigrationWarnings);
   }
-  if (params.shouldRecordStartupCheckpoint) {
+  // Advisory findings allow service, but must not certify unfinished migration work.
+  if (params.shouldRecordStartupCheckpoint && params.startupMigrationWarnings.length === 0) {
     if (!params.migrationCheckpoint) {
       throw new Error("OpenClaw startup migration checkpoint module was not loaded.");
     }
@@ -143,5 +141,13 @@ export async function completeStartupMigrationPreflight(params: {
       identity: params.migrationCheckpointIdentity,
       lease: params.startupMigrationLease,
     });
+  }
+}
+
+export function noteStateMigrationResult(result: MigrationMessages): void {
+  for (const key of ["changes", "notices", "warnings"] as const) {
+    if (result[key]?.length) {
+      note(result[key].map((entry) => `- ${entry}`).join("\n"), `Doctor ${key}`);
+    }
   }
 }

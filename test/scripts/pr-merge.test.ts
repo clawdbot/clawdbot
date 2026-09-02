@@ -94,7 +94,9 @@ function prepareBody(scenario: BodyScenario) {
       "Unprepared change\n\nCo-authored-by: Unprepared <unprepared@example.com>",
     ]);
   }
-  mkdirSync(join(root, ".local"));
+  // Match the native worktree: Git setup may change cwd when the temp root
+  // itself is inside another repository, so the body belongs in sourceRepo.
+  mkdirSync(join(sourceRepo, ".local"));
   const shell = `
 set -euo pipefail
 source "$BODY_MERGE_SCRIPT"
@@ -102,7 +104,7 @@ PREP_HEAD_SHA="$BODY_HEAD"
 LOCAL_PREP_HEAD_SHA="$BODY_LOCAL_HEAD"
 git() {
   if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then return 1; fi
-  if [[ " $* " = *" interpret-trailers "* ]]; then command git "$@"; else command git -C "$BODY_SOURCE_REPO" "$@"; fi
+  command git -C "$BODY_SOURCE_REPO" "$@"
 }
 PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
 gh_plain() { [ "$BODY_PREVIEW_ERROR" = false ] || return 1; printf '%s\\n' "$BODY_PREVIEW"; }
@@ -112,7 +114,7 @@ file=$(prepare_squash_merge_body 123)
 [ -z "$file" ] || cp "$file" "$BODY_OUTPUT"
 `;
   const result = spawnSync("bash", ["-c", shell], {
-    cwd: root,
+    cwd: sourceRepo,
     encoding: "utf8",
     env: {
       ...process.env,

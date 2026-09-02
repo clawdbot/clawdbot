@@ -10,14 +10,15 @@ export async function predictedId(candidate: string, platform: NodeJS.Platform =
   return generateChromeExtensionIdForPath(await fs.realpath(candidate), platform);
 }
 
-export async function writeSecurePreferences(params: {
+export async function writeChromePreferences(params: {
   userDataDir: string;
   profile: string;
   entries: Record<string, unknown>;
+  filename?: "Preferences" | "Secure Preferences";
 }) {
   const profileDir = path.join(params.userDataDir, params.profile);
   await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-  const file = path.join(profileDir, "Secure Preferences");
+  const file = path.join(profileDir, params.filename ?? "Preferences");
   await fs.writeFile(file, JSON.stringify({ extensions: { settings: params.entries } }), {
     mode: 0o600,
   });

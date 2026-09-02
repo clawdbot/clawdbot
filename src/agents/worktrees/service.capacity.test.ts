@@ -10,7 +10,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { getRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
-  initializeManagedWorktreeTestRepository,
+  useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
 } from "./service.test-support.js";
 
@@ -18,6 +18,7 @@ const execFileAsync = promisify(execFile);
 const GiB = 1024 ** 3;
 
 describe("ManagedWorktreeService capacity", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let stateDir: string;
@@ -46,7 +47,7 @@ describe("ManagedWorktreeService capacity", () => {
     root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-capacity-")),
     );
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     service = new ManagedWorktreeService({ env });
@@ -125,9 +126,25 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await git(repo, "branch", "--list", "openclaw/unknown-space")).toBe("");
   });
 
-  it("serializes distinct repositories competing for the thirtieth checkout", async () => {
-    await fill(29);
-    const otherRepo = await initializeManagedWorktreeTestRepository(path.join(root, "other"));
+  it.each(["create", "restore"])("allows %s above thirty live worktrees", async (operation) => {
+    const snapshot = await service.create({ repoRoot: repo, name: "archived", baseRef: "HEAD" });
+    await service.remove({ id: snapshot.id, reason: "archive" });
+    await fill(30);
+
+    const created =
+      operation === "restore"
+        ? await service.restore({ id: snapshot.id })
+        : await service.create({ repoRoot: repo, name: "next", baseRef: "HEAD" });
+
+    expect(
+      service.listRegistryRecords().filter((record) => record.removedAt === undefined),
+    ).toHaveLength(31);
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+  });
+
+  it("serializes distinct repositories competing for the hundredth checkout", async () => {
+    await fill(99);
+    const otherRepo = await initializeRepository(path.join(root, "other"));
     const otherService = new ManagedWorktreeService({ env });
     const outcomes = await Promise.allSettled([
       service.create({ repoRoot: repo, name: "last-one", baseRef: "HEAD" }),
@@ -137,13 +154,13 @@ describe("ManagedWorktreeService capacity", () => {
     expect(outcomes.filter((result) => result.status === "rejected")).toEqual([
       expect.objectContaining({
         reason: expect.objectContaining({
-          message: expect.stringMatching(/30.*archive|30.*remove/i),
+          message: expect.stringMatching(/100.*archive|100.*remove/i),
         }),
       }),
     ]);
     expect(
       service.listRegistryRecords().filter((record) => record.removedAt === undefined),
-    ).toHaveLength(30);
+    ).toHaveLength(100);
     expect(
       await fs.readFile(
         path.join(stateDir, "worktrees", "downstream-fixture", "kept-0", "README.md"),
@@ -161,10 +178,10 @@ describe("ManagedWorktreeService capacity", () => {
       ownerId: "agent:main:owned",
     };
     const created = await service.create(params);
-    await fill(29);
+    await fill(99);
     availableBytes = GiB;
     expect(await service.create(params)).toEqual(created);
-    expect(service.listRegistryRecords()).toHaveLength(30);
+    expect(service.listRegistryRecords()).toHaveLength(100);
   });
 
   it.each(["space", "count"])(
@@ -175,12 +192,12 @@ describe("ManagedWorktreeService capacity", () => {
       await service.remove({ id: created.id, reason: "archive" });
       const before = getRegistryWorktree(env, created.id);
       if (reason === "count") {
-        await fill(30);
+        await fill(100);
       } else {
         availableBytes = GiB;
       }
       await expect(service.restore({ id: created.id })).rejects.toThrow(
-        reason === "count" ? /30/ : /disk space/i,
+        reason === "count" ? /100/ : /disk space/i,
       );
       expect(getRegistryWorktree(env, created.id)).toEqual(before);
       await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });

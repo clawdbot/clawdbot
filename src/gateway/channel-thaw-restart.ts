@@ -1,17 +1,11 @@
 // Host-thaw channel restart over the public ChannelManager surface.
 import type { ChannelId } from "../channels/plugins/index.js";
-import type { ChannelAccountStartOutcome, ChannelManager } from "./server-channels.js";
+import type { ChannelManager } from "./server-channels.js";
 
 type ThawRestartManager = Pick<
   ChannelManager,
-  "getRuntimeSnapshot" | "isManuallyStopped" | "stopChannel"
-> & {
-  startChannelAccountForRecovery: (
-    channelId: ChannelId,
-    accountId: string,
-    opts: { preserveManualStop: true },
-  ) => Promise<ChannelAccountStartOutcome>;
-};
+  "getRuntimeSnapshot" | "isManuallyStopped" | "stopChannel" | "startChannel"
+>;
 
 export type ThawRestartTarget = { channelId: ChannelId; accountId: string };
 
@@ -77,22 +71,24 @@ export async function restartRunningChannelAccounts(
       if (!current) {
         continue;
       }
-      let startOutcome = await manager.startChannelAccountForRecovery(channelId, accountId, {
+      let startOutcomes = await manager.startChannel(channelId, accountId, {
         preserveManualStop: true,
       });
+      let startOutcome = startOutcomes.get(accountId);
       let restarted = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
-      if (startOutcome.status === "retry" && restarted?.restartPending === true) {
+      if (startOutcome?.status === "retry" && restarted?.restartPending === true) {
         // A timed-out stop uses a two-call recovery contract: the first call
         // requests replacement and the second discards the stale task.
-        startOutcome = await manager.startChannelAccountForRecovery(channelId, accountId, {
+        startOutcomes = await manager.startChannel(channelId, accountId, {
           preserveManualStop: true,
         });
+        startOutcome = startOutcomes.get(accountId);
         restarted = manager.getRuntimeSnapshot().channelAccounts[channelId]?.[accountId];
       }
       // The channel manager owns all failures after handoff through its restart
       // supervisor. Intentional configuration skips are complete; only a
       // transient owner conflict remains this thaw's retry.
-      if (startOutcome.status === "retry") {
+      if (startOutcome?.status === "retry") {
         failedTargets.push(target);
         opts.onError(
           `[${channelId}:${accountId}] host-thaw restart failed: replacement was not handed off (${startOutcome.reason})${restarted?.lastError ? `: ${restarted.lastError}` : ""}`,

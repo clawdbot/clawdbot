@@ -53,6 +53,8 @@ const startManagedServiceUpdateHandoffMock = vi.fn<
 }));
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 const logGatewayInfoMock = vi.fn();
+const writeRestartSentinelMock = vi.fn(async () => undefined);
+const recordLatestUpdateRestartSentinelMock = vi.fn();
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
   validateUpdateRunParams: () => true,
@@ -85,7 +87,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   );
   return {
     ...actual,
-    writeRestartSentinel: async () => undefined,
+    writeRestartSentinel: writeRestartSentinelMock,
   };
 });
 
@@ -147,7 +149,7 @@ vi.mock("../../version.js", () => ({
 
 vi.mock("../server-restart-sentinel.js", () => ({
   getLatestUpdateRestartSentinel: () => null,
-  recordLatestUpdateRestartSentinel: () => undefined,
+  recordLatestUpdateRestartSentinel: recordLatestUpdateRestartSentinelMock,
   refreshLatestUpdateRestartSentinel: async () => null,
 }));
 
@@ -202,6 +204,8 @@ beforeEach(() => {
   startManagedServiceUpdateHandoffMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockClear();
   logGatewayInfoMock.mockClear();
+  writeRestartSentinelMock.mockClear();
+  recordLatestUpdateRestartSentinelMock.mockClear();
 });
 
 function setDevCampaignSchedule(upstreamSha = "frozen-upstream-sha"): void {
@@ -310,6 +314,8 @@ function expectNoUpdateMutation(): void {
   expect(runGatewayUpdatePreflightMock).not.toHaveBeenCalled();
   expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+  expect(writeRestartSentinelMock).not.toHaveBeenCalled();
+  expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
 }
 
 describe("update.run campaign ownership", () => {
@@ -647,11 +653,20 @@ describe("update.run campaign ownership", () => {
     );
   });
 
-  it("clears the campaign adopted by a failed update", async () => {
+  it("records the failure before ending the adopted campaign", async () => {
+    let outcomeWhenCampaignEnded: unknown;
+    clearCampaignMock.mockImplementationOnce(() => {
+      outcomeWhenCampaignEnded = recordLatestUpdateRestartSentinelMock.mock.calls.at(-1)?.[0];
+    });
     await invokeUpdateRun();
 
     expect(adoptCampaignMock).toHaveBeenCalledOnce();
     expect(clearCampaignMock).toHaveBeenCalledOnce();
+    expect(outcomeWhenCampaignEnded).toMatchObject({
+      kind: "update",
+      status: "error",
+      stats: { reason: "build-failed" },
+    });
     expect(logGatewayInfoMock).toHaveBeenCalledWith("update.run failed; adopted campaign cleared", {
       campaignId: "campaign-1",
     });
@@ -701,6 +716,8 @@ describe("update.run campaign ownership", () => {
 
     expect(getCampaignStateMock).toHaveBeenCalledOnce();
     expect(clearCampaignMock).not.toHaveBeenCalled();
+    expect(writeRestartSentinelMock).not.toHaveBeenCalled();
+    expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
     expect(logGatewayInfoMock).not.toHaveBeenCalledWith(
       "update.run failed; adopted campaign cleared",
       expect.anything(),

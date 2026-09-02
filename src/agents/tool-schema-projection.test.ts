@@ -84,6 +84,24 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("rejects raw JSON numeric overflow at the root and inside schemas", ({ skip }) => {
+    if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
+      skip();
+      return;
+    }
+    const overflow: unknown = JSON.rawJSON("1e400");
+    for (const schema of [
+      overflow,
+      { type: "object", properties: { score: { default: overflow } } },
+      { type: "object", anyOf: [{ $dynamicRef: "#value", default: overflow }] },
+    ]) {
+      expect(projectRuntimeToolInputSchema(schema)).toEqual({
+        schema: {},
+        violations: ["parameters is not a JSON value"],
+      });
+    }
+  });
+
   it("reports non-finite values returned by nested toJSON serializers", () => {
     expect(
       projectRuntimeToolInputSchema({

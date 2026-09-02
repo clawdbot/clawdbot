@@ -297,7 +297,6 @@ type FollowupRuntimeParams = {
     "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "sessionId"
   >;
   sessionKey?: string;
-  runtimePolicySessionKey?: string;
   agentHarnessId?: string;
 };
 
@@ -318,15 +317,6 @@ function followupUsesCliRuntime(params: FollowupRuntimeParams, runtimeId: string
   );
 }
 
-function resolveFollowupContextConfigProvider(params: FollowupRuntimeParams): string {
-  const provider = params.followupRun.run.provider;
-  return resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: resolveFollowupAgentRuntimeId(params),
-    config: params.cfg,
-  });
-}
-
 function resolveFollowupAgentRuntimeId(params: FollowupRuntimeParams): string {
   if (params.agentHarnessId) {
     return params.agentHarnessId;
@@ -340,11 +330,8 @@ function resolveFollowupAgentRuntimeId(params: FollowupRuntimeParams): string {
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model,
     agentId: params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg),
-    sessionKey:
-      params.runtimePolicySessionKey ??
-      params.sessionKey ??
-      params.followupRun.run.runtimePolicySessionKey ??
-      params.followupRun.run.sessionKey,
+    // Model/runtime selection belongs to execution; sandbox policy has its own classification key.
+    sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
     sessionEntry: matchingSessionEntry,
   });
 }
@@ -794,7 +781,6 @@ export async function runSessionCompactionIfNeeded(params: {
     followupRun: params.followupRun,
     sessionEntry: entry,
     sessionKey: params.sessionKey,
-    runtimePolicySessionKey: params.runtimePolicySessionKey,
     agentHarnessId: params.agentHarnessId,
   };
   assertActive();
@@ -1262,13 +1248,14 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     const runtime = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.runtimePolicySessionKey ?? params.sessionKey,
+      agentId: params.followupRun.run.agentId,
+      sessionKey: params.sessionKey,
+      classificationSessionKey: params.runtimePolicySessionKey,
     });
-    if (!runtime.sandboxed) {
-      return true;
-    }
-    const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.agentId);
-    return sandboxCfg.workspaceAccess === "rw";
+    const workspaceAccess =
+      runtime.workspaceAccess ??
+      resolveSandboxConfigForAgent(params.cfg, runtime.classificationAgentId).workspaceAccess;
+    return !runtime.sandboxed || workspaceAccess === "rw";
   })();
 
   let entry =
@@ -1282,7 +1269,6 @@ export async function runMemoryFlushIfNeeded(params: {
     followupRun: params.followupRun,
     sessionEntry: entry,
     sessionKey: params.sessionKey,
-    runtimePolicySessionKey: params.runtimePolicySessionKey,
   };
   const runtimeId = resolveFollowupAgentRuntimeId(runtimeParams);
   const isCli =
@@ -1301,12 +1287,10 @@ export async function runMemoryFlushIfNeeded(params: {
     recordMemoryFlushFailure(error, params, activeSessionEntry);
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
-    provider: resolveFollowupContextConfigProvider({
-      cfg: params.cfg,
-      followupRun: params.followupRun,
-      sessionEntry: entry,
-      sessionKey: params.sessionKey,
-      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    provider: resolveContextConfigProviderForRuntime({
+      provider: params.followupRun.run.provider,
+      runtimeId,
+      config: params.cfg,
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
   });
@@ -1663,7 +1647,6 @@ export async function runMemoryFlushIfNeeded(params: {
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             abortSignal: deferredLifecycle.signal,
-            compactionCountOwner: "caller",
             onCompactionAccounting: (fact) => {
               if (fact) {
                 recordTurnCompaction(compaction, fact);

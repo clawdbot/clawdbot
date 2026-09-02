@@ -6,7 +6,10 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import {
+  readAcpSessionMetaForEntry,
+  resolveSessionStorePathForAcp,
+} from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
@@ -210,7 +213,18 @@ function resolveSessionRuntime(params: {
         sessionKey: params.sessionKey,
       })
     : params.sessionKey;
-  const acpMeta = readAcpSessionMeta({ cfg: params.cfg, sessionKey: acpSessionKey });
+  const { agentId: acpAgentId } = resolveSessionStorePathForAcp({
+    cfg: params.cfg,
+    sessionKey: acpSessionKey,
+  });
+  // The summary already captured the session generation. Rereading its store
+  // could pair runtime metadata with a replacement row and reopen cold history.
+  const acpMeta = readAcpSessionMetaForEntry({
+    cfg: params.cfg,
+    sessionKey: acpSessionKey,
+    agentId: acpAgentId,
+    entry: params.entry,
+  });
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId ?? "",

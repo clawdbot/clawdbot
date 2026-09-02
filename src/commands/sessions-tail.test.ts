@@ -364,6 +364,31 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("sqlite ok");
   });
 
+  it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
+    vi.useFakeTimers();
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" })]);
+
+    const run = sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey, tail: "0", follow: true },
+      runtime,
+    );
+    closeOpenClawAgentDatabasesForTest();
+    fs.writeFileSync(storePath, "not a SQLite database");
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to read trajectory progress for ${sessionKey}`),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
     const runtime = makeRuntime();
     const opsSessionKey = "agent:ops:telegram:direct:owner";

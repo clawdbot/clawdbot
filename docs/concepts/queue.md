@@ -130,6 +130,16 @@ not a local-mode command.
 
 ## Scope and guarantees
 
+Ordinary Control UI input sent to an existing session is stored in the per-agent database
+before the Gateway acknowledges it. In `collect` mode, appending the combined
+turn and marking its source inputs consumed happen in one transaction. A browser
+reconnect can reconcile those source inputs even if it missed their final events.
+
+This preserves input, not execution permissions. If the Gateway stops before a
+queued input reaches the transcript, it appears as interrupted input after
+restart and requires an explicit resend. The in-memory queue is not replayed.
+Host sleep that preserves the process can continue the existing queue normally.
+
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound turns; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
 - Heartbeat embedded runs use the bounded `cron-nested` lane for global admission so slow background work does not block inbound replies, while their configured heartbeat session lane still serializes work for that session.

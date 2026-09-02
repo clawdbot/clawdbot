@@ -1,4 +1,7 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  formatErrorMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export class CodexThreadStartRequestError extends Error {
   constructor(cause: unknown) {
@@ -21,7 +24,7 @@ export class CodexRestrictedToolSurfaceAttestationError extends Error {
   }
 }
 
-export class CodexAdoptedThreadActiveError extends Error {
+export class CodexAdoptedThreadActiveError extends AgentHarnessPreflightError {
   constructor() {
     super("Codex session became active in another runner; wait for it to finish before continuing");
     this.name = "CodexAdoptedThreadActiveError";

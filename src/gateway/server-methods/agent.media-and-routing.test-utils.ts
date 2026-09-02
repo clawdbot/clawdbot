@@ -1212,7 +1212,7 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
-      status: "queued",
+      status: "running",
       task: "follow-up",
     });
   });
@@ -1306,7 +1306,7 @@ describe("gateway agent handler", () => {
       lastAccountId: "acct-1",
       lastThreadId: 42,
       totalTokens: 12,
-      status: "queued",
+      status: "running",
     });
     expect(mockCallArg(broadcastToConnIds, 0, 2)).toEqual(new Set(["conn-1"]));
     expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({

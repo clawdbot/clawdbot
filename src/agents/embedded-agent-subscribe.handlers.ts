@@ -92,23 +92,28 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         // the following final snapshot can be repaired before persistence.
         capturePendingAssistantUsage(ctx, evt as never);
         void scheduleEvent(evt, () => {
-          handleMessageUpdate(ctx, evt as never);
+          return handleMessageUpdate(ctx, evt as never);
         });
         return;
       case "message_end": {
         const message = evt.message as AgentMessage;
-        if (message?.role === "assistant") {
+        if (
+          message?.role === "assistant" &&
+          !isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)
+        ) {
+          // Capture provider facts before transcript repair can synthesize $0.
+          // Later messages may arrive while this message's delivery is queued.
+          ctx.recordAssistantUsage(message.usage);
           preservePendingAssistantUsage(message, ctx.state.pendingAssistantUsage);
-          if (!isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)) {
-            // Delivery may still be queued when compaction replaces the context.
-            // Capture this message's usage now, including an explicitly unknown snapshot.
-            ctx.params.onContextAccountingEvent?.({
-              kind: "model",
-              contextTokens: deriveSessionTotalTokens({
-                lastCallUsage: normalizeUsage(message.usage),
-              }),
-            });
-          }
+          ctx.commitAssistantUsage();
+          ctx.noteCompletedAssistant(message);
+          // Context accounting also needs an explicitly unknown usage snapshot.
+          ctx.params.onContextAccountingEvent?.({
+            kind: "model",
+            contextTokens: deriveSessionTotalTokens({
+              lastCallUsage: normalizeUsage(message.usage),
+            }),
+          });
         }
         void scheduleEvent(evt, () => {
           return handleMessageEnd(ctx, evt as never);
@@ -144,6 +149,10 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "compaction_end":
+        // Model facts advance at ingress; delivery and retry waiters stay queued.
+        if (evt.outcome.status === "completed" && evt.outcome.willRetry) {
+          ctx.resetModelForCompactionRetry();
+        }
         // The attempt's replacement hook already recorded its private commit fact.
         // Keep public completion timing and standalone subscriber counting unchanged.
         void scheduleEvent(evt, () => {

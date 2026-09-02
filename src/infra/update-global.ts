@@ -22,6 +22,7 @@ import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 
 /** Supported package managers for OpenClaw global install and update flows. */
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
@@ -313,6 +314,27 @@ export async function collectInstalledGlobalPackageErrors(params: {
   return errors;
 }
 
+// Call only before potentially state-mutating work. Package file validity
+// cannot undo lifecycle state changes or a rejected Doctor result.
+export async function verifyPackageUpdateRecovery(
+  root: string | null | undefined,
+): Promise<UpdateRecovery> {
+  const version = root ? await readPackageVersion(root).catch(() => null) : null;
+  if (
+    root &&
+    version &&
+    (
+      await collectInstalledGlobalPackageErrors({
+        packageRoot: root,
+        expectedVersion: version,
+      }).catch(() => ["verification failed"])
+    ).length === 0
+  ) {
+    return { serviceRestartSafe: true, version };
+  }
+  return { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+}
+
 async function collectSourceCheckoutInstallErrors(packageRoot: string): Promise<string[]> {
   const realPackageRoot = await tryRealpath(packageRoot);
   const hasSourceCheckoutShape =
@@ -382,7 +404,7 @@ async function collectInstalledPackageDistErrors(params: {
 
   const criticalErrors = await collectInstalledPathErrors({
     packageRoot: params.packageRoot,
-    expectedFiles: await collectLegacyInstalledPackageDistPaths(params.packageRoot),
+    expectedFiles: criticalPaths,
     actualFiles: null,
     missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
   });
@@ -399,10 +421,6 @@ async function collectInstalledPackageDistErrors(params: {
     ];
   }
   return criticalErrors;
-}
-
-async function collectLegacyInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
-  return await collectCriticalInstalledPackageDistPaths(packageRoot);
 }
 
 async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
@@ -1129,12 +1147,6 @@ export async function resolveGlobalInstallTarget(params: {
       : honoredDirectNpmRoot
         ? resolveInstallCommandForManager(params.manager, "npm", params.pkgRoot)
         : normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
-  const globalRoot =
-    requestedCommand.manager === "pnpm" &&
-    command.manager === requestedCommand.manager &&
-    command.command === requestedCommand.command
-      ? requestedPnpmGlobalRoot
-      : await resolveGlobalRoot(command, params.runCommand, params.timeoutMs, params.pkgRoot);
   const pkgRootGlobalRoot = command.manager === "pnpm" ? pnpmPackageRootGlobalRoot : null;
   // The detected npm owner applies to the running package, so its prefix is
   // authoritative. PATH's npm may belong to another Node installation and
@@ -1149,7 +1161,11 @@ export async function resolveGlobalInstallTarget(params: {
     pkgRootGlobalRoot ??
     (command.manager === "npm" ? honoredPackageRootGlobalRoot : null) ??
     npmPackageRootGlobalRoot ??
-    globalRoot;
+    (requestedCommand.manager === "pnpm" &&
+    command.manager === requestedCommand.manager &&
+    command.command === requestedCommand.command
+      ? requestedPnpmGlobalRoot
+      : await resolveGlobalRoot(command, params.runCommand, params.timeoutMs, params.pkgRoot));
   const pnpmIsolatedLayoutVersion =
     pnpmIsolatedPackage?.layoutVersion ??
     resolvePnpmIsolatedLayoutVersion(verifiedPnpmIsolatedGlobalRoot);

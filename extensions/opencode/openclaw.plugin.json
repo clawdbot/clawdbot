@@ -45,23 +45,23 @@
             "reasoning": true,
             "input": ["text", "image"],
             "cost": {
-              "input": 5,
-              "output": 30,
-              "cacheRead": 0.5,
-              "cacheWrite": 6.25,
+              "input": 2,
+              "output": 10,
+              "cacheRead": 0.2,
+              "cacheWrite": 2.5,
               "tieredPricing": [
                 {
-                  "input": 5,
-                  "output": 30,
-                  "cacheRead": 0.5,
-                  "cacheWrite": 6.25,
+                  "input": 2,
+                  "output": 10,
+                  "cacheRead": 0.2,
+                  "cacheWrite": 2.5,
                   "range": [0, 272000]
                 },
                 {
-                  "input": 10,
-                  "output": 45,
-                  "cacheRead": 1,
-                  "cacheWrite": 12.5,
+                  "input": 4,
+                  "output": 15,
+                  "cacheRead": 0.4,
+                  "cacheWrite": 5,
                   "range": [272000]
                 }
               ]
@@ -178,6 +178,7 @@
     },
     "discovery": { "opencode": "runtime" }
   },
+  "modelPricing": { "providers": { "opencode": { "openCode": { "provider": "opencode" } } } },
   "setup": {
     "providers": [
       { "id": "opencode", "envVars": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"] }

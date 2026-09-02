@@ -3,7 +3,10 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "../tool-stream.ts";
 import { renderTranscriptSearch, toggleTranscriptSearch } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import {
@@ -38,6 +41,113 @@ function touchPointerUp(element: Element): void {
 describe("chat transcript rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("keeps exact-run usage visible through final event batching and later corrections", async () => {
+    const runId = "watched-run";
+    const sessionKey = "global";
+    const host = createHost({ sessionKey, chatRunId: runId });
+    const props = threadProps("pane-run-usage", sessionKey, [
+      {
+        role: "user",
+        content: "Check the workspace",
+        timestamp: 1_000,
+        __openclaw: { idempotencyKey: `${runId}:user` },
+      },
+      { role: "assistant", content: "Workspace checked", timestamp: 2_000, runId },
+    ]);
+    props.gatewayClient = createTestGatewayClient(() => null);
+    props.currentAgentId = "first";
+    props.runId = runId;
+    props.runWorking = true;
+    props.selectedSession = {
+      key: sessionKey,
+      kind: "direct",
+      updatedAt: 1,
+      status: "done",
+      lastRunId: "previous-run",
+      endedAt: 1,
+      runtimeMs: 1,
+      outputTokens: 10,
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      props.runUsageById = host.chatRunUsageById;
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    handleAgentEvent(
+      host,
+      agentEvent("sibling-run", 1, "usage", { outputTokens: 900 }, sessionKey),
+    );
+    rerender();
+    transcript.hostConnected();
+    await flushDeferredRowPrune();
+    expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
+
+    handleAgentEvent(host, agentEvent(runId, 1, "usage", { outputTokens: 6_900 }, sessionKey));
+    rerender();
+    expect(requireElement(container, ".chat-working-indicator__tokens").textContent).toBe(
+      "6,900 output tokens",
+    );
+    // Final usage and lifecycle can share one browser render; neither may discard the count.
+    handleAgentEvent(host, agentEvent(runId, 2, "usage", { outputTokens: 6_950 }, sessionKey));
+    handleAgentEvent(host, agentEvent(runId, 3, "lifecycle", { phase: "end" }, sessionKey));
+    props.runId = null;
+    props.runWorking = false;
+    props.selectedSession = {
+      ...props.selectedSession,
+      lastRunId: runId,
+      endedAt: 16_000,
+      runtimeMs: 14_000,
+    };
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+      "6,950 output tokens",
+    );
+    handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 6_951 }, sessionKey));
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+      "6,951 output tokens",
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("sibling-run", 2, "usage", { outputTokens: 1_000 }, sessionKey),
+    );
+    rerender();
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+      "6,951 output tokens",
+    );
+    for (const replaceOwner of [
+      () => {
+        props.currentAgentId = "second";
+      },
+      () => {
+        props.gatewayClient = createTestGatewayClient(() => null);
+      },
+    ]) {
+      replaceOwner();
+      rerender();
+      expect(container.querySelector(".chat-turn-recap")).toBeNull();
+      props.currentAgentId = "first";
+      props.runId = runId;
+      props.runWorking = true;
+      rerender();
+      props.runId = null;
+      props.runWorking = false;
+      rerender();
+      expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
+        "6,951 output tokens",
+      );
+    }
+    props.messages = [
+      ...props.messages,
+      { role: "assistant", content: "Background reply", timestamp: 20_000, runId: "sibling-run" },
+    ];
+    rerender();
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
+    transcript.hostDisconnected();
+  });
 
   it.each([true, false])(
     "keeps browser cards visible with capture limited to the active pane (%s)",
@@ -261,6 +371,92 @@ describe("chat transcript rendering", () => {
     secondTranscript.hostDisconnected();
   });
 
+  it.each(["indexed", "keyed"] as const)(
+    "keeps a settled %s stream replyable while search separates its following tool row",
+    async (kind) => {
+      const paneId = `pane-settled-stream-reply-${kind}`;
+      const sessionKey = "agent:main:main";
+      const runId = "stream-reply-run";
+      const text = "Settled summary";
+      const onSetReply = vi.fn();
+      const props = {
+        ...threadProps(paneId, sessionKey, [
+          {
+            role: "user",
+            content: "Inspect the workspace",
+            timestamp: 1_000,
+            __openclaw: { id: "stream-prompt", idempotencyKey: `${runId}:user` },
+          },
+        ]),
+        runId,
+        runActive: true,
+        runWorking: true,
+        streamStartedAt: 2_000,
+        showToolCalls: true,
+        onSetReply,
+        streamSegments: [
+          {
+            text,
+            ts: 2_000,
+            runId,
+            ...(kind === "keyed" ? { itemId: "settled-segment" } : {}),
+          },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            toolCallId: "following-read",
+            toolName: "read",
+            content: "Tool result",
+            timestamp: 3_000,
+            runId,
+          },
+        ],
+      };
+      const transcript = createTestTranscript();
+      const searchContainer = document.body.appendChild(document.createElement("div"));
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderTranscriptSearch(paneId, rerender), searchContainer);
+        render(renderChatThread({ ...props, onRequestUpdate: rerender }, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        toggleTranscriptSearch(paneId, rerender);
+        transcript.hostConnected();
+        const input = searchContainer.querySelector<HTMLInputElement>("input");
+        expect(input).not.toBeNull();
+        input!.value = text;
+        input!.dispatchEvent(new Event("input", { bubbles: true }));
+        await flushDeferredRowPrune();
+
+        const bubble = requireElement(container, ".chat-group.assistant .chat-bubble");
+        const group = requireClosest(bubble, ".chat-group");
+        const tool = requireElement(container, ".chat-group.tool");
+        expect(bubble.textContent).toContain(text);
+        expect(bubble.classList.contains("streaming")).toBe(false);
+        expect(group.querySelector(".chat-group-footer-actions")).toBeNull();
+        expect(group.querySelector(".chat-reading-indicator")).toBeNull();
+        expect(group.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+        const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+        bubble.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+        const reply = requireElement(document, '.chat-reply-context-menu [role="menuitem"]');
+        expect(reply.textContent).toBe("Reply");
+        reply.click();
+
+        expect(onSetReply).toHaveBeenCalledOnce();
+        expect(onSetReply).toHaveBeenCalledWith({
+          messageId: bubble.dataset.messageId,
+          text,
+          senderLabel: "Molty",
+        });
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
   it("resolves persisted replies to their source and highlights it on click", async () => {
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -408,79 +604,6 @@ describe("chat transcript rendering", () => {
 
     expect(open).toHaveBeenCalledWith("source-message");
     expect(searchContainer.querySelector("input")).toBeNull();
-    transcript.hostDisconnected();
-  });
-
-  it("loads a truncated assistant message once and keeps the full text visible", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const loadFullAssistantMessage = vi.fn().mockResolvedValue({
-      ok: true,
-      message: { role: "assistant", content: "Complete assistant content." },
-    });
-    function rerender() {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    }
-    const props = {
-      ...threadProps("pane-assistant-expand", "agent:work:main", [
-        {
-          role: "assistant",
-          content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-full-1", truncated: true },
-          timestamp: 1_000,
-        },
-      ]),
-      fullMessageAgentId: "work",
-      loadFullAssistantMessage,
-      onRequestUpdate: rerender,
-    };
-    rerender();
-    transcript.hostConnected();
-    transcript.hostUpdated();
-
-    await vi.waitFor(() => expect(container.textContent).toContain("Complete assistant content."));
-    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
-    expect(loadFullAssistantMessage).toHaveBeenCalledWith({
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      messageId: "assistant-full-1",
-    });
-
-    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
-    expect(container.textContent).toContain("Complete assistant content.");
-    expect(loadFullAssistantMessage).toHaveBeenCalledOnce();
-    transcript.hostDisconnected();
-  });
-
-  it("keeps transport-cut assistant text as received when full content is unavailable", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const loadFullAssistantMessage = vi.fn().mockRejectedValue(new Error("offline"));
-    function rerender() {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
-    }
-    const props = {
-      ...threadProps("pane-assistant-retry", "agent:main:main", [
-        {
-          role: "assistant",
-          content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-retry-1", truncated: true },
-          timestamp: 1_000,
-        },
-      ]),
-      loadFullAssistantMessage,
-      onRequestUpdate: rerender,
-    };
-    rerender();
-    transcript.hostConnected();
-    transcript.hostUpdated();
-
-    await vi.waitFor(() => expect(loadFullAssistantMessage).toHaveBeenCalledOnce());
-    expect(container.textContent).toContain("Preview");
-    expect(container.textContent).toContain("...(truncated)...");
-    expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
     transcript.hostDisconnected();
   });
 

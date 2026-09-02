@@ -274,6 +274,17 @@ Matrix uses the shared audio media provider under `tools.media.audio`, such as O
 - The attachment is marked as already transcribed so downstream media tools do not transcribe it again.
 - Set `tools.media.audio.enabled: false` to disable audio transcription globally.
 
+## Reply controls and presentations
+
+Buttons and selection lists in agent replies include readable fallback text and
+structured content under `com.openclaw.presentation`. Stock Matrix clients show
+the text; OpenClaw-aware clients can render the structured controls. Replies that
+contain only controls still produce a room message.
+
+For replies with multiple attachments, the first event carries the controls.
+Streamed replies retain them in the finalized edit. When a table or chart cannot
+be rendered natively, an authored text fallback is preserved.
+
 ## Approval metadata
 
 Matrix native approval prompts are normal `m.room.message` events with OpenClaw-specific content under the `com.openclaw.approval` key. Stock clients still render the text body; OpenClaw-aware clients can read the structured approval id, kind, state, decisions, and exec/plugin details.

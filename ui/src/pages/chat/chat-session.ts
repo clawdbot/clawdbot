@@ -22,7 +22,7 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import type { ChatHistoryResult } from "./chat-history.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 export { getPendingChatPickerPatch };
 
