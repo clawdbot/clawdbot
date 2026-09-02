@@ -1,6 +1,4 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
@@ -45,7 +43,6 @@ import {
   resolveLegacyNpmPackageInstallPath,
   resolveNpmPackageInstallPath,
 } from "./missing-configured-plugin-install.records.js";
-import { isPostCoreConvergencePass } from "./update-phase.js";
 
 export function isActionableClawHubSkippedOutcome(outcome: {
   status: string;
@@ -207,38 +204,6 @@ async function installCandidatePackage(
   const existingNpmPackagePath = npmInstallSpec
     ? resolveExistingCandidateNpmPackagePath({ candidate, npmDir })
     : null;
-  const existingNpmPackageVersion = existingNpmPackagePath
-    ? await readNpmPackageVersion(existingNpmPackagePath)
-    : undefined;
-  if (
-    recordedSource !== "clawhub" &&
-    existingNpmPackagePath &&
-    existingNpmPackageVersion &&
-    npmInstallSpec &&
-    params.mode !== "update" &&
-    isPostCoreConvergencePass(params.env)
-  ) {
-    const capabilityConsent = await prepareConsent(
-      "npm",
-      npmInstallSpec,
-      candidate.expectedIntegrity,
-    );
-    await capabilityConsent.onBeforePluginArtifactCommit({
-      pluginId: candidate.pluginId,
-      stagedArtifactDir: existingNpmPackagePath,
-      mode: "install",
-    });
-    return await adoptExistingNpmPackage({
-      candidate,
-      capabilityConsent,
-      records: params.records,
-      npmInstallSpec,
-      npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
-      pinResolvedRegistrySpec: pinResolvedSpecForStaleRepair,
-      packagePath: existingNpmPackagePath,
-      version: existingNpmPackageVersion,
-    });
-  }
   const sources = resolvePluginInstallSources(candidate, recordedSource);
   if (sources.length === 0) {
     return {
@@ -413,73 +378,6 @@ function resolveExistingCandidateClawHubPackagePath(params: {
   } catch {
     return null;
   }
-}
-
-async function readNpmPackageVersion(packagePath: string): Promise<string | undefined> {
-  try {
-    const parsed = JSON.parse(await readFile(path.join(packagePath, "package.json"), "utf-8")) as {
-      version?: unknown;
-    };
-    return typeof parsed.version === "string" && parsed.version.trim()
-      ? parsed.version.trim()
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function adoptExistingNpmPackage(params: {
-  candidate: DownloadableInstallCandidate;
-  capabilityConsent: Awaited<ReturnType<typeof prepareManagedPluginArtifactConsentHandler>>;
-  records: Record<string, PluginInstallRecord>;
-  npmInstallSpec: string;
-  npmRecordSpec: string;
-  pinResolvedRegistrySpec: boolean;
-  packagePath: string;
-  version: string;
-}): Promise<{
-  records: Record<string, PluginInstallRecord>;
-  changes: string[];
-  notices: string[];
-  warnings: string[];
-}> {
-  const npmName = parseRegistryNpmSpec(params.npmInstallSpec)?.name;
-  const npmResolution = npmName
-    ? {
-        name: npmName,
-        version: params.version,
-        resolvedSpec: `${npmName}@${params.version}`,
-      }
-    : undefined;
-  return {
-    records: {
-      ...params.records,
-      [params.candidate.pluginId]: params.capabilityConsent.applyAcceptedSurface(
-        params.candidate.pluginId,
-        {
-          source: "npm",
-          // Adoption discovers local bytes; only a registry reinstall can establish official trust.
-          sourcePath: params.packagePath,
-          spec: resolveNpmInstallRecordSpec({
-            requestedSpec: params.npmRecordSpec,
-            resolution: npmResolution,
-            pinResolvedRegistrySpec: params.pinResolvedRegistrySpec,
-          }),
-          installPath: params.packagePath,
-          installedAt: new Date().toISOString(),
-          version: params.version,
-          resolvedVersion: params.version,
-          ...(npmName ? { resolvedName: npmName } : {}),
-          ...(npmResolution ? { resolvedSpec: npmResolution.resolvedSpec } : {}),
-        },
-      ),
-    },
-    changes: [
-      `Repaired missing configured plugin "${params.candidate.pluginId}" from existing npm payload ${params.npmInstallSpec}.`,
-    ],
-    notices: [],
-    warnings: [],
-  };
 }
 
 export function resolveCandidateInstallSpec(params: {

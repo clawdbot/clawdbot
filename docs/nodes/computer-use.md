@@ -207,6 +207,10 @@ Provider descriptors declare `contractVersion: 2`. Invalid capability descriptor
 
 Direct `node.invoke` calls to the provider-backed `computer.act` command must include an `executionId` UUID in the action parameters. The built-in `computer` tool supplies it automatically.
 
+For CUA, use the same `executionId` for the preceding `screen.snapshot` call. Copy its `displayFrameId` into the action and its returned `width` into `refWidth`; coordinates refer to pixels within that returned bitmap. CUA limits both image dimensions to `maxWidth` without enlarging smaller displays, so direct snapshots and the built-in tool share one coordinate space.
+
+A CUA snapshot without an `executionId` is a standalone capture: its temporary execution closes after capture and cannot authorize later input.
+
 Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and screen nodes](/nodes/camera) for the shared capture command.
 
 ## Authorization

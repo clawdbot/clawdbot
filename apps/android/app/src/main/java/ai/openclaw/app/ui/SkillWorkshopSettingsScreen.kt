@@ -445,7 +445,7 @@ private fun SkillWorkshopProposalRow(
         Text(
           text = proposal.title,
           style = ClawTheme.type.body,
-          color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.text,
+          color = ClawTheme.colors.text,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )

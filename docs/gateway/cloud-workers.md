@@ -13,6 +13,8 @@ Enrollment is environment-owned and replay-safe. The Gateway persists one setup 
 
 When the work is done (or the box dies), the machine is discarded. The durable state — transcript, last-reconciled workspace files, and placement records — lives with the Gateway.
 
+Each cloud session retains a session-owned [managed-worktree mirror](/concepts/managed-worktrees) on the Gateway for reconciliation, recovery, and publication. The Gateway creates this checkout before cloud dispatch. The default count of 100 is a cleanup target, not an admission cap: count alone does not block creating or restoring the mirror, but the Gateway's disk-space checks still apply.
+
 A missing setup environment value, a current Crabbox CLI/backend refusal, or changed provider metadata does not prove that an earlier attempt allocated nothing. These failures remain retryable with the original operation identity. Cleanup resolves that operation's handle and retries teardown until the provider confirms release or absence; it never reruns provisioning, setup, or enrollment to discover the lease. Malformed immutable profiles still fail permanently; policy and setup rejections become permanent only after confirmed cleanup.
 
 <Note>
@@ -403,7 +405,7 @@ local Codex turn claim without waiting for an acknowledgment from the offline
 node. If the device is already available, use the
 ordinary reconcile-first move instead.
 
-To stop a running turn in the Control UI, use chat **Stop** or `/stop` first. Once no turn is running, choose **Stop cloud worker…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
+To stop a running turn in the Control UI, use chat **Stop** or `/stop` first. Once no turn is running, choose **Stop cloud worker…** from the placement chip. The Gateway performs one final workspace reconciliation before it destroys the environment. A placement already in `draining` or `reconciling` is finishing teardown; wait for its badge to become `reclaimed` before resetting or deleting the session. An environment in `draining` or `destroying` has not yet confirmed release: teardown errors remain visible, and Stop can be retried. Starting another turn after reclaim provisions a replacement worker only while its original cloud profile remains configured for the same provider; deleting that profile prevents new cloud allocation.
 
 Archiving or deleting a non-main cloud-worker session with an active placement first interrupts and drains its current work, then safely reclaims the worker. The Gateway records the archive or deletion only after final reconciliation and safe teardown succeed. If reclaim is unavailable, fails, or the placement is transitioning or failed without proof that its environment is gone, the operation reports an error and retains the session and recovery state; it never force-discards unsynced work. Restoring an archived session retains reclaimed placement metadata so the next turn can dispatch a fresh worker with the same workspace profile.
 

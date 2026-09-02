@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
+import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -120,6 +121,7 @@ export function createFixture(
     "package.json",
     '{"name":"sdk-declaration-fixture","version":"0.0.0","private":true,"type":"module"}',
   );
+  write("pnpm-workspace.yaml", "packages: []\n");
   write("tsdown.config.ts", fs.readFileSync(path.join(sourceRoot, "tsdown.config.ts"), "utf8"));
   fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
   fs.mkdirSync(path.join(root, "extensions"));
@@ -170,7 +172,10 @@ export function createFixture(
     // Exercise every real extension partition, even in the small compiler fixture.
     for (const id of ["fixture-a", "fixture-b", "fixture-c", "fixture-d", "fixture-e"]) {
       write(`extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
-      write(`extensions/${id}/package.json`, JSON.stringify({ name: `@openclaw/${id}` }));
+      write(
+        `extensions/${id}/package.json`,
+        JSON.stringify({ name: `@openclaw/${id}`, exports: { ".": "./dist/index.js" } }),
+      );
       write(`extensions/${id}/index.ts`, "export {};\n");
     }
   }
@@ -321,6 +326,15 @@ export function treeHashes(root: string) {
           .digest("hex"),
       ]),
   );
+}
+
+export function declarationCacheRecords(root: string) {
+  const cache = path.join(root, ".artifacts/build-all-cache");
+  return fs.readdirSync(cache).map((name) => {
+    const record = readArtifactRecord(path.join(cache, name, "stamp.json"));
+    expect(record, name).toBeDefined();
+    return record!;
+  });
 }
 
 export function expectOutputs(root: string, entries: readonly string[], files: string[]) {

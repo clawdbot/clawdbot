@@ -478,6 +478,11 @@ extension WatchExecApprovalDecision {
     }
 }
 
+struct WatchChatSessionIdentity: Hashable {
+    var gatewayID: WatchGatewayID.Key?
+    var sessionKey: WatchOpaqueUTF8Key
+}
+
 struct WatchAppSnapshotMessage: Codable, Equatable {
     var gatewayStatus: OpenClawWatchAppStatus
     var gatewayConnected: Bool
@@ -495,6 +500,12 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
     var chatStatus: OpenClawWatchAppStatus?
     var sentAtMs: Int64?
     var snapshotId: String?
+
+    var chatSessionIdentity: WatchChatSessionIdentity {
+        WatchChatSessionIdentity(
+            gatewayID: WatchGatewayID.key(self.gatewayStableID),
+            sessionKey: WatchOpaqueUTF8Key(self.sessionKey))
+    }
 
     init(
         gatewayStatus: OpenClawWatchAppStatus,

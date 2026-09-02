@@ -198,7 +198,7 @@ describe("release plugin marketplace lifecycle assertions", () => {
     expect(config.plugins.deny).toEqual([pluginId, sentinelPluginId]);
     expect(config.plugins.load.paths).toEqual([installPath, sentinelPath]);
 
-    delete config.plugins.entries[pluginId];
+    config.plugins.entries[pluginId] = { enabled: false };
     config.plugins.allow = [sentinelPluginId];
     config.plugins.deny = [sentinelPluginId];
     config.plugins.load.paths = [sentinelPath];

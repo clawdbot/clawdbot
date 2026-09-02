@@ -10,7 +10,7 @@ import {
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { LINE_FLEX_BUBBLE_MAX_BYTES, toFlexMessage } from "./flex-templates/message.js";
+import { fitsLineFlexBubble, toFlexMessage } from "./flex-templates/message.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
 import type { FlexBubble } from "./flex-templates/types.js";
 export { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
@@ -449,8 +449,7 @@ export function processLineMessage(text: string): ProcessedLineMessage {
           cells.some((cell) => renderTableCell(cell, "-").hasMarkup),
         ));
     const bubble = rowOverflow ? undefined : convertTableToFlexBubble(toMarkdownTable(table));
-    // LINE rejects the whole push/reply when any bubble exceeds its 30 KB UTF-8 JSON limit.
-    if (!bubble || Buffer.byteLength(JSON.stringify(bubble), "utf8") > LINE_FLEX_BUBBLE_MAX_BYTES) {
+    if (!bubble || !fitsLineFlexBubble(bubble)) {
       plainTextInsertions.push({
         position: table.placeholderOffset,
         text: `\n\n${formatOversizedTableAsBullets(table)}\n\n`,

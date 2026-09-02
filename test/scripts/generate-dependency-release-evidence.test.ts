@@ -1,9 +1,9 @@
 // Generate Dependency Release Evidence tests cover generate dependency release evidence script behavior.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   DEPENDENCY_EVIDENCE_REPORTS,
@@ -296,41 +296,67 @@ describe("generate-dependency-release-evidence", () => {
     },
   );
 
-  it("falls back to fetching tags when local previous-release resolution misses", () => {
-    const calls: Array<{ command: string; args: string[] }> = [];
-    let describeCalls = 0;
-    const execFileSyncImpl = (command: string, args: string[] = []) => {
-      calls.push({ command, args });
-      if (command !== "git") {
-        throw new Error(`unexpected command: ${command}`);
-      }
-      if (args[0] === "describe") {
-        describeCalls += 1;
-        if (describeCalls === 1) {
-          throw new Error("tag not found");
-        }
-        return "v2026.5.1\n";
-      }
-      if (args[0] === "fetch") {
-        return "";
-      }
-      throw new Error(`unexpected git args: ${args.join(" ")}`);
-    };
+  it.each([true, false])(
+    "fetches complete target release history without unrelated refs (shallow=%s)",
+    async (shallow) => {
+      const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-history-test-"));
+      const git = (cwd: string, ...args: string[]) =>
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "user.name=Release test",
+            "-c",
+            "user.email=release-test@example.invalid",
+            "-c",
+            "commit.gpgSign=false",
+            ...args,
+          ],
+          { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        ).trim();
+      try {
+        const origin = path.join(dir, "origin");
+        const target = path.join(dir, "target");
+        await mkdir(origin);
+        await mkdir(target);
+        git(origin, "init", "--quiet", "--initial-branch=main");
+        git(origin, "config", "uploadpack.allowFilter", "true");
+        git(origin, "commit", "--quiet", "--allow-empty", "-m", "previous release");
+        git(origin, "tag", "--no-sign", "-a", "v2026.5.1", "-m", "previous release");
+        git(origin, "commit", "--quiet", "--allow-empty", "-m", "release target");
+        const releaseSha = git(origin, "rev-parse", "HEAD");
+        git(origin, "branch", "release-target");
+        git(origin, "commit", "--quiet", "--allow-empty", "-m", "later main release");
+        git(origin, "tag", "--no-sign", "v2026.6.1");
+        git(origin, "tag", "--no-sign", "release-tooling-unrelated");
+        git(origin, "branch", "unrelated");
+        git(target, "init", "--quiet", "--initial-branch=consumer");
+        git(target, "remote", "add", "origin", pathToFileURL(origin).href);
+        git(target, "fetch", "--no-tags", ...(shallow ? ["--depth=1"] : []), "origin", releaseSha);
+        git(target, "checkout", "--quiet", "--detach", "FETCH_HEAD");
 
-    expect(
-      resolvePreviousReleaseTag({
-        rootDir: "/repo",
-        execFileSyncImpl,
-      }),
-    ).toBe("v2026.5.1");
-    expect(calls.map(({ args }) => args[0])).toEqual(["describe", "fetch", "describe"]);
-    expect(expectDefined(calls[1], "release tag fetch call").args).toEqual([
-      "fetch",
-      "--tags",
-      "--force",
-      "origin",
-    ]);
-  });
+        expect(() => resolvePreviousReleaseTag({ rootDir: target, fetchOnMiss: false })).toThrow(
+          "Could not resolve a previous reachable release tag",
+        );
+        expect(
+          git(target, "for-each-ref", "--format=%(refname)", "refs/tags", "refs/remotes"),
+        ).toBe("");
+        expect(resolvePreviousReleaseTag({ rootDir: target })).toBe("v2026.5.1");
+        expect(git(target, "rev-parse", "HEAD")).toBe(releaseSha);
+        expect(git(target, "rev-parse", "--is-shallow-repository")).toBe("false");
+        expect(git(target, "rev-list", "--count", "HEAD")).toBe("2");
+        expect(
+          git(target, "for-each-ref", "--format=%(refname)", "refs/tags", "refs/remotes").split(
+            "\n",
+          ),
+        ).toEqual(["refs/tags/v2026.5.1", "refs/tags/v2026.6.1"]);
+      } finally {
+        await rm(dir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it.each([
     { status: "checked", mappedPackageVersions: 101, checkedRepositories: 2, issues: [] },

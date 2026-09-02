@@ -321,8 +321,10 @@ main model can read the screenshot directly.
   config. A profile you declare by hand must set `cdpPort` itself, or `cdpUrl`
   for a remote endpoint: the schema rejects an `openclaw` or `clawd` profile
   that sets neither with `Profile must set cdpPort or cdpUrl`.
-  `existing-session` profiles take the endpoint from `cdpUrl` and ignore
-  `cdpPort`; `extension` profiles own their relay port and reject `cdpUrl`.
+  `existing-session` profiles use `cdpUrl` unless valid endpoint arguments in
+  `mcpArgs` override it; see [Custom Chrome MCP launch](/tools/browser#custom-chrome-mcp-launch).
+  They ignore `cdpPort`; `extension` profiles own their relay port and reject
+  `cdpUrl`.
 - Remote and `attachOnly` CDP reachability, WebSocket handshakes, and local
   managed-Chrome startup use built-in deadlines.
 - Repeated managed Chrome launch/readiness failures are circuit-broken per
@@ -496,6 +498,15 @@ auto-route browser tool calls to that node without any extra browser config.
 This is the default path for remote gateways. Automatic host fallback is allowed
 only before the selected node handles a request. Once an action reaches the node,
 its follow-up snapshot or settings stay on that node instead of switching browsers.
+
+Standalone runs such as `openclaw agent exec` use the host browser when no
+Gateway or node route is selected. They do not need Gateway credentials for
+local browser control. Sandbox routing and host-control restrictions still apply.
+To discover browser nodes through a local Gateway from a standalone run, set
+`gateway.nodes.browser.mode="auto"`. An explicit node target or pin, remote
+Gateway configuration, or `OPENCLAW_GATEWAY_URL` also keeps node discovery
+enabled. Explicit node targets and pins retain connection and authentication
+errors.
 
 Notes:
 
@@ -819,21 +830,33 @@ Override the spawned Chrome DevTools MCP server per profile when the default
 `npx chrome-devtools-mcp@latest` flow is not what you want (offline hosts,
 pinned versions, vendored binaries):
 
-| Field        | What it does                                                                                                               |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------- |
-| `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                          |
-| `mcpArgs`    | Argument array passed verbatim to `mcpCommand`. Replaces the default `chrome-devtools-mcp@latest --autoConnect` arguments. |
+| Field        | What it does                                                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `mcpCommand` | Executable to spawn instead of `npx`. Resolved as-is; absolute paths are honored.                                               |
+| `mcpArgs`    | Extra arguments passed unchanged to `mcpCommand`. Connection options override the generated endpoint or auto-connect arguments. |
 
-When `cdpUrl` is set on an existing-session profile, OpenClaw skips
-`--autoConnect` and forwards the endpoint to Chrome MCP automatically:
+Using `mcpArgs` does not replace the package prefix: when `mcpCommand` is `npx`,
+OpenClaw still prepends `-y chrome-devtools-mcp@latest`.
+
+When `mcpArgs` does not set a connection option, OpenClaw forwards a configured
+`cdpUrl` to Chrome MCP instead of generating `--autoConnect`:
 
 - `http(s)://...` → `--browserUrl <url>` (DevTools HTTP discovery endpoint).
 - `ws(s)://...` → `--wsEndpoint <url>` (direct CDP WebSocket).
 
-Endpoint flags and `userDataDir` cannot be combined: when `cdpUrl` is set,
-`userDataDir` is ignored for Chrome MCP launch, since Chrome MCP attaches to
-the running browser behind the endpoint rather than opening a profile
-directory.
+Explicit endpoint arguments in `mcpArgs` override `cdpUrl`; adding
+`--autoConnect` alongside an endpoint does not hide it. OpenClaw uses the selected
+endpoint for CDP control and checks Browser CDP policy before starting Chrome MCP.
+A matching `blockedHostnames` entry denies attachment even when private-network
+access is trusted. Unrelated blocklist entries do not prevent attachment, and
+the default strict-policy restrictions still apply.
+
+Invalid, empty, duplicate, or conflicting endpoint arguments fail with an error
+before launch. Supply one valid endpoint, or omit `cdpUrl` and endpoint arguments
+to use host-local attachment.
+
+When an endpoint is selected, `userDataDir` is ignored: Chrome MCP attaches to the
+running browser behind that endpoint rather than opening a profile directory.
 
 <Accordion title="Existing-session feature limitations">
 
@@ -957,6 +980,10 @@ How it maps:
   that resolve to a download skip it.
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
+- If a screenshot times out while the browser is still capturing or restoring
+  page settings, further screenshots, resizing, and device changes on that tab
+  return a recovery error. Retry after the capture finishes. If it stays stuck,
+  close and reopen the affected tab; other tabs remain available.
 - `browser doctor` checks Gateway, plugin, profile, browser, and tab readiness.
 - `browser` accepts:
   - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).

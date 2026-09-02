@@ -60,6 +60,7 @@ import {
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../test/vitest/vitest.extension-zalo-paths.mjs";
+import { narrowIncludePatternsForCli } from "../test/vitest/vitest.pattern-file.ts";
 import { resolveVitestFsModuleCacheRoot } from "../test/vitest/vitest.performance-config.ts";
 import {
   isPluginSdkLightTarget,
@@ -87,6 +88,8 @@ import {
 import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
+  isUnitConfigTestFile,
+  unitTestIncludePatterns,
 } from "../test/vitest/vitest.unit-paths.mjs";
 import {
   detectChangedLanes,
@@ -2228,9 +2231,12 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "android-version",
       "android-pin-version",
       "docker-release-policy",
+      "docker-release-artifacts",
+      "full-release-validation-at-sha",
       "ios-version",
       "openclaw-npm-extended-stable-release",
       "openclaw-npm-publish",
+      "npm-prepared-bundle",
       "release-preflight",
       "release-prepare",
       "release-upgrade-baseline",
@@ -2238,6 +2244,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       "upgrade-survivor-baselines",
       "upgrade-survivor-config-recipe",
     ],
+  ],
+  [
+    "scripts/lib/release-context.mjs",
+    ["full-release-validation-at-sha", "release-candidate-checklist", packageAcceptance],
   ],
   [
     "scripts/lib/clawhub-bootstrap-artifact.mjs",
@@ -2426,8 +2436,13 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
   ],
   [
-    /^\.github\/workflows\/docker-release\.yml$/u,
-    ["src/dockerfile.test.ts", "docker-channel-promote", "vercel-container-registry-publish"],
+    /^\.github\/workflows\/docker-release(?:-prepare)?\.yml$/u,
+    [
+      "src/dockerfile.test.ts",
+      "docker-channel-promote",
+      "docker-release-artifacts",
+      "vercel-container-registry-publish",
+    ],
   ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
   [
@@ -2451,7 +2466,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [
     /^\.github\/workflows\/openclaw-release-publish\.yml$/u,
-    [packageAcceptance, "vercel-container-registry-publish"],
+    [packageAcceptance, "docker-release-artifacts", "vercel-container-registry-publish"],
   ],
   [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
   [
@@ -4017,8 +4032,34 @@ export function buildVitestRunPlans(
     const useWholeConfigTarget = grouped.some((targetArg) =>
       shouldUseWholeConfigTarget(kind, targetArg, cwd),
     );
+    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
+    const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
+    const unitCliIncludes =
+      kind === "default" &&
+      useCliTargetArgs &&
+      !watchMode &&
+      !options.env?.[INCLUDE_FILE_ENV_KEY]?.trim()
+        ? narrowIncludePatternsForCli(unitTestIncludePatterns, [
+            "node",
+            "vitest",
+            ...forwardedPlanArgs,
+          ])
+        : null;
+    // CI needs explicit selection metadata. Keep the CLI filters too: the unit
+    // config and runner use them for exclude and empty-selection policy.
+    const scopedUnitIncludes =
+      unitCliIncludes?.length &&
+      grouped.every((targetArg) =>
+        unitCliIncludes.includes(toRepoRelativeTarget(targetArg, cwd)),
+      ) &&
+      unitCliIncludes.every(
+        (file) =>
+          !isGlobTarget(file) && isUnitConfigTestFile(file) && isExistingFileTarget(file, cwd),
+      )
+        ? unitCliIncludes
+        : null;
     const includePatterns = useCliTargetArgs
-      ? null
+      ? scopedUnitIncludes
       : useWholeConfigTarget
         ? null
         : uniqueOrdered(
@@ -4027,8 +4068,6 @@ export function buildVitestRunPlans(
               return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
             }),
           );
-    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
-    const forwardedPlanArgs = [...nonTargetArgs, ...scopedTargetArgs];
     const broadToolingScriptPlans = createBroadToolingScriptPlans({
       config,
       cwd,

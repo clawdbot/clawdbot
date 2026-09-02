@@ -1,5 +1,9 @@
+import WaPopover from "@awesome.me/webawesome/dist/components/popover/popover.js";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
+import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import { generateUUID } from "../../../lib/uuid.ts";
 import { selectedGitHubPublisher, type GitHubPublicationView } from "../chat-github-publication.ts";
 
 function sourceLabel(source: string): string {
@@ -13,6 +17,50 @@ function sourceLabel(source: string): string {
 }
 
 export function renderGitHubPublicationAction(publication: GitHubPublicationView) {
+  if (publication.result || publication.locked) {
+    return renderPublicationButton(publication);
+  }
+  return html`
+    ${renderPublicationButton(publication)}
+    <button
+      class="btn btn--ghost btn--icon chat-icon-btn"
+      type="button"
+      aria-label=${t("githubPublication.account")}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+    >
+      ${icons.chevronDown}
+    </button>
+    <wa-popover
+      ${ref(bindPublicationPopover)}
+      style="--max-width: min(320px, calc(100vw - 16px))"
+      placement="top-end"
+      @wa-show=${syncPublicationExpanded}
+      @wa-hide=${syncPublicationExpanded}
+    >
+      ${renderPublicationAccounts(publication)}
+    </wa-popover>
+  `;
+}
+
+function bindPublicationPopover(element: Element | undefined) {
+  const trigger = element?.previousElementSibling;
+  if (element instanceof WaPopover && trigger instanceof HTMLButtonElement) {
+    trigger.id ||= `github-publisher-${generateUUID()}`;
+    element.id ||= `${trigger.id}-popover`;
+    element.for = trigger.id;
+    trigger.setAttribute("aria-controls", element.id);
+  }
+}
+
+function syncPublicationExpanded(event: Event) {
+  const popover = event.currentTarget;
+  if (popover instanceof WaPopover) {
+    popover.anchor?.setAttribute("aria-expanded", String(popover.open));
+  }
+}
+
+function renderPublicationButton(publication: GitHubPublicationView) {
   const { result, selection, busy } = publication;
   if (result?.status === "published") {
     return html`<a
@@ -69,20 +117,27 @@ export function renderGitHubPublicationAction(publication: GitHubPublicationView
     : nothing;
 }
 
-export function renderGitHubPublicationDetails(publication: GitHubPublicationView) {
-  const { options, selection, result, confirmation, busy, locked, error } = publication;
+function renderPublicationAccount(publication: GitHubPublicationView) {
+  const { selection, result } = publication;
   const publisher = result ? result.publisher : selectedGitHubPublisher(selection);
+  return publisher
+    ? html`<span data-publication-account>
+        ${t("githubPublication.publishAs", { account: publisher.login })} ·
+        ${sourceLabel(publisher.source)}
+      </span>`
+    : nothing;
+}
+
+function renderPublicationAccounts(publication: GitHubPublicationView) {
+  const { options, selection, result, busy, locked } = publication;
   const personal = options?.personal;
   const personalAccount =
     personal?.state === "connected" && personal.generation ? personal.account : null;
-  return html`<div class="chat-pr__publication-outcome" data-state=${result?.status ?? "selection"}>
-    ${publisher
-      ? html`<span data-publication-account>
-          ${t("githubPublication.publishAs", { account: publisher.login })} ·
-          ${sourceLabel(publisher.source)}
-        </span>`
-      : nothing}
-    ${publication.onSelect && options
+  const canChoose =
+    publication.onSelect && options && (!selection || (options.shared && personalAccount));
+  return html`<div class="stack muted">
+    ${renderPublicationAccount(publication)}
+    ${canChoose
       ? html`<label>
           <span class="sr-only">${t("githubPublication.account")}</span>
           <select
@@ -116,6 +171,38 @@ export function renderGitHubPublicationDetails(publication: GitHubPublicationVie
           </select>
         </label>`
       : nothing}
+    ${!publication.personalReady
+      ? html`<span>${t("githubPublication.personalWorkspace")}</span>`
+      : nothing}
+    ${!result && options
+      ? html`<span>${t("githubPublication.scopeHelp")}</span> ${!personalAccount
+            ? html`<span
+                >${t(
+                  personal === null
+                    ? "githubPublication.unidentified"
+                    : "githubPublication.connectHelp",
+                )}</span
+              >`
+            : nothing}`
+      : nothing}
+    ${!options && !busy ? renderPublicationRefresh(publication) : nothing}
+  </div>`;
+}
+
+function renderPublicationRefresh(publication: GitHubPublicationView) {
+  return html`<button class="btn btn--sm" type="button" @click=${publication.onRefresh}>
+    ${t("githubPublication.refresh")}
+  </button>`;
+}
+
+export function renderGitHubPublicationDetails(publication: GitHubPublicationView) {
+  const { selection, result, confirmation, busy, locked, error } = publication;
+  const personalUnavailable = selection?.source === "personal" && !publication.personalReady;
+  if (!result && !confirmation && !error && !locked && !personalUnavailable) {
+    return nothing;
+  }
+  return html`<div class="chat-pr__publication-outcome" data-state=${result?.status ?? "selection"}>
+    ${renderPublicationAccount(publication)}
     ${result && result.status !== "published"
       ? html`<span role="status">${result.message}</span>`
       : nothing}
@@ -168,25 +255,11 @@ export function renderGitHubPublicationDetails(publication: GitHubPublicationVie
             : nothing}
         </span>`
       : nothing}
-    ${!publication.personalReady
+    ${personalUnavailable
       ? html`<span>${t("githubPublication.personalWorkspace")}</span>`
       : nothing}
-    ${!result && options
-      ? html`<span>${t("githubPublication.scopeHelp")}</span> ${!personalAccount
-            ? html`<span
-                >${t(
-                  personal === null
-                    ? "githubPublication.unidentified"
-                    : "githubPublication.connectHelp",
-                )}</span
-              >`
-            : nothing}`
-      : nothing}
-    ${!busy &&
-    (error || !options || (result && !publication.onConfirm && result.status !== "published"))
-      ? html`<button class="btn btn--sm" type="button" @click=${publication.onRefresh}>
-          ${t("githubPublication.refresh")}
-        </button>`
+    ${!busy && (error || (result && !publication.onConfirm && result.status !== "published"))
+      ? renderPublicationRefresh(publication)
       : nothing}
   </div>`;
 }

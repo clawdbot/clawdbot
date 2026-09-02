@@ -2949,12 +2949,11 @@ describe("startTelegramWebhook", () => {
           req.end("{}");
         });
 
-        if (responseOrError.kind === "response") {
-          expect(responseOrError.statusCode).toBe(413);
-          expect(responseOrError.body).toBe("Payload too large");
-        } else {
-          expect(responseOrError.code).toBeOneOf(["ECONNRESET", "EPIPE"]);
-        }
+        expect(responseOrError).toEqual({
+          kind: "response",
+          statusCode: 413,
+          body: "Payload too large",
+        });
         expect(handleUpdateSpy).not.toHaveBeenCalled();
       },
     );

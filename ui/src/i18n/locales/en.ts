@@ -5040,6 +5040,16 @@ export const en: TranslationMap & {
         stepMode:
           "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
       },
+      trustedProxy: {
+        title: "Proxy authentication required",
+        summary:
+          "The Gateway is reachable, but it rejected the proxy identity or forwarding information.",
+        stepSignIn:
+          "Open the configured authenticated proxy or SSO dashboard URL and sign in there, rather than visiting the Gateway directly.",
+        stepHeaders:
+          "Ask the Gateway administrator to check for missing identity headers and required-header forwarding on WebSocket upgrade requests, and confirm your account is permitted.",
+        stepNoToken: "A Gateway token cannot replace proxy authentication.",
+      },
       rateLimited: {
         title: "Too many failed attempts",
         summary: "The Gateway is temporarily limiting authentication attempts for this client.",
@@ -5966,7 +5976,6 @@ export const en: TranslationMap & {
       noMatches: "No matching messages",
     },
     pendingInputs: {
-      queued: "Message received. Waiting for the agent to start it.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
@@ -5980,6 +5989,7 @@ export const en: TranslationMap & {
       badge: "Expired",
     },
     composer: {
+      composerInput: "Chat composer",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",

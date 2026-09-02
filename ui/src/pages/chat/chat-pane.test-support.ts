@@ -22,6 +22,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
@@ -167,6 +168,7 @@ export type TestChatPane = HTMLElement & {
     catalog: boolean,
     agentWorkspace: undefined,
     workspaceGit: boolean,
+    placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
   ) => TemplateResult;
 };
 
@@ -355,6 +357,7 @@ export function createTestChatPane(params: {
     connectionEpoch: 4,
     hello: sessionMutationGatewayHello(),
     lastError: null,
+    modelAuthStatusRequestVersion: 0,
     requestUpdate,
     sessionKey: "agent:main:current",
     sessions: params.sessions,

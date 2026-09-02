@@ -137,7 +137,10 @@ function readRestartSentinelPayload(env: NodeJS.ProcessEnv, key = "current"): un
 
 async function runManagedServiceManagerBoundary(
   kind: "systemd" | "launchd",
-  options?: ManagedServiceManagerBoundaryOptions,
+  options?: ManagedServiceManagerBoundaryOptions & {
+    controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
+    relativeInput?: boolean;
+  },
 ): Promise<ManagedServiceManagerBoundaryResult> {
   const { spawn } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -184,6 +187,11 @@ async function runManagedServiceManagerBoundary(
     }
   `,
   );
+  const invocationCwd = options?.relativeInput ? path.join(root, "invoking-directory") : undefined;
+  if (invocationCwd) {
+    await fs.mkdir(invocationCwd);
+    await fs.writeFile(path.join(invocationCwd, "update-input.txt"), "selected target");
+  }
   const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
@@ -217,6 +225,7 @@ async function runManagedServiceManagerBoundary(
       root,
       restartDrainTimeoutMs: 300_000,
       parentPid,
+      invocationCwd,
       execPath: process.execPath,
       argv1: process.argv[1],
       handoffId: `${kind}-boundary`,
@@ -244,6 +253,23 @@ async function runManagedServiceManagerBoundary(
       stateDatabasePath,
       options,
     });
+    let updaterScript = createManagedServiceUpdaterFixtureScript({
+      kind,
+      root,
+      statePath,
+      updaterPath,
+      logPath: String(generated.logPath),
+      stateDatabasePath,
+      consumeNotification,
+      options,
+    });
+    if (invocationCwd) {
+      // Consuming a relative input then removing cwd forces recovery and triage
+      // to launch from the durable helper directory, not the vanished caller cwd.
+      updaterScript =
+        `const inputFs=require("node:fs");if(inputFs.readFileSync("update-input.txt","utf8")!=="selected target")process.exit(42);inputFs.rmSync(process.cwd(),{recursive:true});` +
+        updaterScript;
+    }
     await fs.writeFile(
       paramsPath,
       JSON.stringify({
@@ -264,20 +290,7 @@ async function runManagedServiceManagerBoundary(
         ...(options?.recoveryHang || options?.triageHang ? { recoveryTimeoutMs: 1000 } : {}),
         recovery: { serviceRestartSafe: true, version: "1.0.0" },
         recoveryModulePath,
-        commandArgv: [
-          process.execPath,
-          "-e",
-          createManagedServiceUpdaterFixtureScript({
-            kind,
-            root,
-            statePath,
-            updaterPath,
-            logPath: String(generated.logPath),
-            stateDatabasePath,
-            consumeNotification,
-            options,
-          }),
-        ],
+        commandArgv: [process.execPath, "-e", updaterScript],
       }),
     );
     if (options?.recoverySentinel) {
@@ -351,7 +364,29 @@ async function runManagedServiceManagerBoundary(
       startIdentity: expect.any(String),
     });
     await expect(pathExists(commandsPath)).resolves.toBe(false);
-    if (options?.parentExitTimeoutMs !== undefined) {
+    if (options?.controlDisconnect) {
+      if (options.controlDisconnect !== "unarmed") {
+        const transferred = waitForHandoffResponse(runningHelper.stdout, "transferred");
+        runningHelper.stdin?.write("transfer\n");
+        await transferred;
+        await expect(pathExists(commandsPath)).resolves.toBe(false);
+      }
+      if (options.controlDisconnect === "dead-parent") {
+        parent.stdin?.end();
+        await vi.waitFor(() => expect(parent.exitCode).toBe(0));
+      }
+      runningHelper.stdin?.end();
+      if (options.controlDisconnect === "transferred") {
+        await vi.waitFor(async () => {
+          expect(JSON.parse(await fs.readFile(statePath, "utf8"))).toMatchObject({ parked: true });
+        });
+        parent.stdin?.end();
+      }
+      expect(await completion, stderr).toBe(options.helperExitCode ?? 0);
+      await expect(pathExists(updaterPath)).resolves.toBe(
+        options.controlDisconnect === "transferred",
+      );
+    } else if (options?.parentExitTimeoutMs !== undefined) {
       const timeout = options.parentExitTimeoutMs + (options.launchdTeardown ? 8_000 : 3_000);
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -436,9 +471,15 @@ async function runManagedServiceManagerBoundary(
         }
       : null;
     return {
-      commands: (await fs.readFile(commandsPath, "utf8")).trim().split("\n"),
+      commands: (await fs.readFile(commandsPath, "utf8").catch(() => ""))
+        .trim()
+        .split("\n")
+        .filter(Boolean),
       parentSignal: parent.signalCode,
-      state: JSON.parse(await fs.readFile(statePath, "utf8")) as Record<string, unknown>,
+      state: JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}")) as Record<
+        string,
+        unknown
+      >,
       sentinel: readRestartSentinelPayload({ OPENCLAW_STATE_DIR: root }),
       log: await fs.readFile(String(generated.logPath), "utf8"),
       savedFailure,
@@ -461,6 +502,56 @@ async function runManagedServiceManagerBoundary(
 
 describe("managed service update handoff", () => {
   const itUnix = it.runIf(process.platform !== "win32");
+
+  itUnix.each(
+    (["systemd", "launchd"] as const).flatMap((kind) =>
+      [false, true].map((recover) => ({ kind, recover })),
+    ),
+  )(
+    "transfers $kind update ownership before CLI disconnect and preserves relative inputs (recovery=$recover)",
+    async ({ kind, recover }) => {
+      const { commands, state, sensitiveFilesRemoved } = await runManagedServiceManagerBoundary(
+        kind,
+        {
+          controlDisconnect: "transferred",
+          relativeInput: true,
+          updaterExitCode: recover ? 7 : 0,
+          helperExitCode: recover ? 7 : 0,
+          updaterResult: {
+            status: recover ? "error" : "ok",
+            mode: "npm",
+            ...(recover ? { recovery: { serviceRestartSafe: true, version: "1.0.0" } } : {}),
+          },
+        },
+      );
+      expect(commands.some((command) => /\b(stop|bootout)\b/.test(command))).toBe(true);
+      expect(state).toMatchObject({ parked: true });
+      if (recover) {
+        expect(state).toMatchObject({
+          restored: true,
+          healthProbeCount: 1,
+          triageCalls: 1,
+          triageObservedRestored: true,
+          triageObservedRecovery: true,
+        });
+      }
+      expect(sensitiveFilesRemoved).toBe(true);
+    },
+  );
+
+  itUnix.each(["unarmed", "dead-parent"] as const)(
+    "does not stop or update the service after %s control disconnect",
+    async (controlDisconnect) => {
+      const { commands, sentinel } = await runManagedServiceManagerBoundary("systemd", {
+        controlDisconnect,
+        updaterExitCode: 0,
+      });
+      expect(commands).toEqual([]);
+      expect(sentinel).toMatchObject({
+        payload: { status: "skipped", stats: { reason: "managed-service-handoff-cancelled" } },
+      });
+    },
+  );
 
   it("rejects failed helper spawns and removes the sensitive handoff directory", async () => {
     const child = createSpawnMock();

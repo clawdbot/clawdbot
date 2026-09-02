@@ -647,6 +647,7 @@ extension OpenClawChatViewModel {
             content: message.content,
             timestamp: Date().timeIntervalSince1970 * 1000,
             transcriptMessageID: message.transcriptMessageID,
+            transcriptRunID: message.transcriptRunID,
             isTruncated: message.isTruncated,
             idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,

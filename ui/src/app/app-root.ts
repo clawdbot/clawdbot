@@ -583,6 +583,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
               connected: gatewayConnected,
               lastError: gatewaySnapshot.lastError,
               lastErrorCode: gatewaySnapshot.lastErrorCode,
+              lastErrorAuthReason: gatewaySnapshot.lastErrorAuthReason,
               hasToken: Boolean(this.loginToken.trim()),
               hasPassword: Boolean(this.loginPassword.trim()),
               gatewayUrl: this.loginGatewayUrl,

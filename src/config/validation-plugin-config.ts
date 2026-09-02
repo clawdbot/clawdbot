@@ -3,6 +3,8 @@ import { isPathInside } from "../infra/path-guards.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
+  isExplicitPluginDisableMarker,
+  isRetiredPluginId,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
@@ -19,11 +21,6 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 
-const LEGACY_REMOVED_PLUGIN_IDS = new Set([
-  "google-antigravity-auth",
-  "google-gemini-cli-auth",
-  "skill-workshop",
-]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 type ExplicitPluginReferences = {
@@ -243,7 +240,7 @@ export function validateExplicitPluginConfig(params: {
       missingMessage?: string | null;
     },
   ) => {
-    if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
+    if (isRetiredPluginId(pluginId)) {
       warnings.push({ path: issuePath, message: formatRemovedPluginConfigWarning(pluginId) });
       return;
     }
@@ -289,8 +286,10 @@ export function validateExplicitPluginConfig(params: {
   const pluginsConfig = config.plugins;
   const entries = pluginsConfig?.entries;
   if (entries && isRecord(entries)) {
-    for (const pluginId of Object.keys(entries)) {
-      if (!knownIds.has(pluginId)) {
+    for (const [pluginId, entry] of Object.entries(entries)) {
+      const intentionalDisableMarker =
+        isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId);
+      if (!knownIds.has(pluginId) && !intentionalDisableMarker) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
         pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }

@@ -2,6 +2,7 @@
 summary: "iOS node app: connect to the Gateway, pairing, device capabilities, and troubleshooting"
 read_when:
   - Pairing or reconnecting the iOS node
+  - Using voice input and spoken replies on Apple Watch
   - Enabling or troubleshooting the direct Apple Watch node
   - Running the iOS app from source
   - Debugging gateway discovery or iOS node commands
@@ -141,10 +142,54 @@ calendar day. iOS device consent and explicit Gateway command authorization are
 independent gates. See [HealthKit summaries](/platforms/ios-healthkit) for
 setup, invocation, payload fields, privacy behavior, and troubleshooting.
 
-By default, the Apple Watch companion keeps using the existing iPhone relay and
-does not need a separate Gateway pairing. Pair the Watch with the iPhone in
-Apple's Watch app, install OpenClaw from **Watch app -> My Watch -> Available
-Apps**, then open OpenClaw once on both devices.
+## Apple Watch voice and chat
+
+The Watch companion supports one voice turn at a time: watchOS dictation
+produces text, the paired iPhone sends that text to Gateway chat, and the Watch
+reads the matching reply aloud with the system voice. It does not stream
+microphone audio, run a realtime Talk session, or run an agent on the Watch.
+The Watch Talk controls operate Talk on the paired iPhone.
+
+Pair the Watch with the iPhone in Apple's Watch app, install OpenClaw from
+**Watch app -> My Watch -> Available Apps**, then open OpenClaw once on both
+devices. The companion uses the iPhone relay and does not need separate
+Gateway pairing.
+
+1. Connect the iPhone to your Gateway and select the chat you want to use.
+2. On the Watch, open **Talk to Claw**, then tap the voice button beside
+   **Message OpenClaw**.
+3. Use the native input sheet to dictate and submit your message. Keep Chat
+   open on the Watch to hear the reply. The message pill also opens native
+   input, but does not request a spoken reply.
+
+The iPhone must remain available to relay messages. If its Gateway connection
+is asleep, Watch messages use the same bounded background reconnect as Watch
+quick replies, respecting the iPhone's auto-connect setting. A queued message
+is not confirmation that the Gateway has processed it; open OpenClaw on the
+iPhone if delivery stalls.
+
+Only the reply belonging to the submitted turn is read aloud. Switching the
+Gateway or chat on iPhone retires the pending spoken reply and clears the old
+Watch preview. Leaving Watch Chat or backgrounding the app stops playback;
+a reply received while away can be read on return if its wait has not expired.
+
+The spoken-reply wait expires after 90 seconds and shows **Spoken reply timed
+out. Check Chat on iPhone.**, including after reopening the Watch app. Cancelling
+that wait or stopping speech does **not** cancel the Gateway chat run or remove a queued message.
+If no reply is spoken, refresh Chat or check the conversation on iPhone before
+resending. Long runs and interrupted return delivery can still require this
+manual readback. Keep the Gateway updated for reliable reply attribution when
+messages are collected into a later run.
+
+On multi-agent Gateways, use an agent-qualified session. The Watch relays the
+session key but not the iPhone's separate agent selection, so a shared `main`
+or `global` session can resolve to another owner or be rejected. Use iPhone
+Chat for those shared-session cases.
+
+[Direct Watch node mode](/platforms/ios#optional-direct-apple-watch-node) does not remove the
+iPhone requirement for chat or voice. It only exposes the device and
+notification commands listed below. For continuous voice on a supported
+client, see [Talk mode](/nodes/talk).
 
 ## Review command approvals
 

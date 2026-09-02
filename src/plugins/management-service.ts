@@ -146,7 +146,7 @@ import {
 import { setPluginEnabledInConfig } from "./toggle-config.js";
 import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
 import {
-  prepareConfigForPendingPluginDirectoryRemovalSet,
+  prepareConfigForDisabledPluginSet,
   recordPluginPackageUninstallPlan,
 } from "./uninstall-package-plan.js";
 import {
@@ -1562,12 +1562,10 @@ async function installResolvedManagedPluginSource(
   const extensionsDir = resolveDefaultPluginExtensionsDir(env);
   if (request.source === "bundled") {
     const result = await installBundledPluginSource({
-      snapshot: params.snapshot,
+      ...params,
       rawSpec: request.rawSpec,
       bundledSource: request.bundledSource,
       warning: request.warning,
-      invalidateRuntimeCache: params.invalidateRuntimeCache,
-      runtime: params.runtime,
     });
     return {
       ok: true,
@@ -1606,6 +1604,7 @@ async function installResolvedManagedPluginSource(
     config: params.snapshot.config,
     extensionsDir,
     logger: params.logger,
+    beforePersistentApply: params.beforePersistentApply,
     ...(capabilityConsent
       ? { onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit }
       : {}),
@@ -2127,10 +2126,7 @@ export async function uninstallManagedPlugin(params: {
     let finalSnapshot = snapshot;
     let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
     if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
-        snapshot.config,
-        policyPluginIds,
-      );
+      const disabledConfig = prepareConfigForDisabledPluginSet(snapshot.config, policyPluginIds);
       await replaceConfigFile({
         nextConfig: disabledConfig,
         baseHash: snapshot.baseHash,

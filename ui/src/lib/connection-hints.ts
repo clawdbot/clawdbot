@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Connection-failure hint classification shared by the login gate.
 import {
@@ -35,7 +36,27 @@ const INSECURE_CONTEXT_CODES = new Set<string>([
   ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
 ]);
 
-type AuthHintKind = "required" | "failed";
+const PROXY_AUTH_REASONS = new Set<string>([
+  "trusted_proxy_no_request",
+  "trusted_proxy_untrusted_source",
+  "trusted_proxy_loopback_source",
+  "trusted_proxy_local_interface_check_failed",
+  "trusted_proxy_local_interface_source",
+  "trusted_proxy_user_missing",
+  "trusted_proxy_user_not_allowed",
+  "trusted_proxy_config_missing",
+  "trusted_proxy_no_proxies_configured",
+  "proxy_attribution_required",
+]);
+
+// Generic unauthorized codes need their proxy reason; retain only these fixed
+// producer values rather than arbitrary server details in the application snapshot.
+export function readConnectionAuthReason(details: unknown): string | null {
+  const reason = asNullableRecord(details)?.authReason;
+  return typeof reason === "string" && PROXY_AUTH_REASONS.has(reason) ? reason : null;
+}
+
+type AuthHintKind = "required" | "failed" | "trusted-proxy";
 
 type PairingHint =
   | {
@@ -85,6 +106,7 @@ export function resolveAuthHintKind(params: {
   connected: boolean;
   lastError: string | null;
   lastErrorCode?: string | null;
+  lastErrorAuthReason?: string | null;
   hasToken: boolean;
   hasPassword: boolean;
 }): AuthHintKind | null {
@@ -92,6 +114,14 @@ export function resolveAuthHintKind(params: {
     return null;
   }
   if (params.lastErrorCode) {
+    if (
+      params.lastErrorCode === ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED ||
+      (params.lastErrorCode === ConnectErrorDetailCodes.AUTH_UNAUTHORIZED &&
+        typeof params.lastErrorAuthReason === "string" &&
+        PROXY_AUTH_REASONS.has(params.lastErrorAuthReason))
+    ) {
+      return "trusted-proxy";
+    }
     if (!AUTH_FAILURE_CODES.has(params.lastErrorCode)) {
       return null;
     }

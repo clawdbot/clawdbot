@@ -519,6 +519,33 @@ function readYamlRecord(file: string, lockfile = false) {
   return isRecord(value) ? value : {};
 }
 
+function isolatedPnpmPackageDirectory(
+  storeDir: string,
+  dependencyPath: string,
+  name: string,
+  maxLength: unknown,
+) {
+  if (typeof maxLength !== "number" || !Number.isSafeInteger(maxLength) || maxLength < 1) {
+    throw new Error("frozen pnpm install has an invalid virtualStoreDirMaxLength");
+  }
+  // pnpm 12's PkgNameVerPeer::to_virtual_store_name and shorten_virtual_store_name.
+  let filename = dependencyPath.replace(/[\\/:*?"<>|#]/gu, "+");
+  if (filename.includes("(")) {
+    filename = filename.replace(/\)$/u, "").replaceAll(")(", "_").replace(/[()]/gu, "_");
+  }
+  if (Buffer.byteLength(filename) > maxLength || /[A-Z]/u.test(filename)) {
+    let prefix = "";
+    for (const character of filename) {
+      if (Buffer.byteLength(prefix + character) > Math.max(0, maxLength - 33)) {
+        break;
+      }
+      prefix += character;
+    }
+    filename = `${prefix}_${createHash("sha256").update(filename).digest("hex").slice(0, 32)}`;
+  }
+  return path.join(fs.realpathSync(storeDir), filename, "node_modules", name);
+}
+
 function collectWorkspacePatchedDependencies(
   repoRoot: string,
   packageDir: string,
@@ -567,16 +594,14 @@ function collectWorkspacePatchedDependencies(
   if (typeof virtualStoreDir !== "string") {
     throw new Error("frozen pnpm install has an invalid virtualStoreDir");
   }
-  const installedLock = readYamlRecord(
-    path.resolve(repoRoot, "node_modules", virtualStoreDir, "lock.yaml"),
-    true,
-  );
+  const storeDir = path.resolve(repoRoot, "node_modules", virtualStoreDir);
+  const installedLock = readYamlRecord(path.join(storeDir, "lock.yaml"), true);
   const installedImporter = isRecord(installedLock.importers)
     ? installedLock.importers[importerKey]
     : undefined;
   const require = createRequire(path.join(packageDir, "package.json"));
   // A root declaration alone does not prove the installed bytes were patched.
-  // Bind the patch hash, importer and actual hoisted package before packing it.
+  // Bind the patch hash, importer and actual installed package before packing it.
   return selected.map(({ name, version, selector, patchPath }) => {
     const patchHash =
       typeof patchPath === "string"
@@ -613,17 +638,29 @@ function collectWorkspacePatchedDependencies(
       .paths(name)
       ?.map((dir) => path.join(dir, name))
       .find((dir) => fs.existsSync(path.join(dir, "package.json")));
-    const locations = isRecord(modules.hoistedLocations)
-      ? modules.hoistedLocations[`${name}@${resolved.version}`]
-      : undefined;
+    const dependencyPath = `${name}@${resolved.version}`;
+    const locations =
+      modules.nodeLinker === "isolated"
+        ? [
+            isolatedPnpmPackageDirectory(
+              storeDir,
+              dependencyPath,
+              name,
+              modules.virtualStoreDirMaxLength ?? (process.platform === "win32" ? 60 : 120),
+            ),
+          ]
+        : modules.nodeLinker === "hoisted" && isRecord(modules.hoistedLocations)
+          ? modules.hoistedLocations[dependencyPath]
+          : undefined;
     if (
       !candidate ||
-      modules.nodeLinker !== "hoisted" ||
       !Array.isArray(locations) ||
       !locations.some(
         (location) =>
           typeof location === "string" &&
-          fs.realpathSync(path.resolve(repoRoot, location)) === fs.realpathSync(candidate),
+          (modules.nodeLinker === "isolated"
+            ? location
+            : fs.realpathSync(path.resolve(repoRoot, location))) === fs.realpathSync(candidate),
       )
     ) {
       throw new Error(`patched runtime dependency is not the frozen pnpm package: ${selector}`);

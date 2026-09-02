@@ -249,7 +249,7 @@ private fun SystemAgentQuestionCard(
 ) {
   ClawPanel(modifier = Modifier.fillMaxWidth()) {
     Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-      Text(question.header.uppercase(), style = ClawTheme.type.caption, color = ClawTheme.colors.primary)
+      Text(question.header.uppercase(), style = ClawTheme.type.caption, color = ClawTheme.colors.text)
       Text(question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
       question.options.forEach { option ->
         ClawSecondaryButton(

@@ -20,6 +20,8 @@ case "$APP_ROOT" in
 esac
 APP_DESTINATION="$APP_ROOT"
 APP_STAGE_DIR=""
+SWIFT_BUILD_PID=""
+SWIFT_BUILD_RESULTS=""
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 MLX_TTS_HELPER_PRODUCT="openclaw-mlx-tts"
@@ -136,469 +138,30 @@ sparkle_canonical_build_from_version() {
   (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
 }
 
-build_path_for_arch() {
-  echo "$BUILD_ROOT/$1"
-}
-
-bin_for_arch() {
-  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$PRODUCT"
-}
-
-helper_build_path_for_arch() {
-  echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
-}
-
-helper_bin_for_arch() {
-  local products
-  products="$(build_mlx_tts_helper "$1" --show-bin-path)" || return
-  echo "$products/$MLX_TTS_HELPER_PRODUCT"
-}
-
-build_mlx_tts_helper() {
-  local arch="$1"
-  shift
-  # Swift 6.3 needs Swift Build for Metal and --show-bin-path for its output directory.
-  swift build --build-system swiftbuild \
-    --package-path "$MLX_TTS_HELPER_ROOT" \
-    -c "$BUILD_CONFIG" \
-    --product "$MLX_TTS_HELPER_PRODUCT" \
-    --build-path "$(helper_build_path_for_arch "$arch")" \
-    --arch "$arch" \
-    "$@"
-}
-
-sparkle_framework_for_arch() {
-  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
-}
-
-run_with_locked_swift_packages() {
-  local resolved_file="${SWIFT_PACKAGE_ROOT:-$ROOT_DIR/apps/macos}/Package.resolved"
-  local resolved_snapshot
-  local command_status=0
-
-  if [[ ! -f "$resolved_file" ]]; then
-    echo "ERROR: Swift package lockfile not found at $resolved_file" >&2
-    return 1
-  fi
-  resolved_snapshot="$(mktemp)"
-  cp "$resolved_file" "$resolved_snapshot"
-  "$@" || command_status=$?
-  if ! cmp -s "$resolved_snapshot" "$resolved_file"; then
-    cp "$resolved_snapshot" "$resolved_file"
-    rm "$resolved_snapshot"
-    echo "ERROR: Swift package resolution changed Package.resolved; update it in a separate reviewed change" >&2
-    return 1
-  fi
-  rm "$resolved_snapshot"
-  return "$command_status"
-}
-
-compiled_peekaboo_commit() {
-  local checkout_or_build_path="$1" expected="$2"
-  local checkout="$checkout_or_build_path"
-  if [[ ! -d "$checkout/.git" && ! -f "$checkout/.git" ]]; then
-    checkout="$checkout_or_build_path/checkouts/Peekaboo"
-  fi
-  [[ -d "$checkout/.git" || -f "$checkout/.git" ]] || {
-    echo "ERROR: Resolved Peekaboo checkout not found at $checkout" >&2
-    return 1
-  }
-  local commit
-  if ! commit="$(git --no-replace-objects -C "$checkout" rev-parse HEAD)"; then
-    echo "ERROR: Could not inspect compiled Peekaboo checkout revision" >&2
-    return 1
-  fi
-  [[ "$commit" == "$expected" ]] || {
-    echo "ERROR: Compiled Peekaboo checkout '$commit' does not match locked source '$expected'" >&2
-    return 1
-  }
-  if ! /usr/bin/python3 - "$checkout" "$commit" <<'PY'
-import hashlib
-import os
-import stat
-import subprocess
-import sys
-
-checkout = os.fsencode(sys.argv[1])
-commit = os.fsencode(sys.argv[2])
-visited: set[tuple[bytes, bytes]] = set()
-
-def run_git(repository: bytes, *arguments: str) -> bytes:
-    return subprocess.run(
-        ["git", "-c", "core.commitGraph=false", "--no-replace-objects", "-C", os.fsdecode(repository), *arguments],
-        check=True,
-        stdout=subprocess.PIPE,
-    ).stdout
-
-def object_format_for(object_id: bytes) -> str:
-    if len(object_id) == 40:
-        return "sha1"
-    if len(object_id) == 64:
-        return "sha256"
-    raise SystemExit(1)
-
-def read_verified_object(repository: bytes, object_type: str, object_id: bytes) -> bytes:
-    try:
-        contents = run_git(repository, "cat-file", object_type, object_id.decode("ascii"))
-    except (OSError, subprocess.CalledProcessError, UnicodeError):
-        raise SystemExit(2) from None
-    digest = hashlib.new(object_format_for(object_id))
-    digest.update(f"{object_type} {len(contents)}\0".encode("ascii"))
-    digest.update(contents)
-    if digest.hexdigest().encode("ascii") != object_id:
-        raise SystemExit(1)
-    return contents
-
-def verify_repository(repository: bytes, expected_commit: bytes) -> None:
-    if not os.path.isdir(repository) or os.path.islink(repository):
-        raise SystemExit(1)
-    identity = (os.path.realpath(repository), expected_commit)
-    if identity in visited:
-        raise SystemExit(1)
-    visited.add(identity)
-
-    try:
-        head = run_git(repository, "rev-parse", "HEAD").strip()
-        run_git(repository, "fsck", "--full", "--strict", "--no-dangling", expected_commit.decode("ascii"))
-    except (OSError, subprocess.CalledProcessError):
-        raise SystemExit(2) from None
-    if head != expected_commit:
-        raise SystemExit(1)
-
-    commit = read_verified_object(repository, "commit", expected_commit)
-    tree_line = commit.split(b"\n", 1)[0]
-    if not tree_line.startswith(b"tree "):
-        raise SystemExit(1)
-    tree_id = tree_line.removeprefix(b"tree ")
-    object_format = object_format_for(tree_id)
-    if object_format != object_format_for(expected_commit):
-        raise SystemExit(1)
-    read_verified_object(repository, "tree", tree_id)
-    try:
-        listing = run_git(repository, "ls-tree", "-rz", tree_id.decode("ascii"))
-    except (OSError, subprocess.CalledProcessError, UnicodeError):
-        raise SystemExit(2) from None
-    expected: dict[bytes, tuple[bytes, bytes]] = {}
-    gitlinks: dict[bytes, bytes] = {}
-    for record in listing.split(b"\0"):
-        if not record:
-            continue
-        metadata, path = record.split(b"\t", 1)
-        mode, object_type, object_id = metadata.split(b" ", 2)
-        if object_type == b"blob":
-            expected[path] = (mode, object_id)
-        elif object_type == b"commit":
-            gitlinks[path] = object_id
-
-    def is_gitlink_path(path: bytes) -> bool:
-        return any(path == gitlink or path.startswith(gitlink + b"/") for gitlink in gitlinks)
-
-    actual: set[bytes] = set()
-    for root, directories, files in os.walk(repository, topdown=True, followlinks=False):
-        relative_root = os.path.relpath(root, repository)
-        relative_root = b"" if relative_root == b"." else relative_root
-        kept_directories: list[bytes] = []
-        for directory in directories:
-            relative = os.path.join(relative_root, directory) if relative_root else directory
-            absolute = os.path.join(root, directory)
-            if relative == b".git" or is_gitlink_path(relative):
-                continue
-            if os.path.islink(absolute):
-                actual.add(relative)
-            else:
-                kept_directories.append(directory)
-        directories[:] = kept_directories
-        for filename in files:
-            relative = os.path.join(relative_root, filename) if relative_root else filename
-            if relative == b".git" or is_gitlink_path(relative):
-                continue
-            actual.add(relative)
-
-    if actual != set(expected):
-        raise SystemExit(1)
-
-    for path, (mode, expected_id) in expected.items():
-        absolute = os.path.join(repository, path)
-        file_stat = os.lstat(absolute)
-        if mode == b"120000":
-            if not stat.S_ISLNK(file_stat.st_mode):
-                raise SystemExit(1)
-            contents = os.fsencode(os.readlink(absolute))
-        else:
-            if not stat.S_ISREG(file_stat.st_mode):
-                raise SystemExit(1)
-            executable = bool(file_stat.st_mode & stat.S_IXUSR)
-            if executable != (mode == b"100755"):
-                raise SystemExit(1)
-            with open(absolute, "rb") as source:
-                contents = source.read()
-        digest = hashlib.new(object_format)
-        digest.update(f"blob {len(contents)}\0".encode("ascii"))
-        digest.update(contents)
-        if digest.hexdigest().encode("ascii") != expected_id:
-            raise SystemExit(1)
-
-    for path, object_id in gitlinks.items():
-        verify_repository(os.path.join(repository, path), object_id)
-
-verify_repository(checkout, commit)
-PY
-  then
-    echo "ERROR: Compiled Peekaboo checkout does not exactly match its committed source" >&2
-    return 1
-  fi
-  printf '%s' "$commit"
-}
-
-PEEKABOO_SNAPSHOT_ROOT=""
-PEEKABOO_SNAPSHOT_IMAGE=""
-PEEKABOO_SNAPSHOT_MOUNT=""
-PEEKABOO_EDIT_BUILD_PATHS=()
-SWIFT_PACKAGE_CONTAINER=""
-SWIFT_PACKAGE_ROOT=""
-SWIFT_PACKAGE_LOCK_BASELINE=""
-
-prepare_swift_package_root() {
-  SWIFT_PACKAGE_CONTAINER="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-macos-package.XXXXXX")"
-  SWIFT_PACKAGE_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos"
-  SWIFT_PACKAGE_LOCK_BASELINE="$SWIFT_PACKAGE_CONTAINER/Package.resolved.committed"
-  mkdir -p "$SWIFT_PACKAGE_ROOT"
-  cp "$ROOT_DIR/apps/macos/Package.swift" "$SWIFT_PACKAGE_ROOT/Package.swift"
-  cp "$ROOT_DIR/apps/macos/Package.resolved" "$SWIFT_PACKAGE_LOCK_BASELINE"
-  cp "$SWIFT_PACKAGE_LOCK_BASELINE" "$SWIFT_PACKAGE_ROOT/Package.resolved"
-  chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"
-  ln -s "$ROOT_DIR/apps/macos/Sources" "$SWIFT_PACKAGE_ROOT/Sources"
-  ln -s "$ROOT_DIR/apps/macos/Tests" "$SWIFT_PACKAGE_ROOT/Tests"
-  ln -s "$ROOT_DIR/apps/shared" "$SWIFT_PACKAGE_CONTAINER/apps/shared"
-  ln -s "$ROOT_DIR/apps/swabble" "$SWIFT_PACKAGE_CONTAINER/apps/swabble"
-}
-
-clear_peekaboo_edit() {
-  local build_path="$1"
-  swift package --scratch-path "$build_path" unedit --force Peekaboo >/dev/null 2>&1 || true
-}
-
-edit_peekaboo_from_snapshot() {
-  local build_path="$1"
-  swift package --scratch-path "$build_path" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"
-  PEEKABOO_EDIT_BUILD_PATHS+=("$build_path")
-}
-
-verify_snapshot_swift_lock() {
-  /usr/bin/python3 - \
-    "$SWIFT_PACKAGE_LOCK_BASELINE" \
-    "$SWIFT_PACKAGE_ROOT/Package.resolved" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-committed_path, snapshot_path = map(Path, sys.argv[1:])
-committed = json.loads(committed_path.read_text())
-snapshot = json.loads(snapshot_path.read_text())
-
-def pins(document):
-    values = document.get("pins")
-    if not isinstance(values, list):
-        raise SystemExit(1)
-    result = {}
-    for pin in values:
-        if not isinstance(pin, dict):
-            raise SystemExit(1)
-        identity = pin.get("identity")
-        if not isinstance(identity, str) or not identity or identity in result:
-            raise SystemExit(1)
-        result[identity] = pin
-    return result
-
-if committed.get("version") != snapshot.get("version"):
-    raise SystemExit(1)
-
-committed_pins = pins(committed)
-snapshot_pins = pins(snapshot)
-if "peekaboo" not in committed_pins or "peekaboo" in snapshot_pins:
-    raise SystemExit(1)
-del committed_pins["peekaboo"]
-if committed_pins != snapshot_pins:
-    raise SystemExit(1)
-PY
-}
-
-cleanup_peekaboo_snapshot() {
-  local build_path
-  for build_path in "${PEEKABOO_EDIT_BUILD_PATHS[@]:-}"; do
-    [[ -n "$build_path" ]] || continue
-    clear_peekaboo_edit "$build_path"
-  done
-  PEEKABOO_EDIT_BUILD_PATHS=()
-  if [[ -n "$PEEKABOO_SNAPSHOT_MOUNT" && -d "$PEEKABOO_SNAPSHOT_MOUNT" ]]; then
-    hdiutil detach -quiet "$PEEKABOO_SNAPSHOT_MOUNT" >/dev/null 2>&1 || true
-  fi
-  [[ -z "$PEEKABOO_SNAPSHOT_ROOT" || ! -d "$PEEKABOO_SNAPSHOT_ROOT" ]] ||
-    rm -rf "$PEEKABOO_SNAPSHOT_ROOT"
-  PEEKABOO_SNAPSHOT_ROOT=""
-  PEEKABOO_SNAPSHOT_IMAGE=""
-  PEEKABOO_SNAPSHOT_MOUNT=""
-}
-
-cleanup_swift_package_root() {
-  [[ -z "$SWIFT_PACKAGE_CONTAINER" || ! -d "$SWIFT_PACKAGE_CONTAINER" ]] ||
-    rm -rf "$SWIFT_PACKAGE_CONTAINER"
-  SWIFT_PACKAGE_CONTAINER=""
-  SWIFT_PACKAGE_ROOT=""
-  SWIFT_PACKAGE_LOCK_BASELINE=""
-}
-
-create_verified_peekaboo_snapshot() {
-  local build_path="$1" expected="$2" source_checkout source_commit snapshot_commit
-  source_checkout="$build_path/checkouts/Peekaboo"
-  source_commit="$(compiled_peekaboo_commit "$source_checkout" "$expected")" || return 1
-  cleanup_peekaboo_snapshot
-  PEEKABOO_SNAPSHOT_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-peekaboo-snapshot.XXXXXX")"
-  PEEKABOO_SNAPSHOT_IMAGE="$PEEKABOO_SNAPSHOT_ROOT/Peekaboo.dmg"
-  PEEKABOO_SNAPSHOT_MOUNT="$PEEKABOO_SNAPSHOT_ROOT/mount"
-  mkdir "$PEEKABOO_SNAPSHOT_MOUNT"
-  # -quiet suppresses failure stderr too; discard only routine stdout.
-  hdiutil create -fs APFS -format UDRO \
-    -srcfolder "$source_checkout" \
-    -volname OpenClawPeekabooSnapshot \
-    "$PEEKABOO_SNAPSHOT_IMAGE" >/dev/null
-  hdiutil attach -readonly -nobrowse \
-    -mountpoint "$PEEKABOO_SNAPSHOT_MOUNT" \
-    "$PEEKABOO_SNAPSHOT_IMAGE" >/dev/null
-  snapshot_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$expected")" || return 1
-  [[ "$snapshot_commit" == "$source_commit" ]] || return 1
-}
-
-PATCHED_SWIFTPM_RESOURCE_SOURCES=()
-
-restore_swiftpm_resource_sources() {
-  local source_file
-  local backup_file
-  for source_file in "${PATCHED_SWIFTPM_RESOURCE_SOURCES[@]:-}"; do
-    [[ -n "$source_file" ]] || continue
-    backup_file="$source_file.openclaw-original"
-    if [[ -f "$backup_file" ]]; then
-      mv "$backup_file" "$source_file"
-    fi
-  done
-  PATCHED_SWIFTPM_RESOURCE_SOURCES=()
-}
-
-patch_swiftpm_resource_lookups() {
-  local build_path="$1"
-  local checkout_root="$build_path/checkouts"
-  local source_file
-  local source_files=(
-    "$checkout_root/KeyboardShortcuts/Sources/KeyboardShortcuts/Utilities.swift"
-    "$checkout_root/SwiftMath/Sources/SwiftMath/MathBundle/MathFont.swift"
-    "$checkout_root/SwiftMath/Sources/SwiftMath/MathRender/MTFont.swift"
-  )
-
-  for source_file in "${source_files[@]}"; do
-    if [[ ! -f "$source_file" ]]; then
-      echo "ERROR: SwiftPM resource source not found at $source_file" >&2
-      return 1
-    fi
-    if [[ -e "$source_file.openclaw-original" ]]; then
-      echo "ERROR: Stale SwiftPM resource source backup at $source_file.openclaw-original" >&2
-      return 1
-    fi
-    cp -p "$source_file" "$source_file.openclaw-original"
-    chmod u+w "$source_file"
-    PATCHED_SWIFTPM_RESOURCE_SOURCES+=("$source_file")
-  done
-
-  /usr/bin/python3 - "${source_files[@]}" <<'PY'
-from pathlib import Path
-import sys
-
-
-def replace_exact(path: Path, old: str, new: str, expected: int = 1) -> str:
-    text = path.read_text()
-    if text.count(old) != expected:
-        raise SystemExit(f"Expected {expected} occurrence(s) in {path}: {old!r}")
-    return text.replace(old, new)
-
-
-keyboard_shortcuts, swift_math_font, swift_math_legacy_font = map(Path, sys.argv[1:])
-
-keyboard_text = replace_exact(
-    keyboard_shortcuts,
-    "NSLocalizedString(self, bundle: .module, comment: self)",
-    "NSLocalizedString(self, bundle: .keyboardShortcutsPackagedResources, comment: self)",
-)
-keyboard_marker = "\n\nextension Data {"
-keyboard_injection = """
-
-private extension Bundle {
-\t// Command-line SwiftPM builds resolve Bundle.module beside the executable, which is
-\t// outside a valid signed .app layout. Prefer the bundle copied into Contents/Resources.
-\tstatic let keyboardShortcutsPackagedResources: Bundle = {
-\t\t#if os(macOS)
-\t\tif let url = Bundle.main.url(
-\t\t\tforResource: \"KeyboardShortcuts_KeyboardShortcuts\",
-\t\t\twithExtension: \"bundle\"),
-\t\t   let bundle = Bundle(url: url)
-\t\t{
-\t\t\treturn bundle
-\t\t}
-\t\t#endif
-\t\treturn .module
-\t}()
-}
-"""
-if keyboard_text.count(keyboard_marker) != 1:
-    raise SystemExit(f"Expected one KeyboardShortcuts insertion marker in {keyboard_shortcuts}")
-keyboard_shortcuts.write_text(keyboard_text.replace(keyboard_marker, keyboard_injection + keyboard_marker))
-
-swift_math_text = replace_exact(
-    swift_math_font,
-    "Bundle.module.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
-    "Bundle.swiftMathPackagedResources.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
-    expected=2,
-)
-swift_math_marker = "\n#endif\n\n/// Now available for everyone to use"
-swift_math_injection = """
-
-extension Bundle {
-    // Keep SwiftMath's generated resource sidecar inside the signed app Resources directory.
-    static let swiftMathPackagedResources: Bundle = {
-        #if os(macOS)
-        if let url = Bundle.main.url(
-            forResource: \"SwiftMath_SwiftMath\",
-            withExtension: \"bundle\"),
-           let bundle = Bundle(url: url)
-        {
-            return bundle
-        }
-        #endif
-        return .module
-    }()
-}
-"""
-if swift_math_text.count(swift_math_marker) != 1:
-    raise SystemExit(f"Expected one SwiftMath insertion marker in {swift_math_font}")
-swift_math_font.write_text(
-    swift_math_text.replace(swift_math_marker, "\n#endif" + swift_math_injection + "\n/// Now available for everyone to use")
-)
-
-legacy_text = replace_exact(
-    swift_math_legacy_font,
-    "Bundle.module.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
-    "Bundle.swiftMathPackagedResources.url(forResource: \"mathFonts\", withExtension: \"bundle\")",
-)
-swift_math_legacy_font.write_text(legacy_text)
-PY
-}
+source "$ROOT_DIR/scripts/lib/mac-swift-build.sh"
 
 cleanup_package_build() {
-  restore_swiftpm_resource_sources
-  cleanup_peekaboo_snapshot
-  cleanup_swift_package_root
+  if [[ -n "$SWIFT_BUILD_RESULTS" && ! -f "$SWIFT_BUILD_RESULTS/cleanup-complete" ]]; then
+    echo "ERROR: Swift cleanup was not verified; retaining $APP_STAGE_DIR for inspection" >&2
+    return
+  fi
   [[ -z "$APP_STAGE_DIR" ]] || rm -rf "$APP_STAGE_DIR"
 }
 
+interrupt_package_build() {
+  local signal="$1" code="$2"
+  if [[ -n "$SWIFT_BUILD_PID" ]]; then
+    kill -"$signal" "$SWIFT_BUILD_PID" 2>/dev/null || true
+    wait "$SWIFT_BUILD_PID" || true
+    SWIFT_BUILD_PID=""
+  fi
+  exit "$code"
+}
+
 trap cleanup_package_build EXIT
+trap 'interrupt_package_build INT 130' INT
+trap 'interrupt_package_build TERM 143' TERM
+trap 'interrupt_package_build HUP 129' HUP
 
 PNPM_CMD=()
 
@@ -687,7 +250,6 @@ merge_framework_machos() {
 
 PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"
 PEEKABOO_LOCKED_SOURCE_COMMIT="$PEEKABOO_SOURCE_COMMIT"
-COMPILED_PEEKABOO_SOURCE_COMMIT=""
 
 require_swift_toolchain
 
@@ -739,48 +301,18 @@ APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/dist/.openclaw-package.XXXXXX")"
 APP_ROOT="$APP_STAGE_DIR/OpenClaw.app"
 
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
-for arch in "${BUILD_ARCHS[@]}"; do
-  prepare_swift_package_root
-  cd "$SWIFT_PACKAGE_ROOT"
-  BUILD_PATH="$(build_path_for_arch "$arch")"
-  clear_peekaboo_edit "$BUILD_PATH"
-  echo "📦 Resolving Swift packages [$arch]"
-  run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve
-  if [[ -z "$PEEKABOO_SNAPSHOT_MOUNT" ]]; then
-    echo "🔒 Freezing authenticated Peekaboo sources in a read-only snapshot"
-    create_verified_peekaboo_snapshot "$BUILD_PATH" "$PEEKABOO_LOCKED_SOURCE_COMMIT"
-  fi
-  edit_peekaboo_from_snapshot "$BUILD_PATH"
-  swift package --scratch-path "$BUILD_PATH" resolve
-  verify_snapshot_swift_lock
-  patch_swiftpm_resource_lookups "$BUILD_PATH"
-  echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [$arch]"
-  verify_snapshot_swift_lock
-  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
-  verify_snapshot_swift_lock
-  arch_peekaboo_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_LOCKED_SOURCE_COMMIT")"
-  if [[ -n "$COMPILED_PEEKABOO_SOURCE_COMMIT" && "$COMPILED_PEEKABOO_SOURCE_COMMIT" != "$arch_peekaboo_commit" ]]; then
-    echo "ERROR: Peekaboo checkout differs across requested architectures" >&2
-    exit 1
-  fi
-  COMPILED_PEEKABOO_SOURCE_COMMIT="$arch_peekaboo_commit"
-  restore_swiftpm_resource_sources
-  clear_peekaboo_edit "$BUILD_PATH"
-  PEEKABOO_EDIT_BUILD_PATHS=()
-  cd "$ROOT_DIR/apps/macos"
-  cleanup_swift_package_root
-  if [[ "$SKIP_MLX_TTS" == "1" ]]; then
-    echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1) — app will lack the local MLX voice helper [$arch]"
-  else
-    echo "🔨 Building $MLX_TTS_HELPER_PRODUCT ($BUILD_CONFIG) [$arch]"
-    build_mlx_tts_helper "$arch"
-  fi
-done
-[[ -n "$COMPILED_PEEKABOO_SOURCE_COMMIT" ]] || {
-  echo "ERROR: No compiled Peekaboo checkout was verified" >&2
-  exit 1
-}
-PEEKABOO_SOURCE_COMMIT="$COMPILED_PEEKABOO_SOURCE_COMMIT"
+SWIFT_BUILD_RESULTS="$APP_STAGE_DIR/swift-builds"
+node "$ROOT_DIR/scripts/build-mac-swift.mts" "$ROOT_DIR" "$BUILD_CONFIG" \
+  "$PEEKABOO_LOCKED_SOURCE_COMMIT" "$SKIP_MLX_TTS" "$SWIFT_BUILD_RESULTS" "${BUILD_ARCHS[@]}" &
+SWIFT_BUILD_PID=$!
+if wait "$SWIFT_BUILD_PID"; then
+  SWIFT_BUILD_PID=""
+  PEEKABOO_SOURCE_COMMIT="$PEEKABOO_LOCKED_SOURCE_COMMIT"
+else
+  build_status=$?
+  SWIFT_BUILD_PID=""
+  exit "$build_status"
+fi
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
 echo "pkg: binary $BIN_PRIMARY" >&2
@@ -936,7 +468,7 @@ fi
 echo "📦 Copying SwiftPM resource bundles"
 SWIFTPM_BUILD_PRODUCTS=("$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG")
 if [[ "$SKIP_MLX_TTS" != "1" ]]; then
-  SWIFTPM_BUILD_PRODUCTS+=("$(build_mlx_tts_helper "$PRIMARY_ARCH" --show-bin-path)")
+  SWIFTPM_BUILD_PRODUCTS+=("$(helper_products_for_arch "$PRIMARY_ARCH")")
 fi
 # Main app and helper dependencies share the signed Resources directory.
 # MLX loads its compiled Metal library from its resource bundle there.

@@ -27,6 +27,58 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test(arguments: [
+        ("gateway-a", "gateway-b"),
+        (" gateway-a ", "gateway-a"),
+        ("gateway-e\u{301}", "gateway-\u{E9}"),
+    ])
+    func `chat outbox route keeps the exact gateway owner`(owner: String, otherOwner: String) async throws {
+        let gateway = GatewayNodeSession()
+        var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
+        options.deviceAuthGatewayID = owner
+        options.allowStoredDeviceAuth = false
+        do {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://chat-transport-test.invalid")),
+                credentials: .init(),
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession()),
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+            let matching = IOSGatewayChatTransport(gateway: gateway, outboxGatewayID: owner)
+            let foreign = IOSGatewayChatTransport(gateway: gateway, outboxGatewayID: otherOwner)
+
+            #expect(await matching.currentSessionMutationRoute() != nil)
+            #expect(await foreign.currentSessionMutationRoute() == nil)
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
+    @Test func `history compatibility rejects only the old unsupported input run field`() {
+        let unsupportedField = "invalid chat.history params: at root: unexpected property 'inputRunIds'"
+        let cases: [(String, String, String, Bool)] = [
+            ("chat.history", "INVALID_REQUEST", unsupportedField, true),
+            ("chat.send", "INVALID_REQUEST", unsupportedField, false),
+            ("chat.history", "FORBIDDEN", unsupportedField, false),
+            (
+                "chat.history",
+                "INVALID_REQUEST",
+                "invalid chat.history params: at root: unexpected property 'cursor'",
+                false),
+            ("chat.history", "INVALID_REQUEST", "invalid chat.history params: missing sessionKey", false),
+            ("chat.history", "INVALID_REQUEST", "\(unsupportedField); missing sessionKey", false),
+        ]
+        for (method, code, message, expected) in cases {
+            let error = GatewayResponseError(method: method, code: code, message: message, details: nil)
+            #expect(IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(error) == expected)
+        }
+        #expect(!IOSGatewayChatTransport.isUnsupportedHistoryInputRunIDsError(URLError(.timedOut)))
+    }
+
     @Test func `composer mutation compatibility preserves legacy controls only for unknown catalogs`() {
         #expect(IOSGatewayChatTransport.composerMutationAvailable(
             methodSupport: nil,

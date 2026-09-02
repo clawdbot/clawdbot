@@ -25,7 +25,8 @@ minimumReleaseAgeExclude:
   - "@grammyjs/types@5.0.0"
   - "grammy@1.46.0"
 
-nodeLinker: hoisted
+# Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
+nodeLinker: isolated
 # GWTs share node_modules; script commands must not reconcile that shared install.
 verifyDepsBeforeRun: false
 blockExoticSubdeps: true

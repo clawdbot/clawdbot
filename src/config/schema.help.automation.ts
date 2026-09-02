@@ -103,6 +103,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allows automation webhooks to private and internal network targets. Keep disabled unless every configured webhook destination is trusted.",
   "cron.webhookSsrfPolicy.allowedHostnames":
     "Exact hostnames or IP literals allowed for automation webhook delivery, including otherwise blocked targets. Keep the list minimal.",
+  "cron.webhookSsrfPolicy.blockedHostnames":
+    'Hostname patterns denied before DNS and allow rules for automation webhook delivery. Supports exact hosts and "*.example.com" for subdomains only; add "example.com" separately to block the apex. Empty or unset adds no denials.',
   "cron.webhookSsrfPolicy.allowRfc2544BenchmarkRange":
     "Allows automation webhooks to RFC 2544 benchmark-range IPs (198.18.0.0/15). Use only with trusted fake-IP proxy environments.",
   "cron.webhookSsrfPolicy.allowIpv6UniqueLocalRange":

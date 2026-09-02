@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
 import {
@@ -1130,6 +1131,44 @@ function acceptedSurfaceHash(surface) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+function hasCompanionPluginConsent(record) {
+  return [
+    record.acceptedSurface,
+    record.acceptedSurfaceHash,
+    record.acceptedSurfaceAt,
+    record.acceptedSurfaceIntegrity,
+  ].some((value) => value !== undefined);
+}
+
+async function loadTrustedOfficialInstallRecordPredicate() {
+  const candidatePackageRoot = path.join(
+    requireEnv("npm_config_prefix"),
+    "lib",
+    "node_modules",
+    "openclaw",
+  );
+  const modulePath = path.join(
+    candidatePackageRoot,
+    "dist",
+    "plugins",
+    "official-external-install-records.js",
+  );
+  assert(
+    fs.existsSync(modulePath),
+    `candidate official install record module missing: ${modulePath}`,
+  );
+  const module = await import(pathToFileURL(modulePath).href);
+  assert(
+    typeof module.isTrustedOfficialPluginInstallRecord === "function",
+    `candidate official install record predicate missing: ${modulePath}`,
+  );
+  return module.isTrustedOfficialPluginInstallRecord;
+}
+
+function isTrustedOfficialNpmCompanion(record, pluginId, packageName, isTrustedOfficialRecord) {
+  return isTrustedOfficialRecord?.({ pluginId, packageName, record }) === true;
+}
+
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1156,17 +1195,21 @@ function assertCompanionPluginConsent(record, pluginId, integrity) {
   );
 }
 
-function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
+async function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
   assert(expectedVersion, "assert-companion-installs requires <expected-version>");
   assert(
     capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
     "assert-companion-installs requires candidate capability-consent support",
   );
+  const isTrustedOfficialRecord =
+    capabilityConsentSupported === "1"
+      ? await loadTrustedOfficialInstallRecordPredicate()
+      : undefined;
   const records = readInstalledPluginIndex().installRecords ?? {};
-  for (const [pluginId, packageName, source] of [
-    ["discord", "@openclaw/discord", "npm"],
-    ["whatsapp", "@openclaw/whatsapp", "clawhub"],
-    ["codex", "@openclaw/codex", "npm"],
+  for (const [pluginId, packageName, source, allowsOfficialConsentExemption] of [
+    ["discord", "@openclaw/discord", "npm", true],
+    ["whatsapp", "@openclaw/whatsapp", "clawhub", false],
+    ["codex", "@openclaw/codex", "npm", true],
   ]) {
     const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
     const record = records[pluginId];
@@ -1177,6 +1220,8 @@ function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSuppor
       packageJson,
       expectedVersion,
       capabilityConsentSupported,
+      isTrustedOfficialRecord,
+      allowsOfficialConsentExemption,
     );
   }
 }
@@ -1187,6 +1232,8 @@ function assertPluginArtifactConsent(
   packageJson,
   expectedVersion,
   capabilityConsentSupported,
+  isTrustedOfficialRecord,
+  allowsOfficialConsentExemption = false,
 ) {
   const installedVersion = record.source === "clawhub" ? record.version : record.resolvedVersion;
   assert(
@@ -1202,7 +1249,14 @@ function assertPluginArtifactConsent(
     typeof integrity === "string" && integrity.length > 0,
     `${pluginId} plugin integrity missing`,
   );
-  if (capabilityConsentSupported === "1") {
+  // Verified first-party packages intentionally omit operator-acceptance metadata.
+  // Any unverified or partially accepted record still takes the strict path below.
+  if (
+    capabilityConsentSupported === "1" &&
+    (!allowsOfficialConsentExemption ||
+      hasCompanionPluginConsent(record) ||
+      !isTrustedOfficialNpmCompanion(record, pluginId, packageJson.name, isTrustedOfficialRecord))
+  ) {
     assertCompanionPluginConsent(record, pluginId, integrity);
   }
 }
@@ -1564,7 +1618,7 @@ if (command === "list-scenarios") {
   );
   assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
 } else if (command === "assert-companion-installs") {
-  assertCompanionPluginInstalls(process.argv.slice(3));
+  await assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-recovered-plugin-installs") {
   assertRecoveredPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-status-json") {

@@ -9,8 +9,9 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CONFIG_COMMAND_MAX_BUFFER_BYTES,
@@ -65,15 +66,21 @@ describe("upgrade survivor config recipe command resolution", () => {
     try {
       const mountedNodeModules = join(root, mountTarget.slice(1));
       mkdirSync(mountedNodeModules, { recursive: true });
-      for (const packageName of ["tsx", "esbuild", "@esbuild"]) {
-        cpSync(
-          join(process.cwd(), "node_modules", packageName),
-          join(mountedNodeModules, packageName),
-          {
-            dereference: true,
-            recursive: true,
-          },
-        );
+      const tsxManifest = createRequire(import.meta.url).resolve("tsx/package.json");
+      const esbuildManifest = createRequire(tsxManifest).resolve("esbuild/package.json");
+      const nativePackage = `@esbuild/${process.platform}-${process.arch}`;
+      const nativeManifest = createRequire(esbuildManifest).resolve(
+        `${nativePackage}/package.json`,
+      );
+      for (const [packageName, manifest] of [
+        ["tsx", tsxManifest],
+        ["esbuild", esbuildManifest],
+        [nativePackage, nativeManifest],
+      ] as const) {
+        cpSync(dirname(manifest), join(mountedNodeModules, packageName), {
+          dereference: true,
+          recursive: true,
+        });
       }
 
       const loaderPath = join(root, loaderTarget.slice(1));

@@ -120,6 +120,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
+import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -255,27 +256,6 @@ async function writeExistingBinding(
   });
 }
 
-async function attachSqliteSessionTarget(
-  params: EmbeddedRunAttemptParams,
-  storePath: string,
-  sessionId: string,
-): Promise<void> {
-  params.sessionId = sessionId;
-  params.sessionKey = `agent:main:${sessionId}`;
-  params.sessionTarget = {
-    agentId: "main",
-    sessionId,
-    sessionKey: params.sessionKey,
-    storePath,
-  };
-  await upsertSessionEntry({
-    agentId: "main",
-    sessionKey: params.sessionKey,
-    storePath,
-    entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
-  });
-}
-
 async function appendSqliteHistoryMessage(
   params: EmbeddedRunAttemptParams,
   message: ReturnType<typeof userMessage> | ReturnType<typeof assistantMessage>,
@@ -327,7 +307,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
       headers: {},
     },
     requestTimeoutMs: 60_000,
-    turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
@@ -847,6 +826,7 @@ async function runSharedClientRestartTest(closeCount: number) {
   await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
   const requests: string[][] = [];
   const clients: Array<ReturnType<typeof createCodexLifecycleHarness>> = [];
+  const turnStarted = createDeferred<ReturnType<typeof createCodexLifecycleHarness>>();
   onTestFinished(async () => {
     await Promise.all(clients.map(({ client }) => client.closeAndWait()));
   });
@@ -861,6 +841,7 @@ async function runSharedClientRestartTest(closeCount: number) {
           return threadStartResult("thread-existing");
         }
         if (method === "turn/start") {
+          turnStarted.resolve(wire);
           return turnStartResult();
         }
         return {};
@@ -899,16 +880,18 @@ async function runSharedClientRestartTest(closeCount: number) {
       }),
   );
   const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-  await Promise.race([
-    run,
-    vi.waitFor(() => expect(requests[closeCount]).toContain("turn/start"), fastWait),
+  const readyClient = await Promise.race([
+    turnStarted.promise,
+    run.then(() => {
+      throw new Error("Codex startup retry ended before turn/start");
+    }),
   ]);
-  clients[closeCount]!.notify({
+  readyClient.notify({
     method: "turn/completed",
     params: { threadId: "thread-existing", turn: { id: "turn-1", status: "completed" } },
   });
   const result = await run;
-  return { result, requests, client: clients[closeCount]!.client };
+  return { result, requests, client: readyClient.client };
 }
 
 async function expectRetainedSuccessfulThread(client: CodexAppServerClient, threadId: string) {
@@ -4489,7 +4472,12 @@ describe("runCodexAppServerAttempt", () => {
     const resumedRun = runCodexAppServerAttempt(resumeParams);
     await Promise.race([resumedRun, resumeHarness.waitForMethod("turn/start")]);
     await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await resumedRun;
+    expect(readAttemptTerminal(await resumedRun)).toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
+    expect(resumeHarness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
     const threadResume = resumeHarness.requests.find(
       (request) => request.method === "thread/resume",
     );
@@ -5619,7 +5607,7 @@ describe("runCodexAppServerAttempt", () => {
       const params = createRunParams();
       params.abortSignal = abortController.signal;
       params.onPartialReply = onPartialReply;
-      const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 30 * 60_000 });
+      const run = runCodexAppServerAttempt(params);
       const settled = vi.fn();
       void run.then(settled);
       try {
@@ -5654,7 +5642,7 @@ describe("runCodexAppServerAttempt", () => {
           timedOut: termination === "terminal timeout",
         });
         if (termination === "terminal timeout") {
-          expect(result.codexAppServerFailure?.turnWatchTimeoutKind).toBe("terminal");
+          expect(result.codexAppServerFailure?.kind).toBe("turn_settlement_timeout");
         }
         expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBeUndefined();
       } finally {
@@ -5688,7 +5676,7 @@ describe("runCodexAppServerAttempt", () => {
         return {};
       },
     );
-    const run = runCodexAppServerAttempt(createRunParams(), { turnTerminalIdleTimeoutMs: 60_000 });
+    const run = runCodexAppServerAttempt(createRunParams());
     await bufferedTerminal;
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -5703,6 +5691,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not time out when turn progress arrives before turn/start returns", async () => {
+    vi.useFakeTimers();
     const harness: ReturnType<typeof createAppServerHarness> = createAppServerHarness(
       async (method) => {
         if (method === "thread/start") {
@@ -5723,15 +5712,10 @@ describe("runCodexAppServerAttempt", () => {
       },
     );
     const params = createRunParams();
-    params.timeoutMs = 60_000;
-    const run = runCodexAppServerAttempt(params, {
-      turnCompletionIdleTimeoutMs: 5,
-      turnTerminalIdleTimeoutMs: 60_000,
-    });
+    params.timeoutMs = 60 * 60_000;
+    const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
+    await vi.advanceTimersByTimeAsync(60_001);
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
@@ -5893,6 +5877,18 @@ describe("runCodexAppServerAttempt", () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createRunParams());
     await harness.waitForMethod("turn/start");
+    const mcpItem = {
+      type: "mcpToolCall",
+      id: "raw-item",
+      server: "raw-server",
+      tool: "_raw.tool",
+      arguments: { query: "exact" },
+      status: "inProgress",
+    };
+    await harness.notify({
+      method: "item/started",
+      params: { threadId: "thread-1", turnId: "turn-1", item: mcpItem },
+    });
 
     const params = {
       threadId: "thread-1",
@@ -5910,6 +5906,13 @@ describe("runCodexAppServerAttempt", () => {
       }),
     ).resolves.toEqual({ action: "accept", content: { name: "Ada" }, _meta: null });
     expect(approvalSpy).toHaveBeenCalledWith(expect.objectContaining({ requestParams: params }));
+    const getActiveMcpToolCall = approvalSpy.mock.calls[0]?.[0].getActiveMcpToolCall;
+    expect(getActiveMcpToolCall?.("raw-server")).toEqual({
+      id: mcpItem.id,
+      server: mcpItem.server,
+      tool: mcpItem.tool,
+      arguments: mcpItem.arguments,
+    });
     expect(ordinaryHandler).toHaveBeenCalledWith({ id: "ordinary-1", params });
     const approvalOrder = approvalSpy.mock.invocationCallOrder.at(0);
     const ordinaryOrder = ordinaryHandler.mock.invocationCallOrder.at(0);
@@ -5920,7 +5923,87 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+    expect(getActiveMcpToolCall?.("raw-server")).toBeUndefined();
   });
+  it.each(["competing item", "terminal turn"])(
+    "fences MCP persistence correlation when a %s receipt is behind a slow projection",
+    async (receipt) => {
+      const approvalSpy = vi
+        .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
+        .mockResolvedValue({
+          kind: "handled",
+          response: { action: "accept", content: {}, _meta: { persist: "always" } },
+        });
+      const projectionEntered = createDeferred<void>();
+      const projectionRelease = createDeferred<void>();
+      const params = createRunParams();
+      params.onAssistantMessageStart = async () => {
+        projectionEntered.resolve();
+        await projectionRelease.promise;
+      };
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const item = {
+        type: "mcpToolCall",
+        id: "active-mcp",
+        server: "configured-server",
+        tool: "raw-tool",
+        arguments: {},
+        status: "inProgress",
+      };
+      await harness.notify({
+        method: "item/started",
+        params: { threadId: "thread-1", turnId: "turn-1", item },
+      });
+      await harness.handleServerRequest({
+        id: "pending-mcp-approval",
+        method: "mcpServer/elicitation/request",
+        params: { threadId: "thread-1", turnId: "turn-1", serverName: item.server },
+      });
+      const correlate = approvalSpy.mock.calls[0]?.[0].getActiveMcpToolCall;
+      expect(correlate?.(item.server)?.id).toBe(item.id);
+      const slowProjection = harness.notify({
+        method: "item/agentMessage/delta",
+        params: { threadId: "thread-1", turnId: "turn-1", itemId: "slow", delta: "Waiting" },
+      });
+      await projectionEntered.promise;
+      const queuedReceipt = harness.notify(
+        receipt === "terminal turn"
+          ? turnCompleted({ id: "turn-1", status: "completed" })
+          : {
+              method: "item/started",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: { ...item, id: "competing-mcp" },
+              },
+            },
+      );
+      try {
+        expect(correlate?.(item.server)).toBeUndefined();
+      } finally {
+        projectionRelease.resolve();
+        await Promise.all([slowProjection, queuedReceipt]);
+        if (receipt !== "terminal turn") {
+          try {
+            await harness.notify({
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: { ...item, id: "competing-mcp", status: "completed" },
+              },
+            });
+            expect(correlate?.(item.server)?.id).toBe(item.id);
+          } finally {
+            await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+          }
+        }
+        await run;
+      }
+    },
+  );
   it("routes Computer Use MCP elicitations through the native bridge", async () => {
     const bridgeSpy = vi
       .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")

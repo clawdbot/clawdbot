@@ -248,9 +248,10 @@ function parseContentDispositionFileName(header?: string | null): string | undef
     if (parameter.name !== "filename*") {
       continue;
     }
-    const decoded = decodeExtendedRemoteFileName(parameter.value);
-    if (decoded) {
-      return basenameFromAnyPath(decoded) || undefined;
+    // An unusable extended name must not hide a valid plain filename.
+    const fileName = basenameFromAnyPath(decodeExtendedRemoteFileName(parameter.value) ?? "");
+    if (fileName) {
+      return fileName;
     }
   }
   return fallbackFileName;

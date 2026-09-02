@@ -112,38 +112,41 @@ export function resolvePlacementComposer(params: {
 }
 
 export function resolveChatPaneWorkerPresentation(
-  placement: GatewaySessionRow["placement"],
+  session: GatewaySessionRow,
   startup: Pick<ApplicationPlacementStartupStatus, "phase" | "targetKind"> | null | undefined,
 ) {
+  const placement = session.placement;
   // Active ownership wins even when cloud placements omit runner. Failed startup
   // intent is retained for retry, not evidence of a later placement's target;
   // only a live initial handoff can identify a not-yet-active worker.
-  const targetKind =
-    placement?.state === "active"
-      ? placement.runner?.kind === "device"
-        ? "device"
-        : "profile"
-      : startup?.phase !== "failed"
-        ? startup?.targetKind
+  let targetKind = startup?.phase !== "failed" ? startup?.targetKind : undefined;
+  if (placement?.state === "active") {
+    targetKind = placement.runner?.kind === "device" ? "device" : "profile";
+  }
+  let label: string;
+  let stopKey: string;
+  if (targetKind === "device" || targetKind === "auto-device") {
+    label = t("sessionsView.runsOnDevice");
+    stopKey = "sessionsView.stopDeviceWorker";
+  } else if (targetKind === "profile") {
+    const worker =
+      placement && placement.state !== "local" && placement.state !== "requested"
+        ? placement
         : undefined;
-  const device = targetKind === "device" || targetKind === "auto-device";
-  const worker =
-    placement && placement.state !== "local" && placement.state !== "requested"
-      ? placement
-      : undefined;
+    label =
+      worker?.providerId && worker.profileId
+        ? `${worker.providerId} · ${worker.profileId}`
+        : t("newSession.runsOn", { place: t("newSession.cloud") });
+    stopKey = "sessionsView.stopCloudWorker";
+  } else {
+    label = t("sessionsView.runsOnWorker");
+    stopKey = "sessionsView.stopWorker";
+  }
   return {
-    label: device
-      ? t("sessionsView.runsOnDevice")
-      : targetKind === "profile"
-        ? worker?.providerId && worker.profileId
-          ? `${worker.providerId} · ${worker.profileId}`
-          : t("newSession.runsOn", { place: t("newSession.cloud") })
-        : t("sessionsView.runsOnWorker"),
-    stopKey: device
-      ? "sessionsView.stopDeviceWorker"
-      : targetKind === "profile"
-        ? "sessionsView.stopCloudWorker"
-        : "sessionsView.stopWorker",
+    label,
+    stopLabel: t(stopKey),
+    confirmMessage: t(`${stopKey}Confirm`, { session: session.label || session.key }),
+    confirmLabel: t(`${stopKey}ConfirmAction`),
   };
 }
 

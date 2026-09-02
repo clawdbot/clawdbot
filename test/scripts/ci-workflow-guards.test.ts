@@ -2208,7 +2208,7 @@ NODE
       contents: "read",
       packages: "write",
     });
-    expect(releaseWorkflow.jobs.approve_docker_publish.environment).toBe("docker-release");
+    expect(releaseWorkflow.jobs.publish.environment).toBe("docker-release");
   });
 
   it("forbids moving reusable workflow references", () => {
@@ -3469,7 +3469,11 @@ NODE
     expect(step.run).toContain('"$comparison_status" != "ahead"');
     expect(step.run).toContain('"$comparison_status" != "identical"');
 
-    for (const contextRef of ["release/2026.8.1", "extended-stable/2026.8.33"]) {
+    for (const contextRef of [
+      "release/2026.8.1",
+      "release/2026.8.1-1",
+      "extended-stable/2026.8.33",
+    ]) {
       for (const comparisonStatus of ["ahead", "identical"]) {
         const result = runTargetContextValidation(contextRef, targetSha, comparisonStatus);
         expect(result.status, `${contextRef}: ${result.output}`).toBe(0);
@@ -4392,7 +4396,7 @@ NODE
           step: expect.objectContaining({ name: "Setup Node environment" }),
         },
         {
-          file: ".github/workflows/openclaw-npm-release.yml",
+          file: ".github/workflows/openclaw-npm-preflight.yml",
           mode: "read-write",
           step: expect.objectContaining({ name: "Setup Node environment" }),
         },
@@ -6937,38 +6941,35 @@ server.listen(0, "127.0.0.1", () => {
       uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
     };
     const clawhub = parse(readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8"));
-    const clawhubSteps = clawhub.jobs.preview_plugins_clawhub.steps as WorkflowStep[];
-    expect(clawhubSteps[0]).toEqual(owner);
-    expect(clawhubSteps[1]?.name).toBe("Checkout");
-    const clawhubBodies = clawhubSteps.map(({ run }) => run ?? "").join("\n");
-    expect(clawhubBodies.match(/timeout=120/gu)).toHaveLength(3);
-    expect(clawhubBodies).not.toMatch(
-      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|checkout)\b/mu,
-    );
-    expect(clawhubBodies).not.toMatch(/backoff\(|for attempt in range/u);
-
     const npm = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
-    for (const [jobName, checkoutName] of [
-      ["preview_plugins_npm", "Checkout"],
-      ["verify_plugin_npm_preflight", "Checkout trusted npm preflight tooling"],
-      ["publish_plugins_npm", "Checkout trusted publication tooling"],
+    for (const [workflow, jobName, checkoutName] of [
+      [clawhub, "preview_plugins_clawhub", "Checkout"],
+      [npm, "preview_plugins_npm", "Checkout"],
+      [npm, "verify_plugin_npm_preflight", "Checkout trusted npm preflight tooling"],
+      [npm, "publish_plugins_npm", "Checkout trusted publication tooling"],
     ] as const) {
-      const steps = npm.jobs[jobName].steps as WorkflowStep[];
+      const steps = workflow.jobs[jobName].steps as WorkflowStep[];
       expect(steps[0], jobName).toEqual(owner);
       expect(steps[1]?.name, jobName).toBe(checkoutName);
+      const body = steps
+        .map(({ run }) => run ?? "")
+        .join("\n")
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("#"))
+        .join("\n");
+      const calls = [...body.matchAll(/(?:run_git|git_output)\(([\s\S]*?)\)(?=\.|\n|$)/gu)].map(
+        (match) => match[1]!,
+      );
+      const transports = calls.filter((call) => /^\s*workspace,\s*"(?:fetch|show)",/u.test(call));
+      expect(transports.length, jobName).toBeGreaterThan(0);
+      for (const call of transports) {
+        expect(call, jobName).toMatch(/\btimeout\s*=\s*120\b/u);
+      }
+      expect(body, jobName).not.toMatch(
+        /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|checkout|show)\b/mu,
+      );
+      expect(body, jobName).not.toMatch(/backoff\(|for attempt in range/u);
     }
-    const npmBodies = [
-      ...npm.jobs.preview_plugins_npm.steps,
-      ...npm.jobs.verify_plugin_npm_preflight.steps,
-      ...npm.jobs.publish_plugins_npm.steps,
-    ]
-      .map(({ run }: WorkflowStep) => run ?? "")
-      .join("\n");
-    expect(npmBodies.match(/timeout=120/gu)).toHaveLength(5);
-    expect(npmBodies).not.toMatch(
-      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
-    );
-    expect(npmBodies).not.toMatch(/backoff\(|for attempt in range/u);
     for (const stepName of [
       "Read exact npm preflight source package",
       "Read exact npm publication source package",
@@ -10264,16 +10265,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const selectedFiles = (test: { exclude: string[]; include: string[] }) =>
       globSync(test.include, { cwd: process.cwd(), exclude: test.exclude }).toSorted();
     const rootTest = config.test as { exclude: string[]; include: string[] };
-    expect(config.test?.globalSetup).toEqual(["test/vitest/vitest.ui-e2e.global-setup.ts"]);
+    expect(config.test?.globalSetup).toEqual([]);
     expect(config.test?.include).toEqual([
       "ui/src/**/*.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
     ]);
     expect(projects.map((project) => project.test.name)).toEqual([
       "ui-e2e-bundled",
+      "ui-e2e-standalone",
       "ui-e2e-serial",
+      "ui-e2e-serial-standalone",
     ]);
-    expect(projects.every((project) => project.test.globalSetup === undefined)).toBe(true);
+    const chromiumSetup = "test/vitest/vitest.ui-e2e.global-setup.ts";
+    const bundledSetup = "test/vitest/vitest.ui-e2e.bundled.global-setup.ts";
+    expect(projects.map((project) => project.test.globalSetup)).toEqual([
+      [chromiumSetup, bundledSetup],
+      [chromiumSetup],
+      [chromiumSetup, bundledSetup],
+      [chromiumSetup],
+    ]);
     expect(new Set(projects.map((project) => project.cacheDir)).size).toBe(projects.length);
     expect(config.test?.maxWorkers).toBe(Math.min(2, sharedVitestConfig.test.maxWorkers));
     expect(projects[0]?.test).toMatchObject({
@@ -10282,12 +10292,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       sequence: { groupOrder: 0 },
     });
     expect(projects[1]?.test).toMatchObject({
-      exclude: expect.not.arrayContaining(uiE2eRealGatewayTestFiles),
-      fileParallelism: false,
-      include: uiE2eSerialTestFiles,
-      maxWorkers: 1,
-      sequence: { groupOrder: 1 },
+      fileParallelism: sharedVitestConfig.test.fileParallelism,
+      maxWorkers: undefined,
+      sequence: { groupOrder: 0 },
     });
+    for (const project of projects.slice(2)) {
+      expect(project.test).toMatchObject({
+        exclude: expect.not.arrayContaining(uiE2eRealGatewayTestFiles),
+        fileParallelism: false,
+        maxWorkers: 1,
+        sequence: { groupOrder: 1 },
+      });
+    }
     expect(projects[0]?.test.exclude).toEqual(expect.arrayContaining(uiE2eSerialTestFiles));
 
     const realGateway = new Set(uiE2eRealGatewayTestFiles);
@@ -10295,8 +10311,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const serial = new Set(uiE2eSerialTestFiles);
     const localSelected = projects.map((project) => selectedFiles(project.test));
     expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
-    expect(localSelected[0]).toEqual(trackedUiE2eFiles.filter((file) => !serial.has(file)));
-    expect(localSelected[1]).toEqual(uiE2eSerialTestFiles);
+    expect(localSelected.slice(0, 2).flat().toSorted()).toEqual(
+      trackedUiE2eFiles.filter((file) => !serial.has(file)),
+    );
+    expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
+    expect(localSelected[1]).toEqual([
+      "ui/src/e2e/board-fixture.e2e.test.ts",
+      "ui/src/e2e/control-ui-retained-assets.e2e.test.ts",
+      "ui/src/e2e/service-worker-update.e2e.test.ts",
+    ]);
+    expect(localSelected[3]).toEqual(uiE2ePrivateServerTestFiles);
     expect(localSelected.flat().toSorted()).toEqual(trackedUiE2eFiles);
     expect(new Set(localSelected.flat()).size).toBe(trackedUiE2eFiles.length);
 
@@ -10304,16 +10328,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const ordinaryProjects = ordinaryConfig.test?.projects as typeof projects;
     const ordinarySelected = ordinaryProjects.map((project) => selectedFiles(project.test));
     expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
-    expect(ordinarySelected[0]).toEqual(ordinary.filter((file) => !serial.has(file)));
-    expect(ordinarySelected[1]).toEqual(ordinary.filter((file) => serial.has(file)));
+    expect(ordinarySelected.slice(0, 2).flat().toSorted()).toEqual(
+      ordinary.filter((file) => !serial.has(file)),
+    );
+    expect(ordinarySelected.slice(2).flat().toSorted()).toEqual(
+      ordinary.filter((file) => serial.has(file)),
+    );
     expect(ordinarySelected.flat().toSorted()).toEqual(ordinary);
     expect(new Set(ordinarySelected.flat()).size).toBe(ordinary.length);
 
     const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
-    const serialFile = expectDefined(ordinarySelected[1]?.[0], "serial Control UI E2E file");
+    const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");
     const narrowedByArgv = createUiE2eVitestConfig({}, ["node", "vitest", serialFile]);
     const argvProjects = narrowedByArgv.test?.projects as typeof projects;
-    expect(argvProjects.map((project) => selectedFiles(project.test))).toEqual([[], [serialFile]]);
+    expect(argvProjects.map((project) => selectedFiles(project.test))).toEqual([
+      [],
+      [],
+      [],
+      [serialFile],
+    ]);
 
     const includeDir = tempDirs.make("openclaw-ui-e2e-project-includes-");
     const includeFile = path.join(includeDir, "include.json");
@@ -10325,6 +10358,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const includeProjects = narrowedByFile.test?.projects as typeof projects;
     expect(includeProjects.map((project) => selectedFiles(project.test))).toEqual([
       [bundledFile],
+      [],
+      [],
       [serialFile],
     ]);
 
@@ -10358,9 +10393,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           test: { maxWorkers?: number; fileParallelism: boolean };
         }>;
         expect(config.test?.maxWorkers).toBe(expectedWorkers);
-        expect(projects.map((project) => project.test.maxWorkers)).toEqual([undefined, 1]);
+        expect(projects.map((project) => project.test.maxWorkers)).toEqual([
+          undefined,
+          undefined,
+          1,
+          1,
+        ]);
         expect(projects.map((project) => project.test.fileParallelism)).toEqual([
           fileParallelism,
+          fileParallelism,
+          false,
           false,
         ]);
       }
@@ -13305,32 +13347,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(telegramProvenanceHelper).not.toContain(".baseRefName ==");
   });
 
-  it("checks out the complete Release Decision evidence validator closure", () => {
+  it("checks out the complete trusted Release Decision scripts tree", () => {
     const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
     const checkout = workflow.jobs.release_decision.steps.find(
       (step: WorkflowStep) => step.name === "Checkout release decision tooling",
     );
-    const sparseCheckoutPaths = String(checkout?.with?.["sparse-checkout"] ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
 
-    expect(sparseCheckoutPaths).toEqual([
-      "scripts/full-release-validation-state.mjs",
-      "scripts/full-release-validation-policy.mjs",
-      "scripts/full-release-candidate-contract.mjs",
-      "scripts/release-ci-summary.mjs",
-      "scripts/lib/canonical-json.mjs",
-      "scripts/lib/plain-gh.mjs",
-      "scripts/lib/record-shared.mjs",
-      "scripts/lib/upgrade-survivor-policy.mjs",
-    ]);
-    for (const sparsePath of sparseCheckoutPaths) {
-      expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({
-        sparsePath,
-        exists: true,
-      });
-    }
+    expect(checkout?.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      "sparse-checkout": "scripts",
+      "sparse-checkout-cone-mode": false,
+      "persist-credentials": false,
+    });
   });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {

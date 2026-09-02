@@ -435,7 +435,7 @@ export async function runEmbeddedAttemptSettledPhase(
           sessionManager,
           withOwnedTranscriptWrite: input.sessionLock.withOwnedTranscriptWrite,
           state: streamSettleState,
-          runAbortDeadlineAtMs: getRunAbortDeadlineAtMs(),
+          getRunAbortDeadlineAtMs,
           shouldFlushForContextEngine: Boolean(
             input.activeContextEngine && !getBeforeAgentFinalizeRevisionReason(),
           ),

@@ -11,10 +11,7 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  materializeRuntimeCapabilities,
-  modelCatalogEntryKey,
-} from "./prepared-model-runtime.configured-catalog.js";
+import { modelCatalogEntryKey } from "./prepared-model-runtime.configured-catalog.js";
 import {
   toStaticCatalogEntry,
   type PreparedRuntimeCapabilityModel,
@@ -90,14 +87,42 @@ export function materializePreparedModelCatalog(
   snapshot: ModelCatalogSnapshot,
   runtimeCapabilityModels: readonly PreparedRuntimeCapabilityModel[],
 ): ModelCatalogSnapshot {
+  // Preserve inventory reads before capability preparation when the snapshot has accessors.
+  const materialized = { ...snapshot };
+  const sourceEntries = snapshot.entries;
+  const runtimeByKey = new Map(
+    runtimeCapabilityModels.map(({ provider, modelId, model }) => [
+      modelCatalogEntryKey({ provider, id: modelId }),
+      toStaticCatalogEntry(model),
+    ]),
+  );
   const project = (entries: ModelCatalogSnapshot["entries"]) =>
-    materializeRuntimeCapabilities(entries, runtimeCapabilityModels);
-  const materialized = {
-    ...snapshot,
-    entries: project(snapshot.entries),
-    routeVariants: project(snapshot.routeVariants),
-    ...(snapshot.staticEntries ? { staticEntries: project(snapshot.staticEntries) } : {}),
-  };
+    entries.map((entry) => {
+      const runtime = runtimeByKey.get(modelCatalogEntryKey(entry));
+      if (!runtime) {
+        return entry;
+      }
+      const thinkingPolicyProvider = runtime.provider;
+      if (entry.configuredReasoning !== undefined) {
+        return { ...entry, thinkingPolicyProvider };
+      }
+      const params =
+        runtime.params || entry.params ? { ...runtime.params, ...entry.params } : undefined;
+      const compat =
+        runtime.compat || entry.compat ? { ...runtime.compat, ...entry.compat } : undefined;
+      return {
+        ...entry,
+        thinkingPolicyProvider,
+        ...(runtime.reasoning !== undefined ? { reasoning: runtime.reasoning } : {}),
+        ...(params ? { params } : {}),
+        ...(compat ? { compat } : {}),
+      };
+    });
+  materialized.entries = project(sourceEntries);
+  materialized.routeVariants = project(snapshot.routeVariants);
+  if (snapshot.staticEntries) {
+    materialized.staticEntries = project(snapshot.staticEntries);
+  }
   if (isPreparedModelCatalogFull(snapshot)) {
     markPreparedModelCatalogFull(materialized);
   }

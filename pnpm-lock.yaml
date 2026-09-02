@@ -159,9 +159,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 1.4.0
         version: 1.4.0(zod@4.4.3)
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: 0.3.241
-        version: 0.3.241(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(zod@4.4.3)
       '@anthropic-ai/sdk':
         specifier: 0.120.0
         version: 0.120.0(zod@4.4.3)
@@ -361,6 +358,9 @@ importers:
       '@a2ui/web_core':
         specifier: 0.10.6
         version: 0.10.6
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: 0.3.241
+        version: 0.3.241(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(supports-color@10.2.2)(zod@4.4.3))(zod@4.4.3)
       '@copilotkit/aimock':
         specifier: 1.39.0
         version: 1.39.0(vitest@4.1.11)
@@ -376,6 +376,9 @@ importers:
       '@mdx-js/mdx':
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
+      '@openclaw/crabline':
+        specifier: 0.1.17
+        version: 0.1.17
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -427,6 +430,18 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.1.11
         version: 4.1.11(@vitest/browser@4.1.11)(vitest@4.1.11)
+      '@vitest/runner':
+        specifier: 4.1.11
+        version: 4.1.11(patch_hash=55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93)
+      acpx:
+        specifier: 0.13.1
+        version: 0.13.1
+      apache-arrow:
+        specifier: 18.1.0
+        version: 18.1.0
+      baileys:
+        specifier: 7.0.0-rc14
+        version: 7.0.0-rc14(audio-decode@2.2.3)(supports-color@10.2.2)
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -451,6 +466,12 @@ importers:
       marked:
         specifier: 18.0.10
         version: 18.0.10
+      minipass:
+        specifier: 7.1.3
+        version: 7.1.3
+      nostr-tools:
+        specifier: 2.24.3
+        version: 2.24.3(typescript@6.0.3)
       oxfmt:
         specifier: 0.60.0
         version: 0.60.0
@@ -472,6 +493,9 @@ importers:
       postcss-lit:
         specifier: 1.4.1
         version: 1.4.1(jiti@2.7.0)(postcss@8.5.26)(supports-color@10.2.2)(tsx@4.23.12)(yaml@2.9.0)
+      postcss-selector-parser:
+        specifier: 7.1.5
+        version: 7.1.5
       shiki:
         specifier: 4.4.3
         version: 4.4.3
@@ -490,6 +514,9 @@ importers:
       stylelint-config-recommended:
         specifier: 18.0.0
         version: 18.0.0(stylelint@17.14.1(supports-color@10.2.2)(typescript@6.0.3))
+      tinyglobby:
+        specifier: 0.2.17
+        version: 0.2.17
       tsdown:
         specifier: 0.22.14
         version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.12)(typescript@6.0.3)(unrun@0.3.1)
@@ -684,6 +711,9 @@ importers:
       ws:
         specifier: 8.21.3
         version: 8.21.3
+      yargs-parser:
+        specifier: 22.0.0
+        version: 22.0.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -691,6 +721,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@types/yargs-parser':
+        specifier: 21.0.3
+        version: 21.0.3
       undici:
         specifier: 8.10.0
         version: 8.10.0
@@ -5467,6 +5500,9 @@ packages:
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
+  '@types/yargs-parser@21.0.3':
+    resolution: {integrity: sha512-I4q9QU9MQv4oEOz4tAHJtNz1cwuLxn2F3xcc2iV5WdqLPpUnj30aUuxt1mAxYTG+oe8CZMV/+6rU4S4gRDzqtQ==}
+
   '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260707.2':
     resolution: {integrity: sha512-wny2pgKjGbiZtnOIHVa3tXC1UfDqxNEFzyPGmiqybedG8hipG2Nfp0l5UxbaKCjkLacUpH/W5bP2hBOMVhCOzg==}
     engines: {node: '>=16.20.0'}
@@ -9579,6 +9615,10 @@ packages:
     resolution: {integrity: sha512-tVpsJW7DdjecAiFpbIB1e3qxIQsE6NoPc5/eTdrbbIC4h0LVsWhnoa3g+m2HclBIujHzsxZ4VJVA+GUuc2/LBw==}
     engines: {node: '>=12'}
 
+  yargs-parser@22.0.0:
+    resolution: {integrity: sha512-rwu/ClNdSMpkSrUb+d6BRsSkLUq1fmfsY6TOpYzTwvwkg1/NRG85KBy3kq++A8LKQwX6lsu+aWad+2khvuXrqw==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=23}
+
   yargs@15.4.1:
     resolution: {integrity: sha512-aePbxDmcYW++PaqBsJ+HYUFwCdv4LVvdnhBy78E57PIor8/OVvhMrADFFEDh8DHDFRv/O9i3lPhsENjO7QX0+A==}
     engines: {node: '>=8'}
@@ -12730,6 +12770,8 @@ snapshots:
   '@types/ws@8.18.1':
     dependencies:
       '@types/node': 26.2.0
+
+  '@types/yargs-parser@21.0.3': {}
 
   '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260707.2':
     optional: true
@@ -17148,6 +17190,8 @@ snapshots:
       decamelize: 1.2.0
 
   yargs-parser@21.1.1: {}
+
+  yargs-parser@22.0.0: {}
 
   yargs@15.4.1:
     dependencies:

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +24,11 @@ const observedProcess: PosixProcess = {
   startedAt: "00000000-0000-0000-0000-000000000001:12345",
 };
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return { ...original, execFile: vi.fn(original.execFile) };
+});
+
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -40,6 +45,28 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         : original.readdir(...args),
   };
 });
+
+it.for(["snapshot", "command"] as const)(
+  "normalizes synchronous inspector launch denial for %s",
+  async (kind, ctx) => {
+    ctx.onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.mocked(execFile).mockImplementationOnce(() => {
+      throw Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
+    });
+    const inspected =
+      kind === "snapshot"
+        ? readCodexAppServerProcessSnapshot(undefined, [process.pid])
+        : readCodexAppServerProcessCommand(observedProcess, Date.now() + 1_000);
+    await expect(inspected).rejects.toMatchObject({
+      name: "ProcessInspectionError",
+      reason: "permission",
+      message: expect.stringContaining("Check process inspection permissions"),
+    });
+  },
+);
 
 describe("Codex procfs command inspector", () => {
   it.for([

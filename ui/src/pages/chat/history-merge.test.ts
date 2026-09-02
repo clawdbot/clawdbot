@@ -587,7 +587,6 @@ describe("pane-owned canonical session projection", () => {
     reduceChatSessionProjection(owner, { type: "messagePersisted", message: prefix });
     publishChatSessionProjectionMessages(owner, [prefix, tail], {
       event: { type: "messagePersisted", message: tail },
-      retainSupersededMessages: true,
     });
 
     reduceChatSessionProjection(owner, { type: "snapshotLoaded", messages: [] });

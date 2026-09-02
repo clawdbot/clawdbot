@@ -2,11 +2,21 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
+import { isTrustedOfficialPluginInstallRecord } from "../../src/plugins/official-external-install-records.js";
 
 const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 
@@ -630,6 +640,7 @@ function assertCompanionPluginRecords(
   ) => void,
   capabilityConsentSupported = true,
   recoveryPluginIds?: string[],
+  isolateAssertionRuntime = false,
 ): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companions-"));
   try {
@@ -678,7 +689,7 @@ function assertCompanionPluginRecords(
         resolvedVersion: version,
         integrity: npmIntegrity,
         installPath: discordInstallPath,
-        ...(capabilityConsentSupported ? consent(npmIntegrity) : {}),
+        ...(capabilityConsentSupported && recoveryPluginIds ? consent(npmIntegrity) : {}),
       },
       whatsapp: {
         source: "clawhub",
@@ -698,7 +709,7 @@ function assertCompanionPluginRecords(
         resolvedVersion: version,
         integrity: npmIntegrity,
         installPath: codexInstallPath,
-        ...(capabilityConsentSupported ? consent(npmIntegrity) : {}),
+        ...(capabilityConsentSupported && recoveryPluginIds ? consent(npmIntegrity) : {}),
       },
     };
     mutate?.(records, {
@@ -708,6 +719,38 @@ function assertCompanionPluginRecords(
     });
     mkdirSync(join(stateDir, "plugins"), { recursive: true });
     writeJson(join(stateDir, "plugins", "installs.json"), { installRecords: records });
+    const officialNpmCompanions = [
+      ["discord", "@openclaw/discord"],
+      ["codex", "@openclaw/codex"],
+    ] as const;
+    const trustDecisions = officialNpmCompanions.map(([pluginId, packageName]) => ({
+      packageName,
+      pluginId,
+      record: records[pluginId],
+      trusted: isTrustedOfficialPluginInstallRecord({
+        pluginId,
+        packageName,
+        record: records[pluginId]! as PluginInstallRecord,
+      }),
+    }));
+    const npmPrefix = join(root, "npm-prefix");
+    const candidatePackageRoot = join(npmPrefix, "lib", "node_modules", "openclaw");
+    const trustModuleDir = join(candidatePackageRoot, "dist", "plugins");
+    mkdirSync(trustModuleDir, { recursive: true });
+    writeJson(join(candidatePackageRoot, "package.json"), { type: "module" });
+    writeFileSync(
+      join(trustModuleDir, "official-external-install-records.js"),
+      `const decisions = ${JSON.stringify(trustDecisions)};\n` +
+        `export function isTrustedOfficialPluginInstallRecord(params) {\n` +
+        `  return decisions.some((decision) => decision.pluginId === params.pluginId && decision.packageName === params.packageName && JSON.stringify(decision.record) === JSON.stringify(params.record) && decision.trusted);\n` +
+        `}\n`,
+    );
+    let assertionsPath = ASSERTIONS_PATH;
+    if (isolateAssertionRuntime) {
+      const isolatedLib = join(root, "production-assertion-runtime", "lib");
+      cpSync("scripts/e2e/lib", isolatedLib, { recursive: true });
+      assertionsPath = join(isolatedLib, "upgrade-survivor", "assertions.mjs");
+    }
     const updateFile = join(root, "update.json");
     if (recoveryPluginIds) {
       writeJson(updateFile, {
@@ -726,7 +769,7 @@ function assertCompanionPluginRecords(
     execFileSync(
       process.execPath,
       [
-        ASSERTIONS_PATH,
+        assertionsPath,
         ...(recoveryPluginIds
           ? ["assert-recovered-plugin-installs", updateFile, version, "", "2026.7.1-2"]
           : ["assert-companion-installs", version, capabilityConsentSupported ? "1" : "0"]),
@@ -734,6 +777,7 @@ function assertCompanionPluginRecords(
       {
         env: {
           ...process.env,
+          npm_config_prefix: npmPrefix,
           OPENCLAW_STATE_DIR: stateDir,
         },
         stdio: "pipe",
@@ -1322,7 +1366,7 @@ process.stdout.write(sessionDir + "\\n");
     ).not.toThrow();
   });
 
-  it("requires exact artifact-bound consent for direct companion installs", () => {
+  it("accepts verified first-party companions without recording operator acceptance", () => {
     expect(() => assertCompanionPluginRecords()).not.toThrow();
     expect(() =>
       assertCompanionPluginRecords((records) => {
@@ -1330,9 +1374,71 @@ process.stdout.write(sessionDir + "\\n");
         if (!discord) {
           throw new Error("discord fixture missing");
         }
-        Reflect.deleteProperty(discord, "acceptedSurfaceIntegrity");
+        discord.resolvedSpec = "@openclaw/discord@2026.8.1";
       }),
-    ).toThrow(/discord plugin consent integrity/);
+    ).not.toThrow();
+  });
+
+  it("loads the packaged trust boundary without repository development dependencies", () => {
+    expect(() => assertCompanionPluginRecords(undefined, true, undefined, true)).not.toThrow();
+  });
+
+  it("requires exact artifact-bound consent for an unverified companion install", () => {
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const whatsapp = records.whatsapp;
+        if (!whatsapp) {
+          throw new Error("whatsapp fixture missing");
+        }
+        Reflect.deleteProperty(whatsapp, "acceptedSurfaceIntegrity");
+      }),
+    ).toThrow(/whatsapp plugin consent integrity/);
+  });
+
+  it("rejects genuinely unaccepted or unverified companion state", () => {
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const whatsapp = records.whatsapp;
+        if (!whatsapp) {
+          throw new Error("whatsapp fixture missing");
+        }
+        for (const field of [
+          "acceptedSurface",
+          "acceptedSurfaceHash",
+          "acceptedSurfaceAt",
+          "acceptedSurfaceIntegrity",
+        ]) {
+          Reflect.deleteProperty(whatsapp, field);
+        }
+      }),
+    ).toThrow(/whatsapp plugin accepted surface missing/);
+
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const discord = records.discord;
+        if (!discord) {
+          throw new Error("discord fixture missing");
+        }
+        discord.artifactKind = "npm-pack";
+      }),
+    ).toThrow(/discord plugin accepted surface missing/);
+  });
+
+  it.each([
+    ["spec", "@openclaw/discord@file:payload"],
+    ["resolvedSpec", "@openclaw/discord@file:payload"],
+    ["spec", "@openclaw/discord@npm:@example/discord"],
+    ["resolvedSpec", "@openclaw/discord@git+https://example.invalid/discord.git"],
+  ] as const)("rejects an official-looking non-registry %s", (field, value) => {
+    expect(() =>
+      assertCompanionPluginRecords((records) => {
+        const discord = records.discord;
+        if (!discord) {
+          throw new Error("discord fixture missing");
+        }
+        discord[field] = value;
+      }),
+    ).toThrow(/discord plugin accepted surface missing/);
   });
 
   it("requires artifact-bound consent for every published recovery plugin", () => {

@@ -41,7 +41,7 @@ import {
   parseCompactSplitTimingKey,
 } from "./vitest-shard-metadata.mts";
 
-type NodeTestShardGroup = {
+export type NodeTestShardGroup = {
   shard_name: string;
   timing_key?: string;
   configs: string[];
@@ -157,11 +157,6 @@ type NodeTestSplitShard = Omit<NodeTestShard, "checkName" | "runner" | "pretestB
   runner?: string;
 };
 
-type CompactBin = {
-  exclusive: boolean;
-  groups: NodeTestShardGroup[];
-};
-
 const EXCLUDED_FULL_SUITE_SHARDS = new Set([
   "test/vitest/vitest.full-core-contracts.config.ts",
   "test/vitest/vitest.full-core-bundled.config.ts",
@@ -205,8 +200,8 @@ const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Blacksmith rows with the refit Blacksmith estimates below.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 94;
-const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 114;
+export const COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS = 94;
+const COMPACT_EXPANDED_SMALL_NODE_TEST_JOB_SECONDS = 114;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
@@ -761,22 +756,22 @@ function estimateCompactStripeSeconds(
     : blacksmithSeconds;
 }
 
-// Equal-weight sibling stripes can otherwise land in one bin and recreate the
-// indivisible critical-path floor that striping removes.
-function compactGiantStripeFamily(group: NodeTestShardGroup): string | undefined {
-  if (/^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite))?$/u.test(group.shard_name)) {
+// Split siblings must stay in different jobs, including nested children of
+// deliberately separated fixed stripes.
+function compactStripeFamily(group: NodeTestShardGroup): string | undefined {
+  if (
+    /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite))?(?:-hosted-\d+)?$/u.test(
+      group.shard_name,
+    )
+  ) {
     return "agentic-commands-doctor-sessions-cron";
   }
-  const membershipTimedParent =
-    /^(agentic-agents-support|agentic-control-plane-agent-chat)-hosted-\d+$/u.exec(
+  return (
+    /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+(?:-hosted-\d+)?$/u.exec(
       group.shard_name,
-    )?.[1];
-  if (membershipTimedParent) {
-    return membershipTimedParent;
-  }
-  return /^(agentic-agents-embedded-base|agentic-gateway-core|core-runtime-media-ui|core-unit-src-security)-\d+$/u.exec(
-    group.shard_name,
-  )?.[1];
+    )?.[1] ??
+    (group.timing_key ? parseCompactSplitTimingKey(group.timing_key)?.selectorKey : undefined)
+  );
 }
 
 function expandCompactGroup(group: NodeTestShardGroup): NodeTestShardGroup[] {
@@ -2403,9 +2398,9 @@ function splitOversizedCompactGroup(
   }
   const includePatterns =
     group.includePatterns ?? WHOLE_CONFIG_SPLIT_FILE_LISTERS.get(group.shard_name)?.();
-  const weightForFile = /^core-tooling-\d+$/u.test(group.shard_name)
-    ? toolingFileWeight
-    : stripeFileWeight;
+  const isTooling = /^core-tooling-\d+$/u.test(group.shard_name);
+  const packTooling = isTooling && runnerBackend === "github";
+  const weightForFile = isTooling ? toolingFileWeight : stripeFileWeight;
   const totalWeight =
     includePatterns?.reduce((seconds, file) => seconds + weightForFile(file), 0) ?? 0;
   // A measured whole-config parent can lag newly cataloged files. Its old
@@ -2424,15 +2419,10 @@ function splitOversizedCompactGroup(
     return [{ group, seconds: profileSeconds }];
   }
 
-  // An empty include list falls back to the whole config in the shard runner.
-  let stripeCount = Math.min(
-    includePatterns.length,
-    Math.ceil(splitSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
-  );
   // The prerequisite is charged once per emitted job. Include it in placement
   // so a balanced test stripe still leaves room for its runtime build.
   const buildModes = new Map(
-    isCliProcess
+    isCliProcess || packTooling
       ? includePatterns.map(
           (file) =>
             [
@@ -2442,24 +2432,41 @@ function splitOversizedCompactGroup(
         )
       : [],
   );
-  const cliProcessBatchWeight = (patterns: string[]) => {
-    const mode = mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file)));
-    return (
-      patterns.reduce((seconds, file) => seconds + weightForFile(file), 0) +
-      (mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0)
+  const createStripes = (seconds: number) => {
+    const batchWeight = (patterns: readonly string[]) => {
+      const mode = mergeVitestPretestBuildModes(patterns.map((file) => buildModes.get(file)));
+      const weight = patterns.reduce((sum, file) => sum + weightForFile(file), 0);
+      return (
+        (packTooling ? Math.ceil((seconds * weight) / totalWeight) : weight) +
+        Math.round(
+          (mode ? VITEST_PRETEST_BUILD_SECONDS[mode] : 0) *
+            (packTooling ? COMPACT_GITHUB_GROUP_SECONDS_SCALE : 1),
+        )
+      );
+    };
+    const weightForValue =
+      isCliProcess || packTooling ? (file: string) => batchWeight([file]) : weightForFile;
+    if (packTooling) {
+      // Balanced thirds of a ~301s parent each consume a 150s job. Fill the
+      // budget first so unrelated families can share the small remainder.
+      // Hybrid retains balanced children for its faster Blacksmith admission.
+      const discoveryOrder = (a: string, b: string) =>
+        includePatterns.indexOf(a) - includePatterns.indexOf(b);
+      return packNodeTestGroups(
+        includePatterns.toSorted(
+          (a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b),
+        ),
+        (bin, file) => batchWeight([...bin, file]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
+      ).map((patterns) => patterns.toSorted(discoveryOrder));
+    }
+    return createStripedBatches(
+      includePatterns,
+      Math.min(includePatterns.length, Math.ceil(seconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS)),
+      weightForValue,
+      isCliProcess ? batchWeight : undefined,
     );
   };
-  const weightForValue = isCliProcess
-    ? (file: string) => cliProcessBatchWeight([file])
-    : weightForFile;
-  const createStripes = (count: number) =>
-    createStripedBatches(
-      includePatterns,
-      count,
-      weightForValue,
-      isCliProcess ? cliProcessBatchWeight : undefined,
-    );
-  let stripes = createStripes(stripeCount);
+  let stripes = createStripes(splitSeconds);
   let timingGeneration = createCompactSplitTimingGeneration({
     configs: group.configs,
     env: group.env,
@@ -2484,11 +2491,7 @@ function splitOversizedCompactGroup(
     return [{ group, seconds: profileSeconds }];
   }
   if (completeMeasuredSeconds > splitSeconds) {
-    stripeCount = Math.min(
-      includePatterns.length,
-      Math.ceil(completeMeasuredSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
-    );
-    stripes = createStripes(stripeCount);
+    stripes = createStripes(completeMeasuredSeconds);
     timingGeneration = createCompactSplitTimingGeneration({
       configs: group.configs,
       env: group.env,
@@ -2516,6 +2519,24 @@ function splitOversizedCompactGroup(
         totalWeight,
     ),
   }));
+}
+
+// Owners supply admission order and compatibility; placement retains the original
+// descriptors and never emits an empty job.
+export function packNodeTestGroups<Group>(
+  orderedGroups: readonly Group[],
+  canShareJob: (bin: readonly [Group, ...Group[]], group: Group) => boolean,
+): Array<[Group, ...Group[]]> {
+  const bins: Array<[Group, ...Group[]]> = [];
+  for (const group of orderedGroups) {
+    const bin = bins.find((candidate) => canShareJob(candidate, group));
+    if (bin) {
+      bin.push(group);
+    } else {
+      bins.push([group]);
+    }
+  }
+  return bins;
 }
 
 function createCompactNodeTestShardBundles(
@@ -2587,7 +2608,6 @@ function createCompactNodeTestShardBundles(
   for (const groups of groupsByRunner.values()) {
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
-    const bins: CompactBin[] = [];
     const sortedGroups = groups
       .flatMap(expandCompactGroup)
       .toSorted(
@@ -2595,59 +2615,48 @@ function createCompactNodeTestShardBundles(
           estimateBinSeconds([b]) - estimateBinSeconds([a]) ||
           a.shard_name.localeCompare(b.shard_name),
       );
-    for (const group of sortedGroups) {
+    const bins = packNodeTestGroups(sortedGroups, (candidate, group) => {
       const exclusive = isExclusiveCompactGroup(group);
       const secondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
         : usesExpandedRunnerProfile(options.runnerBackend)
           ? group.runner.includes("-8vcpu-")
-            ? COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS
-            : COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS
+            ? COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS
+            : COMPACT_EXPANDED_SMALL_NODE_TEST_JOB_SECONDS
           : group.runner.includes("-8vcpu-")
             ? COMPACT_LARGE_NODE_TEST_JOB_SECONDS
             : COMPACT_SMALL_NODE_TEST_JOB_SECONDS;
-      const family = compactGiantStripeFamily(group);
-      const bin = bins.find(
-        (candidate) =>
-          candidate.exclusive === exclusive &&
-          (family === undefined ||
-            candidate.groups.every((entry) => compactGiantStripeFamily(entry) !== family)) &&
-          candidate.groups.length < COMPACT_NODE_TEST_JOB_GROUPS &&
-          estimateBinSeconds([...candidate.groups, group]) <= secondsCap,
+      const family = compactStripeFamily(group);
+      return (
+        isExclusiveCompactGroup(candidate[0]) === exclusive &&
+        (family === undefined ||
+          candidate.every((entry) => compactStripeFamily(entry) !== family)) &&
+        candidate.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+        estimateBinSeconds([...candidate, group]) <= secondsCap
       );
-      if (bin) {
-        bin.groups.push(group);
-      } else {
-        bins.push({
-          exclusive,
-          groups: [group],
-        });
-      }
-    }
-
-    bins.sort((a, b) => Number(a.exclusive) - Number(b.exclusive));
+    });
+    bins.sort(
+      (a, b) => Number(isExclusiveCompactGroup(a[0])) - Number(isExclusiveCompactGroup(b[0])),
+    );
 
     for (const [index, bin] of bins.entries()) {
-      const [firstGroup] = bin.groups;
-      if (!firstGroup) {
-        throw new Error("compact node test bin cannot be empty");
-      }
+      const [firstGroup] = bin;
       const runnerClass = firstGroup.runner.includes("-8vcpu-") ? "large" : "small";
       const distSuffix = firstGroup.requiresDist ? "-dist" : "";
       const checkName = `checks-node-compact-${runnerClass}${distSuffix}-${index + 1}`;
       const runner = firstGroup.runner;
       const pretestBuildMode = mergeVitestPretestBuildModes(
-        bin.groups.map((group) => group.pretestBuildMode),
+        bin.map((group) => group.pretestBuildMode),
       );
       compactJobs.push({
         checkName,
-        groups: bin.groups,
+        groups: bin,
         ...(pretestBuildMode ? { pretestBuildMode } : {}),
         requiresDist: firstGroup.requiresDist,
         runner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
         // Whole-config groups run entire suites; keep their generous timeout.
-        ...(bin.groups.some((group) => !group.includePatterns)
+        ...(bin.some((group) => !group.includePatterns)
           ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
           : {}),
         // Every compact bin runs its plans serially. Overlapping two Vitest
@@ -2656,7 +2665,7 @@ function createCompactNodeTestShardBundles(
         // lock-timing flakes on 8 vCPU), and the packed weights are
         // contention-inflated so serializing is roughly wall-neutral.
         planConcurrency: 1,
-        predictedSeconds: estimateBinSeconds(bin.groups),
+        predictedSeconds: estimateBinSeconds(bin),
       });
     }
   }

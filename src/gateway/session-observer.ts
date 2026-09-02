@@ -265,7 +265,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getConfig: deps.getConfig,
     prepareModel,
     completeModel,
-    now,
     setTimeoutFn,
     clearTimeoutFn,
     isCurrent: modelStateIsCurrent,

@@ -521,8 +521,10 @@ content into the fresh Codex thread. It does not copy raw tool-call argument
 values into that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight
-Codex reasoning or plan records when the app-server emits them. OpenClaw
-records the native compaction start and terminal status, but it does not
+Codex reasoning records when the app-server emits them. Reasoning retains
+typed `thinking` content rather than ordinary final-answer text, so OpenClaw's
+existing reasoning visibility and history controls apply. OpenClaw records
+the native compaction start and terminal status, but it does not
 expose a human-readable compaction summary or an auditable list of which
 entries Codex kept after compaction.
 
