@@ -1,3 +1,5 @@
+import { sliceCodePoints } from "@openclaw/normalization-core/code-points";
+
 const graphemeSegmenter =
   typeof Intl.Segmenter === "function"
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -5,7 +7,7 @@ const graphemeSegmenter =
 
 export function takeGraphemes(input: string, limit: number): string {
   if (!graphemeSegmenter) {
-    return Array.from(input).slice(0, limit).join("");
+    return sliceCodePoints(input, 0, limit);
   }
   let result = "";
   let count = 0;

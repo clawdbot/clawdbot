@@ -5,6 +5,7 @@ import {
   createLazyRuntimeNamedExport,
 } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveAskUserQuestionOptionIndices } from "openclaw/plugin-sdk/reply-payload";
+import { codePointCountExceeds } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readDiscordComponentSpec, type DiscordComponentMessageSpec } from "./components.js";
 
 type DiscordComponentSendFn = typeof import("./send.components.js").sendDiscordComponentMessage;
@@ -116,7 +117,7 @@ export function isDiscordComponentSpecWithinMessageLimit(params: {
   includesMedia?: boolean;
 }): boolean {
   const countedSpec = addPayloadTextFallback(params.spec, { text: params.fallbackText });
-  if (countedSpec.text && Array.from(countedSpec.text).length > DISCORD_TEXT_DISPLAY_LIMIT) {
+  if (countedSpec.text && codePointCountExceeds(countedSpec.text, DISCORD_TEXT_DISPLAY_LIMIT)) {
     return false;
   }
   return (

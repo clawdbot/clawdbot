@@ -1,3 +1,4 @@
+import { sliceCodePoints } from "@openclaw/normalization-core/code-points";
 import type {
   SessionSuggestion,
   SessionSuggestionEvent,
@@ -707,7 +708,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       return;
     }
     const draft = typing ? preview?.trim() : undefined;
-    const draftPreview = draft ? Array.from(draft).slice(-300).join("") : undefined;
+    const draftPreview = draft ? sliceCodePoints(draft, -300) : undefined;
     void scope.client
       .request("session.typing", {
         sessionKey,
