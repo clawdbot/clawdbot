@@ -100,6 +100,20 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each(["src/gateway/methods/core-descriptors.ts", "src/gateway/method-scopes.ts"])(
+    "keeps static method policy independent of session storage: %s",
+    (entryPath) => {
+      const graph = collectStaticValueImportGraph(entryPath);
+      const sessionStorageImports = [...graph.keys()]
+        .map((filePath) => path.relative(repoRoot, filePath))
+        .filter((filePath) =>
+          filePath.startsWith(path.join("src", "config", "sessions") + path.sep),
+        );
+
+      expect(sessionStorageImports).toEqual([]);
+    },
+  );
+
   it("keeps remote catalog refresh networking behind the overlay boundary", () => {
     const startupGraph = collectStaticValueImportGraph(
       "src/plugins/gateway-startup-plugin-providers.ts",
