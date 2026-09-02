@@ -3462,7 +3462,7 @@ describe("Codex thread-effective app attestation", () => {
         appServer: createThreadLifecycleAppServerOptions(),
         pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
       }),
-    ).rejects.toThrow("Codex plugin app attestation cleanup failed");
+    ).rejects.toThrow("Codex thread attestation cleanup failed");
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
@@ -3580,7 +3580,7 @@ describe("Codex thread-effective app attestation", () => {
         appServer: createThreadLifecycleAppServerOptions(),
         pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
       }),
-    ).rejects.toThrow("Codex plugin app attestation cleanup failed");
+    ).rejects.toThrow("Codex thread attestation cleanup failed");
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
