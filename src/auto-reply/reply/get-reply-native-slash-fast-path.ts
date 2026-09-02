@@ -1,6 +1,7 @@
 // Handles native slash commands before full get-reply pipeline execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import {
   resolveModelRefFromString,
   resolveThinkingDefaultWithRuntimeCatalogCore,
@@ -53,18 +54,6 @@ const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
-
-function loadCommandsRuntime() {
-  return commandsRuntimeLoader.load();
-}
-
-function loadSkillCommandsRuntime() {
-  return skillCommandsRuntimeLoader.load();
-}
-
-function loadStatusCommandRuntime() {
-  return statusCommandRuntimeLoader.load();
-}
 
 function resolveNativeSlashCommandName(ctx: MsgContext): string | undefined {
   const commandTurn = resolveCommandTurnContext(ctx);
@@ -141,6 +130,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   model: string;
   workspaceDir: string;
   typing: ReturnType<typeof createTypingController>;
+  preparedModelCatalog?: ModelCatalogSnapshot;
   opts?: GetReplyOptions;
   skillFilter?: string[];
 }): Promise<
@@ -300,7 +290,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       workspaceDir: params.workspaceDir,
       readOnly: true,
     });
-    const { buildStatusReply } = await loadStatusCommandRuntime();
+    const { buildStatusReply } = await statusCommandRuntimeLoader.load();
     return {
       handled: true,
       reply: markCommandReplyForDelivery(
@@ -332,14 +322,16 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
 
   let loadedSkillCommands: SkillCommandSpec[] | undefined;
   const loadNativeSkillCommands = async () => {
-    loadedSkillCommands ??= (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
-      workspaceDir: params.workspaceDir,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      skillFilter: params.skillFilter,
-      sessionEntry: sessionState.sessionEntry,
-      sessionKey: sessionState.sessionKey,
-    });
+    loadedSkillCommands ??= (await skillCommandsRuntimeLoader.load()).listSkillCommandsForWorkspace(
+      {
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        skillFilter: params.skillFilter,
+        sessionEntry: sessionState.sessionEntry,
+        sessionKey: sessionState.sessionKey,
+      },
+    );
     return loadedSkillCommands;
   };
 
@@ -351,7 +343,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   const commandResult = compactNeedsModelSelection
     ? { shouldContinue: true, reply: undefined }
     : await (
-        await loadCommandsRuntime()
+        await commandsRuntimeLoader.load()
       ).handleCommands({
         ctx: sessionState.sessionCtx,
         rootCtx: params.ctx,
@@ -431,6 +423,8 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     provider: params.provider,
     model: params.model,
     hasResolvedHeartbeatModelOverride: false,
+    // Native selections reuse the admitted catalog just like ordinary turns.
+    preparedModelCatalog: params.preparedModelCatalog,
     typing: params.typing,
     opts: params.opts,
     skillFilter: params.skillFilter,

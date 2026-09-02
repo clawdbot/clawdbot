@@ -192,10 +192,9 @@ export function formatControlUiSshHint(params: {
   const uiPath = basePath ? `${basePath}/` : "/";
   const protocol = params.tlsEnabled ? "https" : "http";
   const localUrl = `${protocol}://localhost:${params.port}${uiPath}`;
-  const sshTarget = resolveSshTargetHint();
   return [
     "No GUI detected. Open from your computer:",
-    `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
+    `ssh -N -L ${params.port}:127.0.0.1:${params.port} <user>@<host>`,
     "Then open:",
     localUrl,
     "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
@@ -206,13 +205,6 @@ export function formatControlUiSshHint(params: {
   ]
     .filter(Boolean)
     .join("\n");
-}
-
-function resolveSshTargetHint(): string {
-  const user = process.env.USER || process.env.LOGNAME || "user";
-  const conn = process.env.SSH_CONNECTION?.trim().split(/\s+/);
-  const host = conn?.[2] ?? "<host>";
-  return `${user}@${host}`;
 }
 
 /** Ensures workspace bootstrap files and session transcript directories exist. */

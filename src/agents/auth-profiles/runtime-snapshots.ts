@@ -255,17 +255,18 @@ export function hasRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
   return runtimeAuthStoreSnapshots.has(resolveRuntimeStoreKey(agentDir));
 }
 
+/** Checks the owned profile keys without copying private credential data out of the owner. */
+export function hasRuntimeAuthProfileStoreSource(agentDir?: string): boolean {
+  const store = runtimeAuthStoreSnapshots.get(resolveRuntimeStoreKey(agentDir))?.store;
+  return Boolean(store && Object.keys(store.profiles).length > 0);
+}
+
 /** Returns true when requested or main runtime snapshots contain profiles. */
 export function hasAnyRuntimeAuthProfileStoreSource(agentDir?: string): boolean {
-  const requestedStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  if (requestedStore && Object.keys(requestedStore.profiles).length > 0) {
-    return true;
-  }
-  if (!agentDir) {
-    return false;
-  }
-  const mainStore = getRuntimeAuthProfileStoreSnapshotCore();
-  return Boolean(mainStore && Object.keys(mainStore.profiles).length > 0);
+  return (
+    hasRuntimeAuthProfileStoreSource(agentDir) ||
+    (Boolean(agentDir) && hasRuntimeAuthProfileStoreSource())
+  );
 }
 
 /** Replaces all runtime auth profile snapshots with cloned entries. */

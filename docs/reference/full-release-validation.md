@@ -32,8 +32,12 @@ authorizes the initial Tooling SHA selection; it does not authorize refreshing
 the tooling from moving `main`.
 
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
-end-to-end agent turn. Regular `release/*` targets accept only the branch's final
-package version or a matching beta prerelease. Tideclaw alpha validation uses
+end-to-end agent turn. Regular `release/*` targets accept the branch's final
+package version or a matching beta prerelease. For a correction, use
+`--target-ref release/YYYY.M.PATCH-N` to preserve the intended final tag before
+tagging. Its base package version is also accepted when `vYYYY.M.PATCH` resolves
+to the exact Code SHA; preparation retains the package version and seals both
+npm and Docker artifacts for `vYYYY.M.PATCH-N`. Tideclaw alpha validation uses
 its exact alpha tag and matching alpha branch. The helper maps beta releases and
 exact alpha tags to the `beta` profile and final versions to `stable`. Pass
 alternate workflow inputs with `-f key=value`; use `-f release_profile=full`
@@ -46,8 +50,8 @@ still-active child that owns the blocking failure.
 Same-parent continuation requires the original root to have been dispatched
 with `fail_fast=false`. The controller verifies that exact logged input before
 any rerun mutation.
-It is also unavailable when that parent produced the sealed candidate
-artifacts, because GitHub reruns make those prior-attempt artifacts unavailable.
+It is also unavailable when that parent produced the sealed candidate or
+publication artifacts, because GitHub reruns make those prior-attempt artifacts unavailable.
 Keep the candidate and Tooling SHAs frozen, supersede the parent, and start a
 fresh all-group Full Release Validation.
 
@@ -119,14 +123,18 @@ passes the Validation SHA as both the candidate ref and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
 active so blockers can surface while Diagnostic Drain collects failures. It
-waits 15 minutes between run-discovery attempts and between parent polling
-iterations. One parent iteration may perform status, decision-artifact, and
-progress-job reads together; the delay limits repeated polling cycles rather
-than spacing every GitHub call. Run discovery makes one immediate check and one
-delayed retry before failing. A not-yet-created artifact remains an unavailable
-polling result; terminal handling and temporary-ref cleanup wait for the parent
-to complete with a conclusion. Failed validations retain both refs for reruns
-and diagnosis. The
+checks parent status and exact-attempt decision metadata every two minutes,
+with full progress-job reads no more often than every 15 minutes. Each regular
+iteration makes at most two metadata requests; it downloads the decision only
+after its named artifact appears, retrying unavailable downloads on subsequent
+iterations. A validated passing decision is retained only for that attempt.
+Parent completion also triggers a decision download when none has been validated,
+so metadata lag cannot skip terminal handling. Discovery makes one immediate
+check and at most three retries, waiting 30, 60, then 120 seconds between checks.
+All reads use the normal cache-aware GitHub route; cache and request latency can
+add to these intervals. The helper retains its 12-hour wait deadline. Successful
+temporary-ref cleanup still requires parent completion and strict evidence
+verification. Failed validations retain both refs for reruns and diagnosis. The
 Validation SHA equals the Code SHA for product validation or the Release SHA
 for changelog-only validation; it is not a third release identity. The workflow
 rejects malformed or mismatched expected SHAs before child dispatch. Every
@@ -300,8 +308,35 @@ reporting success or failure. Attempts and pagination within each child remain
 sequential. Target resolution and reuse checkouts include only their tooling
 and release metadata; neither needs the complete source tree.
 
-Fresh package-facing validation calls the `Full Release Candidate` reusable
-workflow once. Plugin Prerelease and OpenClaw Release Checks each dispatch an
+Full validation starts npm source checks, publishable package preparation, and
+production Docker preparation independently. The read-only
+`openclaw-npm-preflight.yml` owns source checks, the single root/core package
+build and pack, and final-byte qualification. Qualification joins successful
+source checks with the completed package producer; it does not rebuild. The
+SDK consumer install remains separate because it tests a smaller dependency
+context. The final manifest records its immutable descriptor in
+`publicationArtifacts.npmPreflight`. Regular final releases include separate
+SDK compatibility reports for the current npm `beta` and `latest` predecessors,
+sharing the target snapshot. Publication selects its channel's report and
+acknowledgement without rebuilding. Alpha, beta prerelease, and extended-stable
+targets keep their required channel.
+
+`docker-release-prepare.yml` builds both native architectures, retains OCI
+indexes and their SBOM/provenance, and runs image smoke checks before approval.
+The final manifest records `publicationArtifacts.docker`. Preparation has no
+publication secrets or registry-write permission. After approval, `Docker
+Release` verifies the source/tag, producer, artifact hashes, and image digests,
+then promotes those bytes to GHCR and Docker Hub. The publication lock covers
+registry writes and selector promotion. Historical evidence without prepared
+images uses the same preparation workflow before promotion. Alpha targets
+retain their existing npm-only preparation contract.
+
+Fresh package-facing validation passes the prepared root/core bundle to the
+`Full Release Candidate` reusable workflow. Its registry carries the exact
+unpublished core dependencies and selected plugins. Installers start that
+registry before resolving the root package, including npm, pnpm, Bun, and
+cross-OS lanes. Published baseline versions remain available through the
+upstream registry. Plugin Prerelease and OpenClaw Release Checks each dispatch an
 independent phase immediately, while their candidate phases wait for acquisition.
 Both candidate phases verify the same package SHA, artifact IDs, service digests,
 producer run attempt, and Docker archive digest before use. The package-independent
@@ -317,12 +352,15 @@ plugin package set, producer and publisher workflow/job/run identities, and
 package, registry, and image artifact identities and expiry timestamps. The
 execution plan seals that evidence. Before preparing a candidate, the umbrella may reuse
 the newest artifact with at least fourteen hours of remaining lifetime for the
-same canonical request only after it revalidates the exact workflow run,
+same canonical request and exact prepared npm tarball digest only after it revalidates the exact workflow run,
 publisher job identity, archive digest, manifest, producer attempt and job, and
 live metadata for every package, registry, and image artifact.
 A proven absence creates a fresh candidate. Bounded lookup uncertainty and
 failures after selection are blocking so the run cannot silently switch
-candidates.
+candidates. A different prepared tarball requires a fresh candidate even when
+the source SHA is unchanged. Full validation succeeds only after package
+qualification and Docker preparation also succeed; a passing product Release
+Decision alone does not authorize publication.
 
 Also for `rerun_group=all`, a `Verify Docker runtime image assets` job builds
 the `runtime-assets` Docker target with

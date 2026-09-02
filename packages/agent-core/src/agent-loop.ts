@@ -15,6 +15,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
+  appendToolLoopWarning,
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
   getInternalSyncSteeringGetter,
@@ -46,6 +47,7 @@ import type {
   AgentToolResult,
   StreamFn,
   ToolLoopIntervention,
+  ToolLoopWarning,
 } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
@@ -690,6 +692,7 @@ async function executeToolCalls(
         });
       }
       batch.lifecycle = admission ? takeInternalToolBatchLifecycle(admission) : undefined;
+      batch.warnings = admission?.warnings;
     }
   }
   let hasSequentialToolCall = false;
@@ -729,6 +732,7 @@ type ToolBatchContext = {
   resolved: Map<AgentToolCall, ResolvedToolCallOutcome>;
   validated: Map<AgentToolCall, ValidatedToolCallOutcome>;
   lifecycle?: InternalToolBatchLifecycle;
+  warnings?: ToolLoopWarning[];
 };
 
 type ResolvedToolCallOutcome =
@@ -1633,6 +1637,16 @@ async function finalizeExecutedToolCall(
 }
 
 async function finalizeToolCallOutcome(
+  batch: ToolBatchContext,
+  finalized: FinalizedToolCallOutcome,
+  args: unknown,
+): Promise<FinalizedToolCallOutcome> {
+  const outcome = await applyToolOutcomeHook(batch, finalized, args);
+  const warning = batch.warnings?.find((entry) => entry.toolCallId === outcome.toolCall.id);
+  return warning ? { ...outcome, result: appendToolLoopWarning(outcome.result, warning) } : outcome;
+}
+
+async function applyToolOutcomeHook(
   batch: ToolBatchContext,
   finalized: FinalizedToolCallOutcome,
   args: unknown,

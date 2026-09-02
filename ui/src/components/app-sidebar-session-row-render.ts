@@ -111,6 +111,7 @@ export interface SessionListHost {
   isSessionChildrenFullyShown(sessionKey: string): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
+  sidebarSessionHref(session: SidebarRecentSession): string;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
@@ -344,7 +345,7 @@ export function renderRecentSession(params: {
       @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
-        href=${withSidebarNavCollapseIntent(session.href)}
+        href=${withSidebarNavCollapseIntent(host.sidebarSessionHref(session))}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current=${session.visuallyActive ? "page" : nothing}

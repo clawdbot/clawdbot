@@ -52,7 +52,7 @@ export async function activateCodexAttemptTurn(
     pendingNativePreToolUseFailures,
   } = resources;
   const { context, turnState } = prompt;
-  const { runtime, attemptTools } = context;
+  const { runtime, attemptTools, hookContext } = context;
   const { connection } = runtime;
   const {
     params,
@@ -107,6 +107,7 @@ export async function activateCodexAttemptTurn(
     resourceState.thread.threadId,
     activeTurnId,
     {
+      agentHookContext: hookContext,
       initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&

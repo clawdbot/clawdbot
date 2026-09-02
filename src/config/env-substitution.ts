@@ -90,6 +90,8 @@ type SubstituteOptions = {
   onMissing?: (warning: EnvSubstitutionWarning) => void;
   /** Records exact env SecretRef shorthand that substitution did not materialize. */
   onPendingEnvSecretRef?: (id: string, configPath: string) => void;
+  /** Records the source of an exact env SecretRef shorthand that substitution materialized. */
+  onResolvedEnvSecretRef?: (id: string, configPath: string) => void;
 };
 
 function substituteString(
@@ -135,6 +137,9 @@ function substituteString(
           continue;
         }
         throw new MissingEnvVarError(token.name, configPath);
+      }
+      if (authoredRef?.id === token.name) {
+        opts?.onResolvedEnvSecretRef?.(token.name, configPath);
       }
       chunks.push(envValue);
       i = token.end;

@@ -40,7 +40,6 @@ type MemoryCoreDoctorRegistrationState = Pick<
 
 type MemoryCoreDoctorCheck = HealthCheck & {
   readonly defaultEnabled: false;
-  readonly updateReadiness: "post-plugin";
 };
 
 const registrationsByHost = new WeakMap<
@@ -75,7 +74,6 @@ function createManagedLocalEmbeddingSetupCheck(
     kind: "plugin",
     source: "memory-core",
     defaultEnabled: false,
-    updateReadiness: "post-plugin",
     description: "Checks existing semantic indexes for required managed local embedding setup.",
     async detect(ctx) {
       if (!state.memoryCoreActive) {

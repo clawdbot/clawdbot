@@ -109,6 +109,7 @@ export function compiledSubprocessesPlugin(): Plugin {
       // compiler's source declarations a distinct URL so replay cannot redirect them.
       if (
         importer.endsWith("/scripts/lib/runtime-process-build-entries.mts") ||
+        importer.endsWith("/scripts/lib/runtime-process-core-build-entries.mts") ||
         importer.endsWith("/scripts/lib/vitest-worker-build-entries.mts")
       ) {
         return `${resolved.id}?openclaw-build-source`;

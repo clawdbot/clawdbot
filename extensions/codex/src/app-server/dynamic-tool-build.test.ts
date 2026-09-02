@@ -1827,7 +1827,9 @@ describe("Codex app-server dynamic tool build", () => {
       { type: "inputText", text: "Unknown OpenClaw tool: node_process" },
     ]);
     const nodeExec = tools.find((tool) => tool.name === "node_exec");
-    expect(nodeExec?.description).toContain("Select the node by name or id");
+    expect(nodeExec?.description).toContain(
+      "The sole connected node that can execute commands is selected automatically; select by name or id when several can.",
+    );
     expect(nodeExec?.parameters).toMatchObject({
       type: "object",
       properties: {
@@ -2420,24 +2422,31 @@ describe("Codex app-server dynamic tool build", () => {
     },
   );
 
-  it("passes the delegation capability into shared OpenClaw tool construction", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-    params.delegationCapability = "report_only";
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    const factoryOptions: unknown[] = [];
-    setOpenClawCodingToolsFactoryForTests((options) => {
-      factoryOptions.push(options);
-      return [];
-    });
+  it.each(["ultra", "off"] as const)(
+    "passes active %s thinking into shared OpenClaw tool construction",
+    async (thinkLevel) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.delegationCapability = "report_only";
+      params.thinkLevel = thinkLevel;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      const factoryOptions: unknown[] = [];
+      setOpenClawCodingToolsFactoryForTests((options) => {
+        factoryOptions.push(options);
+        return [];
+      });
 
-    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+      await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
-    expect(factoryOptions).toHaveLength(1);
-    expect(factoryOptions[0]).toMatchObject({ delegationCapability: "report_only" });
-  });
+      expect(factoryOptions).toHaveLength(1);
+      expect(factoryOptions[0]).toMatchObject({
+        delegationCapability: "report_only",
+        requesterThinkingLevel: thinkLevel,
+      });
+    },
+  );
 
   it("uses the tool auth profile store for Codex dynamic tool construction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");

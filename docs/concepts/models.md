@@ -86,6 +86,11 @@ Other selection rules:
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening or refreshing a model picker may discover models required by a trailing `provider/*` policy entry. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
+Once the Gateway has discovered a provider inventory, model-selection hot reloads
+retain it without running discovery again. Aliases, policy, and runtime capabilities
+use the new configuration. Explicit catalog refresh replaces that inventory;
+changes to its provider, plugin, auth, environment, or workspace scope invalidate it.
+
 Full mechanics: [Model failover](/concepts/model-failover).
 
 ## Quick model policy
@@ -192,6 +197,13 @@ plugin rejects the change and preserves the previous session selection and
 configured default. Install and enable the named harness plugin, restart the
 Gateway, then select the model again. This check does not start the runtime or
 verify provider credentials.
+
+If an existing session's harness becomes unavailable, the failed turn reports
+the owner plugin when known and its activation or loading blocker. Follow the error's
+`openclaw doctor --fix` or `openclaw plugins inspect <id> --runtime --json`
+guidance, repair the plugin, and restart the Gateway before retrying. Gateway
+health probes remain independent of model execution; use [Models status](/cli/models)
+and [Doctor](/gateway/doctor) to diagnose the configured route.
 
 Choose the model when you create a session whenever possible. The Control UI's
 **New Chat** composer includes the model picker for this reason: a fresh session

@@ -201,7 +201,7 @@ describe("ClawHub fixture server", () => {
     mkdirSync(packageDir);
     writeFileSync(
       path.join(packageDir, "package.json"),
-      `${JSON.stringify({ name: "@openclaw/whatsapp", version })}\n`,
+      `${JSON.stringify({ name: "@openclaw/whatsapp", version, openclaw: { extensions: ["./index.js"] } })}\n`,
     );
     writeFileSync(
       path.join(packageDir, "openclaw.plugin.json"),
@@ -212,11 +212,25 @@ describe("ClawHub fixture server", () => {
     const sha256 = createHash("sha256").update(archive).digest("hex");
     const npmIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
     const npmShasum = createHash("sha1").update(archive).digest("hex");
+    const coreRoot = path.join(root, "core");
+    mkdirSync(path.join(coreRoot, "package"), { recursive: true });
+    writeFileSync(
+      path.join(coreRoot, "package", "package.json"),
+      JSON.stringify({ name: "@openclaw/ai", version }),
+    );
+    const coreTarball = "openclaw-ai.tgz";
+    execFileSync("tar", ["-czf", path.join(root, coreTarball), "-C", coreRoot, "package"]);
+    const coreSha256 = createHash("sha256")
+      .update(readFileSync(path.join(root, coreTarball)))
+      .digest("hex");
     const manifestPath = path.join(root, "prepublish-plugin-registry.json");
     writeFileSync(
       manifestPath,
       `${JSON.stringify({
-        packages: [{ name: "@openclaw/whatsapp", version, tarball, sha256 }],
+        packages: [
+          { name: "@openclaw/ai", version, tarball: coreTarball, sha256: coreSha256 },
+          { name: "@openclaw/whatsapp", version, tarball, sha256 },
+        ],
       })}\n`,
     );
 
@@ -425,6 +439,7 @@ describe("ClawHub fixture server", () => {
     expect(aboveMaximum.stderr).toContain(
       "expected 2-16 complete ClawHub artifact audit sequences",
     );
+    expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fai`)).status).toBe(404);
   });
 
   it("serves separate plugin-family and skill search fixtures", async () => {

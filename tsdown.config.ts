@@ -2,13 +2,12 @@
 import fs from "node:fs";
 import { isBuiltin } from "node:module";
 import path from "node:path";
-import type { UserConfig } from "tsdown";
+import type { DtsOptions, UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   collectChannelConfigDoctorBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
-import { fsSafeNativeCopy } from "./scripts/lib/fs-safe-native-assets.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -298,6 +297,8 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@larksuiteoapi/node-sdk",
     "@matrix-org/matrix-sdk-crypto-nodejs",
     "@openclaw/ai",
+    // Its native loader resolves optional platform packages from the package scope.
+    "@openclaw/fs-safe",
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
@@ -328,8 +329,6 @@ function shouldNeverBundleDeclarationDependency(id: string): boolean {
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
-    id === "@openclaw/fs-safe" ||
-    id.startsWith("@openclaw/fs-safe/") ||
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
@@ -713,6 +712,11 @@ const unifiedDeps = {
   dts: { neverBundle: shouldNeverBundleDeclarationDependency },
 };
 
+// TypeScript supports this hidden flag before get-tsconfig's option type does.
+const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions"]> & {
+  stableTypeOrdering: true;
+} = { stableTypeOrdering: true };
+
 const configs = [
   nodeBuildConfig({
     name: TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -767,7 +771,6 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      copy: fsSafeNativeCopy,
       plugins: [createStateSchemaInlinePlugin()],
     },
     false,
@@ -794,7 +797,11 @@ const configs = [
             deps: unifiedDeps,
             hooks: { "build:done": createDeclarationInputCapture(name) },
           },
-          { emitDtsOnly: true, entry: sources },
+          {
+            emitDtsOnly: true,
+            entry: sources,
+            compilerOptions: unifiedDeclarationCompilerOptions,
+          },
         ),
       )
     : []),

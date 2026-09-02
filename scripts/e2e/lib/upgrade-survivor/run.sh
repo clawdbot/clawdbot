@@ -924,6 +924,8 @@ prepare_update_restart_probe() {
 
 assert_baseline_state() {
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
@@ -1036,6 +1038,9 @@ update_candidate() {
   else
     openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
   fi
+  # The package swap can precede a failed Doctor. Observe installed bytes before
+  # classifying the result; an unreadable package must not retain the baseline.
+  installed_version="$(read_installed_version)" || installed_version=""
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
@@ -1064,7 +1069,6 @@ update_candidate() {
     [ "$update_status" -ne 0 ] || update_status=1
     return "$update_status"
   fi
-  installed_version="$(read_installed_version)"
   if [ "$installed_version" != "$candidate_version" ]; then
     echo "update did not leave the candidate installed: $installed_version" >&2
     return 1
@@ -1168,6 +1172,7 @@ validate_post_doctor_config() {
 }
 
 assert_survival() {
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
   installed_version="$(read_installed_version)"
@@ -1328,10 +1333,8 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
 fi
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
-if [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; then
-  # A standalone Doctor pass would conceal missing migrations in the updater.
-  phase assert-automatic-migration assert_survival
-fi
+# A standalone Doctor pass would conceal missing migrations in the updater.
+phase assert-automatic-migration assert_survival
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase assert-recovery-migration node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs migrated
 fi

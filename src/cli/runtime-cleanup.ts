@@ -31,7 +31,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
       if (hasManagedProviderLocalServices()) {
         const { stopManagedProviderLocalServices } =
           await import("../agents/provider-local-service.js");
-        stopManagedProviderLocalServices();
+        await stopManagedProviderLocalServices();
       }
     },
     async () => {

@@ -252,16 +252,24 @@ export function resolveAmbientOwnerAgentId(
   return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
-/** Resolves a CLI operation owner while preserving legacy default markers outside explicit fleets. */
+/** Returns a CLI operation owner while preserving legacy defaults outside explicit fleets. */
+export function tryResolveAgentOperationAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+): string | undefined {
+  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
+    return tryResolveAmbientOwnerAgentId(cfg, requestedAgentId);
+  }
+  return tryResolveLegacyCompatibilityAgentId(cfg);
+}
+
+/** Resolves a CLI operation owner, requiring selection when no owner is configured. */
 export function resolveAgentOperationAgentId(
   cfg: OpenClawConfig,
   requestedAgentId?: string,
   context?: AgentSelectionContext,
 ): string {
-  if (requestedAgentId !== undefined || cfg.agents?.ownership === "explicit") {
-    return resolveAmbientOwnerAgentId(cfg, requestedAgentId, context);
-  }
-  return tryResolveLegacyCompatibilityAgentId(cfg) ?? resolveDefaultAgentId(cfg, context);
+  return tryResolveAgentOperationAgentId(cfg, requestedAgentId) ?? resolveSoleAgentId(cfg, context);
 }
 
 /**
@@ -425,6 +433,14 @@ export function resolveAgentWorkspaceDir(
   }
   const stateDir = resolveStateDir(env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
+}
+
+/** Resolves the configured task directory without changing the agent workspace. */
+export function resolveAgentRunCwd(cfg: OpenClawConfig, agentId: string): string | undefined {
+  const cwd =
+    normalizeOptionalString(resolveAgentEntry(cfg, agentId)?.cwd) ??
+    normalizeOptionalString(cfg.agents?.defaults?.cwd);
+  return cwd ? stripNullBytes(resolveUserPath(cwd)) : undefined;
 }
 
 /** How a resolved agent workspace should be provisioned by the lifecycle owner. */

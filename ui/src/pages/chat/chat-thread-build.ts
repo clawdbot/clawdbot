@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -240,7 +241,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     pendingInputs,
     props.searchOpen ? props.searchQuery : undefined,
   );
-  const appendQueuedSend = (queued: ChatQueueItem, beforeMessage?: unknown) => {
+  const appendQueuedSend = (queued: ChatQueueItem) => {
     if (!shouldRenderQueuedSendInThread(queued)) {
       return;
     }
@@ -256,27 +257,28 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     ) {
       return;
     }
-    const queuedItem: ChatItem = {
+    const runId = queued.sendRunId;
+    // Reconnect can deliver a saved reply before history recovers its user row.
+    // Anchor to the first rendered owned output even after the local run clears;
+    // hidden/imported rows cannot anchor, and unmatched future sends stay last.
+    const insertionIndex = items.findIndex((item) => {
+      if (!runId || item.kind !== "message") {
+        return false;
+      }
+      const identity = readSessionMessageIdentity(item.message);
+      return (
+        isLiveTerminalForRun(item.message, runId) ||
+        (identity?.role === "assistant" && !identity.isImported && identity.runId === runId)
+      );
+    });
+    items.splice(insertionIndex < 0 ? items.length : insertionIndex, 0, {
       kind: "message",
       key: queued.sendRunId ? buildMessageKeys([message])[0]! : `pending-send:${queued.id}`,
       message,
-    };
-    const insertionIndex =
-      beforeMessage === undefined
-        ? -1
-        : items.findIndex((item) => item.kind === "message" && item.message === beforeMessage);
-    if (insertionIndex === -1) {
-      items.push(queuedItem);
-    } else {
-      items.splice(insertionIndex, 0, queuedItem);
-    }
+    });
   };
   for (const queued of currentRunQueuedSends) {
-    const runId = queued.sendRunId;
-    const liveTerminal = runId
-      ? history.find((message) => isLiveTerminalForRun(message, runId))
-      : undefined;
-    appendQueuedSend(queued, liveTerminal);
+    appendQueuedSend(queued);
   }
   const currentTurnBounds = findCurrentTurnBounds(items);
   for (const liftedCanvasSource of liftedCanvasSources) {
@@ -667,9 +669,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       ...optionalBoundaryIdentity(latestBoundaryRunId ?? workingRunId),
     });
   }
-  // Future queued turns are a causal ceiling for every current-run projection.
-  // Append them after tools, streams, progress, and prompts so none can cross the
-  // next user turn when a live item becomes stable transcript history.
+  // Unmatched future turns stay after all current-run projections as a causal
+  // ceiling. A known same-run reply instead anchors its already-attempted prompt.
   for (const queued of futureQueuedSends) {
     appendQueuedSend(queued);
   }

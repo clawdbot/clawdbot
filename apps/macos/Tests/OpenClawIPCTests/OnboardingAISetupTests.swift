@@ -919,11 +919,16 @@ struct OnboardingAISetupTests {
             "openclaw.setup.prepare.start")
     }
 
-    @Test(arguments: ["accept", "decline", "cancel", "error", "retry-cancel"], [false, true])
+    @Test(
+        arguments: ["accept", "decline", "cancel", "error", "error-replaced", "malformed-success", "retry-cancel"],
+        [false, true])
     func `activation consent uses shared wizard`(decision: String, manual: Bool) async throws {
         let recorder = AISetupRequestRecorder()
+        let activationAttempts = AISetupSocketGeneration()
         let cancellationFails = LockIsolated(true)
-        let accepts = ["accept", "error"].contains(decision)
+        let terminalError = decision == "error" || decision == "error-replaced"
+        let accepts = terminalError || ["accept", "malformed-success"].contains(decision)
+        let failureDetail = "AI access was saved, but could not be applied."
         let defaults = try #require(isolatedAISetupDefaults(prefix: "ActivationConsent"))
         let session = makeAISetupRequestSession(
             recorder: recorder,
@@ -938,6 +943,14 @@ struct OnboardingAISetupTests {
                 case "openclaw.setup.activate.start":
                     #expect(request.params["kind"] as? String == (manual ? "api-key" : "codex-cli"))
                     let sessionID = try #require(request.params["sessionId"] as? String)
+                    if activationAttempts.claim() > 0 {
+                        payload = [
+                            "sessionId": sessionID, "done": true, "status": "done",
+                            "modelActivation": ["modelRef": request
+                                .params["modelRef"] as? String ?? "synthetic/manual"],
+                        ]
+                        break
+                    }
                     task.emitReceiveSuccess(.data(wizardStartResponse(id: request.id, sessionID: sessionID)))
                     return
                 case "wizard.next":
@@ -951,8 +964,10 @@ struct OnboardingAISetupTests {
                     case "consent":
                         let accepted = try #require(answer?["value"] as? Bool)
                         #expect(accepted == accepts)
-                        payload = if decision == "error" {
-                            ["done": true, "status": "error", "error": "AI access was saved, but could not be applied."]
+                        payload = if terminalError {
+                            ["done": true, "status": "error", "error": failureDetail]
+                        } else if decision == "malformed-success" {
+                            ["done": true, "status": "done"]
                         } else if accepted {
                             ["done": true, "status": "done", "modelActivation": ["modelRef": "openai/gpt-5.5"]]
                         } else {
@@ -995,6 +1010,8 @@ struct OnboardingAISetupTests {
             })
         let gateway = try makeAISetupGateway(url: #require(URL(string: "ws://example.invalid")), session: session)
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
+        var handoffs = 0
+        model.onConnected = { handoffs += 1 }
         let activation = Task {
             await model.detectAndAutoConnect()
             if manual {
@@ -1018,6 +1035,13 @@ struct OnboardingAISetupTests {
         }
         #expect(model.authStep.map(wizardStepType) == "confirm")
         #expect(!model.authConfirmation)
+        let originalOwner = try #require(storedActivationOwner(defaults))
+        let replacementOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
+            id: UUID().uuidString,
+            routeFingerprint: originalOwner.routeFingerprint)
+        if decision == "error-replaced" {
+            markPending(defaults, owner: replacementOwner)
+        }
         if decision == "retry-cancel" {
             model.cancelProviderAuth()
             for _ in 0..<400 where model.authError == nil {
@@ -1036,9 +1060,14 @@ struct OnboardingAISetupTests {
         for _ in 0..<400 where model.activeAuthOption != nil {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
+        await activation.value
         await settleQueuedAISetupTasks()
+        let ambiguous = decision == "malformed-success" || decision == "retry-cancel"
         #expect(model.connected == (decision == "accept"))
-        #expect(model.pendingActivationVerification == (decision == "error" || decision == "retry-cancel"))
+        #expect(handoffs == (decision == "accept" ? 1 : 0))
+        #expect(model.pendingActivationVerification == ambiguous)
+        #expect(model.waitingForPendingActivationDeadline == ambiguous)
+        #expect(model.isBusy == ambiguous)
         #expect(model.activeAuthOption == nil)
         if decision != "accept" {
             let failure: OnboardingAISetupModel.Failure
@@ -1058,14 +1087,49 @@ struct OnboardingAISetupTests {
             } else {
                 #expect(failure.summary ==
                     "The Gateway setup request failed. Show details to inspect or copy the error.")
-                #expect(failure.detail == (decision == "error"
-                        ? "AI access was saved, but could not be applied."
-                        : "AI setup ended before its result was received. OpenClaw will verify the Gateway before trying again."))
+                #expect(failure.detail == (terminalError
+                        ? failureDetail
+                        :
+                        "AI setup ended before its result was received. OpenClaw will verify the Gateway before trying again."))
             }
         }
+        #expect(!model.exhaustedAutoCandidates)
         let requests = await recorder.snapshot()
         #expect(!requests.methods.contains("openclaw.setup.activate"))
         #expect(requests.methods.filter { $0 == "openclaw.setup.activate.start" }.count == 1)
+        if terminalError {
+            #expect(model.phase == .ready)
+            if decision == "error-replaced" {
+                #expect(storedActivationOwner(defaults) == replacementOwner)
+            } else {
+                #expect(pendingState(defaults) == .none)
+            }
+        } else if ambiguous {
+            #expect(model.phase == .detecting)
+            #expect(storedActivationOwner(defaults) == originalOwner)
+        }
+        guard decision == "error" else { return }
+        // The failed wizard has settled. A new user action may retry immediately,
+        // while the assertion above forbids an automatic switch to the next candidate.
+        try #require(!model.isBusy)
+        if manual {
+            model.manualKey = "corrected-fixture-key"
+            model.submitManualKey()
+        } else {
+            model.userSelect(kind: "codex-cli")
+        }
+        for _ in 0..<400 where !model.connected {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(model.connected)
+        #expect(handoffs == 1)
+        #expect(pendingState(defaults) == .completed)
+        #expect(storedActivationOwner(defaults) != originalOwner)
+        let retried = await recorder.snapshot()
+        #expect(retried.methods.filter { $0 == "openclaw.setup.activate.start" }.count == 2)
+        if manual {
+            #expect(retried.apiKeys == ["fixture-key", "corrected-fixture-key"])
+        }
     }
 
     @Test(arguments: ["terminal-reply", "nonterminal-reply", "confirmed-cancel"])

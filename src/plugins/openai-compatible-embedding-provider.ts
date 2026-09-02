@@ -188,6 +188,43 @@ function resolveRemoteApiKey(value: unknown): string | undefined {
   });
 }
 
+async function resolveConfiguredProviderApiKey(params: {
+  providerId: string;
+  options: EmbeddingProviderCreateOptions;
+  configuredProvider: ConfiguredEmbeddingProvider | undefined;
+}): Promise<string | undefined> {
+  const apiKey = resolveSecretString({
+    value: params.configuredProvider?.apiKey,
+    path: `models.providers.${params.providerId}.apiKey`,
+  });
+  if (!apiKey) {
+    return undefined;
+  }
+  const { resolveAgentDir, tryResolveAmbientOwnerAgentId } =
+    await import("../agents/agent-scope-config.js");
+  const agentId = tryResolveAmbientOwnerAgentId(params.options.config);
+  const agentDir =
+    params.options.agentDir?.trim() ||
+    (agentId ? resolveAgentDir(params.options.config, agentId) : undefined);
+  // Without an owned auth store, a configured string retains its literal meaning.
+  if (!agentDir) {
+    return apiKey;
+  }
+  const { resolveScopedAuthProfileStore, resolveProviderEntryApiKeyAuth } =
+    await import("../agents/model-auth-provider.js");
+  const authParams = {
+    provider: params.providerId,
+    modelApi: params.configuredProvider?.api,
+    cfg: params.options.config,
+    agentDir,
+  };
+  const store = resolveScopedAuthProfileStore(authParams);
+  // Only explicit profile bindings enter model auth. General discovery would
+  // replace literal/runtime-resolved keys with unrelated profile or env credentials.
+  const auth = await resolveProviderEntryApiKeyAuth({ ...authParams, store });
+  return auth ? auth.apiKey : apiKey;
+}
+
 function isOpenAICompatibleProviderConfig(
   id: string,
   provider: ConfiguredEmbeddingProvider,
@@ -350,9 +387,10 @@ async function createOpenAICompatibleEmbeddingClient(
     remote: options.remote?.headers,
   });
   if (providerOwnsDestination && !headers.authorization) {
-    const providerApiKey = resolveSecretString({
-      value: configuredProvider?.apiKey,
-      path: `models.providers.${providerId}.apiKey`,
+    const providerApiKey = await resolveConfiguredProviderApiKey({
+      providerId,
+      options,
+      configuredProvider,
     });
     if (providerApiKey) {
       headers.authorization = `Bearer ${providerApiKey}`;

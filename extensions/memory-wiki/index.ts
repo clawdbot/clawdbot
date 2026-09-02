@@ -199,56 +199,39 @@ export default definePluginEntry({
       },
       { name: "wiki_status" },
     );
-    api.registerTool(
-      (ctx) => {
-        const resolved = resolveToolContext(ctx.agentId);
-        return resolved
-          ? createWikiLintTool(resolved.config, resolved.appConfig, resolved.signal)
-          : null;
-      },
-      { name: "wiki_lint" },
-    );
-    api.registerTool(
-      (ctx) => {
-        const resolved = resolveToolContext(ctx.agentId);
-        return resolved
-          ? createWikiApplyTool(resolved.config, resolved.appConfig, resolved.signal)
-          : null;
-      },
-      { name: "wiki_apply" },
-    );
-    api.registerTool(
-      (ctx) => {
-        const resolved = resolveToolContext(ctx.agentId);
-        if (!resolved) {
-          return null;
-        }
-        return createWikiSearchTool(resolved.config, resolved.appConfig, {
-          agentId: resolved.config.agentId ?? ctx.agentId,
-          agentSessionKey: ctx.sessionKey,
-          sandboxed: ctx.sandboxed,
-          conversationRecall: ctx.conversationRecall,
-          ...(resolved.signal ? { signal: resolved.signal } : {}),
-        });
-      },
-      { name: "wiki_search" },
-    );
-    api.registerTool(
-      (ctx) => {
-        const resolved = resolveToolContext(ctx.agentId);
-        if (!resolved) {
-          return null;
-        }
-        return createWikiGetTool(resolved.config, resolved.appConfig, {
-          agentId: resolved.config.agentId ?? ctx.agentId,
-          agentSessionKey: ctx.sessionKey,
-          sandboxed: ctx.sandboxed,
-          conversationRecall: ctx.conversationRecall,
-          ...(resolved.signal ? { signal: resolved.signal } : {}),
-        });
-      },
-      { name: "wiki_get" },
-    );
+    for (const [name, createTool] of [
+      ["wiki_lint", createWikiLintTool],
+      ["wiki_apply", createWikiApplyTool],
+    ] as const) {
+      api.registerTool(
+        (ctx) => {
+          const resolved = resolveToolContext(ctx.agentId);
+          return resolved ? createTool(resolved.config, resolved.appConfig, resolved.signal) : null;
+        },
+        { name },
+      );
+    }
+    for (const [name, createTool] of [
+      ["wiki_search", createWikiSearchTool],
+      ["wiki_get", createWikiGetTool],
+    ] as const) {
+      api.registerTool(
+        (ctx) => {
+          const resolved = resolveToolContext(ctx.agentId);
+          if (!resolved) {
+            return null;
+          }
+          return createTool(resolved.config, resolved.appConfig, {
+            agentId: resolved.config.agentId ?? ctx.agentId,
+            agentSessionKey: ctx.sessionKey,
+            sandboxed: ctx.sandboxed,
+            conversationRecall: ctx.conversationRecall,
+            ...(resolved.signal ? { signal: resolved.signal } : {}),
+          });
+        },
+        { name },
+      );
+    }
     api.registerCli(
       async ({ program }) => {
         const { registerWikiCli } = await import("./src/cli.js");

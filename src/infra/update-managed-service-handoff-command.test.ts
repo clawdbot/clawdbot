@@ -72,6 +72,7 @@ afterEach(async () => {
 async function startHandoffAndReadCommand(params: {
   channel: "beta" | "extended-stable";
   tag?: string;
+  acceptCapabilities?: boolean;
   devTarget?: DevUpdateTarget;
   env?: NodeJS.ProcessEnv;
   restartDelayMs?: number;
@@ -90,6 +91,7 @@ async function startHandoffAndReadCommand(params: {
     ...(params.restartDelayMs === undefined ? {} : { restartDelayMs: params.restartDelayMs }),
     channel: params.channel,
     ...(params.tag ? { tag: params.tag } : {}),
+    ...(params.acceptCapabilities ? { acceptCapabilities: true } : {}),
     parentPid: process.pid,
     execPath: "/usr/local/bin/node",
     argv1: "/opt/openclaw/openclaw.mjs",
@@ -166,6 +168,7 @@ describe("managed service update handoff command", () => {
     const result = await startHandoffAndReadCommand({
       channel: "beta",
       tag: "2.0.0-beta.1",
+      acceptCapabilities: true,
     });
 
     expect(result.commandArgv).toEqual([
@@ -174,6 +177,7 @@ describe("managed service update handoff command", () => {
       "update",
       "--yes",
       "--json",
+      "--accept-capabilities",
       "--channel",
       "beta",
       "--tag",
@@ -181,6 +185,9 @@ describe("managed service update handoff command", () => {
     ]);
     expect(result.command).toContain("--tag 2.0.0-beta.1");
     expect(result.command).toContain("--channel beta");
+    expect(result.command).toContain("--accept-capabilities");
+    expect(result.command).toContain("--yes");
+    expect(result.command).not.toContain("--json");
   });
 
   it("merges a tracked target into the child environment without replacing caller fields", async () => {

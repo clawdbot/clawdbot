@@ -54,6 +54,7 @@ const TOOLING_CLOSURE = [
   "scripts/release-validation-intent.mjs",
   "scripts/release-tooling-identity.mjs",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/npm-core-release-packages.json",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
   "scripts/lib/pnpm-lockfile-documents.mjs",
@@ -229,24 +230,6 @@ function buildFixtureRepo(root: string, version: string, options: FixtureOptions
       ...(options.conflictingPlatformId
         ? ["  publish_windows:", "    uses: ./.github/workflows/docker-release.yml"]
         : []),
-      "",
-    ].join("\n"),
-  );
-  writeFixture(
-    root,
-    ".github/workflows/openclaw-npm-release.yml",
-    [
-      "name: NPM Release",
-      "jobs:",
-      "  preflight:",
-      "    steps:",
-      "      - name: Pack publishable core packages",
-      "        env:",
-      "          CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client",
-      "        run: |",
-      '          if [[ "$package_dir" == "packages/ai" ]] && ! node -e \'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)\'; then',
-      "            exit 0",
-      "          fi",
       "",
     ].join("\n"),
   );
@@ -995,9 +978,6 @@ describe("release plan producer", () => {
 exports.parse = source => {
   if (source.includes("rerun_group")) {
     return { on: { workflow_dispatch: { inputs: { rerun_group: { options: ["package", "all", "ci"] } } } } };
-  }
-  if (source.includes("CORE_PACKAGE_DIRS")) {
-    return { jobs: { preflight: { steps: [{ env: { CORE_PACKAGE_DIRS: "packages/ai packages/gateway-protocol packages/gateway-client" } }] } } };
   }
   return {
     jobs: {

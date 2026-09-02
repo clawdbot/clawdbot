@@ -396,6 +396,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       gatewaySnapshot: this.context.gateway.snapshot,
       movingKey: this.headerPlacementMovingKey,
       reclaimingKey: this.headerPlacementReclaimingKey,
+      restartingKey: this.headerPlacementRestartingKey,
       row,
     });
     const key = this.state?.sessionKey ?? "";
@@ -440,6 +441,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       navDrawerOpen: this.navDrawerOpen,
       title: (catalog ? this.catalogSession?.name?.trim() : undefined) || this.paneTitle,
       session: row,
+      placementStartupStatus: this.context.placementStartup.get(key),
       showOwnerChip,
       ownerViewing,
       personActivity,
@@ -561,8 +563,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             ></openclaw-chat-header-session-menu>`
           : nothing,
       placementMoving: placement.moving,
+      placementRestarting: placement.restarting,
       placementMoveDisabledReason: placement.moveDisabledReason,
       placementReclaimDisabledReason: placement.reclaimDisabledReason,
+      placementRestartDisabledReason: placement.restartDisabledReason,
       nativeGateways: this.nativeGateways,
       gatewaysSnapshot: this.gatewaysSnapshot,
       onboarding: this.onboarding,
@@ -587,6 +591,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       },
       onPlacementMove: () => row && void this.moveHeaderPlacement(row),
       onPlacementReclaim: () => row && void this.reclaimHeaderPlacement(row),
+      onPlacementRestart: () => row && void this.restartHeaderPlacement(row),
       onBranchSelect: (leafEntryId) => {
         const access = readChatSessionActionAccess(
           this.context.gateway.snapshot,

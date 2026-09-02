@@ -14,6 +14,7 @@ import { isLoopbackHost } from "../gateway/net.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { loadNodeHostConfig, type NodeHostGatewayConfig } from "../node-host/config.js";
 import {
   nodeHostCloudflareAccessConfigFromEnv,
@@ -41,6 +42,7 @@ type ConnectCommandOptions = {
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
 
 const MAX_JOIN_PAYLOAD_BYTES = 24 * 1024;
+const MAX_TARGET_FILE_BYTES = 64 * 1024;
 const JOIN_FETCH_TIMEOUT_MS = 15_000;
 
 function parseJoinTarget(target: string): URL | null {
@@ -147,19 +149,33 @@ async function resolveConnectTarget(
   if (target) {
     return target;
   }
-  const path = targetFile?.trim();
-  if (!path) {
+  const filePath = targetFile?.trim();
+  if (!filePath) {
     throw new Error("Connect target is required.");
   }
+  let buffer: Buffer;
   try {
-    const value = (await fs.readFile(path, "utf8")).trim();
-    if (!value) {
-      throw new Error("Connect target file is empty.");
-    }
-    return value;
-  } finally {
-    await fs.rm(path, { force: true });
+    // The original fs.readFile behavior followed symlinks in the target path.
+    // Resolve intentional links before the regular-file safety check so
+    // symlinked secret-mount or one-shot target files keep working.
+    const resolvedFilePath = await fs.realpath(filePath);
+    ({ buffer } = await readRegularFile({
+      filePath: resolvedFilePath,
+      maxBytes: MAX_TARGET_FILE_BYTES,
+    }));
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Could not read --target-file ${filePath} (max ${MAX_TARGET_FILE_BYTES} bytes): ${cause}`,
+      { cause: error },
+    );
   }
+  const value = buffer.toString("utf8").trim();
+  if (!value) {
+    throw new Error("Connect target file is empty.");
+  }
+  await fs.rm(filePath, { force: true });
+  return value;
 }
 
 async function runConnectCommand(

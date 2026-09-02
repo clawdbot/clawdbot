@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -59,6 +59,36 @@ afterEach(async () => {
   }
   await waitFor(() => [...activePids].every((pid) => !isAlive(pid))).catch(() => {});
   activePids.clear();
+});
+
+describe.skipIf(process.platform === "win32")("POSIX child invocation identity", () => {
+  it.each(["direct", "service-managed"] as const)(
+    "preserves caller-selected argv0 through the %s path",
+    async (mode) => {
+      if (mode === "service-managed") {
+        process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+      }
+      const tempDir = tempDirs.make(`openclaw-${mode}-argv0-`);
+      const executableAlias = path.join(tempDir, "claude-shim");
+      await symlink(process.execPath, executableAlias);
+      const run = await createProcessSupervisor().spawn({
+        mode: "child",
+        argv: [process.execPath, "-e", "process.stdout.write(process.argv0)"],
+        argv0: executableAlias,
+        sessionId: `argv0-${mode}`,
+        backendId: "argv0-test",
+        stdinMode: "pipe-closed" as const,
+      });
+
+      await expect(run.wait()).resolves.toMatchObject({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        stdout: executableAlias,
+      });
+      await run.waitForExtinction?.();
+    },
+  );
 });
 
 describe.skipIf(process.platform === "win32")("service-managed child lifecycle", () => {

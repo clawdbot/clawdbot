@@ -38,6 +38,8 @@ mechanics in `openclaw.json`.
 OpenClaw auto-loads an owning bundled plugin when model selection or a
 model-scoped `agentRuntime.id` references its backend.
 
+Utility completions for session digests, progress narration, and tool-call titles use the selected model's runtime too: Claude CLI runs a fresh, tool-free completion with its own authentication, including canonical `anthropic/*` refs configured with `agentRuntime.id: "claude-cli"`.
+
 ## Using it as a fallback
 
 Add the CLI backend to your fallback list so it only runs when primary models fail:
@@ -399,6 +401,17 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 - Structured outputs depend on the CLI's own JSON format.
 
 ## Troubleshooting
+
+When a local Claude Agent SDK subprocess fails, its run error includes a bounded,
+redacted stderr diagnostic when available. Check the run error or `openclaw logs`
+for the underlying launch, permission, or runtime failure. Successful turns do not
+forward stderr into logs. Each live process has its own diagnostic buffer. Since
+stderr has no turn identifiers, a warm process's failure can include earlier turns;
+the error labels that output as process-wide rather than attributing it to the failing turn.
+Oversized incomplete lines are omitted so truncation cannot expose credential
+fragments. Native stdout and MCP input are not included in these diagnostics.
+Stderr is supplemental display text only; it does not change the native error's
+retry, authentication, timeout, or fallback classification.
 
 | Symptom               | Fix                                                                                            |
 | --------------------- | ---------------------------------------------------------------------------------------------- |

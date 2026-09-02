@@ -352,6 +352,7 @@ registerHooks({
     const result = spawnNodeEvalSync(script, {
       imports: ["tsx"],
       env: {
+        ESBUILD_WORKER_THREADS: "0",
         PATH: path.dirname(process.execPath),
         HOME: root,
         USERPROFILE: root,

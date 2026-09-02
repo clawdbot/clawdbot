@@ -56,7 +56,10 @@ function caseInventory(reports: JsonTestResults[]) {
     .toSorted();
 }
 
-function nativeHelpRequested(args: string[], parseCLI: typeof import("vitest/node").parseCLI) {
+export function nativeHelpRequested(
+  args: string[],
+  parseCLI: typeof import("vitest/node").parseCLI,
+) {
   const controls: string[] = [];
   for (const [index, original] of args.entries()) {
     if (original === "--") {

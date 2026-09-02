@@ -18,7 +18,6 @@ import {
 } from "./update-doctor-result.js";
 import {
   resolveNpmGlobalPrefixLayoutFromPrefix,
-  type CommandRunner,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 
@@ -125,32 +124,6 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
 
     expect(step.advisory).toBeUndefined();
     expect(step.stderrTail).toBe("doctor timed out");
-  });
-});
-
-describe("npm lifecycle policy preflight", () => {
-  it("stops before mutation when the owning npm version is unknown", async () => {
-    const runStep = vi.fn();
-    const runCommand = vi.fn<CommandRunner>();
-    const installTarget = createNpmTarget("/tmp/npm-policy-test/lib/node_modules");
-    installTarget.npmOwner = {
-      version: null,
-      lifecyclePolicy: null,
-      probeError: "version probe failed",
-    };
-
-    const result = await runGlobalPackageUpdateSteps({
-      installTarget,
-      installSpec: "openclaw@2.0.0",
-      packageName: "openclaw",
-      runCommand,
-      runStep,
-      timeoutMs: 1000,
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expect(result.failedStep?.stderrTail).toContain("Unable to determine the owning npm version");
-    expect(runStep).not.toHaveBeenCalled();
   });
 });
 
@@ -327,7 +300,13 @@ describe("runGlobalPackageUpdateSteps", () => {
         const globalRoot = path.join(prefix, "lib", "node_modules");
         const packageRoot = path.join(globalRoot, "openclaw");
         await writePackageRoot(packageRoot, "1.0.0");
-        const postVerifyStep = vi.fn(async () => null);
+        const postVerifyStep = vi.fn(async (root: string) => ({
+          name: "candidate validation",
+          command: "doctor",
+          cwd: root,
+          durationMs: 1,
+          exitCode: 0,
+        }));
 
         const result = await runGlobalPackageUpdateSteps({
           installTarget: createNpmTarget(globalRoot),
@@ -364,8 +343,10 @@ describe("runGlobalPackageUpdateSteps", () => {
         expect(result.steps.map((step) => step.name)).toEqual([
           "global update",
           "global install swap",
+          "candidate validation",
         ]);
         expect(postVerifyStep).toHaveBeenCalledWith(packageRoot);
+        expect(result.recovery).toEqual({ serviceRestartSafe: true, version: installedVersion });
         await expect(
           fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
         ).resolves.toContain(`"version":"${installedVersion}"`);
@@ -1021,9 +1002,9 @@ describe("runGlobalPackageUpdateSteps", () => {
         });
         expect(retry.failedStep).not.toBeNull();
         expect(await fs.readdir(globalRoot)).toEqual(expect.arrayContaining(backups));
-      } else {
-        expect(result.recovery?.serviceRestartSafe).not.toBe(false);
       }
+      // Package and launcher rollback does not reverse possible lifecycle state changes.
+      expect(result.recovery?.serviceRestartSafe).toBe(false);
     });
   });
 
@@ -1050,8 +1031,8 @@ describe("runGlobalPackageUpdateSteps", () => {
           timeoutMs: 1000,
         }),
       ).resolves.toMatchObject({
-        recovery: { serviceRestartSafe: true },
         failedStep: { stderrTail: "install crashed", exitCode: 1 },
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
 
       if (stagePrefix === undefined) {

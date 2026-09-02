@@ -198,6 +198,8 @@ export function createMainRefreshFixture(directory: string) {
     metadata,
     authorPermission: "write",
     failFetch: false,
+    failPrFetch: false,
+    failDetach: false,
     failFetchAt: 0,
     pauseFetchAt: 0,
     failAuth: false,
@@ -259,6 +261,11 @@ function runGit(args, input) {
     instrumentedGit,
     prelude +
       `
+if ((control.failPrFetch && args.includes('fetch') && args.includes('pull/42/head:pr-42')) ||
+    (control.failDetach && args[0] === 'checkout' && args[1] === '--detach')) {
+  console.error('fatal: injected prepare handoff failure');
+  process.exit(73);
+}
 const mainFetch = args.includes('fetch') && args.some(arg =>
   arg === 'main' || arg.startsWith('+refs/heads/main:') || arg === 'refs/heads/main'
 );
@@ -524,8 +531,11 @@ if (process.argv[1]?.endsWith('/watch-pr-ci.mts')) {
     metadata,
     configure(update: Partial<typeof control>) {
       Object.assign(control, update);
-      if (control.hostedCi === "scheduled") delete env.NODE_OPTIONS;
-      else env.NODE_OPTIONS = `--import=${clock}`;
+      if (control.hostedCi === "scheduled") {
+        delete env.NODE_OPTIONS;
+      } else {
+        env.NODE_OPTIONS = `--import=${clock}`;
+      }
       writeFileSync(controlFile, JSON.stringify(control));
     },
     events() {

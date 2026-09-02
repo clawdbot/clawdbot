@@ -9,6 +9,7 @@ import {
 // Decides whether an inbound turn may start, queue, or abort a reply run.
 import {
   isRestartRecoveryTombstone,
+  SessionWorkStartChangedError,
   resolveSessionWorkStartError,
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SessionRestartRecoveryTombstoneError,
@@ -92,6 +93,7 @@ function rejectLifecycleInvalidatedWork(params: {
   kind: ReplyTurnKind;
   message: string;
   restartRecoveryTombstone?: boolean;
+  transientSessionChange?: boolean;
 }): never {
   if (params.kind === "queued_followup") {
     const error = new QueuedFollowupLifecycleInvalidatedError(params.message);
@@ -102,6 +104,9 @@ function rejectLifecycleInvalidatedWork(params: {
   }
   if (params.restartRecoveryTombstone === true) {
     throw new SessionRestartRecoveryTombstoneError(params.message);
+  }
+  if (params.kind === "visible" && params.transientSessionChange === true) {
+    throw new SessionWorkStartChangedError(params.message);
   }
   throw new Error(params.message);
 }
@@ -225,6 +230,7 @@ export async function admitReplyTurn(
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: `Session "${params.sessionKey}" was deleted while starting work. Retry.`,
+                  transientSessionChange: true,
                 });
               }
               const registeredOperation = replyRunRegistry.get(params.sessionKey);
@@ -258,6 +264,7 @@ export async function admitReplyTurn(
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
                   message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+                  transientSessionChange: true,
                 });
               }
               if (activeOperationRotatedExpectedSession) {
@@ -308,6 +315,7 @@ export async function admitReplyTurn(
             rejectLifecycleInvalidatedWork({
               kind: params.kind,
               message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+              transientSessionChange: true,
             });
           }
           recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
@@ -316,6 +324,7 @@ export async function admitReplyTurn(
           rejectLifecycleInvalidatedWork({
             kind: params.kind,
             message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+            transientSessionChange: true,
           });
         }
         if (params.adoptOperation) {

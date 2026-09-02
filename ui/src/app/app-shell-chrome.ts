@@ -22,6 +22,7 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
+import { focusWithoutTooltip } from "../components/tooltip.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
@@ -227,10 +228,11 @@ export class ShellChromeOwner {
 
   /** Native Mac chrome hides in-page toggles, so restoration falls back to content. */
   restoreFocusTo = (target: HTMLElement | null | undefined): void =>
-    (target?.isConnected && target.checkVisibility()
-      ? target
-      : this.host.querySelector<HTMLElement>(".content")
-    )?.focus();
+    focusWithoutTooltip(
+      target?.isConnected && target.checkVisibility()
+        ? target
+        : this.host.querySelector<HTMLElement>(".content"),
+    );
 
   closeNavDrawer(options: { restoreFocus?: boolean } = {}): void {
     const host = this.host;

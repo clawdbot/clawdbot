@@ -60,62 +60,57 @@ describe("Anthropic plugin manifest", () => {
     }
   });
 
-  it("publishes the exact Claude Sonnet 5 API contract", () => {
-    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
-    expect(models.find((model) => model.id === "claude-sonnet-5")).toEqual({
-      id: "claude-sonnet-5",
-      name: "Claude Sonnet 5",
-      reasoning: true,
-      input: ["text", "image"],
-      mediaInput: {
-        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
-      },
-      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-      contextWindow: 1_000_000,
-      ...selectableContextWindowMetadata,
-      maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-      compat: { codeMode: "preferred" },
-    });
-  });
-
-  it("publishes the exact Claude Opus 5 API contract", () => {
-    const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
-    expect(models.find((model) => model.id === "claude-opus-5")).toEqual({
+  it.each([
+    {
       id: "claude-opus-5",
       name: "Claude Opus 5",
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    },
+    {
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    },
+    {
+      id: "claude-fable-5-1",
+      name: "Claude Fable 5.1",
+      cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+    },
+    {
+      id: "claude-fable-5",
+      name: "Claude Fable 5",
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+    },
+  ])("publishes $name API and CLI contracts", ({ id, name, cost, thinkingLevelMap }) => {
+    const metadata = {
+      id,
       reasoning: true,
       input: ["text", "image"],
       mediaInput: {
         image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
       },
-      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       contextWindow: 1_000_000,
       ...selectableContextWindowMetadata,
       maxTokens: 128_000,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    };
+    const providers = manifest.modelCatalog?.providers;
+    expect(providers?.anthropic?.models?.find((model) => model.id === id)).toEqual({
+      ...metadata,
+      name,
+      cost,
+      thinkingLevelMap,
       compat: { codeMode: "preferred" },
     });
-    // Opus 5's 1M window is the model default, so the CLI row is not clamped to 200k.
-    const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
-    expect(cliModels.find((model) => model.id === "claude-opus-5")).toMatchObject({
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    });
+    const cliModel = providers?.["claude-cli"]?.models?.find((model) => model.id === id);
+    expect(cliModel).toMatchObject({ ...metadata, name: `${name} (Claude CLI)` });
+    expect(cliModel).not.toHaveProperty("cost");
   });
 
-  it("declares selectable context windows on both canonical Fable catalog rows", () => {
-    const providers = manifest.modelCatalog?.providers;
-
-    expect(
-      providers?.anthropic?.models?.find((model) => model.id === "claude-fable-5"),
-    ).toMatchObject(selectableContextWindowMetadata);
-    expect(
-      providers?.["claude-cli"]?.models?.find((model) => model.id === "claude-fable-5"),
-    ).toMatchObject(selectableContextWindowMetadata);
-  });
-
-  it("declares Opus 4.8 limits without overstating bare Claude CLI context", () => {
+  it("preserves older Claude CLI contracts without overstating bare context", () => {
     const models = manifest.modelCatalog?.providers?.anthropic?.models ?? [];
     expect(models.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
       contextWindow: 1_000_000,
@@ -124,9 +119,20 @@ describe("Anthropic plugin manifest", () => {
       replacedBy: "claude-opus-5",
     });
     const cliModels = manifest.modelCatalog?.providers?.["claude-cli"]?.models ?? [];
+    for (const [id, label, maxSidePx] of [
+      ["claude-opus-4-8", "Claude Opus 4.8", 2576],
+      ["claude-opus-4-7", "Claude Opus 4.7", 2576],
+      ["claude-sonnet-4-6", "Claude Sonnet 4.6", 1568],
+      ["claude-opus-4-6", "Claude Opus 4.6", 1568],
+    ] as const) {
+      expect(cliModels.find((model) => model.id === id)).toMatchObject({
+        name: `${label} (Claude CLI)`,
+        contextWindow: 200_000,
+        maxTokens: 128_000,
+        mediaInput: { image: { maxSidePx, preferredSidePx: maxSidePx, tokenMode: "provider" } },
+      });
+    }
     expect(cliModels.find((model) => model.id === "claude-opus-4-8")).toMatchObject({
-      contextWindow: 200_000,
-      maxTokens: 128_000,
       status: "deprecated",
       replacedBy: "claude-opus-5",
     });
