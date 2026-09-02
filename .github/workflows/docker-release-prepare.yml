@@ -166,9 +166,9 @@ jobs:
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Prepare OCI output directory
         run: mkdir -p "${RUNNER_TEMP}/docker-release/oci"
-      # Keep intermediate stages in the shared builder for the browser build.
-      # Export runtime layers only; archiving build stages dominates preparation.
-      # Separate scopes avoid importing the retired full-stage cache.
+      # Both variants reuse this builder's local cache. Fresh provenance timestamps
+      # invalidate application layers across runs; remote transfers cost more than
+      # reusing the remaining runtime setup saves.
       # Fast gzip keeps new layers compatible with the Skopeo smoke transport.
       - name: Build default OCI image
         id: build
@@ -177,8 +177,6 @@ jobs:
           context: source
           platforms: linux/${{ matrix.architecture }}
           outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/default,tar=false,compression=gzip,compression-level=1
-          cache-from: type=gha,scope=docker-release-min-${{ matrix.architecture }}
-          cache-to: type=gha,mode=min,scope=docker-release-min-${{ matrix.architecture }}
           build-args: |
             GIT_COMMIT=${{ inputs.release_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
@@ -199,8 +197,6 @@ jobs:
           context: source
           platforms: linux/${{ matrix.architecture }}
           outputs: type=oci,dest=${{ runner.temp }}/docker-release/oci/browser,tar=false,compression=gzip,compression-level=1
-          cache-from: type=gha,scope=docker-release-browser-min-${{ matrix.architecture }}
-          cache-to: type=gha,mode=min,scope=docker-release-browser-min-${{ matrix.architecture }}
           build-args: |
             GIT_COMMIT=${{ inputs.release_sha }}
             OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}
