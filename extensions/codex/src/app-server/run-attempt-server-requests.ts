@@ -101,6 +101,7 @@ export function createCodexAttemptServerRequestController(
           turnId,
           autoApproveMcpTools: autoApprove,
           projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
+          getActiveMcpToolCall: (serverName) => projector?.getActiveMcpToolCall(serverName),
           pluginAppPolicyContext: resourceState.thread.pluginAppPolicyContext,
           ...(computerUseConfig.enabled
             ? { computerUseMcpServerName: computerUseConfig.mcpServerName }

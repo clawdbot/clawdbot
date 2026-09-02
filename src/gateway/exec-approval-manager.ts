@@ -117,6 +117,8 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   /** Closure-bound authority for approvals created by in-process delegated tools. */
   approvalAuthority?: () => boolean | void;
   approvalSignals?: readonly AbortSignal[];
+  /** Process-local persistence proof; never serialized with approval presentation. */
+  mcpToolApprovalActive?: () => boolean;
 };
 
 type OperatorApprovalPersistenceRuntime = {
@@ -126,6 +128,7 @@ type OperatorApprovalPersistenceRuntime = {
 
 export type OperatorStandingGrantMintSpec =
   | ({ kind: "cron" } & CronStandingGrantMintSpec)
+  | { kind: "mcp-tool"; agentId: string; server: string; tool: string }
   | ({ kind: "placement" } & PlacementStandingGrantMintSpec);
 
 type ExecApprovalManagerOptions<TPayload> = {
@@ -577,10 +580,16 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { outcome: "not-found" };
     }
 
-    const standingGrantSpec =
+    let standingGrantSpec =
       decision === "allow-always" && localEntry
         ? (this.options.resolveStandingGrantMint?.(localEntry.record.request) ?? undefined)
         : undefined;
+    if (
+      standingGrantSpec?.kind === "mcp-tool" &&
+      localEntry?.record.mcpToolApprovalActive?.() !== true
+    ) {
+      standingGrantSpec = undefined;
+    }
     const standingGrant = standingGrantSpec
       ? {
           ...standingGrantSpec,
@@ -600,6 +609,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         runtimeEpoch: persistence.runtimeEpoch,
         databaseOptions: persistence.databaseOptions,
         ...(standingGrant?.kind === "cron" ? { standingGrant } : {}),
+        ...(standingGrant?.kind === "mcp-tool" ? { mcpToolGrant: standingGrant } : {}),
       });
     } catch (error) {
       this.settleLocalStorageFailure(recordId);
@@ -857,6 +867,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     pending.record.runtimeEpoch = this.runtimeEpoch ?? undefined;
     pending.record.consumedAtMs = params.consumedAtMs ?? null;
     pending.record.consumedBy = params.consumedBy ?? null;
+    delete pending.record.mcpToolApprovalActive;
     pending.retainForManagerLifetime ||= params.retainForManagerLifetime === true;
     pending.admissionContinuation?.release();
     pending.admissionContinuation = null;
