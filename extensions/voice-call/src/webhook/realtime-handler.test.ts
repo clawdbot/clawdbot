@@ -174,11 +174,16 @@ function makeHandler(
 
 const startRealtimeServer = async (
   handler: RealtimeCallHandler,
+  callId: string,
 ): Promise<{
   url: string;
   close: () => Promise<void>;
 }> => {
-  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"));
+  const payload = handler.buildTwiMLPayload(
+    makeRequest("/voice/webhook"),
+    new URLSearchParams({ CallSid: callId }),
+    callId,
+  );
   const match = payload.body.match(/wss:\/\/[^/]+(\/[^"]+)/);
   if (!match) {
     throw new Error("Failed to extract realtime stream path");
@@ -318,7 +323,7 @@ async function withBargeInHarness(
       id: params.handlesProviderBargeIn ? "openai" : "test",
     }),
   });
-  const server = await startRealtimeServer(handler);
+  const server = await startRealtimeServer(handler, params.providerCallId);
 
   try {
     const ws = await connectWs(server.url);
@@ -432,7 +437,11 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("uses the request host and stream path in TwiML", () => {
     const handler = makeHandler();
-    const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "gateway.ts.net"));
+    const payload = handler.buildTwiMLPayload(
+      makeRequest("/voice/webhook", "gateway.ts.net"),
+      new URLSearchParams({ CallSid: "CA-host" }),
+      "CA-host",
+    );
 
     expect(payload.statusCode).toBe(200);
     expect(payload.body).toMatch(
@@ -445,6 +454,7 @@ describe("RealtimeCallHandler path routing", () => {
     const payload = handler.buildTwiMLPayload(
       makeRequest("/voice/webhook"),
       new URLSearchParams({ CallSid: "  CA-signed  " }),
+      "CA-signed",
     );
     const token = payload.body.match(/\/([0-9a-f-]{36})"/)?.[1];
 
@@ -469,6 +479,7 @@ describe("RealtimeCallHandler path routing", () => {
     const payload = handler.buildTwiMLPayload(
       makeRequest("/voice/webhook"),
       new URLSearchParams({ CallSid: "CA-signed" }),
+      "CA-signed",
     );
     const streamUrl = payload.body.match(/url="([^"]+)"/)?.[1];
     const server = await startStreamSessionServer(
@@ -502,7 +513,11 @@ describe("RealtimeCallHandler path routing", () => {
   it("preserves a public path prefix ahead of serve.path", () => {
     const handler = makeHandler({ streamPath: "/custom/stream/realtime" });
     handler.setPublicUrl("https://public.example:8443/api/voice/webhook");
-    const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook", "127.0.0.1:3334"));
+    const payload = handler.buildTwiMLPayload(
+      makeRequest("/voice/webhook", "127.0.0.1:3334"),
+      new URLSearchParams({ CallSid: "CA-prefix" }),
+      "CA-prefix",
+    );
 
     expect(handler.getStreamPathPattern()).toBe("/api/custom/stream/realtime");
     expect(payload.body).toMatch(
@@ -553,6 +568,7 @@ describe("RealtimeCallHandler path routing", () => {
         From: "+15550001234",
         To: "+15550009999",
       }),
+      "CA-outbound",
     );
     const match = payload.body.match(/wss:\/\/[^/]+(\/[^"]+)/);
     if (!match) {
@@ -807,7 +823,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-silent");
 
     try {
       const ws = await connectWs(server.url);
@@ -859,7 +875,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-speak");
 
     try {
       const ws = await connectWs(server.url);
@@ -947,7 +963,7 @@ describe("RealtimeCallHandler path routing", () => {
       realtimeProvider: makeRealtimeProvider(createBridge),
       streamDisconnectLifecycle,
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-complete");
 
     try {
       const ws = await connectWs(server.url);
@@ -1037,7 +1053,7 @@ describe("RealtimeCallHandler path routing", () => {
       realtimeProvider: makeRealtimeProvider(createBridge),
       streamDisconnectLifecycle,
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, providerCallId);
     const ws = await connectWs(server.url);
 
     try {
@@ -1116,7 +1132,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-talk-events");
 
     try {
       const ws = await connectWs(server.url);
@@ -1427,7 +1443,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-end-current");
     const ws = await connectWs(server.url);
 
     try {
@@ -1482,7 +1498,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-end-failed");
     const ws = await connectWs(server.url);
 
     try {
@@ -1543,7 +1559,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const predecessorServer = await startRealtimeServer(handler);
+    const predecessorServer = await startRealtimeServer(handler, "CA-end-replacement");
     const predecessorWs = await connectWs(predecessorServer.url);
     let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
     let replacementWs: WebSocket | undefined;
@@ -1557,7 +1573,7 @@ describe("RealtimeCallHandler path routing", () => {
       );
       await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalledTimes(1));
 
-      replacementServer = await startRealtimeServer(handler);
+      replacementServer = await startRealtimeServer(handler, "CA-end-replacement");
       replacementWs = await connectWs(replacementServer.url);
       replacementWs.send(
         JSON.stringify({
@@ -1693,7 +1709,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     handler.registerToolHandler("openclaw_agent_consult", consultHandler);
     handler.registerToolHandler("custom_lookup", async () => ({ ok: true }));
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-tool");
 
     try {
       const ws = await connectWs(server.url);
@@ -1885,7 +1901,7 @@ describe("RealtimeCallHandler path routing", () => {
       });
       const name = path === "general" ? "custom_lookup" : "openclaw_agent_consult";
       handler.registerToolHandler(name, hostTool);
-      const server = await startRealtimeServer(handler);
+      const server = await startRealtimeServer(handler, call.providerCallId!);
       const ws = await connectWs(server.url);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -2003,7 +2019,7 @@ describe("RealtimeCallHandler path routing", () => {
     });
     const consult = vi.fn(async () => ({ text: "should not run" }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, call.providerCallId!);
 
     try {
       const ws = await connectWs(server.url);
@@ -2099,7 +2115,7 @@ describe("RealtimeCallHandler path routing", () => {
       (args: unknown, callId: string, context: Record<string, unknown>) => Promise<{ text: string }>
     >(async () => ({ text: "I created the smoke test file." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-force");
 
     try {
       const ws = await connectWs(server.url);
@@ -2165,7 +2181,7 @@ describe("RealtimeCallHandler path routing", () => {
     });
     const consult = vi.fn(async () => ({ text: "fresh consult answer" }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-continuity-consult");
 
     try {
       const ws = await connectWs(server.url);
@@ -2267,7 +2283,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     handler.registerToolHandler("openclaw_agent_consult", consult);
     const clearAudio = vi.spyOn(RealtimeAudioPacer.prototype, "clearAudio");
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-forced-close");
 
     try {
       const ws = await connectWs(server.url);
@@ -2358,7 +2374,7 @@ describe("RealtimeCallHandler path routing", () => {
       .mockImplementationOnce(() => replacementResult.promise);
     handler.registerToolHandler("openclaw_agent_consult", consult);
     const clearAudio = vi.spyOn(RealtimeAudioPacer.prototype, "clearAudio");
-    const oldServer = await startRealtimeServer(handler);
+    const oldServer = await startRealtimeServer(handler, "CA-forced-old");
     let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
     let oldWs: WebSocket | undefined;
 
@@ -2399,7 +2415,7 @@ describe("RealtimeCallHandler path routing", () => {
       });
       expect(consult).toHaveBeenCalledTimes(1);
 
-      replacementServer = await startRealtimeServer(handler);
+      replacementServer = await startRealtimeServer(handler, "CA-forced-replacement");
       const replacementWs = await connectWs(replacementServer.url);
       try {
         replacementWs.send(
@@ -2504,7 +2520,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const oldServer = await startRealtimeServer(handler);
+    const oldServer = await startRealtimeServer(handler, sharedCallSid);
     let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
     let oldWs: WebSocket | undefined;
 
@@ -2521,7 +2537,7 @@ describe("RealtimeCallHandler path routing", () => {
       });
       callbacks[0]?.onTranscript?.("user", "Old ", false);
 
-      replacementServer = await startRealtimeServer(handler);
+      replacementServer = await startRealtimeServer(handler, sharedCallSid);
       const replacementWs = await connectWs(replacementServer.url);
       const replacementOutboundMessages: Array<Record<string, unknown>> = [];
       replacementWs.on("message", (data) => {
@@ -2656,7 +2672,7 @@ describe("RealtimeCallHandler path routing", () => {
         },
         realtimeProvider: makeRealtimeProvider(createBridge),
       });
-      const oldServer = await startRealtimeServer(handler);
+      const oldServer = await startRealtimeServer(handler, sharedCallSid);
       let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
       let oldWs: WebSocket | undefined;
 
@@ -2673,7 +2689,7 @@ describe("RealtimeCallHandler path routing", () => {
         });
         callbacks[0]?.onTranscript?.("user", "Old ", false);
 
-        replacementServer = await startRealtimeServer(handler);
+        replacementServer = await startRealtimeServer(handler, sharedCallSid);
         const replacementWs = await connectWs(replacementServer.url);
         try {
           const replacementClosed = waitForClose(replacementWs);
@@ -2743,7 +2759,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-transcript-initial-failure");
     const ws = await connectWs(server.url);
 
     try {
@@ -2790,7 +2806,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-transcript-synchronous-close");
     const ws = await connectWs(server.url);
 
     try {
@@ -2852,7 +2868,7 @@ describe("RealtimeCallHandler path routing", () => {
       .mockImplementationOnce(() => oldResult.promise)
       .mockImplementationOnce(() => replacementResult.promise);
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const oldServer = await startRealtimeServer(handler);
+    const oldServer = await startRealtimeServer(handler, "CA-native-old");
     let replacementServer: Awaited<ReturnType<typeof startRealtimeServer>> | undefined;
     let oldWs: WebSocket | undefined;
 
@@ -2878,7 +2894,7 @@ describe("RealtimeCallHandler path routing", () => {
         expect(oldSubmitToolResult).toHaveBeenCalledTimes(1);
       });
 
-      replacementServer = await startRealtimeServer(handler);
+      replacementServer = await startRealtimeServer(handler, "CA-native-replacement");
       const replacementWs = await connectWs(replacementServer.url);
       try {
         replacementWs.send(
@@ -2969,7 +2985,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-direct-turns");
 
     try {
       const ws = await connectWs(server.url);
@@ -3063,7 +3079,7 @@ describe("RealtimeCallHandler path routing", () => {
       (args: unknown, callId: string, context: Record<string, unknown>) => Promise<{ text: string }>
     >(async () => ({ text: "I sent it." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-settle");
 
     try {
       const ws = await connectWs(server.url);
@@ -3168,7 +3184,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const consult = vi.fn(async () => ({ text: "Native consult result." }));
     handler.registerToolHandler("openclaw_agent_consult", consult);
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-native");
 
     try {
       const ws = await connectWs(server.url);
@@ -3261,7 +3277,7 @@ describe("RealtimeCallHandler path routing", () => {
       },
     );
     handler.registerToolHandler("openclaw_agent_consult", async () => ({ text: "Fast context." }));
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-fast");
 
     try {
       const ws = await connectWs(server.url);
@@ -3331,7 +3347,7 @@ describe("RealtimeCallHandler websocket hardening", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-backpressure");
 
     try {
       const ws = await connectWs(server.url);
@@ -3377,7 +3393,7 @@ describe("RealtimeCallHandler websocket hardening", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(handler, "CA-oversized");
 
     try {
       const ws = await connectWs(server.url);
