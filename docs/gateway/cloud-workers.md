@@ -427,7 +427,7 @@ Cancellation does not wait for unrelated provider inspections. Final reconciliat
 
 The result placement is `reclaimed` after an active worker is safely stopped. Reclaim also waits for an in-flight dispatch and retries pending teardown for a failed placement before returning `local`. No other placement states are successful reclaim results.
 
-Crabbox lease teardown has a separate five-minute command budget, plus time for CLI startup and process cleanup. Inspection keeps its shorter timeout. Failed node enrollment also reserves time for diagnostics before teardown; optional image capture has its own additional budget.
+Crabbox lease teardown reserves time for the CLI's full bounded release attempts, retries, cleanup observation, and process settlement. Inspection keeps its shorter timeout. Failed node enrollment also reserves time for diagnostics before teardown; optional image capture has its own additional budget.
 
 If provider teardown fails or times out during stop or move, the request reports that failure even if recovery subsequently finishes cleanup. Check the current placement before retrying. A dedicated cloud worker can remain recorded as attached while destruction is uncertain, but its closed authority cannot resume remote workspace processes.
 
