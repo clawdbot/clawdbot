@@ -85,13 +85,8 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
         handoff.pending = false;
       }
     },
-    receive: (
-      message: unknown,
-      identity: SessionMessageIdentity | null,
-      persisted = false,
-      acceptedRunId?: string,
-    ) => {
-      const runId = acceptedRunId ?? identity?.idempotencyKey?.replace(/:user$/u, "");
+    receive: (message: unknown, identity: SessionMessageIdentity | null, persisted = false) => {
+      const runId = identity?.idempotencyKey?.replace(/:user$/u, "");
       if (identity?.role !== "user" || !runId) {
         return message;
       }
@@ -105,20 +100,11 @@ function readChatSubmissionBatch(owner: ChatSessionProjectionOwner, scope: Sessi
       // Cached bytes for this retained submission are not a receipt. Omit
       // that snapshot copy; the pane admits the recorded local owner through
       // sendPending, preserving provenance even with sender/reply metadata.
-      if (!receipt && !acceptedRunId) {
+      if (!receipt) {
         return undefined;
       }
       handoff.pending = false;
-      const authoritative = asNullableRecord(message) ?? {};
-      // Initial inline bytes replace managed media, never duplicate it. The
-      // received object and its authoritative sender attribution stay intact.
-      const { media: _media, ...metadata } = asNullableRecord(authoritative["__openclaw"]) ?? {};
-      return {
-        ...handoff.message,
-        ...authoritative,
-        content: handoff.message.content,
-        __openclaw: metadata,
-      };
+      return message;
     },
   };
 }
@@ -360,21 +346,7 @@ export function reconcileChatInputCustody(
   }
   return {
     acceptedRunIds,
-    page:
-      page && submissions?.initial
-        ? {
-            ...page,
-            items: page.items.map((input) => ({
-              ...input,
-              message: submissions.receive(
-                input.message,
-                readSessionMessageIdentity(input.message),
-                false,
-                input.runId,
-              ),
-            })),
-          }
-        : (page ?? { items: [], total: 0 }),
+    page: page ?? { items: [], total: 0 },
   };
 }
 

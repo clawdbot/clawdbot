@@ -50,8 +50,10 @@ waits in durable pending-input custody, including during workspace preparation.
 An optional `messageSeq` comes only from a committed transcript receipt; clients
 must not predict it from history length or treat `status: "started"` as persistence.
 The Control UI replaces its provisional source with accepted custody, then with
-the canonical row. Retained initial attachment bytes may enrich that exact row
-without recreating a pending bubble on later snapshots or pane remounts.
+the canonical row. Its renderer keeps a loaded local preview in the same image
+element during this handoff while canonical media metadata and image bytes load.
+Authoritative text, media replacements, and removals still win; unavailable or
+access-denied media shows a visible reason.
 Once custody, a consumption record, or a committed user-message receipt retires
 a local source, replayed terminal events cannot bring it back, even when its row
 is absent from a later history page. Submission identity stays separate from the
