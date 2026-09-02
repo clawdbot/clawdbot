@@ -8,7 +8,21 @@ import {
   makeCompletionsModel,
   streamChunks,
 } from "./openai-completions.test-support.js";
-import { parseOpenAICompletionsUsage } from "./openai-transport-shared.js";
+import {
+  parseOpenAICompletionsUsage,
+  normalizeOpenAICompletionsTextDelta,
+} from "./openai-transport-shared.js";
+
+describe("normalizeOpenAICompletionsTextDelta", () => {
+  it("returns growth from cumulative snapshots and drops long exact replays", () => {
+    expect(normalizeOpenAICompletionsTextDelta("", "abc")).toBe("abc");
+    expect(normalizeOpenAICompletionsTextDelta("abc", "abcdef")).toBe("def");
+    expect(normalizeOpenAICompletionsTextDelta("abcdefgh", "abcdefgh")).toBe("");
+    expect(normalizeOpenAICompletionsTextDelta("abcdefghij", "abcdefgh")).toBe("");
+    expect(normalizeOpenAICompletionsTextDelta("ab", "cd")).toBe("cd");
+    expect(normalizeOpenAICompletionsTextDelta("Ha", "Ha")).toBe("Ha");
+  });
+});
 
 describe("openai completions stream", () => {
   it("preserves reasoning tokens without double-counting them", () => {
@@ -326,6 +340,75 @@ describe("openai completions stream", () => {
     expect(textDeltas).toHaveLength(2);
     expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
     expect(output.content).toEqual([{ type: "text", text: "ab" }]);
+  });
+
+  it("normalizes cumulative OpenAI-compatible text frames before emitting bare deltas", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const prefix = "abcdefghijklmnopqrst";
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: prefix }),
+        makeCompletionsChunk({ content: "uv" }),
+        // Compatible providers sometimes replay the full accumulated snapshot.
+        makeCompletionsChunk({ content: `${prefix}uv` }),
+        makeCompletionsChunk({ content: "w" }),
+        // Exact full-text replay must not double the live message.
+        makeCompletionsChunk({ content: `${prefix}uvw` }),
+        // Long prefix replay of already-emitted text is also a no-op.
+        makeCompletionsChunk({ content: prefix }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual([prefix, "uv", "w"]);
+    expect(output.content).toEqual([{ type: "text", text: `${prefix}uvw` }]);
+  });
+
+  it("keeps intentional short repeated OpenAI-compatible text incremental", async () => {
+    const model = makeCompletionsModel({
+      id: "dense-local",
+      name: "Dense Local",
+      provider: "local",
+      baseUrl: "http://127.0.0.1:18065/v1",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ role: "assistant" as const, content: "Ha" }),
+        makeCompletionsChunk({ content: "Ha" }),
+        makeCompletionsChunk({ content: "Ha" }),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textDeltas = events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => ("delta" in event ? event.delta : undefined));
+    expect(textDeltas).toEqual(["Ha", "Ha", "Ha"]);
+    expect(output.content).toEqual([{ type: "text", text: "HaHaHa" }]);
   });
 
   it("skips null and non-object OpenAI-compatible stream chunks", async () => {

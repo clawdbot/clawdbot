@@ -33,6 +33,7 @@ import { getCompat } from "./openai-transport-params.js";
 import {
   createModelStreamCooperativeScheduler,
   isOpenAICompletionsThinkingEnabled,
+  normalizeOpenAICompletionsTextDelta,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
@@ -229,15 +230,19 @@ export async function processCompletionsStream(
       contentBlockIndices.set(currentBlock, output.content.length - 1);
       pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
     }
-    currentBlock.text += text;
-    if (pendingInterruptedTextBlock && text.trim()) {
+    const normalizedText = normalizeOpenAICompletionsTextDelta(currentBlock.text, text);
+    if (!normalizedText) {
+      return;
+    }
+    currentBlock.text += normalizedText;
+    if (pendingInterruptedTextBlock && normalizedText.trim()) {
       confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
       pendingInterruptedTextBlock = null;
     }
     pushStreamEvent({
       type: "text_delta",
       contentIndex: blockIndex(),
-      delta: text,
+      delta: normalizedText,
       ...(directMode ? { partial: output } : {}),
     });
   };

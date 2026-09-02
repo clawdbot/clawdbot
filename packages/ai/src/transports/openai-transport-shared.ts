@@ -328,6 +328,29 @@ export function isOpenAICompletionsThinkingEnabled(effort: string): boolean {
   return normalized !== "off" && normalized !== "none";
 }
 
+/** Minimum length before treating an exact/prefix replay as a cumulative snapshot. */
+const OPENAI_COMPLETIONS_TEXT_REPLAY_MIN_CHARS = 8;
+
+/** Turn cumulative OpenAI-compatible `delta.content` snapshots into true increments. */
+export function normalizeOpenAICompletionsTextDelta(accumulated: string, incoming: string): string {
+  if (!incoming) {
+    return "";
+  }
+  if (!accumulated) {
+    return incoming;
+  }
+  if (incoming.startsWith(accumulated) && incoming.length > accumulated.length) {
+    return incoming.slice(accumulated.length);
+  }
+  if (
+    incoming.length >= OPENAI_COMPLETIONS_TEXT_REPLAY_MIN_CHARS &&
+    (incoming === accumulated || accumulated.startsWith(incoming))
+  ) {
+    return "";
+  }
+  return incoming;
+}
+
 export function readOpenAICompletionsContentDeltas(
   content: unknown,
   topLevelRefusal?: unknown,
