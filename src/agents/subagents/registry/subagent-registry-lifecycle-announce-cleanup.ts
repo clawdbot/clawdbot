@@ -40,7 +40,6 @@ import {
   markPendingFinalDelivery,
   maskLifecycleIdentifier,
   recordAnnounceDeliveryResult,
-  safeMarkRequiredCompletionDeliveryBlocked,
   safeSetSubagentTaskDeliveryStatus,
 } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -93,10 +92,6 @@ export const finalizeResumedAnnounceGiveUp = async (
     entry,
     deliveryStatus: "failed",
     deliveryError,
-  });
-  safeMarkRequiredCompletionDeliveryBlocked(params, {
-    entry,
-    reason: deliveryError,
   });
   entry.wakeOnDescendantSettle = undefined;
   const completion = ensureCompletionState(entry);
@@ -205,9 +200,13 @@ const finalizeSubagentCleanup = async (
   const skipRequesterDelivery =
     options?.skipRequesterDelivery === true || entry.suppressCompletionDelivery === true;
   if (entry.expectsCompletionMessage === false || skipRequesterDelivery) {
+    const intentionalNonDelivery = entry.delivery?.disposition === "intentional_non_delivery";
     clearSubagentPendingDelivery(entry);
     if (skipRequesterDelivery) {
-      ensureDeliveryState(entry).status = "not_required";
+      const delivery = ensureDeliveryState(entry);
+      delivery.status = "not_required";
+      // Preserve the lifecycle owner's terminal fact after cleanup clears retry state.
+      delivery.disposition = intentionalNonDelivery ? "intentional_non_delivery" : undefined;
       entry.suppressCompletionDelivery = undefined;
     }
     entry.wakeOnDescendantSettle = undefined;

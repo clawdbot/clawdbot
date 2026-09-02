@@ -339,8 +339,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `maxLinesPerMessage` (default `17`) splits tall messages even when under 2000 chars.
 - `channels.discord.suppressEmbeds` defaults to `true`, so outbound URLs do not expand into Discord link previews unless disabled. Explicit `embeds` payloads still send normally; per-message tool calls can override with `suppressEmbeds`.
 - `channels.discord.threadBindings` controls Discord thread-bound routing:
-  - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and bound delivery/routing)
-  - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
+  - `enabled`: Discord override for thread-bound session spawning, delivery, and routing; manage bindings with `/session unbind`, `/agents`, `/session idle`, and `/session max-age`
+  - `idleHours`: Discord override for inactivity auto-unbind in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
   - `spawnSessions`: switch for `sessions_spawn({ thread: true })` and ACP thread-spawn auto thread creation/binding (default: `true`)
   - `defaultSpawnContext`: native subagent context for thread-bound spawns (`"fork"` by default)

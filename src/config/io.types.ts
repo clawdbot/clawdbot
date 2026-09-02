@@ -45,6 +45,8 @@ export type ConfigWriteOptions = {
   explicitSetPaths?: readonly (readonly string[])[];
   /** Source-shaped values paired with explicitSetPaths. */
   explicitSetValueSource?: OpenClawConfig;
+  /** Persist roster format without treating every leaf as an explicit value edit. */
+  persistCanonicalAgentRoster?: boolean;
   /** Agent ids that this write intentionally removes from the canonical roster. */
   allowedAgentRosterRemovals?: readonly string[];
   /** Permit explicit local overrides below an ancestor $include without flattening it. */

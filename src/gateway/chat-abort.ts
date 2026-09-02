@@ -143,12 +143,13 @@ export function projectInFlightRunSnapshot(params: {
 
 type RegisteredChatAbortController = {
   controller: AbortController;
-  registered: boolean;
-  entry?: ChatAbortControllerEntry;
   markExecutionStarted: () => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
   cleanup: () => void;
-};
+} & (
+  | { registered: true; entry: ChatAbortControllerEntry }
+  | { registered: false; entry?: undefined }
+);
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
@@ -709,7 +710,8 @@ export function abortChatRunById(
       aborted: true,
       stopReason,
       ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
-      startedAt: active.startedAtMs,
+      // Pre-execution admission time is not an execution start.
+      startedAt: active.executionStarted === false ? undefined : active.startedAtMs,
       endedAt: Date.now(),
     },
   });

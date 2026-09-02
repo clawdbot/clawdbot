@@ -395,7 +395,7 @@ struct MacNodeHostWorkerTests {
               IFS= read -r unavailable
               printf '%s' "$unavailable" | grep -q '"type":"gateway-response"' || exit 44
               printf '%s' "$unavailable" | grep -q '"ok":false' || exit 45
-              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli"}}}'
+              printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"worker-run","ok":true,"payload":{"owner":"cli","generations":[0,1,9007199254740993,18446744073709551615],"flags":[false,true]}}}'
               ;;
           esac
         done
@@ -408,9 +408,22 @@ struct MacNodeHostWorkerTests {
             id: "worker-run",
             command: "system.run",
             paramsJSON: #"{"command":["/usr/bin/true"]}"#))
-        #expect(response.ok)
-        #expect(response.payload != nil)
         await worker.stop()
+        #expect(response.ok)
+
+        struct Response: Decodable {
+            struct Payload: Decodable {
+                let owner: String
+                let generations: [UInt64]
+                let flags: [Bool]
+            }
+
+            let payload: Payload
+        }
+        let decoded = try JSONDecoder().decode(Response.self, from: JSONEncoder().encode(response))
+        #expect(decoded.payload.owner == "cli")
+        #expect(decoded.payload.generations == [0, 1, 9_007_199_254_740_993, UInt64.max])
+        #expect(decoded.payload.flags == [false, true])
     }
 
     @Test func `worker strips inherited CUA values and receives only the app-provided endpoint`() async throws {
@@ -695,35 +708,43 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test func `worker drains stdout while a large stdin frame is backpressured`() async throws {
+        let directory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let firstReceived = directory.appendingPathComponent("first-received.pid")
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
         let script = """
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["system"],"commands":["system.run"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
         IFS= read -r first
+        printf '%s\\n' "$$" > "$1"
+        # Wait for the large write to begin before filling stdout. Neither pipe
+        # can finish unless the app drains output independently of its writer.
+        head -c 1 >/dev/null
         printf '{"type":"invoke-result","generation":0,"result":{"id":"first","ok":true,"payload":{"blob":"'
         head -c 2097152 /dev/zero | tr '\\000' x
         printf '"}}}\\n'
-        IFS= read -r second
+        # Buffer the remaining frame instead of timing the shell's large-line read.
+        head -n 1 >/dev/null
         printf '%s\\n' '{"type":"invoke-result","generation":0,"result":{"id":"second","ok":true,"payload":{"done":true}}}'
+        while IFS= read -r line; do :; done
         """
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
-
-        let first = Task {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "first",
-                command: "system.run",
-                paramsJSON: #"{"command":["/usr/bin/true"]}"#))
-        }
-        try await Task.sleep(for: .milliseconds(20))
-        let largeParams = #"{"blob":""# + String(repeating: "x", count: 2 * 1024 * 1024) + #""}"#
-        let second = Task {
-            await worker.invoke(BridgeInvokeRequest(
-                id: "second",
-                command: "system.run",
-                paramsJSON: largeParams))
-        }
+            command: ["/bin/sh", "-c", script, "worker", firstReceived.path]))
 
         do {
+            let first = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "first",
+                    command: "system.run",
+                    paramsJSON: #"{"command":["/usr/bin/true"]}"#))
+            }
+            _ = try await TestProcessSupport.waitForPID(in: firstReceived)
+            let largeParams = #"{"blob":""# + String(repeating: "x", count: 2 * 1024 * 1024) + #""}"#
+            let second = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "second",
+                    command: "system.run",
+                    paramsJSON: largeParams))
+            }
             let responses = try await AsyncTimeout.withTimeout(
                 seconds: 5,
                 onTimeout: { WorkerBackpressureTimeout() },
@@ -731,6 +752,8 @@ struct MacNodeHostWorkerTests {
             await worker.stop()
             let allResponsesSucceeded = responses.allSatisfy(\.ok)
             #expect(allResponsesSucceeded)
+            let firstPayload = try #require(responses[0].payload?.value as? [String: Any])
+            #expect((firstPayload["blob"] as? String)?.count == 2 * 1024 * 1024)
         } catch {
             await worker.stop()
             throw error

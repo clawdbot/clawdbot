@@ -359,11 +359,13 @@ export async function resolveReplyDirectives(params: {
     typing.cleanup();
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg,
-      sessionKey: resolveRuntimePolicySessionKey({
+      agentId,
+      sessionKey,
+      classificationSessionKey: resolveRuntimePolicySessionKey({
         agentId,
         cfg,
         ctx,
-        sessionKey: ctx.SessionKey,
+        sessionKey,
       }),
     }).sandboxed;
     return {

@@ -1,5 +1,6 @@
 // Covers plugin config state normalization and reset behavior.
 import { describe, expect, it, vi } from "vitest";
+import * as bundledChannelCatalog from "../channels/bundled-channel-catalog-read.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -353,7 +354,10 @@ describe("resolveEffectivePluginActivationState", () => {
 
   it.each<{
     name: string;
-    params: Pick<ActivationParams, "id" | "origin" | "enabledByDefault" | "autoEnabledReason">;
+    params: Pick<
+      ActivationParams,
+      "id" | "origin" | "enabledByDefault" | "autoEnabledReason" | "channelIds"
+    >;
     rawConfig?: ActivationParams["rootConfig"];
     effectiveConfig?: ActivationParams["rootConfig"];
     expected: ReturnType<typeof resolveEffectivePluginActivationState>;
@@ -386,6 +390,7 @@ describe("resolveEffectivePluginActivationState", () => {
     {
       name: "marks bundled default-enabled plugins as default activation",
       params: { id: "openai", origin: "bundled", enabledByDefault: true },
+      rawConfig: {},
       expected: {
         enabled: true,
         activated: true,
@@ -487,6 +492,38 @@ describe("resolveEffectivePluginActivationState", () => {
       },
     },
     {
+      name: "keeps an explicit channel disable authoritative over plugin entry enablement",
+      params: { id: "telegram", origin: "bundled" },
+      rawConfig: {
+        channels: { telegram: { enabled: false } },
+        plugins: { entries: { telegram: { enabled: true } } },
+      },
+      expected: {
+        enabled: false,
+        activated: false,
+        explicitlyEnabled: true,
+        source: "disabled",
+        reason: "channel disabled in config",
+      },
+    },
+    {
+      name: "resolves an explicit channel disable through manifest-owned channel ids",
+      // QQ Bot style: plugin id `openclaw-demo` owns `channels.demo`, which the built-in
+      // catalog cannot map from the plugin id alone.
+      params: { id: "openclaw-demo", origin: "bundled", channelIds: ["demo"] },
+      rawConfig: {
+        channels: { demo: { enabled: false } },
+        plugins: { entries: { "openclaw-demo": { enabled: true } } },
+      },
+      expected: {
+        enabled: false,
+        activated: false,
+        explicitlyEnabled: true,
+        source: "disabled",
+        reason: "channel disabled in config",
+      },
+    },
+    {
       name: "keeps a global plugin default-enabled without inventing explicit selection or a reason",
       params: { id: "global-helper", origin: "global" },
       expected: {
@@ -498,16 +535,24 @@ describe("resolveEffectivePluginActivationState", () => {
       },
     },
   ])("$name", ({ params, rawConfig, effectiveConfig = rawConfig, expected }) => {
-    expect(
-      resolveEffectivePluginActivationState({
-        ...params,
-        config: normalizePluginsConfig(effectiveConfig ? effectiveConfig.plugins : {}),
-        ...(effectiveConfig ? { rootConfig: effectiveConfig } : {}),
-        ...(rawConfig
-          ? { activationSource: createPluginActivationSource({ config: rawConfig }) }
-          : {}),
-      }),
-    ).toEqual(expected);
+    const catalog = vi.spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries");
+    try {
+      expect(
+        resolveEffectivePluginActivationState({
+          ...params,
+          config: normalizePluginsConfig(effectiveConfig ? effectiveConfig.plugins : {}),
+          ...(effectiveConfig ? { rootConfig: effectiveConfig } : {}),
+          ...(rawConfig
+            ? { activationSource: createPluginActivationSource({ config: rawConfig }) }
+            : {}),
+        }),
+      ).toEqual(expected);
+      if (!rawConfig?.channels && !effectiveConfig?.channels) {
+        expect(catalog).not.toHaveBeenCalled();
+      }
+    } finally {
+      catalog.mockRestore();
+    }
   });
 });
 

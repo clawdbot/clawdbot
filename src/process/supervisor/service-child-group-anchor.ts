@@ -213,6 +213,7 @@ export function runServiceChildGroupAnchor(): void {
       command = spawn(start.command, start.args, {
         cwd: start.cwd,
         env: start.env,
+        argv0: start.argv0,
         stdio,
         detached: false,
         windowsHide: true,

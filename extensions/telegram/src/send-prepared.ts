@@ -86,6 +86,7 @@ export function createTelegramPreparedSender(config: {
   warn: (message: string) => void;
   beforeTextPage?: () => Promise<void>;
   beforeMedia?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
 }) {
   const parts: AcceptedPart[] = [];
   const fail = (error: unknown, start = 0, details?: PartialDeliveryResult): never => {
@@ -131,11 +132,20 @@ export function createTelegramPreparedSender(config: {
       requestParams,
       ...(options?.rich ? { removeNativeQuoteParam: removeTelegramRichNativeQuoteParam } : {}),
       request: (effective, operation) =>
-        config.request(() => send(effective), operation, {
-          shouldLog: (error) =>
-            (options?.shouldLog?.(error) ?? true) &&
-            !(getTelegramNativeQuoteReplyMessageId(effective) && isTelegramQuoteParamError(error)),
-        }),
+        config.request(
+          () => {
+            config.assertPlatformSendAuthorized?.();
+            return send(effective);
+          },
+          operation,
+          {
+            shouldLog: (error) =>
+              (options?.shouldLog?.(error) ?? true) &&
+              !(
+                getTelegramNativeQuoteReplyMessageId(effective) && isTelegramQuoteParamError(error)
+              ),
+          },
+        ),
     });
 
   const sendText = async (params: {

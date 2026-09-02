@@ -14,10 +14,14 @@ import {
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import type { OpenClawConfig } from "../../../../src/plugin-sdk/config-contracts.js";
 import { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } from "../../../../src/plugin-sdk/memory-core-host-status.js";
+import { readMemoryHostEventRecords } from "../../../../src/plugin-sdk/memory-host-events.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const RESTRICTED_MARKER = "SESSION_MEMORY_RESTRICTED_MARKER";
 const LEGACY_MARKER = "LEGACY_MEMORY_GRANDFATHERED_MARKER";
+const EXPLICIT_OWNER_MARKER = "EXPLICIT_OWNER_CONSOLIDATION_MARKER";
+const CONSOLIDATION_PROMPT_MARKER =
+  "Revise the supplied MEMORY.md using only the supplied candidates as new evidence.";
 const WAIT_TIMEOUT_MS = 30_000;
 
 type GatewayHandle = QaGatewayChild;
@@ -76,7 +80,16 @@ async function sendAndWait(params: {
   expect(terminal.status).toBe("ok");
 }
 
-function configureMemoryProof(cfg: OpenClawConfig): OpenClawConfig {
+function configureMemoryProof(
+  cfg: OpenClawConfig,
+  deep: {
+    enabled: boolean;
+    limit: number;
+    minScore: number;
+    minRecallCount?: number;
+    minUniqueQueries?: number;
+  } = { enabled: true, limit: 20, minScore: 1 },
+): OpenClawConfig {
   return {
     ...cfg,
     agents: {
@@ -120,12 +133,65 @@ function configureMemoryProof(cfg: OpenClawConfig): OpenClawConfig {
               phases: {
                 light: { enabled: true, limit: 20, lookbackDays: 2 },
                 rem: { enabled: false },
-                deep: { enabled: true, limit: 20, minScore: 1 },
+                deep,
               },
             },
           },
         },
       },
+    },
+  };
+}
+
+function configureExplicitOwnerProof(cfg: OpenClawConfig): OpenClawConfig {
+  const configured = configureMemoryProof(cfg, {
+    enabled: true,
+    limit: 20,
+    minScore: 0,
+    minRecallCount: 1,
+    minUniqueQueries: 1,
+  });
+  const workspace = configured.agents?.defaults?.workspace;
+  if (!workspace) {
+    throw new Error("QA memory proof requires a default workspace");
+  }
+  return {
+    ...configured,
+    memory: {
+      ...configured.memory,
+      search: {
+        ...configured.memory?.search,
+        provider: "none",
+        model: "",
+        sources: ["memory"],
+        store: {
+          ...configured.memory?.search?.store,
+          vector: {
+            ...configured.memory?.search?.store?.vector,
+            enabled: false,
+          },
+        },
+        query: {
+          ...configured.memory?.search?.query,
+          minScore: 0,
+        },
+      },
+    },
+    agents: {
+      ...configured.agents,
+      ownership: "explicit",
+      defaults: {
+        ...configured.agents?.defaults,
+        systemAgent: { agentId: "researcher" },
+      },
+      entries: {
+        ...configured.agents?.entries,
+        researcher: { workspace },
+      },
+    },
+    plugins: {
+      ...configured.plugins,
+      slots: { ...configured.plugins?.slots, memory: "memory-core" },
     },
   };
 }
@@ -260,6 +326,129 @@ describe("memory provenance through a real Gateway", () => {
       expect(narrativeRequest.allInputText).not.toContain(RESTRICTED_MARKER);
       expect(narrativeRequest.body?.tools ?? []).toEqual([]);
       expect(await fs.readFile(legacyPath, "utf8")).toContain(LEGACY_MARKER);
+    },
+  );
+
+  test(
+    "routes the explicit workspace owner into deep consolidation",
+    { timeout: 180_000 },
+    async () => {
+      mock = await startQaMockOpenAiServer();
+      gatewayOwner = createQaGatewayChild();
+      gateway = await gatewayOwner.start({
+        repoRoot: path.resolve(import.meta.dirname, "../../../.."),
+        providerBaseUrl: `${mock.baseUrl}/v1`,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
+        transportBaseUrl: "http://127.0.0.1:9",
+        controlUiEnabled: false,
+        enabledPluginIds: ["memory-core"],
+        mockAuthAgentIds: ["qa", "researcher"],
+        mutateConfig: configureExplicitOwnerProof,
+      });
+      const activeGateway = gateway;
+      const memoryFileName = `${new Date().toISOString().slice(0, 10)}-explicit-owner.md`;
+      const memoryPath = path.join(activeGateway.workspaceDir, "memory", memoryFileName);
+
+      await activeGateway.restartAfterStateMutation(async () => {
+        await fs.mkdir(path.dirname(memoryPath), { recursive: true });
+        await fs.writeFile(
+          memoryPath,
+          `Hidden QA fact: the project codename is ORBIT-9. ${EXPLICIT_OWNER_MARKER}\n`,
+          "utf8",
+        );
+      });
+      await activeGateway.runCli(["memory", "index", "--force", "--agent", "researcher"]);
+
+      await sendAndWait({
+        call: activeGateway.call,
+        sessionKey: "agent:researcher:memory-explicit-owner-e2e",
+        message:
+          "Memory tools check: what is the hidden project codename stored only in memory? Use memory tools first.",
+      });
+
+      const recallEvent = await waitFor("explicit-owner recall tracking", async () => {
+        const events = await readMemoryHostEventRecords({
+          workspaceDir: activeGateway.workspaceDir,
+          env: activeGateway.runtimeEnv,
+        });
+        return events.find(
+          (event) =>
+            event.type === "memory.recall.recorded" && event.query === "hidden project codename",
+        );
+      });
+      expect(recallEvent).toMatchObject({ type: "memory.recall.recorded" });
+      if (recallEvent.type !== "memory.recall.recorded") {
+        throw new Error(`expected recorded recall, received ${JSON.stringify(recallEvent)}`);
+      }
+      expect(recallEvent.results.some((result) => result.path.endsWith(memoryFileName))).toBe(true);
+
+      const cursorResult = (await fetch(`${mock.baseUrl}/debug/request-cursor`).then((response) =>
+        response.json(),
+      )) as { cursor?: unknown };
+      expect(typeof cursorResult.cursor).toBe("number");
+      const cursor = cursorResult.cursor as number;
+
+      const dreamingJob = await waitFor("managed researcher dreaming cron", async () => {
+        const cron = (await activeGateway.call("cron.list", {
+          includeDisabled: true,
+        })) as {
+          jobs?: Array<{ id?: unknown; name?: unknown; agentId?: unknown }>;
+        };
+        return cron.jobs?.find((job) => job.name === "Memory Dreaming Promotion");
+      });
+      expect(typeof dreamingJob.id).toBe("string");
+      const startedDreaming = (await activeGateway.call("cron.run", {
+        id: dreamingJob.id,
+        mode: "force",
+      })) as { runId?: unknown };
+      expect(typeof startedDreaming.runId).toBe("string");
+      const completedDreaming = await waitFor(
+        "completed explicit-owner dreaming cron",
+        async () => {
+          const history = (await activeGateway.call("cron.runs", {
+            id: dreamingJob.id,
+            runId: startedDreaming.runId,
+            limit: 1,
+          })) as { entries?: Array<{ runId?: unknown; status?: unknown; error?: unknown }> };
+          return history.entries?.find((entry) => entry.runId === startedDreaming.runId);
+        },
+      );
+      expect(completedDreaming).toMatchObject({ status: "ok" });
+
+      const consolidationRequest = await waitFor(
+        "explicit-owner consolidation provider request",
+        async () => {
+          const response = await fetch(`${mock?.baseUrl}/debug/requests?after=${cursor}`);
+          if (!response.ok) {
+            throw new Error(`mock request log returned ${response.status}`);
+          }
+          const requests = (await response.json()) as Array<{ allInputText?: unknown }>;
+          return requests.find(
+            (request) =>
+              typeof request.allInputText === "string" &&
+              request.allInputText.includes(CONSOLIDATION_PROMPT_MARKER) &&
+              request.allInputText.includes(EXPLICIT_OWNER_MARKER),
+          );
+        },
+      );
+      expect(consolidationRequest.allInputText).toContain(EXPLICIT_OWNER_MARKER);
+      expect(activeGateway.logs()).not.toContain("AGENT_SELECTION_REQUIRED");
+
+      const verdict = {
+        ok: true,
+        explicitOwner: "researcher",
+        recallRecorded: recallEvent.resultCount > 0,
+        consolidationReachedProvider:
+          typeof consolidationRequest.allInputText === "string" &&
+          consolidationRequest.allInputText.includes(CONSOLIDATION_PROMPT_MARKER),
+        ownerSelectionErrorAbsent: !activeGateway.logs().includes("AGENT_SELECTION_REQUIRED"),
+      };
+      expect(verdict.recallRecorded).toBe(true);
+      expect(verdict.consolidationReachedProvider).toBe(true);
+      expect(verdict.ownerSelectionErrorAbsent).toBe(true);
+      console.log(`MEMORY_EXPLICIT_OWNER_CONSOLIDATION_PROOF=${JSON.stringify(verdict)}`);
     },
   );
 });

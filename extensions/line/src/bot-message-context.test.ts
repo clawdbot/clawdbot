@@ -947,4 +947,70 @@ describe("buildLineMessageContext", () => {
       expect.objectContaining({ groupId: "C5aeb18d690759492f1a8c391c37549a0" }),
     );
   });
+
+  it.each<{
+    text: string;
+    spans: [number, number][];
+    expected: string;
+    mention?: webhook.TextMessageContent["mention"];
+  }>([
+    { text: "()hello", spans: [[0, 2]], expected: "[emoji]hello" },
+    { text: "(hello)", spans: [[0, 7]], expected: "(hello)" },
+    {
+      text: "😂() (hello)",
+      spans: [
+        [2, 2],
+        [5, 7],
+      ],
+      expected: "😂[emoji] (hello)",
+    },
+    { text: "call foo()", spans: [], expected: "call foo()" },
+    {
+      text: "()a()",
+      spans: [
+        [0, 2],
+        [3, 2],
+      ],
+      expected: "[emoji]a[emoji]",
+    },
+    { text: "call foo() now ()", spans: [[15, 2]], expected: "call foo() now [emoji]" },
+    {
+      text: "@openclaw3 ()",
+      spans: [[11, 2]],
+      expected: "@openclaw3 [emoji]",
+      mention: { mentionees: [{ type: "user" as const, index: 0, length: 10, isSelf: true }] },
+    },
+  ])(
+    "projects LINE emoji metadata without losing text: $text",
+    async ({ text, spans, expected, mention }) => {
+      const context = await buildLineMessageContext({
+        event: createMessageEvent(
+          { type: "user", userId: "user-1" },
+          {
+            message: {
+              id: "emoji-message",
+              type: "text",
+              text,
+              quoteToken: "quote-token",
+              emojis: spans.map(([index, length]) => ({
+                index,
+                length,
+                productId: "emoji-set",
+                emojiId: "1",
+              })),
+              mention,
+            },
+          },
+        ),
+        allMedia: [],
+        cfg,
+        account,
+        commandAuthorized: true,
+      });
+
+      expect(context?.ctxPayload.BodyForAgent).toBe(expected);
+      expect(context?.ctxPayload.RawBody).toBe(expected);
+      expect(context?.ctxPayload.CommandBody).toBe(mention ? "()" : text);
+    },
+  );
 });

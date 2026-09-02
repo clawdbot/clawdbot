@@ -61,6 +61,7 @@ export function captureAgentHarnessSessionDeletions() {
           const { owner, target } = candidate;
           let active = true;
           const assertCurrent = () => {
+            target.initialization?.assertRollbackCurrent();
             if (
               !active ||
               !owner.current?.() ||

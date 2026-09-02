@@ -1466,6 +1466,79 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("ignores a legacy sidecar symlink to the populated canonical agent database", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(legacyPath), agentPath), legacyPath);
+
+    const migration = legacyMemoryIndexMigration();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    expect((await fs.lstat(legacyPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.realpath(legacyPath)).resolves.toBe(await fs.realpath(agentPath));
+    expect(readMemoryRows(agentPath).chunks).toEqual([
+      { id: "canonical-chunk", text: "canonical memory remains authoritative" },
+    ]);
+  });
+
+  it("keeps the warning for a legacy sidecar symlink to a different data-bearing database", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const unrelatedPath = path.join(rootDir, "unrelated.sqlite");
+    const db = new DatabaseSync(unrelatedPath);
+    try {
+      db.exec("CREATE TABLE unrelated (value TEXT)");
+      db.prepare("INSERT INTO unrelated (value) VALUES (?)").run("preserve me");
+    } finally {
+      db.close();
+    }
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(legacyPath), unrelatedPath), legacyPath);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped Memory Core legacy memory index import for agent main because the sidecar schema is not a legacy memory index",
+    ]);
+    expect((await fs.lstat(legacyPath)).isSymbolicLink()).toBe(true);
+    await expect(fs.realpath(legacyPath)).resolves.toBe(await fs.realpath(unrelatedPath));
+    const preserved = new DatabaseSync(unrelatedPath, { readOnly: true });
+    try {
+      expect(preserved.prepare("SELECT value FROM unrelated").get()).toEqual({
+        value: "preserve me",
+      });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("keeps a corrupt legacy sidecar with an import warning", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const corruptBytes = Buffer.from("not a sqlite database");
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(legacyPath, corruptBytes);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported:",
+      ),
+    ]);
+    await expect(fs.readFile(legacyPath)).resolves.toEqual(corruptBytes);
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("preserves the main sidecar when a companion stat fails with ELOOP", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");

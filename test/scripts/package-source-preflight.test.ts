@@ -82,6 +82,7 @@ function runSourceRequirement(step: WorkflowStep, env: Record<string, string>) {
       encoding: "utf8",
       env: {
         ...process.env,
+        ...Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""])),
         ...env,
         GITHUB_OUTPUT: outputPath,
       },
@@ -194,9 +195,6 @@ if [[ "$1" == "scripts/package-openclaw-for-docker.mjs" ]]; then
   printf '{"commit":"%s"}\\n' "$SELECTED_SHA" > "$fixture/package/dist/build-info.json"
   tar -czf "$output_dir/$output_name" -C "$fixture" package
   rm -rf "$fixture"
-  exit 0
-fi
-if [[ "$1" == "scripts/check-openclaw-package-tarball.mjs" ]]; then
   exit 0
 fi
 exit 64
@@ -326,19 +324,21 @@ function runReleaseInputCapture(params: {
 }
 
 describe("package source preflight", () => {
-  it.each(["2026.8.1", "2026.8.1-beta.4", "2026.9.1"])(
-    "accepts aligned %s source manifests with Unreleased notes",
-    (version) => {
-      expect(
-        validatePackageSource({
-          aiManifestContent: aiManifest({ version }),
-          allowUnreleasedChangelog: true,
-          changelogContent: changelog,
-          rootManifestContent: rootManifest({ version }),
-        }),
-      ).toBe(version);
-    },
-  );
+  it.each([
+    ["2026.8.1", "Unreleased"],
+    ["2026.8.1-beta.4", "Unreleased"],
+    ["2026.9.1", "Unreleased"],
+    ["2026.9.1", "2026.8.3 (Unreleased)"],
+  ])("accepts aligned %s source manifests with %s notes", (version, heading) => {
+    expect(
+      validatePackageSource({
+        aiManifestContent: aiManifest({ version }),
+        allowUnreleasedChangelog: true,
+        changelogContent: changelog.replace("## Unreleased", `## ${heading}`),
+        rootManifestContent: rootManifest({ version }),
+      }),
+    ).toBe(version);
+  });
 
   it("uses canonical package changelog validation", () => {
     expect(() =>
@@ -348,6 +348,16 @@ describe("package source preflight", () => {
         rootManifestContent: rootManifest(),
       }),
     ).toThrow("CHANGELOG.md does not contain a release section for 2026.8.1.");
+  });
+
+  it("accepts complete oversized contribution records through the package renderer", () => {
+    expect(
+      validatePackageSource({
+        aiManifestContent: aiManifest(),
+        rootManifestContent: rootManifest(),
+        changelogContent: `# Changelog\n\n## 2026.8.1\n\n- A complete release note with its original credit. Thanks @contributor.\n\n### Complete contribution record\n\n${"- **PR #123** Thanks @contributor.\n".repeat(20_000)}`,
+      }),
+    ).toBe("2026.8.1");
   });
 
   it("rejects source package version drift", () => {
@@ -571,6 +581,12 @@ describe("package source preflight", () => {
         PACKAGE_ARTIFACT_PRESENT: "true",
       }),
     ).toBe("required=false");
+    expect(
+      runSourceRequirement(sourceRequirement, {
+        PACKAGE_ARTIFACT_PRESENT: "false",
+        PREPARED_NPM_BUNDLE_JSON: "{}",
+      }),
+    ).toBe("required=false");
     expect(steps.indexOf(prepareOnlyPreflight)).toBeLessThan(steps.indexOf(harnessSetup));
     expect(harnessSetup.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
     expect(steps.indexOf(plannedPreflight)).toBeGreaterThan(
@@ -643,7 +659,6 @@ describe("package source preflight", () => {
     expect(result.validationResult.status, result.validationResult.stderr).toBe(0);
     expect(result.calls).toEqual([
       expect.stringContaining("scripts/package-openclaw-for-docker.mjs"),
-      expect.stringContaining("scripts/check-openclaw-package-tarball.mjs"),
     ]);
     expect(result.output).toMatchObject({
       file_name: "openclaw-current.tgz",
@@ -731,20 +746,20 @@ describe("package source preflight", () => {
   });
 
   it("guards npm source producers with trusted tooling before Node setup", () => {
-    const workflow = readWorkflow(".github/workflows/openclaw-npm-release.yml");
-    const steps = workflow.jobs.preflight_openclaw_npm!.steps;
+    const workflow = readWorkflow(".github/workflows/openclaw-npm-preflight.yml");
+    const steps = workflow.jobs.prepare_openclaw_npm!.steps;
     const checkout = workflowStep(
       workflow,
-      "preflight_openclaw_npm",
+      "prepare_openclaw_npm",
       "Checkout trusted package source preflight",
     );
     const preflight = workflowStep(
       workflow,
-      "preflight_openclaw_npm",
+      "prepare_openclaw_npm",
       "Validate npm package source metadata",
     );
-    const setup = workflowStep(workflow, "preflight_openclaw_npm", "Setup Node environment");
-    const build = workflowStep(workflow, "preflight_openclaw_npm", "Build");
+    const setup = workflowStep(workflow, "prepare_openclaw_npm", "Setup Node environment");
+    const build = workflowStep(workflow, "prepare_openclaw_npm", "Build");
 
     expect(checkout.with).toMatchObject({
       ref: "${{ github.workflow_sha }}",

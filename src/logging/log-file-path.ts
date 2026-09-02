@@ -73,9 +73,8 @@ export function isRollingLogFilePath(file: string): boolean {
 export function isLegacyRollingLogFilePath(file: string): boolean {
   const base = path.basename(file);
   return (
-    base.startsWith(`${LOG_PREFIX}-`) &&
-    base.endsWith(LOG_SUFFIX) &&
-    base.length === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}`.length
+    base === `${LOG_PREFIX}-YYYY-MM-DD${LOG_SUFFIX}` ||
+    ROLLING_LOG_FILE_RE.exec(base)?.[1] === LOG_PREFIX
   );
 }
 

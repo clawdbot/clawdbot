@@ -374,6 +374,7 @@ export async function runReplyAgent(
   const cfg = followupRun.run.config;
   const replyMediaContext = createReplyMediaContext({
     cfg,
+    agentId: followupRun.run.agentId,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
     messageProvider: followupRun.run.messageProvider,

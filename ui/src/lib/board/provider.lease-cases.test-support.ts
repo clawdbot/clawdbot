@@ -32,8 +32,8 @@ export function registerBoardProviderLeaseCases(disableMockBoard: () => void): v
     const previous = createClient(1);
     const current = createClient(2);
     const future = createClient(3);
-    const writer = acquireBoardProviderForSession(sessionKey, previous);
-    const stale = acquireBoardProviderForSession(sessionKey, previous);
+    const writer = acquireBoardProviderForSession({ sessionKey }, previous);
+    const stale = acquireBoardProviderForSession({ sessionKey }, previous);
 
     try {
       await vi.waitFor(() => expect(writer.provider.snapshot$.value).toEqual(previous.snapshot));
@@ -97,9 +97,9 @@ export function registerBoardProviderLeaseCases(disableMockBoard: () => void): v
         addEventListener: vi.fn(() => removeListener),
       };
       const acquireChat = () =>
-        acquireBoardProviderForSession(sessionKey, client, true, true, true, true, true);
+        acquireBoardProviderForSession({ sessionKey }, client, true, true, true, true, true);
       const acquireDashboard = () =>
-        acquireBoardProviderForSession(sessionKey, client, true, false, false, false, false);
+        acquireBoardProviderForSession({ sessionKey }, client, true, false, false, false, false);
       const first = order === "chat-first" ? acquireChat() : acquireDashboard();
       const second = order === "chat-first" ? acquireDashboard() : acquireChat();
       const chat = order === "chat-first" ? first : second;
@@ -192,7 +192,7 @@ export function registerBoardProviderLeaseCases(disableMockBoard: () => void): v
       addEventListener: vi.fn(() => () => {}),
     };
     const writer = acquireBoardProviderForSession(
-      sessionKey,
+      { sessionKey },
       client,
       true,
       true,
@@ -201,7 +201,7 @@ export function registerBoardProviderLeaseCases(disableMockBoard: () => void): v
       false,
     );
     const approver = acquireBoardProviderForSession(
-      sessionKey,
+      { sessionKey },
       client,
       true,
       false,

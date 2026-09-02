@@ -1,8 +1,21 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { MatrixVerificationSummary } from "@openclaw/matrix/test-api.js";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MatrixQaE2eeScenarioClient } from "../substrate/e2ee-client.js";
-import { waitForMatrixQaVerificationSummary } from "./scenario-runtime-e2ee-shared.js";
+import {
+  createMatrixQaE2eeScenarioClient,
+  type MatrixQaE2eeScenarioClient,
+} from "../substrate/e2ee-client.js";
+import {
+  waitForMatrixQaVerificationSummary,
+  withMatrixQaE2eeDriverAndObserver,
+} from "./scenario-runtime-e2ee-shared.js";
+import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
+
+vi.mock("../substrate/e2ee-client.js", () => ({
+  createMatrixQaE2eeScenarioClient: vi.fn(),
+  runMatrixQaE2eeBootstrap: vi.fn(),
+}));
 
 vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
@@ -38,6 +51,139 @@ function summary(overrides: Partial<MatrixVerificationSummary> = {}): MatrixVeri
     ...overrides,
   };
 }
+
+describe("Matrix E2EE scenario client ownership", () => {
+  const context = createMatrixQaE2eeTestContext();
+  const scenarioId = "matrix-e2ee-qr-verification";
+  const client = (stop: MatrixQaE2eeScenarioClient["stop"]) =>
+    ({ stop }) as MatrixQaE2eeScenarioClient;
+
+  it.each([false, true])(
+    "stops the driver when observer acquisition fails (cleanup fails: %s)",
+    async (cleanupFails) => {
+      const acquisitionFailure = new Error("observer startup failed");
+      const cleanupFailure = new Error("driver persistence failed");
+      const stop = vi.fn(async () => {
+        if (cleanupFails) {
+          throw cleanupFailure;
+        }
+      });
+      vi.mocked(createMatrixQaE2eeScenarioClient)
+        .mockResolvedValueOnce(client(stop))
+        .mockRejectedValueOnce(acquisitionFailure);
+      const run = vi.fn();
+      const failure = await withMatrixQaE2eeDriverAndObserver(context, scenarioId, run).catch(
+        (error: unknown) => error,
+      );
+
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(run).not.toHaveBeenCalled();
+      if (cleanupFails) {
+        expect(failure).toMatchObject({
+          cause: acquisitionFailure,
+          errors: [acquisitionFailure, cleanupFailure],
+        });
+      } else {
+        expect(failure).toBe(acquisitionFailure);
+      }
+    },
+  );
+
+  it.each(["driver", "observer"] as const)(
+    "joins both clients and preserves all errors when %s cleanup fails first",
+    async (firstFailure) => {
+      const scenarioFailure = new Error("verification failed");
+      const driverFailure = new Error("driver shutdown failed");
+      const observerFailure = new Error("observer shutdown failed");
+      const delayedStop = createDeferred<void>();
+      const stops = {
+        driver: vi.fn(async () => {
+          if (firstFailure !== "driver") {
+            await delayedStop.promise;
+          }
+          throw driverFailure;
+        }),
+        observer: vi.fn(async () => {
+          if (firstFailure !== "observer") {
+            await delayedStop.promise;
+          }
+          throw observerFailure;
+        }),
+      };
+      vi.mocked(createMatrixQaE2eeScenarioClient)
+        .mockResolvedValueOnce(client(stops.driver))
+        .mockResolvedValueOnce(client(stops.observer));
+      const settled = vi.fn();
+      const completion = withMatrixQaE2eeDriverAndObserver(context, scenarioId, async () => {
+        throw scenarioFailure;
+      }).then(settled, settled);
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stops.driver).toHaveBeenCalledTimes(1);
+        expect(stops.observer).toHaveBeenCalledTimes(1);
+        expect(settled).not.toHaveBeenCalled();
+      } finally {
+        delayedStop.resolve();
+        await completion;
+      }
+      expect(settled).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          cause: scenarioFailure,
+          errors: [scenarioFailure, driverFailure, observerFailure],
+        }),
+      );
+    },
+  );
+
+  it("returns the scenario result after stopping both clients", async () => {
+    const stopDriver = vi.fn(async () => {});
+    const stopObserver = vi.fn(async () => {});
+    const driver = client(stopDriver);
+    const observer = client(stopObserver);
+    vi.mocked(createMatrixQaE2eeScenarioClient)
+      .mockResolvedValueOnce(driver)
+      .mockResolvedValueOnce(observer);
+    const result = { verified: true };
+    const run = vi.fn(async () => result);
+
+    await expect(withMatrixQaE2eeDriverAndObserver(context, scenarioId, run)).resolves.toBe(result);
+    expect(run).toHaveBeenCalledExactlyOnceWith({ driver, observer });
+    expect(stopDriver).toHaveBeenCalledTimes(1);
+    expect(stopObserver).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a cleanup-only rejection after joining the other client", async () => {
+    const delayedStop = createDeferred<void>();
+    const stopDriver = vi.fn().mockRejectedValue(undefined);
+    const stopObserver = vi.fn(() => delayedStop.promise);
+    const driver = client(stopDriver);
+    const observer = client(stopObserver);
+    vi.mocked(createMatrixQaE2eeScenarioClient)
+      .mockResolvedValueOnce(driver)
+      .mockResolvedValueOnce(observer);
+    const resolved = vi.fn();
+    const rejected = vi.fn();
+    const completion = withMatrixQaE2eeDriverAndObserver(context, scenarioId, async () => ({
+      verified: true,
+    })).then(resolved, rejected);
+    try {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(stopDriver).toHaveBeenCalledTimes(1);
+      expect(stopObserver).toHaveBeenCalledTimes(1);
+      expect(resolved).not.toHaveBeenCalled();
+      expect(rejected).not.toHaveBeenCalled();
+    } finally {
+      delayedStop.resolve();
+      await completion;
+    }
+    expect(resolved).not.toHaveBeenCalled();
+    expect(rejected).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+});
 
 describe("Matrix verification wait diagnostics", () => {
   it("reports only four latest phase/boolean states at the unchanged polling deadline", async () => {

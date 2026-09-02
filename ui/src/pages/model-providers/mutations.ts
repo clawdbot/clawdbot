@@ -1,3 +1,5 @@
+import type { FastMode } from "../../api/types.ts";
+
 export function buildProviderApiKeyPatch(provider: string, apiKey: string | null) {
   return {
     models: {
@@ -15,16 +17,31 @@ export function buildProviderApiKeyPatch(provider: string, apiKey: string | null
  */
 export const DEFAULT_MODELS_REPLACE_PATHS = ["agents.defaults.model.fallbacks"];
 
-export function buildDefaultModelsPatch(
-  primary: string,
-  fallbacks: readonly string[],
-  utilityModel: string | null,
-) {
+export function buildDefaultsPatch(params: {
+  primary: string;
+  fallbacks: readonly string[];
+  utilityModel: string | null;
+  thinkingLevel: string | undefined;
+  thinkingOverridden: boolean;
+  fastMode: FastMode | undefined;
+  fastModeOverridden: boolean;
+}) {
   return {
     agents: {
       defaults: {
-        model: fallbacks.length > 0 ? { primary, fallbacks: [...fallbacks] } : primary,
-        utilityModel,
+        ...(params.primary
+          ? {
+              model:
+                params.fallbacks.length > 0
+                  ? { primary: params.primary, fallbacks: [...params.fallbacks] }
+                  : params.primary,
+              utilityModel: params.utilityModel,
+            }
+          : {}),
+        thinkingDefault:
+          params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
+        fastModeDefault:
+          params.fastModeOverridden && params.fastMode !== undefined ? params.fastMode : null,
       },
     },
   };

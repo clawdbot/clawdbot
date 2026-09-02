@@ -14,6 +14,10 @@ import {
   syncAndroidVersioning,
 } from "../../scripts/lib/android-version.ts";
 import {
+  parseVersionQueryArgs,
+  parseVersionSyncArgs,
+} from "../../scripts/lib/version-script-args.ts";
+import {
   installAndroidFixtureCleanup,
   writeAndroidFixture,
 } from "./android-version.test-support.ts";
@@ -21,6 +25,20 @@ import {
 installAndroidFixtureCleanup();
 
 describe("resolveAndroidVersion", () => {
+  it("preserves mobile parser ordering and platform-specific revision support", () => {
+    expect(
+      parseVersionQueryArgs(["--shell", "--", "--json", "--field", "canonicalVersion"]),
+    ).toMatchObject({ field: "canonicalVersion", format: "json" });
+    expect(parseVersionSyncArgs(["--check", "--write"])).toMatchObject({ mode: "write" });
+    expect(() => parseVersionQueryArgs(["--field=canonicalVersion"])).toThrow(
+      "Unknown argument: --field=canonicalVersion",
+    );
+    expect(() => parseVersionSyncArgs(["--revision"])).toThrow("Unknown argument: --revision");
+    expect(
+      parseVersionSyncArgs(["--revision", "1"], { allowAppStoreRevision: true }),
+    ).toMatchObject({ appStoreRevision: "1" });
+  });
+
   it("rejects missing CLI option values before reading version files", () => {
     const result = spawnSync(
       process.execPath,
@@ -208,74 +226,39 @@ describe("gateway version normalization", () => {
 
 describe("renderAndroidVersionProperties", () => {
   it("renders checked-in defaults from the pinned Android version", () => {
-    const rootDir = writeAndroidFixture({
-      version: "2026.6.2",
+    const properties = renderAndroidVersionProperties({
+      canonicalVersion: "2026.6.2",
       versionCode: 2026060201,
     });
-    const version = resolveAndroidVersion(rootDir);
 
-    expect(renderAndroidVersionProperties(version)).toContain(
-      "OPENCLAW_ANDROID_VERSION_NAME=2026.6.2",
-    );
-    expect(renderAndroidVersionProperties(version)).toContain(
-      "OPENCLAW_ANDROID_VERSION_CODE=2026060201",
-    );
+    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_NAME=2026.6.2");
+    expect(properties).toContain("OPENCLAW_ANDROID_VERSION_CODE=2026060201");
   });
 });
 
 describe("renderAndroidReleaseNotes", () => {
   it("extracts exact pinned-version notes before Unreleased notes", () => {
-    const rootDir = writeAndroidFixture({
-      version: "2026.6.2",
-      versionCode: 2026060201,
-      changelog: [
-        "# OpenClaw Android Changelog",
-        "",
-        "## Unreleased",
-        "",
-        "Future Android changes.",
-        "",
-        "## 2026.6.2 - 2026-06-02",
-        "",
-        "Pinned Android release notes.",
-        "",
-      ].join("\n"),
-    });
-    const version = resolveAndroidVersion(rootDir);
-
     expect(
       renderAndroidReleaseNotes(
-        version,
+        { canonicalVersion: "2026.6.2" },
         "# OpenClaw Android Changelog\n\n## Unreleased\n\nFuture Android changes.\n\n## 2026.6.2 - 2026-06-02\n\nPinned Android release notes.\n",
       ),
     ).toBe("Pinned Android release notes.\n");
   });
 
   it("falls back to Unreleased notes while iterating on a release train", () => {
-    const rootDir = writeAndroidFixture({
-      version: "2026.6.2",
-      versionCode: 2026060201,
-    });
-    const version = resolveAndroidVersion(rootDir);
-
     expect(
       renderAndroidReleaseNotes(
-        version,
+        { canonicalVersion: "2026.6.2" },
         "# OpenClaw Android Changelog\n\n## Unreleased\n\nPending Android notes.\n",
       ),
     ).toBe("Pending Android notes.\n");
   });
 
   it("rejects changelogs without exact-version or Unreleased notes", () => {
-    const rootDir = writeAndroidFixture({
-      version: "2026.6.2",
-      versionCode: 2026060201,
-    });
-    const version = resolveAndroidVersion(rootDir);
-
     expect(() =>
       renderAndroidReleaseNotes(
-        version,
+        { canonicalVersion: "2026.6.2" },
         "# OpenClaw Android Changelog\n\n## 2026.6.1\n\nOld notes.\n",
       ),
     ).toThrow("Unable to find Android changelog notes for 2026.6.2");

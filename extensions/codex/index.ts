@@ -69,6 +69,9 @@ export default definePluginEntry({
   id: "codex",
   name: "Codex",
   description: "Codex app-server harness and native session supervision.",
+  reload: {
+    noopPrefixes: ["plugins.entries.codex.config.codexPlugins"],
+  },
   register(api) {
     // Bundled modules may execute from a shared dist chunk, so import.meta.url
     // cannot identify the owning plugin package or its pinned dependencies.
@@ -154,9 +157,10 @@ export default definePluginEntry({
       }));
     const lazyManagedThreadStateStore: Pick<
       PluginStateSyncKeyedStore<StoredCodexManagedThread>,
-      "entries" | "registerIfAbsent"
+      "entries" | "lookup" | "registerIfAbsent"
     > = {
       entries: () => openManagedThreadStateStore().entries(),
+      lookup: (key) => openManagedThreadStateStore().lookup(key),
       registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
     };
     const bindingStore = createLazyCodexAppServerBindingStore(
@@ -165,6 +169,7 @@ export default definePluginEntry({
     );
     registerCodexCliMetadata(api);
     const sessionCatalogControlFactory = createCodexSessionCatalogControl({
+      managedThreads: bindingStore.managedThreads,
       config: api.config as OpenClawConfig,
       getPluginConfig: resolveCurrentPluginConfig,
       getRuntimeConfig: resolveCurrentConfig,

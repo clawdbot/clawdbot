@@ -3,6 +3,7 @@ import {
   renderFormatErrorCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
+  renderFailoverCodeUserCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -11,6 +12,18 @@ import {
 describe("failover user copy", () => {
   const tokenLimitCopy =
     "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.";
+
+  it("renders only the allowlisted selected-profile code", () => {
+    expect(renderFailoverCodeUserCopy("selected_auth_profile_unavailable")).toBe(
+      "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
+        "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.",
+    );
+    expect(renderFailoverCodeUserCopy("plugin_selected_profile_unavailable")).toBeUndefined();
+    expect(
+      renderFailoverCodeUserCopy({ code: "selected_auth_profile_unavailable" }),
+    ).toBeUndefined();
+  });
+
   it("renders transient copy from the classified reason", () => {
     const raw = "429 Too Many Requests: model overloaded";
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw })).toBe(

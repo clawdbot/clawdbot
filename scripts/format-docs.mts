@@ -8,7 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
-import { outputTail } from "./lib/output-tail.mts";
+import { outputTail, spawnOutputText } from "./lib/output-tail.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 const ROOT = resolveRepoRoot(import.meta.url);
@@ -39,16 +39,6 @@ type OxfmtParams = {
 };
 type FormatDocsParams = OxfmtParams & { check?: boolean; root?: string };
 type CommandInvocation = { args: string[]; command: string };
-
-function outputText(value: unknown) {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Buffer.isBuffer(value)) {
-    return value.toString("utf8");
-  }
-  return "";
-}
 
 function commandFailureMessage(
   label: string,
@@ -99,7 +89,7 @@ export function docsFiles(root = ROOT, deps: FormatDeps = {}) {
       }),
     );
   }
-  return outputText(result.stdout)
+  return spawnOutputText(result.stdout)
     .split("\n")
     .filter(Boolean)
     .filter((relativePath) => (deps.existsSync ?? fs.existsSync)(path.join(root, relativePath)));

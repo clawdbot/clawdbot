@@ -212,7 +212,11 @@ function createResumeControlRequest(
       requestOptions?: CodexControlRequestOptions,
     ) => {
       const value = typeof response === "function" ? await response() : response;
-      await requestOptions?.beforeRequest?.(async <T>() => ({ thread: value.thread }) as T);
+      await requestOptions?.beforeRequest?.(
+        async <T>() => ({ thread: value.thread }) as T,
+        client,
+        { assertCurrent: () => undefined },
+      );
       await requestOptions?.onResponse?.(value, client, {
         ...auth,
         assertCurrent: () => undefined,
@@ -777,6 +781,8 @@ describe("codex command", () => {
               method: string;
               requestParams?: unknown;
             }) => await harness.client.request<T>(scopedMethod, scopedParams),
+            harness.client,
+            { assertCurrent: () => undefined },
           );
           const value = await harness.client.request(method, controlParams);
           await options?.onResponse?.(value, harness.client, { assertCurrent: () => undefined });

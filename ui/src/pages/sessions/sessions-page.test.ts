@@ -460,7 +460,10 @@ describe("sessions page lifecycle", () => {
     expect(page.transcriptSearch).toEqual({ status: "idle" });
   });
 
-  it.each(["green", null])("patches color %s from the sessions page menu", async (color) => {
+  it.each([
+    ["green", "Green"],
+    [null, "Default"],
+  ] as const)("patches color %s from the sessions page menu", async (color, label) => {
     const row = {
       key: "agent:main:color",
       sessionId: "color-session",
@@ -475,7 +478,9 @@ describe("sessions page lifecycle", () => {
     await page.updateComplete;
     const menu = page.querySelector<TestSessionMenu>("openclaw-session-menu");
     await menu?.updateComplete;
-    const item = menu?.querySelector<HTMLElement>(`[value="set-color:${color ?? ""}"]`);
+    const item = menu?.querySelector<HTMLButtonElement>(
+      `.session-menu__color-choice[aria-label="${label}"]`,
+    );
     expect(item).not.toBeNull();
     item?.click();
     await vi.waitFor(() =>
@@ -923,7 +928,7 @@ describe("sessions page lifecycle", () => {
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:cloud", agentId: "main" },
-      { timeoutMs: 10 * 60_000 },
+      { timeoutMs: null },
     );
     expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
     expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
@@ -961,7 +966,7 @@ describe("sessions page lifecycle", () => {
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:cloud", agentId: "main" },
-      { timeoutMs: 10 * 60_000 },
+      { timeoutMs: null },
     );
     expect(managed.refreshList).toHaveBeenCalledOnce();
     expect(page.sessionMutationPending).toBe(false);

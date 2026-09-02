@@ -775,38 +775,28 @@ describe("ensureSandboxBrowser create args", () => {
     expect(latestBridgeResolved().evaluateEnabled).toBe(false);
   });
 
-  it("mounts the main workspace read-only when workspaceAccess is none", async () => {
-    const cfg = buildConfig(false);
-    cfg.workspaceAccess = "none";
+  it.each([
+    { workspaceAccess: "none", flags: "z", rejectedFlags: "ro,z" },
+    { workspaceAccess: "ro", flags: "ro,z", rejectedFlags: "z" },
+    { workspaceAccess: "rw", flags: "z", rejectedFlags: "ro,z" },
+  ] as const)(
+    "uses the main workspace mount permissions for workspaceAccess=$workspaceAccess",
+    async ({ workspaceAccess, flags, rejectedFlags }) => {
+      const cfg = buildConfig(false);
+      cfg.workspaceAccess = workspaceAccess;
 
-    await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg,
-    });
+      await ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      });
 
-    const createArgs = requireDockerCreateArgs();
-
-    expect(createArgs).toContain("/tmp/workspace:/workspace:ro,z");
-  });
-
-  it("keeps the main workspace writable when workspaceAccess is rw", async () => {
-    const cfg = buildConfig(false);
-    cfg.workspaceAccess = "rw";
-
-    await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg,
-    });
-
-    const createArgs = requireDockerCreateArgs();
-
-    expect(createArgs).toContain("/tmp/workspace:/workspace:z");
-    expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro,z");
-  });
+      const createArgs = requireDockerCreateArgs();
+      expect(createArgs).toContain(`/tmp/workspace:/workspace:${flags}`);
+      expect(createArgs).not.toContain(`/tmp/workspace:/workspace:${rejectedFlags}`);
+    },
+  );
 
   it("stamps the mount format version label on browser containers", async () => {
     await ensureTestSandboxBrowser({

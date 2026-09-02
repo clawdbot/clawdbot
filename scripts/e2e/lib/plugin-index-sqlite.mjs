@@ -3,6 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { readPositiveIntEnv } from "./env-limits.mjs";
+import {
+  resolveOpenClawConfigPath as configPath,
+  resolveOpenClawStateDir as stateDir,
+} from "./openclaw-state-paths.mjs";
 import { readTextFileBounded } from "./text-file-utils.mjs";
 
 const STATE_KEY = "plugins.installedIndex";
@@ -12,14 +16,6 @@ const JSON_ARTIFACT_MAX_BYTES = readPositiveIntEnv(
   "OPENCLAW_PLUGIN_INDEX_JSON_MAX_BYTES",
   1024 * 1024,
 );
-
-function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
-}
-
-function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
 
 function readJsonMaybe(file) {
   let text;

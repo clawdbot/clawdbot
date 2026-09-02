@@ -177,8 +177,8 @@ describe("title fetch batching", () => {
     expect(requestedIds.size).toBe(commands.length);
   });
 
-  it.each(["new-version", "new-owner"] as const)(
-    "resumes when transcript retention removes the saturation cursor on %s",
+  it.each(["new-version", "new-owner", "cursor-reappears"] as const)(
+    "resumes title admission after a missing saturation cursor on %s",
     async (transition) => {
       vi.useFakeTimers();
       const requestedIds = new Set<string>();
@@ -229,9 +229,9 @@ describe("title fetch batching", () => {
       expect(requestedIds.size).toBe(48);
 
       renderTranscript(
-        retainedCommands,
+        transition === "cursor-reappears" ? commands : retainedCommands,
         transition === "new-owner" ? secondHistoryOwner : firstHistoryOwner,
-        transition === "new-owner" ? retainedHistoryVersion : ++historyVersion,
+        transition === "new-version" ? ++historyVersion : retainedHistoryVersion,
       );
       await vi.advanceTimersByTimeAsync(1_000);
       expect(requestedIds.size).toBe(96);

@@ -99,14 +99,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   async inspectSessionGroupRepository(path?: string): Promise<WorktreeRepositoryStatus> {
-    const requestedPath = path?.trim();
-    const agent = this.activeChipAgent().agent;
+    const requestedPath = path?.trim() || this.activeChipAgent().agent?.workspace?.trim();
     if (!requestedPath) {
-      return agent?.workspaceGit === true
-        ? "git"
-        : agent?.workspaceGit === false
-          ? "not_git"
-          : "unavailable";
+      return "unavailable";
     }
     const sessions = this.context?.sessions;
     const scope = sessions?.captureConnectionScope();
@@ -198,13 +193,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sessionNavigationState = super.getSessionNavigationState();
     this.projectedSessionRows = super.selectedAgentSessionRows(this.sessionNavigationState);
     this.projectedSessionSections = super.zonedVisibleSections(this.projectedSessionRows);
-    const chip = this.activeChipAgent();
     // An open switcher tracks roster/reconnect updates; otherwise only hydrate
     // the active card and avoid background RPCs for every configured agent.
     const identityIds =
       this.sidebarMenus.agentMenuPosition === null
-        ? [chip.activeId]
-        : chip.agents.map((agent) => agent.id);
+        ? [this.expandedAgentId()]
+        : this.activeChipAgent().agents.map((agent) => agent.id);
     this.ensureAgentIdentities(identityIds);
   }
 

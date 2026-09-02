@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { spawnCommand } from "../../../process/exec.js";
@@ -14,12 +13,13 @@ import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
-import { resolveToCwd } from "./path-utils.js";
+import { appendBoundedTextTail, formatStderrTail, normalizePositiveLimit } from "./limits.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   appendSessionToolTruncationWarning,
   formatSessionToolOutput,
   invalidArgText,
+  reuseTextComponent,
   shortenPath,
   str,
 } from "./render-utils.js";
@@ -165,6 +165,7 @@ export function createFindToolDefinition(
   options?: FindToolOptions,
 ): ToolDefinition<typeof findSchema, FindToolDetails | undefined> {
   const customOps = options?.operations;
+  const resolvePath = customOps ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "find",
     label: "find",
@@ -210,7 +211,7 @@ export function createFindToolDefinition(
               settle(() => reject(new Error("Limit must be an integer")));
               return;
             }
-            const searchPath = resolveToCwd(searchDir || ".", cwd);
+            const searchPath = resolvePath(searchDir || ".", cwd);
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             // One extra candidate distinguishes an exact-size result from a truncated one.
             const observationLimit = effectiveLimit + 1;
@@ -296,6 +297,7 @@ export function createFindToolDefinition(
             releaseChildProcessOutputAfterExit(child.nodeChildProcess);
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
+            let stderrDroppedBytes = 0;
             const lines: string[] = [];
 
             stopChild = () => {
@@ -320,7 +322,9 @@ export function createFindToolDefinition(
             // cannot split multibyte characters into U+FFFD replacement noise.
             child.stderr?.setEncoding("utf8");
             child.stderr?.on("data", (chunk: string) => {
-              stderr = appendBoundedTextTail(stderr, chunk).tail;
+              const appended = appendBoundedTextTail(stderr, chunk);
+              stderr = appended.tail;
+              stderrDroppedBytes += appended.droppedBytes;
             });
             // Readline re-emits input failures, while the stream listener also catches
             // implementations that do not. settle() keeps the shared failure path one-shot.
@@ -345,7 +349,8 @@ export function createFindToolDefinition(
               }
               const output = lines.join("\n");
               if (code !== 0) {
-                const errorMsg = stderr.trim() || `fd exited with code ${code}`;
+                const fallback = `fd exited with code ${code}`;
+                const errorMsg = formatStderrTail(stderr, stderrDroppedBytes, fallback);
                 settle(() => reject(new Error(errorMsg)));
                 return;
               }
@@ -382,14 +387,11 @@ export function createFindToolDefinition(
       });
     },
     renderCall(args, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatFindCall(args, theme));
-      return text;
+      return reuseTextComponent(context.lastComponent, formatFindCall(args, theme));
     },
     renderResult(result, optionsLocal, theme, context) {
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatFindResult(result, optionsLocal, theme, context.showImages));
-      return text;
+      const content = formatFindResult(result, optionsLocal, theme, context.showImages);
+      return reuseTextComponent(context.lastComponent, content);
     },
   };
 }

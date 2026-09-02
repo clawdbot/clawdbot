@@ -459,7 +459,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       sessionAgentId,
       config: resolvedConfig,
     }),
-    ...(options?.sandboxed
+    ...(options?.sandboxed && !options.skillWorkshop?.libraryAuthoring
       ? []
       : [
           createConfiguredSkillWorkshopTool({
@@ -551,6 +551,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
             requesterTurnRunId: options?.runId,
+            requesterThinkingLevel: options?.requesterThinkingLevel,
             completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,

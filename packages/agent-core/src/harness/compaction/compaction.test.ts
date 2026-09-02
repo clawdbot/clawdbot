@@ -339,8 +339,9 @@ describe("session-entry compaction budgeting", () => {
   });
 
   it("omits private shell history from a genuine split-turn summary prefix", () => {
+    const latestRequest = `request-start ${"x".repeat(1_000)} request-end`;
     const entries: SessionTreeEntry[] = [
-      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
+      createMessageEntry({ role: "user", content: latestRequest, timestamp: 1 }, 0),
       createMessageEntry(createAssistant("earlier work", createUsage(10), 2), 1),
       createMessageEntry(createBashMessage("private output ".repeat(6_000), 3, true), 2),
       createMessageEntry(createAssistant("latest", createUsage(10), 4), 3),
@@ -352,11 +353,15 @@ describe("session-entry compaction budgeting", () => {
       isSplitTurn: true,
     });
 
-    const preparation = prepareCompaction(entries, {
-      enabled: true,
-      reserveTokens: 0,
-      keepRecentTokens: 1,
-    });
+    const preparation = prepareCompaction(
+      entries,
+      {
+        enabled: true,
+        reserveTokens: 0,
+        keepRecentTokens: 1,
+      },
+      "unresolved",
+    );
 
     expect(preparation.ok).toBe(true);
     if (!preparation.ok || !preparation.value) {
@@ -368,6 +373,10 @@ describe("session-entry compaction budgeting", () => {
       tokensBefore: 10,
       turnPrefixMessages: [{ role: "user" }, { role: "assistant" }],
     });
+    expect(preparation.value.latestUnresolvedUserRequest).toHaveLength(800);
+    expect(preparation.value.latestUnresolvedUserRequest).toMatch(
+      /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end$/s,
+    );
     expect(preparation.value).not.toHaveProperty("splitTurnCompleted");
     expect(JSON.stringify(preparation.value)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
@@ -956,9 +965,16 @@ describe("split-turn compaction", () => {
       budgets: [800, 500],
       focus: `<policy>${"preserve generated policy ".repeat(200)}</policy>`,
     },
+    {
+      name: "active overflow request",
+      history: true,
+      prefix: false,
+      budgets: [800],
+      activeRequest: "finish the current deployment review",
+    },
   ])(
     "forwards focus and serializes $name summaries",
-    async ({ history, prefix, budgets, focus = operatorFocus }) => {
+    async ({ history, prefix, budgets, focus = operatorFocus, activeRequest }) => {
       const model: Model = {
         id: "summary-model",
         name: "Summary Model",
@@ -1013,6 +1029,7 @@ describe("split-turn compaction", () => {
           messagesToSummarize: history ? [{ role: "user", content: "history", timestamp: 1 }] : [],
           turnPrefixMessages: prefix ? [{ role: "user", content: "prefix", timestamp: 2 }] : [],
           isSplitTurn: prefix,
+          ...(activeRequest ? { latestUnresolvedUserRequest: activeRequest } : {}),
           tokensBefore: 100,
           fileOps: createFileOps(),
           settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
@@ -1037,6 +1054,11 @@ describe("split-turn compaction", () => {
       for (const prompt of prompts) {
         expect(prompt).toContain(focus);
         expect(prompt.indexOf(focus)).toBeGreaterThan(prompt.lastIndexOf("</conversation>"));
+      }
+      if (result.ok && activeRequest) {
+        expect(result.value.summary).toContain(
+          `## Latest unresolved user request\n${JSON.stringify(activeRequest)}`,
+        );
       }
     },
   );

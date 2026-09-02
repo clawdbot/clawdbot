@@ -162,8 +162,9 @@ const MIME_SYNONYMS: Record<string, string> = {
   "text/yaml": "application/yaml",
   "application/x-yaml": "application/yaml",
   "application/xml": "text/xml",
-  // Preserve the shipped AVI filename/header spelling for byte-detected containers.
+  // Preserve shipped filename/header spellings for byte-detected container aliases.
   "video/vnd.avi": "video/x-msvideo",
+  "video/matroska": "video/x-matroska",
 };
 
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding registered synonyms. */

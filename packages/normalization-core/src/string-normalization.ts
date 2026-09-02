@@ -1,6 +1,17 @@
 // Normalization Core module implements string normalization behavior.
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
+/** Detects C0 and DEL without rejecting C1 or other Unicode text. */
+export function containsAsciiControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Retains runtime string entries from arrays without normalizing their contents. */
 export function filterStringEntries(value: unknown): string[] {
   return Array.isArray(value)
@@ -15,7 +26,7 @@ export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
 
 /** Normalizes string entries and lowercases each retained value. */
 export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
-  return normalizeStringEntries(list).map((entry) => normalizeOptionalLowercaseString(entry) ?? "");
+  return normalizeStringEntries(list).map((entry) => entry.toLowerCase());
 }
 
 /** Returns first-seen unique values while preserving insertion order. */
@@ -42,14 +53,12 @@ export function normalizeUniqueStringEntries(values?: Iterable<unknown>): string
 
 /** Lowercases normalized entries, removes empties/duplicates, and preserves first-seen order. */
 export function normalizeUniqueStringEntriesLower(values?: Iterable<unknown>): string[] {
-  return uniqueStrings(
-    normalizeStringEntriesLower(values ? [...values] : undefined).filter(Boolean),
-  );
+  return uniqueStrings(normalizeStringEntriesLower(values ? [...values] : undefined));
 }
 
 /** Normalizes entries, removes duplicates, and returns sorted output. */
 export function normalizeSortedUniqueStringEntries(values?: Iterable<unknown>): string[] {
-  return sortUniqueStrings(normalizeUniqueStringEntries(values));
+  return sortUniqueStrings(normalizeStringEntries(values ? [...values] : undefined));
 }
 
 /** Normalizes array-backed string lists and rejects non-array input as empty. */

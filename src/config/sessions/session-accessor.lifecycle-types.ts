@@ -156,7 +156,6 @@ export type SessionEntryLifecycleUpsert = {
       buildEntry: (context: {
         currentEntry?: SessionEntry;
         sessionKey: string;
-        store: Record<string, SessionEntry>;
       }) => Promise<SessionEntry | null | undefined> | SessionEntry | null | undefined;
       entry?: never;
     }

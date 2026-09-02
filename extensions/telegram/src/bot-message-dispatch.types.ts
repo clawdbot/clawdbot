@@ -123,6 +123,7 @@ export type TelegramQueuedAnswerBlockRotation = {
 export type TelegramBufferedFinalSettlement = {
   visibleReplySent: boolean;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
   resolve: (result: { visibleReplySent: boolean }) => void;
   reject: (error: unknown) => void;

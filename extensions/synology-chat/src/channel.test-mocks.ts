@@ -7,7 +7,7 @@ import { vi } from "vitest";
 export const registerPluginHttpRouteMock: Mock<typeof registerPluginHttpRoute> = vi.fn(() =>
   vi.fn(),
 );
-export const synologyIngressStartMock = vi.fn();
+export const synologyIngressStartMock: Mock = vi.fn();
 export const synologyIngressStopMock = vi.fn(async () => undefined);
 export const tryHandleSynologyHostedMediaRequestMock = vi.fn(async () => false);
 

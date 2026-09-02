@@ -33,7 +33,11 @@ import {
   resolveHeartbeatSummaryForAgent,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
-import { seedHeartbeatScratchForTest, seedSessionStore } from "./heartbeat-runner.test-utils.js";
+import {
+  readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
+  seedSessionStore,
+} from "./heartbeat-runner.test-utils.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatDeliveryTargetWithSessionRoute,
@@ -1137,19 +1141,23 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("prepends the first heartbeat alert only once for the implicit owner default", async () => {
+  it("persists implicit first-alert state when an isolated heartbeat starts without a base row", async () => {
     const tmpDir = await createCaseDir("hb-owner-preamble");
     const storePath = path.join(tmpDir, "sessions.json");
     const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m" } } },
+      agents: {
+        defaults: { workspace: tmpDir, heartbeat: { every: "5m", isolatedSession: true } },
+      },
       commands: { ownerAllowFrom: ["+15555550166"] },
       channels: { whatsapp: { allowFrom: ["+15555550166"] } },
       session: { store: storePath },
     };
-    await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));
+    const sessionKey = resolveMainSessionKey(cfg);
+    const isolatedSessionKey = `${sessionKey}:heartbeat`;
     const replySpy = vi
       .fn()
       .mockResolvedValueOnce({ text: "First alert" })
+      .mockResolvedValueOnce({ text: "Second alert" })
       .mockResolvedValueOnce({ text: "Second alert" });
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
@@ -1157,11 +1165,26 @@ describe("runHeartbeatOnce", () => {
       cfg,
       deps: createHeartbeatDeps(sendWhatsApp, { nowMs: 1, getReplyFromConfig: replySpy }),
     });
+    let store = readSessionStoreForTest(storePath);
+    expect(store[sessionKey]).toMatchObject({
+      lastHeartbeatText: "First alert",
+      lastHeartbeatSentAt: 1,
+    });
+    expectReplyCall(replySpy, 0, {
+      SessionKey: isolatedSessionKey,
+    });
+    expect(store[isolatedSessionKey]?.lastHeartbeatText).toBeUndefined();
+
     await runHeartbeatOnce({
       cfg,
       deps: createHeartbeatDeps(sendWhatsApp, { nowMs: 2, getReplyFromConfig: replySpy }),
     });
+    await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(sendWhatsApp, { nowMs: 3, getReplyFromConfig: replySpy }),
+    });
 
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expectWhatsAppSendCall(sendWhatsApp, 0, {
       to: "+15555550166",
       text: 'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.\nFirst alert',
@@ -1170,6 +1193,12 @@ describe("runHeartbeatOnce", () => {
       to: "+15555550166",
       text: "Second alert",
     });
+    store = readSessionStoreForTest(storePath);
+    expect(store[sessionKey]).toMatchObject({
+      lastHeartbeatText: "Second alert",
+      lastHeartbeatSentAt: 2,
+    });
+    expect(store[isolatedSessionKey]?.lastHeartbeatText).toBeUndefined();
   });
 
   it("uses per-agent heartbeat overrides and session keys", async () => {

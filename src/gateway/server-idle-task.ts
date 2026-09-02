@@ -47,7 +47,7 @@ export function scheduleGatewayIdleTask(params: {
           return;
         }
         await params.run();
-      }).catch((error: unknown) => {
+      }, "idle-task").catch((error: unknown) => {
         if (!isGatewayRestartDrainError(error)) {
           params.log.warn(`${params.errorMessage}: ${String(error)}`);
         }

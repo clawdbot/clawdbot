@@ -412,7 +412,7 @@ describe("preflightDiscordMessage", () => {
       id: "m-system-1",
       channelId: threadId,
       content:
-        "⚙️ codex-acp session active (auto-unfocus in 24h). Messages here go directly to this session.",
+        "⚙️ codex-acp session active (idle expiry in 24h). Messages here go directly to this session.",
       author: {
         id: "relay-bot-1",
         bot: true,

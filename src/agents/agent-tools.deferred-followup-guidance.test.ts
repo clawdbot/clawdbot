@@ -214,6 +214,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
       [
         "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label.",
         "A session identifies model context, not an external address; its reply may still announce through established delivery context.",
+        'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later announcement state, and neither proves target completion.',
         "For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`.",
         'Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status "no_reply" is terminal, so do not wait for an announcement.',
         "watch:true: notice arrives when others later change target session.",
@@ -231,6 +232,7 @@ describe("createOpenClawCodingTools availability guidance", () => {
       { name: "sessions_history", description: "history" },
     ] as AnyAgentTool[]);
 
+    expect(tool?.description).toContain("Search visible past sessions");
     expect(tool?.description).toContain("sessions_history");
     expect(tool?.description).toContain(`${sessionLinkBase}/chat/<agentId>`);
     expect(tool?.description.indexOf("Follow up with sessions_history")).toBeLessThan(

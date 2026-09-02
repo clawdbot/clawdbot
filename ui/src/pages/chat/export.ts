@@ -1,6 +1,7 @@
 // Control UI chat module implements export behavior.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
+import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 
 export type ChatExportResult = "downloaded" | "empty";
 
@@ -22,8 +23,8 @@ export function exportChatMarkdown(messages: unknown[], assistantName: string): 
   return "downloaded";
 }
 
-function buildChatMarkdown(messages: unknown[], assistantName: string): string | null {
-  const history = Array.isArray(messages) ? messages : [];
+export function buildChatMarkdown(messages: unknown[], assistantName: string): string | null {
+  const history = visibleChatHistoryMessages(messages);
   if (history.length === 0) {
     return null;
   }

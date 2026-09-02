@@ -16,6 +16,7 @@ export const WORKER_LOCAL_TOOL_NAMES = [
 
 /** Gateway-proxied tools exposed through the closed worker protocol. */
 export const WORKER_SESSION_TOOL_NAMES = [
+  "skill_workshop",
   "sessions_spawn",
   "sessions_send",
   "github_publish",

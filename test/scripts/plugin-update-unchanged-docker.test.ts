@@ -304,9 +304,10 @@ describe("plugin update unchanged Docker E2E", () => {
     expect(script).toContain(
       "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s",
     );
-    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(8);
+    expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(7);
+    expect(script).toContain('openclaw_e2e_print_log "$post_core_result_path"');
     expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
-    expect(script.match(/assert-corrupt-policy-preserved/g)).toHaveLength(2);
+    expect(script.match(/assert-corrupt-policy-preserved/g)).toHaveLength(3);
   });
 
   it.each([
@@ -317,7 +318,7 @@ describe("plugin update unchanged Docker E2E", () => {
       runProbe("assert-corrupt-policy-preserved", {
         plugins: {
           allow: [CORRUPT_PLUGIN_ID],
-          entries: { [CORRUPT_PLUGIN_ID]: entry },
+          entries: { [CORRUPT_PLUGIN_ID]: entry, codex: { enabled: false } },
         },
       }),
     ).not.toThrow();
@@ -326,7 +327,7 @@ describe("plugin update unchanged Docker E2E", () => {
   it("rejects corrupt update recovery that revokes the explicit allow policy", () => {
     const revokedPolicy = runProbeStatus("assert-corrupt-policy-preserved", {
       plugins: {
-        entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
+        entries: { [CORRUPT_PLUGIN_ID]: { enabled: false }, codex: { enabled: false } },
       },
     });
     expect(revokedPolicy.status).not.toBe(0);

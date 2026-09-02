@@ -31,7 +31,7 @@ openclaw config schema
 openclaw config schema --json
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
-openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+openclaw config set browser.profiles.work '{"cdpPort":18801,"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}' --strict-json --merge
 openclaw config set agents.defaults.heartbeat.every "2h"
 openclaw config set logging.audit.executionIdentity true
 openclaw config set 'agents.entries.main.tools.exec.node' "node-id-or-name"
@@ -62,6 +62,16 @@ persist the canonical keyed roster. Indexed edits use the current roster order.
 Within a batch, a submitted list keeps its order across subsequent keyed edits,
 including when agent IDs are numeric strings. Existing roster-deletion and
 `$include` ownership protections still apply.
+
+When a legacy roster expands a single-agent installation in the root config file,
+writes retire its `default` marker and preserve the existing agent's responsibilities
+with explicit owners. An explicitly authored `ownership: "explicit"` cannot be
+combined with a legacy `default: true` marker.
+
+For root-file writes, changing `session.store` clears a copied
+`agents.defaults.sessionStore.agentId` because that owner belongs to the previous
+store. To assign the destination store's owner, set that owner path explicitly in
+the same batch.
 
 ### `config get`
 
@@ -148,8 +158,10 @@ Values parse as JSON5 when possible; otherwise they are treated as raw strings. 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"
 openclaw config set gateway.port 19001 --strict-json
-openclaw config set channels.whatsapp.groups '["*"]' --strict-json
+openclaw config set channels.whatsapp.groups '{"*":{"requireMention":true}}' --strict-json
 ```
+
+For structured values that are awkward to quote in your shell, put a config-shaped JSON5 object in a file and use [`config patch --file <path> --dry-run`](/cli/config#config-patch). The file contains config keys and their values, not a bare array.
 
 `config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
 
@@ -167,6 +179,29 @@ openclaw config set models.providers.ollama.models '[{"id":"llama3.2","name":"Ll
 ```
 
 Use `--replace` only when the provided value should intentionally become the complete target value.
+
+### Conditional writes
+
+Use a conditional expectation when automation must update one authored path only if it has not
+changed since the caller last observed it:
+
+```bash
+openclaw config set gateway.port 19001 --strict-json --expect-current-json 18789
+openclaw config set gateway.port 19001 --strict-json --expect-current-absent
+```
+
+`--expect-current-json <json>` uses strict JSON and compares the value by JSON type and structure.
+`null` is an authored value, so it does not satisfy `--expect-current-absent`. The comparison uses
+the effective authored config after includes and environment substitution, before runtime defaults
+are applied.
+
+The two expectation flags are mutually exclusive. They apply only to a single `config set`
+operation, require a direct non-redirected config path, and cannot be combined with batch mode or
+`--dry-run`. If input or roster resolution would write a different path than the caller requested,
+such as a sibling `*Ref` path, the command exits with status 1 instead of retargeting the
+expectation. A mismatch exits with status 1, writes nothing, and does not print either the expected
+or current value. OpenClaw's config snapshot guard still rejects a later race between the
+expectation check and the final file replacement.
 
 ## `config set` modes
 
@@ -354,7 +389,7 @@ openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.disc
 
 ## Dry run
 
-`--dry-run` validates changes without writing `openclaw.json`. Available on `config set`, `config patch`, and `config unset`.
+`--dry-run` simulates a change without writing `openclaw.json`. Available on `config set`, `config patch`, and `config unset`. Which checks run depends on the input mode. Value mode (`config set <path> <value>` without `--strict-json`) skips the full schema pass and the ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, value mode reports `Dry run successful` even for a value the real write rejects. Use `--strict-json` (or `config patch --file --dry-run`) when you need schema validation.
 
 ```bash
 openclaw config set channels.discord.token \
@@ -374,6 +409,7 @@ openclaw config set channels.discord.token \
 
 <AccordionGroup>
   <Accordion title="Dry-run behavior">
+    - Value mode (a plain `<value>` without `--strict-json`): skips the full schema pass and ordinary SecretRef resolvability scan. Policy, provider, and model-reference checks can still run. When no checks apply, the CLI prints `Dry run note: value mode does not run schema/resolvability checks` and can succeed even when the real write would fail schema validation.
     - Builder mode: runs SecretRef resolvability checks for changed refs/providers.
     - JSON mode (`--strict-json`, `--json`, or batch mode): runs schema validation plus SecretRef resolvability checks.
     - Policy validation runs against the full post-change config, so parent-object writes (for example setting `hooks` as an object) cannot bypass unsupported-surface validation.
@@ -409,7 +445,7 @@ openclaw config set channels.discord.token \
   skippedExecRefs: number,
   errors?: [
     {
-      kind: "missing-path" | "schema" | "resolvability" | "model",
+      kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict",
       message: string,
       ref?: string, // present for resolvability errors
     },
@@ -498,8 +534,8 @@ The active config path must be a regular file. Symlinked `openclaw.json` layouts
 Prefer CLI writes for small edits:
 
 ```bash
-openclaw config set gateway.reload.mode hybrid --dry-run
-openclaw config set gateway.reload.mode hybrid
+openclaw config set gateway.reload.mode '"hybrid"' --strict-json --dry-run
+openclaw config set gateway.reload.mode '"hybrid"' --strict-json
 openclaw config validate
 ```
 

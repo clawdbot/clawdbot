@@ -1,6 +1,7 @@
 ---
 summary: "Inbound event helpers for channel plugins: context building, shared runner orchestration, session record, and prepared reply dispatch"
 title: "Channel inbound API"
+doc-schema-version: 1
 read_when:
   - You are building or refactoring a messaging channel plugin receive path
   - You need shared inbound context construction, session recording, or prepared reply dispatch
@@ -109,6 +110,23 @@ translate legacy `Provider` values `"heartbeat"`, `"cron-event"`, and
 `"exec-event"` into `InternalTurnSource`. They remove those labels from channel
 fields while preserving a real reply route. New callers should set the typed
 source directly.
+
+## Receive acknowledgment policy
+
+`createMessageReceiveContext(...)`, exported from
+`openclaw/plugin-sdk/channel-outbound`, tracks acknowledgment state for one
+inbound event. Its `ackPolicy` selects the stage accepted by `shouldAckAfter(...)`:
+
+| Policy                 | Acknowledgment boundary                                                   |
+| ---------------------- | ------------------------------------------------------------------------- |
+| `after_receive_record` | After durable inbound metadata is recorded for deduplication and routing. |
+| `after_agent_dispatch` | After the agent run is dispatched.                                        |
+| `after_durable_send`   | After durable outbound delivery commits.                                  |
+| `manual`               | No stage qualifies automatically; the caller decides when to acknowledge. |
+
+The helper defaults to `after_receive_record`, not `manual`. Callers still
+perform the work and invoke `ack()` or `nack(error)`; selecting a policy does
+not itself persist, dispatch, or send a message.
 
 ## Delivery settlement contract
 

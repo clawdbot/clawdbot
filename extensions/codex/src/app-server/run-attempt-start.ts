@@ -13,6 +13,7 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { joinPresentSections } from "./run-attempt-state.js";
+import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
@@ -256,6 +257,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await runCleanupStep("codex-start-failure-abort-listener", () =>
       params.abortSignal?.removeEventListener("abort", abortFromUpstream),
     );
-    throw state.executionDisconnectError ?? error;
+    throw error instanceof CodexThreadPolicyHandoffError
+      ? error
+      : (state.executionDisconnectError ?? error);
   }
 }

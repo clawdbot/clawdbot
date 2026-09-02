@@ -105,10 +105,8 @@ describe("automatic media selection", () => {
   );
 
   it.each(["provider-transcription", undefined])(
-    "key-selected audio ignores the chat model with provider default %s",
+    "configured audio ignores the chat model with provider default %s",
     async (model) => {
-      let attempts = 0;
-      selection.auth.mockImplementation(async () => ++attempts > 1);
       const seenModels: Array<string | undefined> = [];
       const provider: MediaUnderstandingProvider = {
         id: "selection-audio",
@@ -122,25 +120,33 @@ describe("automatic media selection", () => {
       await withAudioFixture("media-selection-key-audio", async ({ ctx, media, cache }) => {
         const result = await runCapability({
           capability: "audio",
-          cfg: {},
+          cfg: {
+            models: {
+              providers: {
+                [provider.id]: { baseUrl: "https://audio.example/v1", models: [] },
+              },
+            },
+          },
           ctx,
           media,
           attachments: cache,
           providerRegistry: new Map([[provider.id, provider]]),
-          activeModel: { provider: provider.id, model: "chat-only-model" },
+          activeModel: { provider: "chat-only", model: "chat-only-model" },
         });
         expect(result.decision.outcome).toBe("success");
         expect(seenModels).toEqual([model]);
-        expect(attempts).toBe(2);
+        expect(selection.auth).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ provider: provider.id }),
+        );
       });
     },
   );
 
-  it("retains the final key-provider pass after unavailable local audio", async () => {
+  it("checks audio providers once in priority order until auth is available", async () => {
     const calls: string[] = [];
     selection.auth.mockImplementation(async ({ provider }) => {
       calls.push(provider);
-      return calls.length === 4;
+      return provider === "second";
     });
     const providers = ["first", "second"].map(
       (id, priority): MediaUnderstandingProvider => ({
@@ -151,7 +157,7 @@ describe("automatic media selection", () => {
         transcribeAudio: async ({ model }) => ({ text: id, model }),
       }),
     );
-    await withAudioFixture("media-selection-second-pass", async ({ ctx, media, cache }) => {
+    await withAudioFixture("media-selection-provider-order", async ({ ctx, media, cache }) => {
       const result = await runCapability({
         capability: "audio",
         cfg: {},
@@ -160,7 +166,7 @@ describe("automatic media selection", () => {
         attachments: cache,
         providerRegistry: new Map(providers.map((provider) => [provider.id, provider])),
       });
-      expect(calls).toEqual(["first", "second", "first", "second"]);
+      expect(calls).toEqual(["first", "second"]);
       expect(result.outputs).toEqual([
         {
           kind: "audio.transcription",

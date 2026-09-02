@@ -7,6 +7,7 @@ export type {
   SessionCatalogLocator,
   SessionCatalogPullRequestSummary,
   SessionCatalogSession,
+  SessionCatalogShareRoute,
   SessionCatalogTranscriptItem,
   SessionsCatalogArchiveParams,
   SessionsCatalogArchiveResult,

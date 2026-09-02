@@ -11,6 +11,7 @@ import {
   getObservedBrowserStateViaPlaywright,
   getMainFrameDocumentIdentityViaPlaywright,
   getPageForTargetId,
+  hasCachedPlaywrightBrowserConnection,
   isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright,
   markObservedDialogsHandledRemotelyForPage,
@@ -59,7 +60,7 @@ import {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
-  storeAriaSnapshotRefsViaPlaywright,
+  storeSnapshotRefsViaPlaywright,
 } from "./pw-tools-core.snapshot.js";
 import {
   emulateMediaViaPlaywright,
@@ -96,6 +97,7 @@ export const pwAi = {
   getObservedBrowserStateViaPlaywright,
   getMainFrameDocumentIdentityViaPlaywright,
   getPageForTargetId,
+  hasCachedPlaywrightBrowserConnection,
   isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright,
   markObservedDialogsHandledRemotelyForPage,
@@ -140,7 +142,7 @@ export const pwAi = {
   snapshotAiViaPlaywright,
   snapshotAriaViaPlaywright,
   snapshotRoleViaPlaywright,
-  storeAriaSnapshotRefsViaPlaywright,
+  storeSnapshotRefsViaPlaywright,
   screenshotWithLabelsViaPlaywright,
   storageClearViaPlaywright,
   storageGetViaPlaywright,

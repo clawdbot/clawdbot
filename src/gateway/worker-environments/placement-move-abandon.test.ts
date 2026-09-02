@@ -241,6 +241,24 @@ describe("offline device placement abandonment", () => {
     expect(persistedPartials).toEqual(["offline-retry-run"]);
     options.deviceRunnerAvailable = true;
 
+    // The existing durable decision skips new preparation, but still rejects a different
+    // source, destination, or abandonment disposition before an exact retry can resume.
+    const conflictingRequests = [
+      { ...request, source: { ...request.source, generation: request.source.generation + 1 } },
+      {
+        ...REQUEST,
+        source: request.source,
+        target: { kind: "profile" as const, profileId: "other" },
+      },
+      { ...REQUEST, source: request.source, target: { kind: "gateway" as const } },
+    ];
+    for (const conflicting of conflictingRequests) {
+      await expect(harness.service.move(conflicting)).rejects.toThrow(
+        "already has a conflicting placement move",
+      );
+    }
+    expect(beforeMoveBegin).toHaveBeenCalledOnce();
+
     await expect(harness.service.move(request)).resolves.toMatchObject({ state: "local" });
 
     expect(beforeMoveBegin).toHaveBeenCalledOnce();
