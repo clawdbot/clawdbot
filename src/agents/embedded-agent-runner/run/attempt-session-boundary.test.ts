@@ -25,6 +25,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 
 function createActiveSession(messages: AgentMessage[] = []) {
@@ -228,11 +229,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         }),
       ).toBe(false);
       const leafBeforeAppend = manager.getLeafId();
-      const appended = manager.appendMessageWithTranscriptAnchor({
-        role: "assistant",
-        content: [{ type: "text", text: "recovery reply" }],
-        timestamp: 2,
-      });
+      const appended = manager.appendMessageWithTranscriptAnchor(
+        makeAssistantMessageFixture({
+          content: [{ type: "text", text: "recovery reply" }],
+          stopReason: "stop",
+          timestamp: 2,
+        }),
+      );
       expect(manager.getEntry(appended.entryId)?.parentId).toBe(leafBeforeAppend);
       expect(manager.getBranch().map((entry) => entry.id)).toEqual(
         expect.arrayContaining([orphanId, appended.entryId]),
@@ -676,11 +679,11 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
   it("excludes a preserved orphan from this turn's messages without branching", async () => {
     const contextMessages: AgentMessage[] = [
-      {
-        role: "assistant" as const,
+      makeAssistantMessageFixture({
         content: [{ type: "text" as const, text: "prior" }],
+        stopReason: "stop",
         timestamp: 1,
-      },
+      }),
       {
         role: "user" as const,
         content: [{ type: "text" as const, text: "old" }],
@@ -722,8 +725,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect(branch).not.toHaveBeenCalled();
     expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
     expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
-    expect(activeSession.agent.state.messages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "prior" }], timestamp: 1 },
+    expect(activeSession.agent.state.messages).toMatchObject([
+      { role: "assistant", content: [{ type: "text", text: "prior" }] },
     ]);
   });
 
@@ -731,11 +734,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const interrupted = "interrupted user wake";
     const recoveryPrompt = "gateway restart recovery";
     const bare = SessionManager.inMemory();
-    bare.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "prior" }],
-      timestamp: 1,
-    });
+    bare.appendMessage(
+      makeAssistantMessageFixture({
+        content: [{ type: "text", text: "prior" }],
+        stopReason: "stop",
+        timestamp: 1,
+      }),
+    );
     const orphanId = bare.appendMessage({
       role: "user",
       content: interrupted,
@@ -770,11 +775,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         timestamp: 3,
       }),
     ).toBeUndefined();
-    sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "recovery reply" }],
-      timestamp: 4,
-    });
+    sessionManager.appendMessage(
+      makeAssistantMessageFixture({
+        content: [{ type: "text", text: "recovery reply" }],
+        stopReason: "stop",
+        timestamp: 4,
+      }),
+    );
 
     // This exact context seeds the next turn's provider request.
     expect(sessionManager.buildSessionContext().messages).toMatchObject([
