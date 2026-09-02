@@ -46,11 +46,11 @@ Each `git worktree add` checkout during creation or snapshot restore has a five-
 
 ## Capacity and disk space
 
-OpenClaw allows up to 100 live managed worktrees per state directory. Manual and protected worktrees count toward this limit. Creating or restoring a checkout at the limit reports how to free a slot; it never evicts another session as part of creation. Reusing an existing valid checkout does not require a new slot.
+OpenClaw uses 100 live managed worktrees per state directory as a cleanup target, not an admission cap. Count alone never blocks creation or snapshot restore; available disk space still bounds new allocations. Creation never evicts another session to make room. Manual and protected worktrees can keep the total above the cleanup target.
 
 Before allocating a checkout, OpenClaw checks its destination, Git metadata, source checkout, and state volumes. It keeps 10% of each volume free, with a minimum reserve of 4 GiB and a maximum of 16 GiB, plus twice the estimated Git checkout and provisioned-file size. An executable setup script requires additional room equal to the larger of 4 GiB or the current source checkout footprint excluding Git metadata. Space is checked again before provisioning/setup and after setup. An unavailable capacity reading stops allocation with an actionable error.
 
-Creation, restore, and snapshot removal share one allocation lease across repositories and processes using the same state directory. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Worktrees created directly through Git are outside the managed count and cleanup lifecycle.
+Creation, restore, and snapshot removal share one allocation lease across repositories and processes using the same state directory. Costs on the same volume are added together. These checks are conservative estimates, not a disk quota: other OpenClaw state directories, shell commands, deployment tools, and arbitrary setup/build output can still consume space. Reusing an existing valid checkout does not allocate another checkout. Worktrees created directly through Git are outside the managed cleanup lifecycle.
 
 Snapshot removal uses a smaller reserve of 128 MiB plus estimated snapshot writes, so safe cleanup remains possible below the operational reserve. If a snapshot cannot fit, removal preserves the checkout and asks you to free space first.
 
@@ -81,6 +81,8 @@ Setup failures report the exit code or termination signal, or an actual timeout 
 ## Session worktrees
 
 Start an isolated chat from a Git-backed folder with a worktree session: on the Control UI's New session page, use the **Place** picker to choose a Gateway source folder, then select **Worktree** (with an optional base branch and worktree name). Choosing a paired device or cloud profile forces this managed-worktree path from the selected Gateway source; remote placement never browses or binds a node working directory. When the name is omitted, OpenClaw derives it from the explicit session label or the concise title generated from the first message, then falls back to a crustacean-themed name. iOS exposes the same choice from Chat actions, and Android exposes it beside New Chat, when the active agent workspace is Git-backed.
+
+Remote sessions retain a durable managed-worktree mirror on the Gateway for workspace reconciliation, recovery, and publication. The same disk-space checks apply to this mirror; selecting a remote destination does not eliminate Gateway disk requirements.
 
 The Control UI offers **Worktree** only after confirming a usable Git checkout with at least one commit, or when a selected remote Git repository is awaiting cloning. Plain folders and newly initialized repositories without commits can run directly on the Gateway. A failed Git check also leaves direct execution available if the folder is accessible; a `.git` entry or saved project alone does not enable isolation. If you already selected **Worktree** and a later check fails, that selection stays visible and starting is blocked. Clear **Worktree** to run directly, or reselect the folder to check it again.
 
@@ -124,7 +126,7 @@ OpenClaw applies these cleanup rules:
 
 - At run end, it removes a worktree only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. Otherwise it only releases the activity lock.
 - Startup and hourly cleanup snapshot and remove unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Session worktrees whose owner is archived or absent are eligible immediately. Failed owner lookups preserve the checkout.
-- Cleanup also removes the least recently active eligible run-owned worktrees above the default limit of 100. Manual worktrees are never automatically removed, and protected worktrees can keep the total above the limit until they are released or explicitly cleaned up.
+- Cleanup also removes the least recently active eligible run-owned worktrees above the default target of 100. Manual worktrees are never automatically removed, and protected worktrees can keep the total above the target until they are released or explicitly cleaned up.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - A live OpenClaw process lock and any foreign or unrecognized git worktree lock protect a worktree from garbage collection.
 

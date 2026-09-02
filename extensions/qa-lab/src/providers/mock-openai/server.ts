@@ -1,7 +1,11 @@
 // QA Lab mock Responses dispatcher, HTTP transport, and debug endpoints.
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeQaHttpServer } from "../../bus-server.js";
+import {
+  closeQaHttpServer,
+  dispatchQaHttpRequest,
+  writeQaRequestBodyLimitError,
+} from "../../bus-server.js";
 import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 import {
@@ -47,7 +51,6 @@ import {
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
-  QA_TOOL_PROGRESS_ERROR_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
@@ -109,13 +112,10 @@ import {
   MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
   readBody,
   parseJsonObjectBody,
-  writeOpenAiMalformedJsonError,
   transcriptionTextForAudioRequest,
   writeSse,
   isRemoteCompactionV2Request,
   buildRemoteCompactionV2Events,
-  writeSseWithPreviewPause,
-  writeAnthropicSse,
   countApproxTokens,
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
@@ -198,6 +198,13 @@ import {
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
+const MOCK_HTTP_POST_ROUTES = new Map([
+  ["/v1/images/generations", "OpenAI Images"],
+  ["/v1/audio/transcriptions", "OpenAI Audio"],
+  ["/v1/embeddings", "OpenAI Embeddings"],
+  ["/v1/responses", "OpenAI Responses"],
+  ["/v1/messages", "Anthropic Messages"],
+]);
 const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE =
   /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i;
@@ -1070,22 +1077,6 @@ async function buildResponsesPayload(
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
   const canCallSessionsYield =
     hasToolDefinition(toolDeclarationBody, "sessions_yield") || hasCallableCodeMode;
-  const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
-  // Progress scenarios share full session transcripts. Scope completion to
-  // the selected prompt so an older turn's tool output cannot finish this one.
-  const toolProgressToolOutput = toolProgressTurn
-    ? extractToolOutput(input.slice(toolProgressTurn.index))
-    : "";
-  const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
-  const buildToolProgressReadEvents = () => {
-    return buildToolCallEventsWithArgs("read", {
-      path: readTargetFromPrompt(scenarioFamilyPrompt),
-    });
-  };
-  const buildToolProgressExecEvents = () => {
-    const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
-    return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
-  };
   const slackProgressTurn = extractLastMatchingUserTurn(
     input,
     QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
@@ -1653,28 +1644,31 @@ async function buildResponsesPayload(
       );
     }
   }
-  const toolProgressReplyDirective =
-    extractExactReplyDirective(toolProgressToolOutput) ??
-    extractExactMarkerDirective(toolProgressToolOutput) ??
-    scenarioFamilyReplyDirective;
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt)) {
-    if (!toolProgressToolOutput) {
-      return buildToolProgressReadEvents();
-    }
-    if (toolProgressReplyDirective) {
-      return buildAssistantEvents(
-        hasToolErrorOutput(toolProgressToolJson, toolProgressToolOutput)
-          ? toolProgressReplyDirective
-          : "BUG-TOOL-DID-NOT-FAIL",
+  const toolProgress = QA_TOOL_PROGRESS_PROMPT_RE.exec(scenarioFamilyPrompt);
+  if (toolProgress) {
+    const expectsError = Boolean(toolProgress[1]);
+    const turn = extractLastMatchingUserTurn(input, QA_TOOL_PROGRESS_PROMPT_RE);
+    // Progress scenarios share transcripts. Only the selected prompt's result can finish it.
+    const progressInput = turn ? input.slice(turn.index) : [];
+    if (!hasToolOutput(progressInput)) {
+      const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
+      return buildToolCallEventsWithArgs(
+        command ? "exec" : "read",
+        command ? { command } : { path: readTargetFromPrompt(scenarioFamilyPrompt) },
       );
     }
-  }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(scenarioFamilyPrompt)) {
-    if (!toolProgressToolOutput) {
-      return buildToolProgressExecEvents() ?? buildToolProgressReadEvents();
-    }
-    if (toolProgressReplyDirective) {
-      return buildAssistantEvents(toolProgressReplyDirective);
+    const output = extractToolOutput(progressInput);
+    const reply =
+      extractExactReplyDirective(output) ??
+      extractExactMarkerDirective(output) ??
+      scenarioFamilyReplyDirective;
+    if (reply) {
+      // A successful CodeMode runner can still return a failed capability result.
+      const structuredError = extractToolOutputStructuredError(progressInput);
+      const failed =
+        (hasCodeModeControlOutput ? structuredError || undefined : structuredError) ??
+        hasToolErrorOutput(parseToolOutputJson(output), output);
+      return buildAssistantEvents(expectsError && !failed ? "BUG-TOOL-DID-NOT-FAIL" : reply);
     }
   }
   if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
@@ -2768,7 +2762,7 @@ export async function startQaMockOpenAiServer(params?: {
   const dispatchResponses = (request: Omit<QaMockProviderDispatchRequest, "route">) =>
     dispatchProvider({ ...request, route: "responses" });
   const server = createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
         writeJson(res, 200, { ok: true, status: "live" });
@@ -2837,13 +2831,36 @@ export async function startQaMockOpenAiServer(params?: {
         writeJson(res, 200, imageGenerationRequests);
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/images/generations") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Images");
-          return;
+      const requestLabel = req.method === "POST" && MOCK_HTTP_POST_ROUTES.get(url.pathname);
+      if (!requestLabel) {
+        writeJson(res, 404, { error: "not found" });
+        return;
+      }
+      let raw: string;
+      try {
+        raw = await readBody(req);
+      } catch (error) {
+        if (!(await writeQaRequestBodyLimitError(req, res, error))) {
+          throw error;
         }
+        return;
+      }
+      if (url.pathname === "/v1/audio/transcriptions") {
+        writeJson(res, 200, { text: transcriptionTextForAudioRequest(raw) });
+        return;
+      }
+      const body = parseJsonObjectBody(raw);
+      if (!body) {
+        writeJson(res, 400, {
+          ...(url.pathname === "/v1/messages" ? { type: "error" } : {}),
+          error: {
+            type: "invalid_request_error",
+            message: `Malformed JSON body for ${requestLabel} request.`,
+          },
+        });
+        return;
+      }
+      if (url.pathname === "/v1/images/generations") {
         imageGenerationRequests.push(body);
         if (imageGenerationRequests.length > 20) {
           imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
@@ -2858,20 +2875,7 @@ export async function startQaMockOpenAiServer(params?: {
         });
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
-        const raw = await readBody(req);
-        writeJson(res, 200, {
-          text: transcriptionTextForAudioRequest(raw),
-        });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/v1/embeddings") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Embeddings");
-          return;
-        }
+      if (url.pathname === "/v1/embeddings") {
         const inputs = extractEmbeddingInputTexts(body.input);
         writeJson(res, 200, {
           object: "list",
@@ -2891,13 +2895,7 @@ export async function startQaMockOpenAiServer(params?: {
         });
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/responses") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Responses");
-          return;
-        }
+      if (url.pathname === "/v1/responses") {
         const dispatched = await dispatchResponses({ body, raw });
         if (dispatched.failure) {
           writeJson(res, dispatched.failure.status, {
@@ -2923,50 +2921,23 @@ export async function startQaMockOpenAiServer(params?: {
           dispatched.onResponseSent?.();
           return;
         }
-        if (dispatched.previewPauseMs !== undefined) {
-          await writeSseWithPreviewPause(res, events, dispatched.previewPauseMs);
-        } else {
-          writeSse(res, events);
-        }
+        await writeSse(res, events, "responses", dispatched.previewPauseMs);
         dispatched.onResponseSent?.();
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/messages") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw) as AnthropicMessagesRequest | null;
-        if (!body) {
-          writeJson(res, 400, {
-            type: "error",
-            error: {
-              type: "invalid_request_error",
-              message: "Malformed JSON body for Anthropic Messages request.",
-            },
-          });
-          return;
-        }
-        const dispatched = await dispatchProvider({
-          route: "anthropic-messages",
-          body: body as Record<string, unknown>,
-          raw,
-        });
-        const { responseBody, streamEvents } = buildMessagesPayload(dispatched);
-        if (dispatched.failure?.presentation !== "anthropic-thinking") {
-          if (dispatched.failure) {
-            writeJson(res, dispatched.failure.status, responseBody);
-            return;
-          }
-        }
-        if (body.stream === true) {
-          writeAnthropicSse(res, streamEvents);
-          dispatched.onResponseSent?.();
-          return;
-        }
+      const dispatched = await dispatchProvider({ route: "anthropic-messages", body, raw });
+      const { responseBody, streamEvents } = buildMessagesPayload(dispatched);
+      if (dispatched.failure && dispatched.failure.presentation !== "anthropic-thinking") {
+        writeJson(res, dispatched.failure.status, responseBody);
+        return;
+      }
+      if (body.stream === true) {
+        await writeSse(res, streamEvents, "anthropic");
+      } else {
         writeJson(res, dispatched.failure?.status ?? 200, responseBody);
-        dispatched.onResponseSent?.();
-        return;
       }
-      writeJson(res, 404, { error: "not found" });
-    })();
+      dispatched.onResponseSent?.();
+    });
   });
   const responsesWebSocket = attachQaMockResponsesWebSocketServer({
     server,

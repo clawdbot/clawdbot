@@ -706,6 +706,12 @@ gh workflow run openclaw-release-publish.yml \
 
 For a selected plugin repair, use `OpenClaw Release Publish` with `publish_openclaw_npm=false`, `plugin_publish_scope=selected`, and `plugins=@openclaw/name`. The parent rejects selected scope when `publish_openclaw_npm=true` so the core package cannot ship without every publishable official plugin, including `@openclaw/diffs-language-pack`. `Plugin NPM Release` also supports direct focused repair dispatch.
 
+Plugin npm artifact preflight checks out only the trusted scripts and workflows
+it needs. Preflight and publication fetch the selected source manifest on demand
+at the exact release SHA. Each verifier still independently checks that manifest
+against the artifact's recorded source hash, together with the tarball hashes
+and producer identity.
+
 ClawHub OIDC publication requires the executing release parent to authorize the exact child run, attempt, and package inventories. A direct `Plugin ClawHub Release` dry run can prepare packages without publication authority, but a standalone publish cannot replace the parent. A new recovery child cannot reuse an earlier child's receipt, and a completed parent cannot issue a new one. Failed-parent recovery therefore needs a separately approved ClawHub owner recovery contract; an environment approval alone does not supply the missing receipt. Do not retry publication with copied receipts or treat staging as completed publication.
 
 First-publish ClawHub bootstrap is the exception: dispatch `Plugin ClawHub New`

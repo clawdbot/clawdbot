@@ -1047,7 +1047,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	4
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	4
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	11
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	2
-extensions/qa-lab/src/providers/mock-openai/server.ts	18
+extensions/qa-lab/src/providers/mock-openai/server.ts	16
 extensions/qa-lab/src/providers/shared/auth-store.ts	1
 extensions/qa-lab/src/qa-bus-protocol.ts	1
 extensions/qa-lab/src/qa-transport.ts	1
@@ -2116,7 +2116,7 @@ src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
 src/auto-reply/reply/agent-runner-failure-reply.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
-src/auto-reply/reply/agent-runner-memory.ts	7
+src/auto-reply/reply/agent-runner-memory.ts	6
 src/auto-reply/reply/agent-runner-result-complete.ts	3
 src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-session-reset.ts	1
@@ -3258,7 +3258,7 @@ src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
-src/logging/logger.ts	14
+src/logging/logger.ts	13
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	3

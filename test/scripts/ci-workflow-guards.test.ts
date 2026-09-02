@@ -6941,38 +6941,35 @@ server.listen(0, "127.0.0.1", () => {
       uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
     };
     const clawhub = parse(readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8"));
-    const clawhubSteps = clawhub.jobs.preview_plugins_clawhub.steps as WorkflowStep[];
-    expect(clawhubSteps[0]).toEqual(owner);
-    expect(clawhubSteps[1]?.name).toBe("Checkout");
-    const clawhubBodies = clawhubSteps.map(({ run }) => run ?? "").join("\n");
-    expect(clawhubBodies.match(/timeout=120/gu)).toHaveLength(3);
-    expect(clawhubBodies).not.toMatch(
-      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|checkout)\b/mu,
-    );
-    expect(clawhubBodies).not.toMatch(/backoff\(|for attempt in range/u);
-
     const npm = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
-    for (const [jobName, checkoutName] of [
-      ["preview_plugins_npm", "Checkout"],
-      ["verify_plugin_npm_preflight", "Checkout trusted npm preflight tooling"],
-      ["publish_plugins_npm", "Checkout trusted publication tooling"],
+    for (const [workflow, jobName, checkoutName] of [
+      [clawhub, "preview_plugins_clawhub", "Checkout"],
+      [npm, "preview_plugins_npm", "Checkout"],
+      [npm, "verify_plugin_npm_preflight", "Checkout trusted npm preflight tooling"],
+      [npm, "publish_plugins_npm", "Checkout trusted publication tooling"],
     ] as const) {
-      const steps = npm.jobs[jobName].steps as WorkflowStep[];
+      const steps = workflow.jobs[jobName].steps as WorkflowStep[];
       expect(steps[0], jobName).toEqual(owner);
       expect(steps[1]?.name, jobName).toBe(checkoutName);
+      const body = steps
+        .map(({ run }) => run ?? "")
+        .join("\n")
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("#"))
+        .join("\n");
+      const calls = [...body.matchAll(/(?:run_git|git_output)\(([\s\S]*?)\)(?=\.|\n|$)/gu)].map(
+        (match) => match[1]!,
+      );
+      const transports = calls.filter((call) => /^\s*workspace,\s*"(?:fetch|show)",/u.test(call));
+      expect(transports.length, jobName).toBeGreaterThan(0);
+      for (const call of transports) {
+        expect(call, jobName).toMatch(/\btimeout\s*=\s*120\b/u);
+      }
+      expect(body, jobName).not.toMatch(
+        /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|checkout|show)\b/mu,
+      );
+      expect(body, jobName).not.toMatch(/backoff\(|for attempt in range/u);
     }
-    const npmBodies = [
-      ...npm.jobs.preview_plugins_npm.steps,
-      ...npm.jobs.verify_plugin_npm_preflight.steps,
-      ...npm.jobs.publish_plugins_npm.steps,
-    ]
-      .map(({ run }: WorkflowStep) => run ?? "")
-      .join("\n");
-    expect(npmBodies.match(/timeout=120/gu)).toHaveLength(5);
-    expect(npmBodies).not.toMatch(
-      /timeout[^\n]*git|(?:^|\s)git (?:fetch|rev-parse|merge-base|for-each-ref|show)\b/mu,
-    );
-    expect(npmBodies).not.toMatch(/backoff\(|for attempt in range/u);
     for (const stepName of [
       "Read exact npm preflight source package",
       "Read exact npm publication source package",
@@ -13309,32 +13306,18 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(telegramProvenanceHelper).not.toContain(".baseRefName ==");
   });
 
-  it("checks out the complete Release Decision evidence validator closure", () => {
+  it("checks out the complete trusted Release Decision scripts tree", () => {
     const workflow = readWorkflow(".github/workflows/full-release-validation.yml");
     const checkout = workflow.jobs.release_decision.steps.find(
       (step: WorkflowStep) => step.name === "Checkout release decision tooling",
     );
-    const sparseCheckoutPaths = String(checkout?.with?.["sparse-checkout"] ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
 
-    expect(sparseCheckoutPaths).toEqual([
-      "scripts/full-release-validation-state.mjs",
-      "scripts/full-release-validation-policy.mjs",
-      "scripts/full-release-candidate-contract.mjs",
-      "scripts/release-ci-summary.mjs",
-      "scripts/lib/canonical-json.mjs",
-      "scripts/lib/plain-gh.mjs",
-      "scripts/lib/record-shared.mjs",
-      "scripts/lib/upgrade-survivor-policy.mjs",
-    ]);
-    for (const sparsePath of sparseCheckoutPaths) {
-      expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({
-        sparsePath,
-        exists: true,
-      });
-    }
+    expect(checkout?.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      "sparse-checkout": "scripts",
+      "sparse-checkout-cone-mode": false,
+      "persist-credentials": false,
+    });
   });
 
   it("keeps maturity scorecard release docs opt-in from release checks", () => {
