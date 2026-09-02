@@ -5530,7 +5530,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     timestamp: 2000 + Double(index)))
         }
 
-        let items = WatchChatPresentation.makeItems(from: rawMessages)
+        let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(items.map(\.text) == ["Still worth reading"])
     }
@@ -5543,7 +5543,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 timestamp: Double(index + 1))
         }
 
-        let items = WatchChatPresentation.makeItems(from: rawMessages)
+        let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(items.map(\.text) == (2..<7).map { "Readable message \($0)" })
     }
@@ -5563,7 +5563,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 isMessageToolMirror: true),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Send the update",
@@ -5584,8 +5584,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     idempotencyKey: runID),
             ]
 
-            let items = WatchChatPresentation.makeItems(from: rawMessages)
-            let reply = WatchChatPresentation.replyText(
+            let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
+            let reply = OpenClawChatHistoryPresentation.replyText(
                 from: rawMessages,
                 runID: runID,
                 submittedText: "Question",
@@ -5610,7 +5610,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 idempotencyKey: "other-run"),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Question",
@@ -5639,7 +5639,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 stopReason: "stop"),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Question",
@@ -5664,7 +5664,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 stopReason: "stop"),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Watch question",
@@ -5689,7 +5689,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             makeWatchChatRawMessage(role: "assistant", text: "Queued reply", timestamp: 4000),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Watch question",
@@ -5722,7 +5722,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 timestamp: 4000),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Watch question",
@@ -5748,7 +5748,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             makeWatchChatRawMessage(role: "assistant", text: "Collected reply", timestamp: 4000),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Watch question",
@@ -5786,7 +5786,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             receipts.append(.init(runId: "watch-run", consumedByEventId: consumedEventID))
         }
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Original Watch question",
@@ -5803,7 +5803,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             makeWatchChatRawMessage(role: "assistant", text: "Unrelated reply", timestamp: 5000),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Watch question",
@@ -5830,7 +5830,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             makeWatchChatRawMessage(role: "assistant", text: "Same", timestamp: 1000),
         ]
 
-        let items = WatchChatPresentation.makeItems(from: rawMessages)
+        let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(items.count == 2)
         #expect(items[0].id != items[1].id)
@@ -5851,7 +5851,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 isMessageToolMirror: true),
         ]
 
-        let items = WatchChatPresentation.makeItems(from: rawMessages)
+        let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(items.count == 2)
         #expect(items[0].id != items[1].id)
@@ -5867,13 +5867,13 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                     timestamp: Double(1000 + index)))
         }
 
-        let before = WatchChatPresentation.makeItems(from: rawMessages)
+        let before = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
         try rawMessages.append(
             makeWatchChatRawMessage(
                 role: "user",
                 text: "Next question",
                 timestamp: 2000))
-        let after = WatchChatPresentation.makeItems(from: rawMessages)
+        let after = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(before.last?.id == after.dropLast().last?.id)
         #expect(after.last?.role == "user")

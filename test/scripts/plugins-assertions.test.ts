@@ -1508,7 +1508,9 @@ ${command}
         env: {
           ...process.env,
           HOME: home,
+          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
           OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
         },
       });
 
@@ -1530,6 +1532,9 @@ ${command}
       writeFileSync(path.join(scratchRoot, "plugins2-install-path.txt"), installPath, "utf8");
       writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
         installRecords: {},
+      });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), {
+        plugins: { entries: { "demo-plugin-tgz": { enabled: false } } },
       });
 
       const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {

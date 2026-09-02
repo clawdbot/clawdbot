@@ -4716,12 +4716,35 @@ describe("package artifact reuse", () => {
       PREPARED_DOCKER_MANIFEST_SHA256: "a".repeat(64),
       TARGET_VERSION: "2026.8.1",
     };
-    expect(spawnSync("bash", ["-c", gate.run ?? ""], { env }).status).toBe(0);
-    for (const failed of ["NPM_QUALIFY_RESULT", "DOCKER_PREPARE_RESULT"]) {
-      expect(
-        spawnSync("bash", ["-c", gate.run ?? ""], { env: { ...env, [failed]: "failure" } }).status,
-      ).not.toBe(0);
+    for (const targetVersion of ["2026.8.1", "2026.8.1-1", "2026.8.1-beta.1", "2026.8.33"]) {
+      const releaseEnv = { ...env, TARGET_VERSION: targetVersion };
+      expect(spawnSync("bash", ["-c", gate.run ?? ""], { env: releaseEnv }).status).toBe(0);
+      for (const failure of [
+        { NPM_PREPARE_RESULT: "failure" },
+        { NPM_QUALIFY_RESULT: "failure" },
+        { DOCKER_PREPARE_RESULT: "failure" },
+        { DOCKER_PREPARE_RESULT: "skipped" },
+        { PREPARED_DOCKER_MANIFEST_SHA256: "" },
+      ]) {
+        expect(
+          spawnSync("bash", ["-c", gate.run ?? ""], {
+            env: { ...releaseEnv, ...failure },
+          }).status,
+        ).not.toBe(0);
+      }
     }
+    const alphaEnv = {
+      ...env,
+      TARGET_VERSION: "2026.8.1-alpha.1",
+      DOCKER_PREPARE_RESULT: "skipped",
+      PREPARED_DOCKER_MANIFEST_SHA256: "",
+    };
+    expect(spawnSync("bash", ["-c", gate.run ?? ""], { env: alphaEnv }).status).toBe(0);
+    expect(
+      spawnSync("bash", ["-c", gate.run ?? ""], {
+        env: { ...alphaEnv, NPM_QUALIFY_RESULT: "failure" },
+      }).status,
+    ).not.toBe(0);
   });
 
   it("prepares one immutable candidate for release validation children", () => {
@@ -4763,9 +4786,7 @@ describe("package artifact reuse", () => {
       workflowStep(candidateBinding, "Checkout candidate binding authority"),
       workflowStep(summary, "Checkout release state verifier"),
     ]) {
-      expect(checkout.with?.["sparse-checkout"]).toContain(
-        "scripts/lib/full-release-candidate-reuse.mjs",
-      );
+      expect(checkout.with?.["sparse-checkout"]).toBe("scripts");
     }
     expect(discovery.outputs?.state).toBe("${{ steps.discover.outputs.state }}");
     expect(workflowStep(discovery, "Discover trusted release candidate").run).toContain(

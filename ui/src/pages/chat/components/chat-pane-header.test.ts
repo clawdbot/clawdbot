@@ -14,7 +14,7 @@ import {
 } from "../../../components/command-palette-contract.ts";
 import type { SessionCapability } from "../../../lib/sessions/index.ts";
 import { resolveSessionWorkspace } from "../../../lib/sessions/workspace.ts";
-import { createTestChatPane } from "../chat-pane.test-support.ts";
+import { activePlacementSession, createTestChatPane } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import {
@@ -27,6 +27,7 @@ import {
   renderChatPaneHeader,
   resolveChatPaneParentSession,
 } from "./chat-pane-header.ts";
+import { renderChatPanePlacement } from "./chat-pane-placement.ts";
 import { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 
 const containers: HTMLElement[] = [];
@@ -114,6 +115,7 @@ function mountIntegratedPresenceHeader(params: {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
@@ -318,22 +320,11 @@ describe("chat pane header", () => {
     const onPlacementMove = vi.fn();
     const onPlacementReclaim = vi.fn();
     const { container } = mountHeader({
-      session: row({
-        placement: {
-          state: "active",
-          generation: 1,
-          createdAtMs: 100_000,
-          updatedAtMs: 300_000,
-          stateChangedAtMs: 300_000,
-          environmentId: "worker:one",
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
-          workspaceBaseManifestRef: "base-manifest",
-          remoteWorkspaceDir: "/worker/repo",
-        },
+      placementControl: renderChatPanePlacement({
+        session: activePlacementSession(),
+        onPlacementMove,
+        onPlacementReclaim,
       }),
-      onPlacementMove,
-      onPlacementReclaim,
     });
 
     expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
@@ -374,7 +365,10 @@ describe("chat pane header", () => {
         updatedAtMs: 300_000,
       },
     });
-    const { container } = mountHeader({ session });
+    const { container } = mountHeader({
+      session,
+      placementControl: renderChatPanePlacement({ session }),
+    });
 
     expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
       "Moving to Gateway…",
@@ -383,27 +377,32 @@ describe("chat pane header", () => {
 
   it.each(["local", "reclaimed"] as const)("hides the placement chip for %s state", (state) => {
     const { container } = mountHeader({
-      session: row({
-        placement: {
-          state,
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
-        },
+      placementControl: renderChatPanePlacement({
+        session: row({
+          placement: {
+            state,
+            generation: 1,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            stateChangedAtMs: 1,
+          },
+        }),
       }),
     });
     expect(container.querySelector(".chat-pane__placement-chip")).toBeNull();
   });
 
-  it("places pane presence between the identity trail and face control", () => {
+  it("places placement and presence between the identity trail and face control", () => {
     const { container } = mountHeader({
+      placementControl: html`<span data-slot="placement"></span>`,
       presence: html`<span data-slot="presence"></span>`,
       faceControl: html`<span data-slot="face"></span>`,
     });
     const crumbs = container.querySelector(".chat-pane__crumbs");
-    expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("presence");
-    expect(crumbs?.nextElementSibling?.nextElementSibling?.getAttribute("data-slot")).toBe("face");
+    expect(
+      [...container.querySelectorAll("[data-slot]")].map((slot) => slot.getAttribute("data-slot")),
+    ).toEqual(["placement", "presence", "face"]);
+    expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
   });
 
   it("leads with the project, then a separator, then the session title", () => {
@@ -716,10 +715,10 @@ describe("chat pane header", () => {
   });
 
   it("shows cloud placement and hides reveal when disabled", () => {
+    const session = row({ placement: { state: "active" } as GatewaySessionRow["placement"] });
     const { container } = mountHeader({
-      session: row({
-        placement: { state: "active" } as GatewaySessionRow["placement"],
-      }),
+      session,
+      placementControl: renderChatPanePlacement({ session }),
       canReveal: false,
     });
     expect(container.querySelector(".chat-pane__placement-chip")).not.toBeNull();

@@ -42,8 +42,7 @@ export function createEmbeddedAgentSubscribeState(
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
     partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
-    lastStreamedAssistant: undefined,
-    lastStreamedAssistantCleaned: undefined,
+    assistantStream: undefined,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
@@ -64,9 +63,6 @@ export function createEmbeddedAgentSubscribeState(
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
-    pendingAssistantUsage: undefined,
-    assistantUsageCommitted: false,
-    retryUsage: undefined,
     compactionInFlight: false,
     lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,

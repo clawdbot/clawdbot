@@ -51,7 +51,8 @@ Same-parent continuation requires the original root to have been dispatched
 with `fail_fast=false`. The controller verifies that exact logged input before
 any rerun mutation.
 It is also unavailable when that parent produced the sealed candidate or
-publication artifacts, because GitHub reruns make those prior-attempt artifacts unavailable.
+publication artifacts: the continuation controller does not rebind those
+artifacts to a later parent attempt.
 Keep the candidate and Tooling SHAs frozen, supersede the parent, and start a
 fresh all-group Full Release Validation.
 
@@ -321,11 +322,25 @@ sharing the target snapshot. Publication selects its channel's report and
 acknowledgement without rebuilding. Alpha, beta prerelease, and extended-stable
 targets keep their required channel.
 
+If npm qualification fails after source checks and package preparation succeed,
+rerun the failed qualification job. It reuses the exact successful producer jobs
+and package bytes from the earlier attempt, even if that attempt failed or was
+cancelled. Failed or unfinished producer jobs remain ineligible. Final npm
+publication still requires the qualified preflight attempt to complete
+successfully.
+
 `docker-release-prepare.yml` builds both native architectures, retains OCI
 indexes and their SBOM/provenance, and runs image smoke checks before approval.
-Its GitHub Actions cache exports final image layers with `mode=min`; intermediate
-build stages stay in the shared local builder for the browser variant. This
-avoids compressing and uploading build-only layers on the release critical path.
+OCI export uses gzip level 1 for new layers and reuses cached layers without
+forced recompression, preserving the image format used by smoke and promotion.
+
+Default and browser images share the builder's local cache. Preparation does not
+transfer a remote build cache: fresh provenance timestamps invalidate application
+layers, and measured transfers cost more than reusing runtime setup saves.
+Fresh runners rebuild that setup, including mutable Debian and npm updates;
+the sealed OCI artifacts remain the reusable inputs for publication.
+The hosted VM reclaims its local builder when the job ends, so builder-volume
+deletion does not delay sealing after the artifact uploads.
 The final manifest records `publicationArtifacts.docker`. Preparation has no
 publication secrets or registry-write permission. After approval, `Docker
 Release` verifies the source/tag, producer, artifact hashes, and image digests,
@@ -333,6 +348,12 @@ then promotes those bytes to GHCR and Docker Hub. The publication lock covers
 registry writes and selector promotion. Historical evidence without prepared
 images uses the same preparation workflow before promotion. Alpha targets
 retain their existing npm-only preparation contract.
+
+If Docker preparation succeeds but publication fails in the same workflow run,
+rerun the failed publication job. The new publisher attempt verifies the original
+successful preparation job and sealed artifacts without rebuilding. A separate
+publisher run still requires the original producer attempt to be active or
+successful; it cannot adopt a failed producer attempt through this retry path.
 
 Fresh package-facing validation passes the prepared root/core bundle to the
 `Full Release Candidate` reusable workflow. Its registry carries the exact
@@ -365,17 +386,19 @@ the source SHA is unchanged. Full validation succeeds only after package
 qualification and Docker preparation also succeed; a passing product Release
 Decision alone does not authorize publication.
 
-Also for `rerun_group=all`, a `Verify Docker runtime image assets` job builds
-the `runtime-assets` Docker target with
-`OPENCLAW_EXTENSIONS=diagnostics-otel,codex`. It runs in parallel with the
-other stages and is enforced by the umbrella verifier; lanes no longer wait for
-it before dispatching. A narrower `rerun_group` skips this preflight.
+For alpha targets with `rerun_group=all`, a `Verify Docker runtime image assets`
+job builds the `runtime-assets` Docker target with
+`OPENCLAW_EXTENSIONS=diagnostics-otel,codex`. It runs in parallel with the other
+stages and remains enforced by the umbrella verifier. Other release types
+validate that same target inside mandatory Docker image preparation on both
+native architectures, avoiding a duplicate build. A narrower `rerun_group`
+skips the standalone preflight.
 
 | Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                                     |
 | Shared candidate        | **Job:** `Acquire full release candidate`<br />**Child workflow:** `Full Release Candidate`, which exact-reuses a trusted candidate or calls `OpenClaw Live And E2E Checks (Reusable)` on a cache miss<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, and emits content-addressed producer and publisher evidence for the package, plugin registry, image, and preparation plan. Both paths produce the same sealed downstream binding.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group. |
-| Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target succeeds in parallel with other stages and remains enforced by the umbrella verifier. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                                              |
+| Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** for alpha targets, the `runtime-assets` Docker build target succeeds in parallel with other stages and remains enforced by the umbrella verifier. Runs only for `rerun_group=all`; other release types cover this target in mandatory Docker image preparation.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                              |
 | Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** the selected CI graph against the target ref. `npm-beta-v1` retains Linux/macOS/Windows Node, plugin and channel contracts, Node compatibility, checks, built-artifact smoke, docs, Python skills, and Control UI; it defers macOS Swift/OpenClawKit, iOS, Android, and native i18n. Other coverage policies use full CI.<br />**Rerun:** `rerun_group=ci`.                                                                                                                                             |
 | Plugin prerelease       | **Jobs:** `Run plugin prerelease independent validation` and `Run plugin prerelease candidate validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** independent static and agentic coverage can start before acquisition, while candidate-dependent Docker lanes consume the sealed package and plugin registry identities.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                                     |
 | Release checks          | **Jobs:** `Run release checks independent validation` and `Run release checks candidate validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** independent install, QA, and live coverage can start before acquisition, while package, cross-OS, and candidate-dependent Docker lanes consume the sealed candidate. Stable and full profiles retain exhaustive live/E2E and release-path coverage.<br />**Rerun:** classify the failed surface and select one concrete release-check group.                                                                 |

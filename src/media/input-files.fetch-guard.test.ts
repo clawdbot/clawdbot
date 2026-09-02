@@ -368,6 +368,31 @@ describe("HEIC input image normalization", () => {
 });
 
 describe("guarded input file URL fetches", () => {
+  it("releases a rejected fetch without waiting for its capture tee", async () => {
+    const response = new Response("server error", { status: 503 });
+    const capture = response.clone();
+    const release = vi.fn(async () => {
+      await capture.body?.cancel();
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release });
+    let failure: unknown;
+    const pending = extractFileContentFromSource({
+      source: { type: "url", url: "https://example.com/notes" },
+      limits: createFileSourceLimits(["text/plain"], true),
+    }).catch((error: unknown) => {
+      failure = error;
+    });
+
+    try {
+      await vi.waitFor(() => expect(failure).toBeInstanceOf(Error), { timeout: 500 });
+      expect(failure).toMatchObject({ message: expect.stringContaining("Failed to fetch: 503") });
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      await capture.body?.cancel();
+      await pending;
+    }
+  });
+
   it.each([
     'text/plain; charset="windows-1252"',
     'text/plain; note="a;charset=utf-8;b"; charset=windows-1252',

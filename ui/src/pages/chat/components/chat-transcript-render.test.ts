@@ -88,7 +88,7 @@ describe("chat transcript rendering", () => {
     handleAgentEvent(host, agentEvent(runId, 1, "usage", { outputTokens: 6_900 }, sessionKey));
     rerender();
     expect(requireElement(container, ".chat-working-indicator__tokens").textContent).toBe(
-      "6,900 output tokens",
+      "6.9k output tokens",
     );
     // Final usage and lifecycle can share one browser render; neither may discard the count.
     handleAgentEvent(host, agentEvent(runId, 2, "usage", { outputTokens: 6_950 }, sessionKey));
@@ -102,13 +102,11 @@ describe("chat transcript rendering", () => {
       runtimeMs: 14_000,
     };
     rerender();
-    expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
-      "6,950 output tokens",
-    );
-    handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 6_951 }, sessionKey));
+    expect(requireElement(container, ".chat-turn-recap").textContent).toContain("7k output tokens");
+    handleAgentEvent(host, agentEvent(runId, 4, "usage", { outputTokens: 7_094 }, sessionKey));
     rerender();
     expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
-      "6,951 output tokens",
+      "7.1k output tokens",
     );
     handleAgentEvent(
       host,
@@ -116,7 +114,7 @@ describe("chat transcript rendering", () => {
     );
     rerender();
     expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
-      "6,951 output tokens",
+      "7.1k output tokens",
     );
     for (const replaceOwner of [
       () => {
@@ -137,7 +135,7 @@ describe("chat transcript rendering", () => {
       props.runWorking = false;
       rerender();
       expect(requireElement(container, ".chat-turn-recap").textContent).toContain(
-        "6,951 output tokens",
+        "7.1k output tokens",
       );
     }
     props.messages = [

@@ -798,13 +798,16 @@ const inspected = new Set();
 cp.spawnSync = (command, args, options) => {
   if (command === "/bin/ps") {
     const index = args.indexOf("-p");
-    assert(index >= 0 && args.filter(arg => arg === "-p").length === 1 && /^[1-9][0-9]*$/.test(args[index + 1]), "fixture census must query exactly one PID");
+    assert(index >= 0 && args.filter(arg => arg === "-p").length === 1 && /^[1-9][0-9]*(?:,[1-9][0-9]*)*$/.test(args[index + 1]), "fixture census must query an explicit PID list");
+    const selected = args[index + 1].split(",").map(Number);
+    assert(process.platform === "linux" || selected.length === 1, "non-Linux census must query exactly one PID");
     assert(args.every(arg => !arg.startsWith("-") || ["-p", "-o"].includes(arg)), "fixture census must select owned PIDs only");
     const records = path.join(process.argv[3], "pids");
     const allowed = new Set(fs.readdirSync(records).filter(name => name.endsWith(".json")).map(name => JSON.parse(fs.readFileSync(path.join(records, name), "utf8"))).filter(record => !fs.existsSync(path.join(records, record.instance + ".dead"))).map(record => record.pid));
-    const pid = Number(args[index + 1]);
-    assert(allowed.has(pid) && !inspected.has(pid), "fixture census escaped deduplicated registered ownership");
-    inspected.add(pid);
+    for (const pid of selected) {
+      assert(allowed.has(pid) && !inspected.has(pid), "fixture census escaped deduplicated registered ownership");
+      inspected.add(pid);
+    }
   }
   return spawnSync(command, args, options);
 };

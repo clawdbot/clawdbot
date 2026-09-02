@@ -3,18 +3,22 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
-import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
+import {
+  resolveChatPanePlacement,
+  resolveChatPaneWorkerPresentation,
+} from "./chat-pane-placement.ts";
 import {
   activePlacementSession,
+  createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
   offlineDeviceSession,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -38,7 +42,7 @@ const workerPlacement = {
   environmentId: "node:device-looking-id",
 };
 
-describe.each([
+const startupPlacements = [
   { state: "requested", ...placementTiming },
   { state: "provisioning", ...workerPlacement },
   { state: "syncing", ...workerPlacement, workerBundleHash: "a".repeat(64) },
@@ -49,112 +53,133 @@ describe.each([
     workspaceBaseManifestRef: "base",
     remoteWorkspaceDir: "/workspace",
   },
-] as const satisfies readonly NonNullable<GatewaySessionRow["placement"]>[])(
-  "$state placement stop presentation",
-  (placement) => {
-    const phase = placement.state;
-    it.each([
-      {
-        startupPhase: phase,
-        targetKind: "device",
-        label: "device worker",
-        location: "Runs on device",
-      },
-      {
-        startupPhase: phase,
-        targetKind: "auto-device",
-        label: "device worker",
-        location: "Runs on device",
-      },
-      {
-        startupPhase: phase,
-        targetKind: "profile",
-        label: "cloud worker",
-        location: "device-service · device-profile",
-      },
-      { startupPhase: phase, targetKind: undefined, label: "worker", location: "Runs on worker" },
-      { startupPhase: "failed", targetKind: "device", label: "worker", location: "Runs on worker" },
-      {
-        startupPhase: "failed",
-        targetKind: "auto-device",
-        label: "worker",
-        location: "Runs on worker",
-      },
-      {
-        startupPhase: "failed",
-        targetKind: "profile",
-        label: "worker",
-        location: "Runs on worker",
-      },
-    ] as const)(
-      "projects $startupPhase $targetKind intent into menu and confirmation",
-      async ({ startupPhase, targetKind, label, location }) => {
-        const request = vi.fn(async () => ({ ok: true }));
-        const refreshReplacement = vi.fn(async () => undefined);
-        const { pane } = createTestChatPane({
-          client: { request } as unknown as GatewayBrowserClient,
-          sessions: { refreshReplacement } as unknown as SessionCapability,
-        });
-        const session: GatewaySessionRow = {
-          key: "agent:main:startup",
-          label: "Startup session",
-          kind: "direct",
-          updatedAt: 1,
-          placement,
-        };
-        vi.mocked(pane.context.placementStartup.get).mockImplementation((key) =>
-          key === session.key && targetKind
-            ? { sessionKey: key, phase: startupPhase, startedAt: 1, targetKind }
-            : null,
-        );
-        const container = document.createElement("div");
-        document.body.append(container);
-        render(
-          renderChatPanePlacement({
-            session,
-            placementStartupStatus: pane.context.placementStartup.get(session.key),
-          }),
-          container,
-        );
-        const chipText = container.querySelector(".chat-pane__placement-chip")?.textContent;
-        const menuText = container
-          .querySelector(".chat-pane__placement-reclaim")
-          ?.textContent?.trim();
+] as const satisfies readonly NonNullable<GatewaySessionRow["placement"]>[];
 
-        const reclaim = pane.reclaimHeaderPlacement(session);
-        const actions = await waitForConfirmDialogActions();
-        const confirmation = document.querySelector("openclaw-modal-dialog")?.textContent;
-        answerConfirmDialog(actions, "confirm");
-        await reclaim;
-        expect(request).toHaveBeenCalledExactlyOnceWith(
-          "sessions.reclaim",
-          { key: session.key, agentId: "main" },
-          { timeoutMs: null },
-        );
-        expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
-        expect({ chipText, menuText, confirmation }).toEqual({
-          chipText:
-            targetKind === "profile" && phase === "requested" && startupPhase !== "failed"
-              ? "Runs on Cloud"
-              : location,
-          menuText: `Stop ${label}…`,
-          confirmation: expect.stringContaining(`Stop the ${label} for "Startup session"?`),
-        });
-      },
-    );
-  },
-);
+const deviceCopy = {
+  label: "Runs on device",
+  stopLabel: "Stop device worker…",
+  confirmMessage: 'Stop the device worker for "Startup session"?',
+  confirmLabel: "Stop device worker",
+};
+const cloudCopy = {
+  label: "Runs on Cloud",
+  stopLabel: "Stop cloud worker…",
+  confirmMessage: 'Stop the cloud worker for "Startup session"?',
+  confirmLabel: "Stop worker",
+};
+const unknownCopy = {
+  label: "Runs on worker",
+  stopLabel: "Stop worker…",
+  confirmMessage: 'Stop the worker for "Startup session"?',
+  confirmLabel: "Stop worker",
+};
+
+function startupSession(placement: GatewaySessionRow["placement"]): GatewaySessionRow {
+  return {
+    key: "agent:main:startup",
+    label: "Startup session",
+    kind: "direct",
+    updatedAt: 1,
+    placement,
+  };
+}
+
+describe.each([
+  { placement: startupPlacements[0], cloudLabel: "Runs on Cloud" },
+  { placement: startupPlacements[1], cloudLabel: "device-service · device-profile" },
+  { placement: startupPlacements[2], cloudLabel: "device-service · device-profile" },
+  { placement: startupPlacements[3], cloudLabel: "device-service · device-profile" },
+])("$placement.state placement stop presentation", ({ placement, cloudLabel }) => {
+  const phase = placement.state;
+  it.each([
+    { phase, targetKind: "device", copy: deviceCopy },
+    { phase, targetKind: "auto-device", copy: deviceCopy },
+    { phase, targetKind: "profile", copy: { ...cloudCopy, label: cloudLabel } },
+    { phase, targetKind: undefined, copy: unknownCopy },
+    { phase: "failed", targetKind: "device", copy: unknownCopy },
+    { phase: "failed", targetKind: "auto-device", copy: unknownCopy },
+    { phase: "failed", targetKind: "profile", copy: unknownCopy },
+  ] as const)(
+    "projects $phase $targetKind intent into operator copy",
+    ({ phase: startupPhase, targetKind, copy }) => {
+      expect(
+        resolveChatPaneWorkerPresentation(
+          startupSession(placement),
+          targetKind ? { phase: startupPhase, targetKind } : null,
+        ),
+      ).toEqual(copy);
+    },
+  );
+});
 
 describe("chat pane worker stop", () => {
+  it.each([
+    { placement: startupPlacements[0], targetKind: "device", copy: deviceCopy },
+    { placement: startupPlacements[1], targetKind: "auto-device", copy: deviceCopy },
+    {
+      placement: startupPlacements[2],
+      targetKind: "profile",
+      copy: { ...cloudCopy, label: "device-service · device-profile" },
+    },
+    { placement: startupPlacements[3], targetKind: undefined, copy: unknownCopy },
+  ] as const)(
+    "stops $placement.state $targetKind startup from the placement menu",
+    async ({ placement, targetKind, copy }) => {
+      const request = vi.fn(async () => ({ ok: true }));
+      const refreshReplacement = vi.fn(async () => undefined);
+      const { pane } = createTestChatPane({
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions: createSessionCapabilityFixture({ refreshReplacement }),
+      });
+      const session = startupSession(placement);
+      const startup = targetKind
+        ? { sessionKey: session.key, phase: placement.state, startedAt: 1, targetKind }
+        : null;
+      vi.mocked(pane.context.placementStartup.get).mockReturnValue(startup);
+      const container = document.createElement("div");
+      document.body.append(container);
+      let reclaim: Promise<void> | undefined;
+      render(
+        renderChatPanePlacement({
+          session,
+          placementStartupStatus: startup,
+          onPlacementReclaim: () => {
+            reclaim = pane.reclaimHeaderPlacement(session);
+          },
+        }),
+        container,
+      );
+      expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
+        copy.label,
+      );
+      const stop = container.querySelector<HTMLElement>(".chat-pane__placement-reclaim");
+      expect(stop?.textContent?.trim()).toBe(copy.stopLabel);
+      stop?.click();
+      const actions = await waitForConfirmDialogActions();
+      expect(document.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+        copy.confirmMessage,
+      );
+      expect(actions.querySelector(".btn.danger")?.textContent?.trim()).toBe(copy.confirmLabel);
+      answerConfirmDialog(actions, "confirm");
+      await reclaim;
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "sessions.reclaim",
+        { key: session.key, agentId: "main" },
+        { timeoutMs: null },
+      );
+      expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
+    },
+  );
+
   it("disables offline Stop while keeping Continue enabled, then restores ordinary actions", () => {
     const { pane } = createTestChatPane({
-      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.move", "sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    } as never;
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.move", "sessions.reclaim"],
+      ["operator.read", "operator.write"],
+    );
     const offline = { ...offlineDeviceSession(), hasActiveRun: false };
     const available = {
       ...offline,
@@ -198,13 +223,13 @@ describe("chat pane worker stop", () => {
   it("does not issue reclaim for an offline device placement", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture(),
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    } as never;
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.reclaim"],
+      ["operator.read", "operator.write"],
+    );
 
     await pane.reclaimHeaderPlacement({ ...offlineDeviceSession(), hasActiveRun: false });
 
@@ -212,35 +237,23 @@ describe("chat pane worker stop", () => {
     expect(document.body.querySelector("dialog[open]")).toBeNull();
   });
 
-  it("reclaims a provisioning placement through its session", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+  it("enables only Stop for provisioning with reclaim-only write access", () => {
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-    } as never;
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.reclaim"],
+      ["operator.read", "operator.write"],
+    );
 
-    const session = {
-      key: "agent:main:provisioning",
-      kind: "direct",
-      updatedAt: 0,
-      placement: {
-        state: "provisioning",
-        environmentId: "worker:one",
-      } as GatewaySessionRow["placement"],
-    } satisfies GatewaySessionRow;
+    const session = startupSession(startupPlacements[1]);
     const placement = resolveChatPanePlacement({
       gatewaySnapshot: pane.context.gateway.snapshot,
       movingKey: null,
       reclaimingKey: null,
       row: session,
     });
-    const reclaim = pane.reclaimHeaderPlacement(session);
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-    await reclaim;
 
     expect(placement).toEqual({
       moving: false,
@@ -249,11 +262,6 @@ describe("chat pane worker stop", () => {
       reclaimDisabledReason: undefined,
       restartDisabledReason: "This Gateway does not support this session action.",
     });
-    expect(request).toHaveBeenCalledWith(
-      "sessions.reclaim",
-      { key: session.key, agentId: "main" },
-      { timeoutMs: null },
-    );
   });
 
   it.each([
@@ -273,13 +281,13 @@ describe("chat pane worker stop", () => {
       const request = vi.fn(async () => ({ ok: true }));
       const refreshReplacement = vi.fn(async () => undefined);
       const { pane } = createTestChatPane({
-        client: { request } as unknown as GatewayBrowserClient,
-        sessions: { refreshReplacement } as unknown as SessionCapability,
+        client: createGatewayBrowserClientFixture({ request }),
+        sessions: createSessionCapabilityFixture({ refreshReplacement }),
       });
-      pane.context.gateway.snapshot.hello = {
-        features: { methods: ["sessions.reclaim"] },
-        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
-      } as never;
+      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+        ["sessions.reclaim"],
+        ["operator.read", "operator.write"],
+      );
       const session = activePlacementSession();
       if (runner === "device") {
         session.placement.runner = { kind: "device", status: "available" };
@@ -324,13 +332,13 @@ describe("chat pane worker stop", () => {
   it("does not reclaim when the operator cancels", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture(),
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    } as never;
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.reclaim"],
+      ["operator.admin"],
+    );
     const session = {
       ...activePlacementSession(),
       placement: {
@@ -360,13 +368,13 @@ describe("chat pane worker stop", () => {
   it("does not reclaim after the connection changes while confirmation is open", async () => {
     const request = vi.fn(async () => ({ ok: true }));
     const { pane, state } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture(),
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    } as never;
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.reclaim"],
+      ["operator.admin"],
+    );
     const session = {
       ...activePlacementSession(),
       placement: {
@@ -401,13 +409,13 @@ describe("chat pane worker stop", () => {
       throw new Error("reclaim failed");
     });
     const { pane, state } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture(),
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    } as never;
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.reclaim"],
+      ["operator.admin"],
+    );
     const session = activePlacementSession();
 
     const reclaim = pane.reclaimHeaderPlacement(session);
@@ -423,13 +431,13 @@ describe("chat pane worker stop", () => {
     const response = createDeferred<never>();
     const request = vi.fn(() => response.promise);
     const { pane, state } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture(),
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    } as never;
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.reclaim"],
+      ["operator.admin"],
+    );
     const session = activePlacementSession();
 
     const reclaim = pane.reclaimHeaderPlacement(session);
@@ -446,22 +454,17 @@ describe("chat pane worker stop", () => {
   });
 
   it("keeps reclaim progress with its session when the pane switches rows", async () => {
-    let resolveRequest!: (result: { ok: true }) => void;
-    const request = vi.fn(
-      () =>
-        new Promise<{ ok: true }>((resolve) => {
-          resolveRequest = resolve;
-        }),
-    );
+    const response = createDeferred<{ ok: true }>();
+    const request = vi.fn(() => response.promise);
     const refreshReplacement = vi.fn(async () => undefined);
     const { pane, state } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: { refreshReplacement } as unknown as SessionCapability,
+      client: createGatewayBrowserClientFixture({ request }),
+      sessions: createSessionCapabilityFixture({ refreshReplacement }),
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["sessions.reclaim"] },
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    } as never;
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["sessions.reclaim"],
+      ["operator.admin"],
+    );
     const sessionA = activePlacementSession("agent:main:cloud-a");
     const sessionB = {
       ...sessionA,
@@ -477,10 +480,8 @@ describe("chat pane worker stop", () => {
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "confirm");
     await vi.waitFor(() => expect(pane.headerPlacementReclaimingKey).toBe(sessionA.key));
-    expect(pane.headerPlacementReclaimingKey).toBe(sessionA.key);
 
     state.sessionKey = sessionB.key;
-    expect(state.sessionKey).toBe(sessionB.key);
     const placementA = resolveChatPanePlacement({
       gatewaySnapshot: pane.context.gateway.snapshot,
       movingKey: null,
@@ -496,7 +497,7 @@ describe("chat pane worker stop", () => {
     expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
     expect(placementB.reclaimDisabledReason).toBeUndefined();
 
-    resolveRequest({ ok: true });
+    response.resolve({ ok: true });
     await pendingReclaim;
 
     expect(pane.headerPlacementReclaimingKey).toBeNull();

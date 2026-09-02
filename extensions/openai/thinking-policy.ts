@@ -94,7 +94,7 @@ function buildOpenAIThinkingProfile(params: {
   const agentRuntime = normalizeModelId(params.agentRuntime ?? "");
   const codexEfforts = params.compat?.supportedReasoningEfforts?.map(normalizeModelId);
   const resolvedCodexEfforts =
-    params.api === "openai-chatgpt-responses"
+    params.api === undefined || params.api === "openai-chatgpt-responses"
       ? resolveOpenAICodexReasoningEfforts(modelId, codexEfforts)
       : undefined;
   const knownCodexEfforts = resolveOpenAICodexReasoningEfforts(modelId, undefined);
@@ -104,7 +104,7 @@ function buildOpenAIThinkingProfile(params: {
     modelId.startsWith("gpt-5.6") && (agentRuntime !== "codex" || codexSupportsMax);
   const codexSupportsUltra = (resolvedCodexEfforts ?? knownCodexEfforts)?.includes("ultra");
   // OpenClaw owns its logical Ultra orchestration. Native Codex capabilities
-  // come only from the selected ChatGPT route's catalog metadata.
+  // come from native discovery or the selected ChatGPT route's catalog metadata.
   const supportsUltra =
     (modelId === OPENAI_GPT_56_MODEL_ID || isGpt56Variant) &&
     (agentRuntime === "openclaw" ||

@@ -34,20 +34,21 @@ session keys.
 
 Flags:
 
-| Flag                 | Description                                                                   |
-| -------------------- | ----------------------------------------------------------------------------- |
-| `--agent <id>`       | One configured agent store (required for multiple explicit agents).           |
-| `--all-agents`       | Aggregate all configured agent stores.                                        |
-| `--store <path>`     | Legacy store selector path (cannot combine with `--agent` or `--all-agents`). |
-| `--active <minutes>` | Only show sessions updated within the past N minutes.                         |
-| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).               |
-| `--json`             | Machine-readable output.                                                      |
-| `--verbose`          | Verbose logging.                                                              |
+| Flag                 | Description                                                         |
+| -------------------- | ------------------------------------------------------------------- |
+| `--agent <id>`       | One configured agent store (required for multiple explicit agents). |
+| `--all-agents`       | Aggregate all configured agent stores.                              |
+| `--store <path>`     | Legacy store selector path (cannot combine with `--all-agents`).    |
+| `--active <minutes>` | Only show sessions updated within the past N minutes.               |
+| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).     |
+| `--json`             | Machine-readable output.                                            |
+| `--verbose`          | Verbose logging.                                                    |
 
 `--store` accepts the documented legacy selector form, including `sessions.json`
 and suffixless custom selectors. OpenClaw resolves that selector to its physical
 SQLite target, verifies the target exists and is usable, and reports the physical
-path it actually read.
+path it actually read. Combine it with `--agent <id>` when you must select the
+configured agent that owns the store.
 
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event

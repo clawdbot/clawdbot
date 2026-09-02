@@ -51,6 +51,7 @@ export function createCodexAttemptServerRequestController(
   const { runtime, attemptTools } = context;
   const { connection } = runtime;
   const { params, computerUseConfig, runAbortController, appServer, sessionAgentId } = connection;
+  const autoApprove = shouldAutoApproveCodexAppServerApprovals(appServer);
   const {
     compactionPlanState,
     toolBridge,
@@ -98,6 +99,9 @@ export function createCodexAttemptServerRequestController(
           paramsForRun: params,
           threadId: resourceState.thread.threadId,
           turnId,
+          autoApproveMcpTools: autoApprove,
+          projectedMcpServers: runtime.bundleMcpThreadConfig.configPatch?.mcp_servers,
+          getActiveMcpToolCall: (serverName) => projector?.getActiveMcpToolCall(serverName),
           pluginAppPolicyContext: resourceState.thread.pluginAppPolicyContext,
           ...(computerUseConfig.enabled
             ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
@@ -133,7 +137,7 @@ export function createCodexAttemptServerRequestController(
             threadId: resourceState.thread.threadId,
             turnId,
             nativeHookRelay: resourceState.nativeHookRelay,
-            autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
+            autoApprove,
             signal,
             onNativeToolFailureDisposition: (itemId, disposition, approvalKind) =>
               projector?.recordNativeToolApprovalFailure(itemId, disposition, approvalKind),

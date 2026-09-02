@@ -72,7 +72,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
-  "src/auto-reply/reply/agent-runner-memory.ts": Symbol.for("openclaw.agentRunnerMemoryTestApi"),
   "src/auto-reply/reply/agent-runner-session-reset.ts": Symbol.for(
     "openclaw.agentRunnerSessionResetTestApi",
   ),

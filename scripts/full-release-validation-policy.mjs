@@ -722,7 +722,8 @@ export function buildReleaseExecutionPlan(input) {
     },
     {
       name: "Verify Docker runtime image assets",
-      required: !reused && rerunGroup === "all",
+      required:
+        !reused && rerunGroup === "all" && stringValue(input.targetVersion).includes("-alpha."),
       result: stringValue(input.dockerPreflightResult, "skipped"),
     },
     {

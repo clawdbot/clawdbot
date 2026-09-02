@@ -19,6 +19,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  loadCodexBundleMcpApprovalConfig,
+  resolveCodexMcpToolOverridesForAgent,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -42,6 +46,7 @@ import {
 } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  hasCodexMcpToolApprovalOverrides,
   isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   isCodexSandboxExecServerEnabled,
@@ -51,6 +56,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
+  withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import {
@@ -506,7 +512,22 @@ export async function runCodexAppServerSideQuestion(
   };
 
   try {
-    const approvalPolicy = appServer.approvalPolicy;
+    const autoApproveMcpTools = shouldAutoApproveCodexAppServerApprovals(appServer);
+    const projectedMcpServers = loadCodexBundleMcpApprovalConfig({
+      workspaceDir: agentWorkspaceDir,
+      cfg: params.cfg,
+      toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
+        agentId: sessionAgentId,
+        toolOverrides: params.sessionEntry.toolOverrides,
+      }),
+    });
+    const approvalPolicy = hasCodexMcpToolApprovalOverrides(
+      params.cfg?.mcp?.servers,
+      Object.keys(projectedMcpServers),
+      projectedMcpServers,
+    )
+      ? withMcpElicitationsApprovalPolicy(appServer.approvalPolicy)
+      : appServer.approvalPolicy;
     const sandbox = appServer.sandbox;
     const nativeProviderWebSearchSupport =
       resolveCodexWebSearchPlan({
@@ -558,6 +579,10 @@ export async function runCodexAppServerSideQuestion(
             paramsForRun: sideRunParams,
             threadId: childThreadId,
             turnId,
+            autoApproveMcpTools,
+            projectedMcpServers,
+            getActiveMcpToolCall: (serverName) =>
+              nativeToolLifecycleProjector?.getActiveMcpToolCall(serverName),
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
             signal: runAbortController.signal,
           });
@@ -580,11 +605,7 @@ export async function runCodexAppServerSideQuestion(
             threadId: childThreadId,
             turnId,
             nativeHookRelay,
-            autoApprove: shouldAutoApproveCodexAppServerApprovals({
-              approvalPolicy,
-              networkProxy: appServer.networkProxy,
-              sandbox,
-            }),
+            autoApprove: autoApproveMcpTools,
             signal: runAbortController.signal,
             onNativeToolFailureDisposition: (itemId, disposition) =>
               nativeToolLifecycleProjector?.recordApprovalFailureDisposition(itemId, disposition),
@@ -660,7 +681,7 @@ export async function runCodexAppServerSideQuestion(
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
     const nativeHookRelayEvents = resolveCodexSideNativeHookRelayEvents({
       configuredEvents: options.nativeHookRelay?.events,
-      approvalPolicy,
+      approvalPolicy: appServer.approvalPolicy,
     });
     nativeHookRelay = options.nativeHookRelay
       ? registerCodexSideNativeHookRelay({
@@ -670,6 +691,8 @@ export async function runCodexAppServerSideQuestion(
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           config: params.cfg,
+          autoApproveMcpTools,
+          projectedMcpServers,
           runId: sideRunParams.runId,
           channelId: buildAgentHookContextChannelFields({
             sessionKey: params.sessionKey,
@@ -980,6 +1003,8 @@ function registerCodexSideNativeHookRelay(params: {
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParamsV2["config"];
+  autoApproveMcpTools: boolean;
+  projectedMcpServers: Parameters<typeof registerNativeHookRelay>[0]["projectedMcpServers"];
   runId: string;
   channelId?: string;
   requestTimeoutMs: number;
@@ -998,6 +1023,8 @@ function registerCodexSideNativeHookRelay(params: {
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
+    autoApproveMcpTools: params.autoApproveMcpTools,
+    projectedMcpServers: params.projectedMcpServers,
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents: params.events,

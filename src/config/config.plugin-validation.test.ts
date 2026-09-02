@@ -401,6 +401,30 @@ describe("config plugin validation", () => {
     }
   });
 
+  it.each([
+    {
+      name: "an exact explicit disable marker",
+      entry: { enabled: false },
+      warns: false,
+    },
+    {
+      name: "a disabled entry that retains settings",
+      entry: { enabled: false, config: { stale: true } },
+      warns: true,
+    },
+  ])("handles $name for a missing plugin", ({ entry, warns }) => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: { entries: { "missing-plugin": entry } },
+    });
+
+    expect(res.ok).toBe(true);
+    const hasWarning = (res.warnings ?? []).some(
+      (warning) => warning.path === "plugins.entries.missing-plugin",
+    );
+    expect(hasWarning).toBe(warns);
+  });
+
   it("warns instead of failing for stale plugins.deny entries", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },

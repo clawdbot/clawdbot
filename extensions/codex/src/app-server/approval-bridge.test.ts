@@ -3249,14 +3249,14 @@ describe("Codex app-server approval bridge", () => {
     await requestPluginApproval({
       hostCapabilities: createParams().hostCapabilities,
       title: `${"t".repeat(76)}😀tail`,
-      description: `${"d".repeat(252)}😀tail`,
+      description: `${"d".repeat(508)}😀tail`,
       severity: "warning",
       toolName: "codex_utf16_test",
     });
 
     const payload = gatewayRequestPayload();
     expect(payload.title).toBe(`${"t".repeat(76)}...`);
-    expect(payload.description).toBe(`${"d".repeat(252)}...`);
+    expect(payload.description).toBe(`${"d".repeat(508)}...`);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

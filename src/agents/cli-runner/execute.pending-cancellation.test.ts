@@ -34,6 +34,7 @@ function createTestAdapter(): TestAdapter {
   let stderrListener: ((chunk: string) => void) | undefined;
   const adapter: TestAdapter = {
     pid: 1234,
+    supportsRawOutput: false,
     onStdout: (listener) => {
       stdoutListener = listener;
     },

@@ -686,6 +686,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       listVoices: vi.fn<PluginRuntime["tts"]["listVoices"]>(),
     },
     mediaUnderstanding: {
+      resolveAudioInputBudget: vi
+        .fn<PluginRuntime["mediaUnderstanding"]["resolveAudioInputBudget"]>()
+        .mockResolvedValue({ enabled: true, maxBytes: 20 * 1024 * 1024 }),
       runFile: vi.fn<PluginRuntime["mediaUnderstanding"]["runFile"]>(),
       describeImageFile: vi.fn<PluginRuntime["mediaUnderstanding"]["describeImageFile"]>(),
       describeImageFileWithModel:

@@ -220,7 +220,7 @@ const persistRequesterSettleWakePending = (
 // blocks on the wake, but the wake must run as tracked root work: a live
 // cleanup parent reserves the root synchronously, so restart or suspend
 // cannot reach quiescence between scheduling and the wake's gateway turn.
-// Failures are logged only.
+// Failures settle only the exact admitted wake so a newer requester-yield rearm survives.
 function retainScheduledRequesterSettleWakeTimer(
   context: SubagentLifecycleWakeContext,
   runId: string,
@@ -283,6 +283,7 @@ export function scheduleRequesterSettleWake(
   entry: SubagentRunRecord,
 ): void {
   const params = context.options;
+  const admittedWake = entry.requesterSettleWake;
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   // A replayed lifecycle start can retain an older endedAt; require both
   // terminal status and end evidence so a live child never wakes its requester.
@@ -331,11 +332,30 @@ export function scheduleRequesterSettleWake(
       "subagents:lifecycle-wake",
     )
       .catch((error: unknown) => {
+        const safeError = buildSafeLifecycleErrorMeta(error);
         params.warn("requester settle wake failed", {
-          error: buildSafeLifecycleErrorMeta(error),
+          error: safeError,
           runId: maskLifecycleIdentifier(runId, "run"),
           requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
         });
+        const current = params.runs.get(runId);
+        if (!admittedWake || current !== entry || current.requesterSettleWake !== admittedWake) {
+          return;
+        }
+        try {
+          completeRequesterSettleWakeBatch(
+            context,
+            admittedWake.batchRunIds ?? [runId],
+            admittedWake.rearmGeneration,
+            { delivered: false, path: "none", error: safeError.message },
+          );
+        } catch (settleError) {
+          params.warn("failed to persist requester settle wake rejection", {
+            error: buildSafeLifecycleErrorMeta(settleError),
+            runId: maskLifecycleIdentifier(runId, "run"),
+            requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
+          });
+        }
       })
       .finally(() => {
         context.unmarkRequesterSettleWakeRunScheduled(runId);

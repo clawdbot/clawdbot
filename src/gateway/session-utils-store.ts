@@ -445,8 +445,8 @@ export function listAgentsForGateway(
   });
   return {
     defaultId: basic.defaultId,
-    ownership: basic.ownership!,
-    selectionRequired: basic.selectionRequired!,
+    ownership: basic.ownership,
+    selectionRequired: basic.selectionRequired,
     mainKey: basic.mainKey,
     scope: basic.scope,
     agents,

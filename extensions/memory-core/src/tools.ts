@@ -407,15 +407,17 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             return { corpus: "memory", outcome: "unavailable", value: null, ...failure };
           }
           const executed = attempted.value!;
-          if (executed.pausedIndexIdentityReason) {
-            const reason = executed.pausedIndexIdentityReason;
+          if (executed.pausedIndexIdentity) {
             return unavailableMemoryCorpus(
               "memory",
               {
                 results: [],
-                unavailableResult: buildPausedMemoryIndexUnavailableResult(reason),
+                unavailableResult: buildPausedMemoryIndexUnavailableResult(
+                  executed.pausedIndexIdentity,
+                  { agentId, status: executed.status },
+                ),
               },
-              reason,
+              executed.pausedIndexIdentity.reason,
             );
           }
           const citationsMode = resolveMemoryCitationsMode(cfg);
