@@ -24,6 +24,7 @@ import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import type { AgentTurnInternalResult, AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -87,6 +88,19 @@ export async function handleAgentExecutionError(params: {
       });
     params.state.pendingLifecycleTerminal = undefined;
     return terminal;
+  };
+  const settleFailure = async (
+    payload: ReplyPayload,
+    terminalMetadata?: { fallbackExhaustedFailure: true },
+  ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
+    takePendingLifecycleTerminal().emit("error", err, terminalMetadata);
+    turn.replyOperation?.fail("run_failed", err);
+    await params.modelPatch.fail(err);
+    return {
+      kind: "final",
+      payload: markAgentRunFailureReplyPayload(payload),
+      postCompactionModelFailure,
+    };
   };
   const resolveReplyOperationAbortAction = (abortError: unknown): ErrorAction | undefined => {
     const reason = isAgentRunRestartAbortReason(abortError)
@@ -169,14 +183,7 @@ export async function handleAgentExecutionError(params: {
       isGenericRunnerFailure: externalReply.isGenericRunnerFailure,
       cfg: turn.followupRun.run.config,
     });
-    takePendingLifecycleTerminal().emit("error", err);
-    turn.replyOperation?.fail("run_failed", err);
-    await params.modelPatch.fail(err);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({ text }),
-      postCompactionModelFailure,
-    };
+    return await settleFailure({ text });
   }
   const failoverFacts = resolveReplyFailoverFacts(err, message);
   const fallbackAttempts = isFailoverError(err) ? err.attempts : undefined;
@@ -245,18 +252,11 @@ export async function handleAgentExecutionError(params: {
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
-    takePendingLifecycleTerminal().emit("error", err);
-    turn.replyOperation?.fail("run_failed", err);
-    await params.modelPatch.fail(err);
-    return {
-      kind: "final",
-      payload: markAgentRunFailureReplyPayload({
-        // Curated facet copy beats the generic classified summary; see
-        // buildExternalRunFailureReply for the same priority.
-        text: providerRequestError.userMessage,
-      }),
-      postCompactionModelFailure,
-    };
+    return await settleFailure({
+      // Curated facet copy beats the generic classified summary; see
+      // buildExternalRunFailureReply for the same priority.
+      text: providerRequestError.userMessage,
+    });
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
   const isPureTransientSummary = Boolean(
@@ -333,17 +333,13 @@ export async function handleAgentExecutionError(params: {
     isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
     cfg: turn.followupRun.run.config,
   });
-  takePendingLifecycleTerminal().emit("error", err, { fallbackExhaustedFailure: true });
-  turn.replyOperation?.fail("run_failed", err);
-  await params.modelPatch.fail(err);
-  return {
-    kind: "final",
-    payload: markAgentRunFailureReplyPayload({
+  return await settleFailure(
+    {
       text: userVisibleFallbackText,
       ...(externalRunFailureReply?.presentation
         ? { presentation: externalRunFailureReply.presentation }
         : {}),
-    }),
-    postCompactionModelFailure,
-  };
+    },
+    { fallbackExhaustedFailure: true },
+  );
 }
