@@ -538,3 +538,35 @@ test("projects.remove refuses to delete a cloned checkout used by a live direct 
     await state.cleanup();
   }
 });
+
+test("projects.list names folder recents from Windows-style paths", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  try {
+    const profile = ensureProfileForEmail("windows-recents@example.test");
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:windows" },
+      {
+        sessionId: "session-windows",
+        updatedAt: 900,
+        createdActor: { type: "human", source: "profile", id: profile.id },
+        spawnedCwd: "C:\\Users\\dev\\projects\\windows-project",
+      },
+    );
+    const result = await invokeProjectMethod(
+      "projects.list",
+      {},
+      { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } },
+      ["operator.write"],
+      profile.id,
+    );
+    expect((result?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
+      {
+        kind: "folder",
+        folder: "C:\\Users\\dev\\projects\\windows-project",
+        displayName: "windows-project",
+      },
+    ]);
+  } finally {
+    await state.cleanup();
+  }
+});
