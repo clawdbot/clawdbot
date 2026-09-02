@@ -7686,8 +7686,7 @@ done
       'DOCKER_RUN_TIMEOUT="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_RUN_TIMEOUT:-900s}"',
       'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --rm',
       'docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"',
-      "plugin-owned binding commands fall through to command processing",
-      "lets authorized gateway-style plugin commands escape plugin-owned bindings",
+      "lets authorized (plugin-owned binding commands fall through to command processing|gateway-style plugin commands escape plugin-owned bindings)",
       "keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin",
       "expected focused Vitest summary for exactly 3 passed tests",
     ]);
