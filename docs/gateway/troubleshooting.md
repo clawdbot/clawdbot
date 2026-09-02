@@ -312,7 +312,7 @@ Look for:
 
 - Correct probe URL and dashboard URL.
 - Auth mode/token mismatch between client and gateway.
-- HTTP usage where device identity is required.
+- Clients that connect without device identity. Plain HTTP is not the cause: the Control UI mints its device identity on any origin ([Insecure HTTP](/web/control-ui#insecure-http)).
 
 If a local browser cannot connect to `127.0.0.1:18789` after an update, first recover the local Gateway service and confirm it is serving the dashboard:
 
@@ -326,8 +326,8 @@ If `curl` returns OpenClaw HTML, the Gateway is working and the remaining issue 
 
 <AccordionGroup>
   <Accordion title="Connect / auth signatures">
-    - `device identity required` → non-secure context or missing device auth.
-    - `origin not allowed` → browser `Origin` is not in `gateway.controlUi.allowedOrigins` (or you are connecting from a non-loopback browser origin without an explicit allowlist).
+    - `device identity required` → the client sent no device identity and its role cannot skip it: node-role sessions always need one, and operator clients can skip it only with valid shared token/password auth. Plain HTTP is not a trigger; the Control UI mints its device identity on any origin ([Insecure HTTP](/web/control-ui#insecure-http)).
+    - `origin not allowed` → the browser `Origin` is not in `gateway.controlUi.allowedOrigins` and is not a private same-origin load. Same-origin loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without an allowlist; public or cross-origin browsers need one.
     - `device nonce required` / `device nonce mismatch` → client is not completing the challenge-based device auth flow (`connect.challenge` + `device.nonce`).
     - `device signature invalid` / `device signature expired` → client signed the wrong payload (or stale timestamp) for the current handshake.
     - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.

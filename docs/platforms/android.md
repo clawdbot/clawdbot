@@ -186,13 +186,18 @@ For Tailscale or public hosts, Android requires a secure endpoint:
 
 ### 1. Start the Gateway
 
+For a trusted same-LAN setup, start an authenticated Gateway with `gateway.bind: "lan"`. The default loopback bind is not reachable from a phone, and setup-code creation refuses a loopback-only Gateway unless Tailscale Serve or a device-pair public URL supplies another route. If the Gateway has not been configured yet, run `openclaw onboard` first so the Gateway has a token or password; a non-loopback bind refuses to start without one.
+
 ```bash
-openclaw gateway --port 18789 --verbose
+openclaw config set gateway.bind lan
+openclaw gateway --port 18789
 ```
 
-Confirm in logs you see something like:
+Set `gateway.bind` in config rather than passing `--bind lan` alone: setup-code creation reads the configured bind, so a Gateway started with only the flag still refuses to mint one.
 
-- `listening on ws://0.0.0.0:18789`
+Confirm the bind with `openclaw gateway status`; it should report:
+
+- `Gateway: bind=lan (0.0.0.0), port=18789 (env/config)`
 
 For remote Android access over Tailscale, prefer Serve/Funnel instead of a raw tailnet bind:
 
@@ -234,6 +239,7 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 In the Android app:
 
 - The app keeps its gateway connection alive via a **foreground service** (persistent notification).
+- Create the setup code in the [Control UI](/web/control-ui) (**Nodes** → **Devices** → **Pair device**) or with `openclaw qr`. Both need a route the phone can reach, resolved in this order: a configured `plugins.entries.device-pair.config.publicUrl`, then Tailscale Serve or Funnel (which keeps the Gateway on loopback), then the LAN bind from step 1. A loopback-only Gateway with none of these refuses to mint a code.
 - During first-run setup, choose **Scan QR or setup code** or **Set up manually**.
 - After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
 - If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
