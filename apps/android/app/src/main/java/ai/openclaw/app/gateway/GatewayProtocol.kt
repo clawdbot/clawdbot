@@ -897,6 +897,7 @@ enum class GatewayMethod(
   SessionsTitlePrepare("sessions.title.prepare"),
   TranscriptsList("transcripts.list"),
   TranscriptsGet("transcripts.get"),
+  ModelsAuthOrderSet("models.authOrderSet"),
 }
 
 enum class GatewayEvent(
