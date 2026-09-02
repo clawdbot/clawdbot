@@ -1,5 +1,5 @@
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
-import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-flags";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -408,8 +408,8 @@ export async function withTelegramNativeQuoteFallback<T>(params: {
     ) {
       throw err;
     }
-    // Mirror delivery.send.ts legacy-reply retry: model quotes can drift from
-    // the source text, but final replies should keep the message reply target.
+    // Model quotes can drift from the source text; rejecting the quote must not
+    // discard its message reply target or topic routing.
     sendLogger.warn(
       `telegram ${params.label} native quote rejected, retrying with legacy reply_to_message_id: ${formatErrorMessage(
         err,

@@ -2,6 +2,7 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -9,14 +10,15 @@ import {
 } from "../agents/agent-scope.js";
 import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { replaceConfigFile } from "../config/config.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { AgentConfig, IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import {
   type AgentIdentity,
@@ -39,6 +41,10 @@ type AgentsSetIdentityOptions = {
 };
 
 const normalizeWorkspacePath = (input: string) => path.resolve(resolveUserPath(input));
+
+function failAgentIdentity(message: string): never {
+  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+}
 
 function resolveAgentIdByWorkspace(
   cfg: Parameters<typeof resolveAgentWorkspaceDir>[0],
@@ -69,7 +75,6 @@ export async function agentsSetIdentityCommand(
   ).config as OpenClawConfig;
   const baseHash = configSnapshot.hash;
 
-  const agentRaw = normalizeOptionalString(opts.agent);
   const nameRaw = normalizeOptionalString(opts.name);
   const emojiRaw = normalizeOptionalString(opts.emoji);
   const themeRaw = normalizeOptionalString(opts.theme);
@@ -79,7 +84,11 @@ export async function agentsSetIdentityCommand(
   const identityFileRaw = normalizeOptionalString(opts.identityFile);
   const workspaceRaw = normalizeOptionalString(opts.workspace);
   const wantsIdentityFile = Boolean(opts.fromIdentity || identityFileRaw || !hasExplicitIdentity);
-  let agentId = agentRaw ? normalizeAgentId(agentRaw) : undefined;
+  const normalizedAgent = opts.agent === undefined ? null : normalizeAgentIdStrict(opts.agent);
+  if (normalizedAgent && !normalizedAgent.ok) {
+    failAgentIdentity(`Agent "${opts.agent}" not found. Create it with \`openclaw agents add\`.`);
+  }
+  let agentId = normalizedAgent?.value;
 
   let identityFilePath: string | undefined;
   let workspaceDir: string | undefined;
@@ -96,25 +105,17 @@ export async function agentsSetIdentityCommand(
   }
 
   if (!agentId) {
-    if (!workspaceDir) {
-      runtime.error("Select an agent with --agent or provide a workspace via --workspace.");
-      runtime.exit(1);
-      return;
-    }
-    const matches = resolveAgentIdByWorkspace(cfg, workspaceDir);
+    const resolvedWorkspace = expectDefined(workspaceDir, "agent workspace");
+    const matches = resolveAgentIdByWorkspace(cfg, resolvedWorkspace);
     if (matches.length === 0) {
-      runtime.error(
-        `No agent workspace matches ${shortenHomePath(workspaceDir)}. Pass --agent to target a specific agent.`,
+      failAgentIdentity(
+        `No agent workspace matches ${shortenHomePath(resolvedWorkspace)}. Pass --agent to target a specific agent.`,
       );
-      runtime.exit(1);
-      return;
     }
     if (matches.length > 1) {
-      runtime.error(
-        `Multiple agents match ${shortenHomePath(workspaceDir)}: ${matches.join(", ")}. Pass --agent to choose one.`,
+      failAgentIdentity(
+        `Multiple agents match ${shortenHomePath(resolvedWorkspace)}: ${matches.join(", ")}. Pass --agent to choose one.`,
       );
-      runtime.exit(1);
-      return;
     }
     agentId = matches[0];
   }
@@ -122,9 +123,9 @@ export async function agentsSetIdentityCommand(
   const resolvedAgentId = expectDefined(agentId, "agent id");
   const resolvedAgentIds = listAgentIds(cfg).map((id) => normalizeAgentId(id));
   if (!resolvedAgentIds.includes(resolvedAgentId)) {
-    runtime.error(`Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`);
-    runtime.exit(1);
-    return;
+    failAgentIdentity(
+      `Agent "${resolvedAgentId}" not found. Create it with \`openclaw agents add\`.`,
+    );
   }
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, resolvedAgentId);
@@ -135,9 +136,7 @@ export async function agentsSetIdentityCommand(
       try {
         identityFromFile = await loadAgentIdentityFromFile(identityFilePath);
       } catch (error) {
-        runtime.error(String(error instanceof Error ? error.message : error));
-        runtime.exit(1);
-        return;
+        failAgentIdentity(formatErrorMessage(error));
       }
     } else if (workspaceDir) {
       identityFromFile = loadAgentIdentity(workspaceDir);
@@ -146,9 +145,7 @@ export async function agentsSetIdentityCommand(
       const targetPath =
         identityFilePath ??
         (workspaceDir ? path.join(workspaceDir, DEFAULT_IDENTITY_FILENAME) : "IDENTITY.md");
-      runtime.error(`No identity data found in ${shortenHomePath(targetPath)}.`);
-      runtime.exit(1);
-      return;
+      failAgentIdentity(`No identity data found in ${shortenHomePath(targetPath)}.`);
     }
   }
 
@@ -162,19 +159,6 @@ export async function agentsSetIdentityCommand(
       ? { avatar: avatarRaw ?? identityFromFile?.avatar }
       : {}),
   };
-
-  if (
-    !incomingIdentity.name &&
-    !incomingIdentity.emoji &&
-    !incomingIdentity.theme &&
-    !incomingIdentity.avatar
-  ) {
-    runtime.error(
-      "No identity fields provided. Use --name/--emoji/--theme/--avatar or --from-identity.",
-    );
-    runtime.exit(1);
-    return;
-  }
 
   const base: AgentConfig =
     index >= 0 ? expectDefined(list[index], "agent config") : { id: resolvedAgentId };
@@ -225,20 +209,20 @@ export async function agentsSetIdentityCommand(
   }
 
   logConfigUpdated(runtime);
-  runtime.log(`Agent: ${agentId}`);
+  runtime.log(`Agent: ${sanitizeTerminalText(resolvedAgentId)}`);
   if (nextIdentity.name) {
-    runtime.log(`Name: ${nextIdentity.name}`);
+    runtime.log(`Name: ${sanitizeTerminalText(nextIdentity.name)}`);
   }
   if (nextIdentity.theme) {
-    runtime.log(`Theme: ${nextIdentity.theme}`);
+    runtime.log(`Theme: ${sanitizeTerminalText(nextIdentity.theme)}`);
   }
   if (nextIdentity.emoji) {
-    runtime.log(`Emoji: ${nextIdentity.emoji}`);
+    runtime.log(`Emoji: ${sanitizeTerminalText(nextIdentity.emoji)}`);
   }
   if (nextIdentity.avatar) {
-    runtime.log(`Avatar: ${nextIdentity.avatar}`);
+    runtime.log(`Avatar: ${sanitizeTerminalText(nextIdentity.avatar)}`);
   }
   if (workspaceDir) {
-    runtime.log(`Workspace: ${shortenHomePath(workspaceDir)}`);
+    runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(workspaceDir))}`);
   }
 }

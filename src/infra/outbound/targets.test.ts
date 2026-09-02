@@ -1,11 +1,12 @@
 // Covers outbound direct target resolution, heartbeat target derivation,
 // heartbeat sender context, and route-aware heartbeat refinements.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { normalizeLegacySessionEntryDelivery } from "../state-migrations.legacy-session-store.js";
 import {
@@ -111,6 +112,10 @@ vi.mock("./channel-resolution.js", () => ({
 }));
 
 runResolveOutboundTargetCoreTests();
+
+afterEach(() => {
+  setActiveDegradedSecretOwners([]);
+});
 
 beforeEach(() => {
   mocks.normalizeDeliverableOutboundChannel.mockReset();
@@ -308,63 +313,6 @@ describe("resolveSessionDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-one",
     });
-  });
-
-  it("keeps parser-only explicit target compatibility during the migration window", () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            targetPrefixes: ["alpha"],
-            parseExplicitTarget: ({ raw }) =>
-              raw === "alpha:room-a:topic:77"
-                ? { to: "room-a", threadId: 77, chatType: "group" as const }
-                : null,
-          },
-        },
-      ]),
-    );
-
-    const resolved = resolveSessionDeliveryTarget({
-      requestedChannel: "alpha",
-      explicitTo: "alpha:room-a:topic:77",
-    });
-
-    expect(resolved.to).toBe("room-a");
-    expect(resolved.threadId).toBe(77);
-  });
-
-  it("keeps parser-only session target thread compatibility during the migration window", () => {
-    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
-    setActivePluginRegistry(
-      createTargetsTestRegistry([
-        {
-          ...alpha,
-          messaging: {
-            targetPrefixes: ["alpha"],
-            parseExplicitTarget: ({ raw }) =>
-              raw === "alpha:room-a:topic:77"
-                ? { to: "room-a", threadId: 77, chatType: "group" as const }
-                : null,
-          },
-        },
-      ]),
-    );
-
-    const resolved = resolveSessionDeliveryTarget({
-      entry: {
-        sessionId: "sess-parser",
-        updatedAt: 1,
-        lastChannel: "alpha",
-        lastTo: "alpha:room-a:topic:77",
-      },
-      requestedChannel: "last",
-    });
-
-    expect(resolved.to).toBe("room-a");
-    expect(resolved.threadId).toBe(77);
   });
 
   it("uses an explicit provider-prefixed target before last-session channel fallback", () => {
@@ -758,6 +706,73 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved).toMatchObject({ channel: "alpha", to: "user:alpha-owner" });
   });
 
+  it.each(["cold", "disabled", "inspection-unavailable", "stale"] as const)(
+    "keeps heartbeat owner discovery usable when an account is %s",
+    (state) => {
+      const unavailable = state !== "stale";
+      const alpha = createOwnerAllowlistTargetTestPlugin({
+        id: "alpha",
+        label: "Alpha",
+        ownerId: "user:alpha-owner",
+        inferTargetChatType: () => "direct",
+      });
+      const beta = createOwnerAllowlistTargetTestPlugin({
+        id: "beta",
+        label: "Beta",
+        ownerId: "user:beta-owner",
+        inferTargetChatType: () => "direct",
+      });
+      const resolveAllowFrom = vi.fn(() => {
+        if (unavailable) {
+          throw new Error("unavailable credential must not resolve for owner discovery");
+        }
+        return ["user:alpha-owner"];
+      });
+      alpha.config = {
+        ...alpha.config,
+        listAccountIds: () => ["work"],
+        inspectAccount: () => ({
+          enabled: state !== "disabled",
+          configured: true,
+          tokenStatus: state === "inspection-unavailable" ? "configured_unavailable" : "available",
+        }),
+        resolveAllowFrom,
+      };
+      beta.config.listAccountIds = () => ["work"];
+      setActivePluginRegistry(createTargetsTestRegistry([alpha, beta]));
+      if (state === "cold" || state === "stale") {
+        setActiveDegradedSecretOwners([
+          {
+            ownerKind: "account",
+            ownerId: "alpha:work",
+            state: "unavailable",
+            degradationState: state,
+            paths: ["channels.alpha.accounts.work.token"],
+            refKeys: [],
+            reason: "secret reference was not found",
+          },
+        ]);
+      }
+      const cfg = { channels: { alpha: {}, beta: {} } } as OpenClawConfig;
+
+      expect(hasResolvableHeartbeatOwnerRoute({ cfg, heartbeat: { accountId: "work" } })).toBe(
+        true,
+      );
+      expect(
+        resolveHeartbeatDeliveryTarget({ cfg, heartbeat: { accountId: "work" } }),
+      ).toMatchObject({
+        channel: unavailable ? "beta" : "alpha",
+        accountId: "work",
+        to: unavailable ? "user:beta-owner" : "user:alpha-owner",
+      });
+      if (unavailable) {
+        expect(resolveAllowFrom).not.toHaveBeenCalled();
+      } else {
+        expect(resolveAllowFrom).toHaveBeenCalled();
+      }
+    },
+  );
+
   it("reuses an exact direct owner route with its account and thread", () => {
     const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
     setActivePluginRegistry(createTargetsTestRegistry([alpha]));
@@ -1074,6 +1089,7 @@ describe("resolveSessionDeliveryTarget", () => {
 
     const resolved = resolveHeartbeatDeliveryTarget({
       cfg: {},
+      agentId: "ops",
       entry: {
         sessionId: "sess-heartbeat-no-registry",
         updatedAt: 1,
@@ -1090,6 +1106,7 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
       channel: "forum",
       cfg: {},
+      agentId: "ops",
       allowBootstrap: true,
     });
     expect(
@@ -1097,6 +1114,44 @@ describe("resolveSessionDeliveryTarget", () => {
         ([params]) => params.allowBootstrap === true,
       ),
     ).toHaveLength(1);
+  });
+
+  it("upgrades an owner-route setup shell with the selected agent runtime", () => {
+    const runtime = createOwnerAllowlistTargetTestPlugin({
+      id: "forum",
+      label: "Forum",
+      ownerId: "user:ops",
+      inferTargetChatType: () => "direct",
+    });
+    const setup = { ...runtime, outbound: undefined };
+    setActivePluginRegistry(createTargetsTestRegistry([setup]));
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({
+        channel,
+        agentId,
+        allowBootstrap,
+      }: {
+        channel: string;
+        agentId?: string;
+        allowBootstrap?: boolean;
+      }) => (channel === "forum" && agentId === "ops" && allowBootstrap === true ? runtime : setup),
+    );
+    const cfg = { channels: { forum: {} } } as OpenClawConfig;
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      agentId: "ops",
+      heartbeat: { target: "owner" },
+    });
+
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("user:ops");
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "forum",
+      cfg,
+      agentId: "ops",
+      allowBootstrap: true,
+    });
   });
 
   it("does not bypass target policy when bootstrapping plugin-channel heartbeat routes", () => {
@@ -1202,6 +1257,12 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.channel).toBe("forum");
     expect(resolved.to).toBe("room:ops");
     expect(resolved.threadId).toBe(1008013);
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "forum",
+      cfg,
+      agentId: "main",
+      allowBootstrap: true,
+    });
   });
 
   it("bootstraps explicit external heartbeat targets before strict validation", () => {

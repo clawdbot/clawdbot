@@ -11,7 +11,7 @@ const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>>
 };
 
 const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
-  node: ["canvas", "image", "pdf", "tts", "web_fetch", "web_search"],
+  node: ["canvas", "pdf", "tts", "view_image", "web_fetch", "web_search"],
 };
 
 /** Applies message-provider filtering while preserving duplicate tool entries. */

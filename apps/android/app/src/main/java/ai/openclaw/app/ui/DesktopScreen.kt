@@ -34,6 +34,7 @@ import androidx.core.net.toUri
 internal fun DesktopScreen(
   viewModel: MainViewModel,
   source: String? = null,
+  session: String? = null,
   onBack: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
@@ -72,10 +73,10 @@ internal fun DesktopScreen(
         val page = controlPage
         if (isConnected && page != null) {
           // GatewayControlPage equality includes credentials and the accepted TLS pin.
-          key(page, source) {
+          key(page, source, session) {
             ControlUiWebView(
               page = page,
-              url = desktopUrl(baseUrl = page.baseUrl, source = source),
+              url = desktopUrl(baseUrl = page.baseUrl, source = source, session = session),
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -102,20 +103,26 @@ internal fun DesktopScreen(
   }
 }
 
-/** Builds the desktop document route; credentials stay in ControlUiWebView's startup script. */
+/** Builds the desktop focus route; credentials stay in ControlUiWebView's startup script. */
 internal fun desktopUrl(
   baseUrl: String,
   source: String? = null,
+  session: String? = null,
 ): String {
-  val baseUri = baseUrl.trimEnd('/').toUri()
-  val routePath = "${baseUri.encodedPath.orEmpty().trimEnd('/')}/"
+  val normalizedSource = source?.trim()?.takeIf(String::isNotEmpty)
+  val normalizedSession = session?.trim()?.takeIf(String::isNotEmpty)
   val builder =
-    baseUri
+    baseUrl
+      .trimEnd('/')
+      .toUri()
       .buildUpon()
-      .encodedPath(routePath)
       .clearQuery()
       .fragment(null)
-      .appendQueryParameter("view", "desktop")
-  source?.let { builder.appendQueryParameter("source", it) }
+      .appendPath("focus")
+      .appendPath("desktop")
+  when {
+    normalizedSource != null -> builder.appendPath("source").appendPath(normalizedSource)
+    normalizedSession != null -> builder.appendPath("session").appendPath(normalizedSession)
+  }
   return builder.build().toString()
 }

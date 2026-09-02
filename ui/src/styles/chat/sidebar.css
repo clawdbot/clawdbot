@@ -2,138 +2,20 @@
 .chat-workbench {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
-/* A collapsed rail renders nothing at all — the whole width goes back to the
-   thread. Reopen via the pane header or ⇧⌘B. */
-.chat-workbench--workspace-collapsed {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-/* Bottom dock mirrors the terminal panel: the rail becomes a strip under the
-   thread instead of a column beside it. */
-.chat-workbench--dock-bottom {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
-}
-
-.chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.chat-workbench--dock-bottom .chat-workspace-rail {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  border-left: none;
-  border-top: 1px solid var(--border);
-}
-
-/* Background-tasks rail: always right-docked, taking the last grid track. It
-   composes with the workspace rail (three columns when both are open) and
-   with a bottom-docked workspace strip (the strip spans under it). These
-   rules sit after the collapse/dock modifiers so the extra column wins at
-   equal specificity. */
-.chat-workbench--tasks-open {
-  grid-template-columns: minmax(0, 1fr) minmax(270px, 330px);
-}
-
-.chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
-  .chat-workbench--dock-bottom
-) {
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(270px, 330px);
-}
-
-/* Compact icon button shared by the pane header actions. Sizing only — chrome
-   stays ghost; .btn--icon's 36px min-width/height would win otherwise. */
+/* Compact icon button shared by the pane header actions. */
 .chat-icon-btn {
   width: 28px;
   min-width: 28px;
   height: 28px;
   min-height: 28px;
   padding: 5px;
-}
-
-/* Both rails adapt to the pane width (side column on wide panes, bottom strip
-   on narrow ones — chat-pane measures and flips the presentation), so their
-   toggles stay available at every width. */
-
-/* Positioning context for the badge on both the pane-header and floating
-   variants (the floating buttons are static children of the toggle row). */
-.chat-workspace-toggle,
-.chat-tasks-toggle {
-  position: relative;
-}
-
-.chat-workspace-toggle__badge,
-.chat-tasks-toggle__badge {
-  position: absolute;
-  top: 0;
-  right: -2px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-full);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  font-size: 9px;
-  font-weight: 650;
-  line-height: 14px;
-  text-align: center;
-}
-
-/* Drop zones shown while dragging the rail's grip; the hovered edge wins. */
-.chat-workbench__dock-zones {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-  pointer-events: none;
-}
-
-.chat-workbench__dock-zone {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 550;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.chat-workbench__dock-zone--right {
-  top: 8px;
-  right: 8px;
-  bottom: 8px;
-  width: 26%;
-}
-
-.chat-workbench__dock-zone--bottom {
-  right: 8px;
-  bottom: 8px;
-  left: 8px;
-  height: 28%;
-}
-
-.chat-workbench__dock-zone--active {
-  border-style: solid;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--text-strong);
-}
-
-/* The bottom zone paints over the right zone's lower corner; keep the active
-   one on top so its label stays readable. */
-.chat-workbench__dock-zone--active {
-  z-index: 1;
 }
 
 /* The workspace rail docks flush to the window edge like the terminal panel:
@@ -173,7 +55,22 @@
   flex: 1 1 0;
 }
 
+.chat-main__conversation-column {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .chat-main__conversation {
+  --chat-composer-top-margin: 8px;
+  --chat-transcript-composer-underlap: 30px;
+  --chat-transcript-fade-height: 24px;
+  --chat-transcript-fade-stack-overlap: calc(20px * var(--openclaw-corner-radius-scale));
+
   position: relative;
   display: flex;
   min-width: 0;
@@ -183,31 +80,46 @@
   overflow: hidden;
 }
 
+/* Header-to-transcript blend. It stops one thread gutter short of both pane
+   edges: the transcript's scrollbar lives in that strip, and a full-width
+   overlay paints over the thumb's top (it vanishes under the fade while
+   scrolling). Transcript content never enters the gutter, so nothing escapes
+   the blend. Both edges stay symmetric so RTL keeps the same clearance. */
 .chat-main__conversation::before {
   content: "";
   position: absolute;
   z-index: 2;
-  inset: 0 0 auto;
+  inset: 0 var(--chat-thread-gutter) auto;
   height: 24px;
   pointer-events: none;
   background: linear-gradient(to bottom, var(--chat-surface), transparent);
 }
 
-.chat-main--rail-docked {
-  flex-direction: row;
+@media (max-width: 560px) {
+  .chat-main__conversation {
+    --chat-transcript-fade-height: 64px;
+  }
+
+  .chat-main__conversation::before {
+    height: 56px;
+    background: linear-gradient(
+      to bottom,
+      var(--chat-surface) 0,
+      color-mix(in srgb, var(--chat-surface) 72%, transparent) 34%,
+      color-mix(in srgb, var(--chat-surface) 30%, transparent) 72%,
+      transparent 100%
+    );
+  }
 }
 
-.chat-main--rail-docked > openclaw-chat-session-rail {
-  display: block;
-  width: 400px;
-  min-width: 400px;
-  min-height: 0;
-  flex: 0 0 400px;
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-main__conversation::before {
+    display: none;
+  }
 }
 
 openclaw-chat-sidebar-region,
-.sidebar-region__right-runtime,
-.sidebar-region__panels-runtime {
+.sidebar-region__right-runtime {
   display: contents;
 }
 
@@ -229,6 +141,20 @@ openclaw-chat-sidebar-region,
   overflow: hidden;
 }
 
+.sidebar-region--bottom {
+  flex-direction: column;
+}
+
+.sidebar-region--bottom .sidebar-region__primary {
+  width: 100%;
+  min-height: 200px;
+}
+
+.sidebar-region--bottom .sidebar-column__divider {
+  --resize-handle-line-block: 100%;
+  width: 100%;
+}
+
 .sidebar-column {
   display: flex;
   flex: 0 0 auto;
@@ -240,143 +166,120 @@ openclaw-chat-sidebar-region,
   animation: chat-sidebar-fade-in 160ms ease-out;
 }
 
-.sidebar-column__header {
+/* Canonical rail header contract. The header owns geometry; actions are bare
+   glyphs with an invisible hit area so generic button chrome cannot leak in. */
+.rail-header {
   display: flex;
+  height: var(--rail-header-height);
+  min-height: var(--rail-header-height);
   flex: 0 0 auto;
   align-items: center;
-  min-width: 0;
-  min-height: 42px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel-strong) 90%, transparent);
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 var(--rail-header-padding-end) 0 var(--rail-header-padding-start);
+  border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
+  background: var(--rail-header-background);
 }
 
-.sidebar-column__tabs {
-  --track-width: 0;
-  display: block;
-  flex: 1 1 auto;
-  align-self: stretch;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.sidebar-column__tabs::part(body) {
-  display: none;
-}
-
-.sidebar-column__tabs::part(nav) {
+.rail-header__copy {
   display: flex;
-  height: 100%;
-}
-
-.sidebar-column__tab {
-  flex: 0 1 auto;
   min-width: 0;
-  cursor: grab;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--rail-header-copy-gap);
 }
 
-.sidebar-column__tab::part(base) {
-  position: relative;
-  height: 100%;
-  padding: 0 12px;
+.rail-header__eyebrow {
+  overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 600;
+  font-size: var(--rail-header-eyebrow-size);
+  letter-spacing: var(--rail-header-eyebrow-letter-spacing);
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
   white-space: nowrap;
 }
 
-.sidebar-column__tab[active]::part(base) {
+.rail-header__title {
+  overflow: hidden;
   color: var(--text);
+  font-size: var(--rail-header-title-size);
+  font-weight: var(--rail-header-title-weight);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.sidebar-column__tab[active]::part(base)::after {
-  position: absolute;
-  right: 10px;
-  bottom: 0;
-  left: 10px;
-  height: 2px;
-  border-radius: var(--radius-full);
-  background: var(--accent);
-  content: "";
-}
-
-.sidebar-column__actions {
+.rail-header__actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 2px;
-  padding-right: 5px;
+  gap: var(--rail-header-action-gap);
 }
 
-.sidebar-column__actions .btn {
-  width: 30px;
-  height: 30px;
-  min-height: 30px;
-  padding: 6px;
+.rail-header__action {
+  display: inline-flex;
+  width: var(--rail-header-action-size);
+  min-width: var(--rail-header-action-size);
+  height: var(--rail-header-action-size);
+  min-height: var(--rail-header-action-size);
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  box-shadow: none;
+  color: var(--rail-header-action-color);
+  font: inherit;
+  opacity: 1;
+  transform: none;
 }
 
-.sidebar-column__body,
-.sidebar-column__panel,
-.sidebar-column__panel > :is(.chat, openclaw-chat-detail-panel, openclaw-session-discussion) {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
+.rail-header__action:hover,
+.rail-header__action:focus-visible {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--rail-header-action-hover-color);
+  transform: none;
 }
 
-.sidebar-column__panel[hidden] {
-  display: none;
+.rail-header__action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -3px;
 }
 
-.sidebar-column__panel--wide {
-  position: absolute;
-  z-index: 1;
-  top: 42px;
-  bottom: 0;
+.rail-header__action.is-active,
+.rail-header__action[aria-pressed="true"] {
+  background: transparent;
+  color: var(--rail-header-action-active-color);
 }
 
-.sidebar-column__panel > openclaw-chat-detail-panel {
-  flex-direction: column;
+.rail-header__action:disabled,
+.rail-header__action[aria-disabled="true"] {
+  opacity: var(--rail-header-action-disabled-opacity);
+}
+
+.rail-header__action svg,
+.rail-header__action .nav-collapse-toggle__icon,
+.rail-header__action .nav-collapse-toggle__icon svg {
+  display: block;
+  width: var(--rail-header-action-glyph-size);
+  height: var(--rail-header-action-glyph-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-column__divider {
+  --resize-handle-line-inline: 100%;
   z-index: 2;
 }
 
-.sidebar-empty-side-drop-zone {
-  position: absolute;
-  z-index: 3;
-  top: 0;
-  bottom: 0;
-  width: 48px;
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
-}
-
-.sidebar-empty-side-drop-zone--left {
-  left: 0;
-}
-
-.sidebar-empty-side-drop-zone--right {
-  right: 0;
-}
-
-.sidebar-empty-side-drop-zone__boundary {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-}
-
-.sidebar-empty-side-drop-zone--left .sidebar-empty-side-drop-zone__boundary {
-  right: 0;
-}
-
-.sidebar-empty-side-drop-zone--right .sidebar-empty-side-drop-zone__boundary {
-  left: 0;
-}
-
-.sidebar-region--narrow {
+.sidebar-region--narrow:not(.sidebar-region--expanded) {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(200px, 1fr) minmax(160px, 1fr);
@@ -389,111 +292,18 @@ openclaw-chat-sidebar-region,
   min-height: 200px;
 }
 
-.sidebar-column__panel--narrow {
-  z-index: 1;
-  grid-column: 1;
-  grid-row: 2;
-  min-height: 0;
-  margin-top: 42px;
-}
-
-.sidebar-column--collapsed {
-  z-index: 0;
-  grid-column: 1;
-  grid-row: 2;
-  width: 100%;
-  min-width: 0;
-  min-height: 160px;
-  flex: 1 1 0;
+.sidebar-region--expanded .sidebar-region__primary {
+  display: none;
 }
 
 .chat-workspace-rail {
-  grid-column: 2;
-  grid-row: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
-.chat-workspace-rail__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-}
-
-.chat-workspace-rail__title {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.chat-workspace-rail__eyebrow {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.chat-workspace-rail__title strong {
-  color: var(--text);
-  font-size: var(--control-ui-text-md);
-  line-height: 1.2;
-}
-
-.chat-workspace-rail__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.chat-workspace-rail__refresh,
-.chat-workspace-rail__dock,
-.chat-workspace-rail__collapse-toggle {
-  width: 32px;
-  min-width: 32px;
-  height: 32px;
-  padding: 0;
-}
-
-/* Grab affordance for drag-to-dock. */
-.chat-workspace-rail__grip {
-  cursor: grab;
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: none;
-}
-
-.chat-workspace-rail__grip:active {
-  cursor: grabbing;
-}
-
-/* Overrides the shared .nav-collapse-toggle chrome (border, elevated
-   background, inset highlight): rail header buttons only show chrome on
-   hover. */
-.chat-workspace-rail__collapse-toggle {
-  flex: 0 0 auto;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-.chat-workspace-rail__collapse-toggle:hover {
-  border-color: transparent;
-  background: var(--bg-hover);
-  transform: none;
-}
-
-.chat-workspace-rail__refresh svg,
-.chat-workspace-rail__dock svg,
-.chat-workspace-rail__collapse-toggle svg,
 .chat-workspace-rail__file-icon svg {
   width: 15px;
   height: 15px;
@@ -505,7 +315,6 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-workspace-rail__path {
-  /* Fixed rows: only the scroll area gives way when the bottom dock is short. */
   flex-shrink: 0;
   padding: 9px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
@@ -555,32 +364,6 @@ openclaw-chat-sidebar-region,
   min-height: 0;
   overflow-y: auto;
   padding-top: 8px;
-}
-
-/* Bottom dock is short and wide: sections sit side by side as their own
-   scroll columns instead of compressing into clipped slivers. */
-.chat-workbench--dock-bottom .chat-workspace-rail__scroll {
-  flex-direction: row;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__section {
-  flex: 1 0 260px;
-  min-width: 0;
-}
-
-.chat-workbench--dock-bottom
-  .chat-workspace-rail__scroll
-  > .chat-workspace-rail__section
-  + .chat-workspace-rail__section {
-  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
-}
-
-/* The empty-state notice can sit in the row too; keep it readable. */
-.chat-workbench--dock-bottom .chat-workspace-rail__scroll > .chat-workspace-rail__state {
-  flex: 0 0 auto;
-  align-self: flex-start;
 }
 
 .chat-workspace-rail__section-title {
@@ -707,7 +490,8 @@ openclaw-chat-sidebar-region,
   opacity: 1;
 }
 
-.chat-workspace-rail__row-action {
+.chat-workspace-rail__row-action,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn) {
   display: inline-grid;
   width: 24px;
   height: 24px;
@@ -719,13 +503,15 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-workspace-rail__row-action:hover,
-.chat-workspace-rail__row-action:focus-visible {
+.chat-workspace-rail__row-action:focus-visible,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
   border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   color: var(--text);
 }
 
-.chat-workspace-rail__row-action svg {
+.chat-workspace-rail__row-action svg,
+.chat-workspace-rail__row-actions :where(.chat-copy-btn svg) {
   width: 14px;
   height: 14px;
   fill: none;
@@ -787,76 +573,26 @@ openclaw-chat-sidebar-region,
 
 .chat-workspace-rail__browser-caption {
   color: var(--muted);
-}
-
-.chat-workspace-rail__browser-caption {
   padding: 0 12px 6px;
   font-size: var(--control-ui-text-xs);
   line-height: 1.2;
 }
 
-/* Background-tasks rail: independent element classes on purpose — the
-   workspace rail's dock-bottom modifiers re-lay-out its descendants, and the
-   tasks rail must not inherit that when the workspace strip moves. */
 .chat-tasks-rail {
-  grid-column: -2;
-  grid-row: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
 
-.chat-tasks-rail__header {
+.chat-pane-primary-column {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
-}
-
-.chat-tasks-rail__title {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 2px;
   min-width: 0;
-}
-
-.chat-tasks-rail__eyebrow {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.1;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
   overflow: hidden;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.chat-tasks-rail__title strong {
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-tasks-rail__actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.chat-tasks-rail__refresh svg,
-.chat-tasks-rail__collapse-toggle svg {
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
 }
 
 .chat-tasks-rail__state {
@@ -876,6 +612,10 @@ openclaw-chat-sidebar-region,
   flex-direction: column;
   min-height: 0;
   overflow: auto;
+}
+
+.chat-tasks-rail__scroll[hidden] {
+  display: none;
 }
 
 /* List mode splits scrolling per section: running work owns the rail and the
@@ -1157,8 +897,30 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-tasks-rail__task-inspector-state--error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
   color: var(--danger);
+}
+
+.chat-tasks-rail__task-inspector-retry {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.chat-tasks-rail__task-inspector-retry:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.chat-tasks-rail__task-inspector-retry:disabled {
+  opacity: 0.55;
 }
 
 @keyframes chat-sidebar-fade-in {
@@ -1294,6 +1056,7 @@ openclaw-chat-sidebar-region,
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -1412,10 +1175,10 @@ openclaw-session-discussion {
 .sidebar-file-view__editor-menu::part(menu) {
   min-width: 132px;
   padding: 5px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
 }
 
 .sidebar-file-view__editor-item {
@@ -1547,66 +1310,61 @@ openclaw-session-discussion {
 }
 
 /* Code syntax palette is shared with highlighted message code via base tokens. */
-.file-view .tok-comment {
+:is(.file-view, .code-highlight) .tok-comment {
   color: var(--muted);
   font-style: italic;
 }
 
-.file-view .tok-keyword {
+:is(.file-view, .code-highlight) .tok-keyword {
   color: var(--hljs-keyword);
 }
 
-.file-view
+:is(.file-view, .code-highlight)
   :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
   color: var(--hljs-number);
 }
 
-.file-view :where(.tok-string, .tok-string2) {
+:is(.file-view, .code-highlight) :where(.tok-string, .tok-string2) {
   color: var(--hljs-string);
 }
 
-.file-view :where(.tok-heading, .tok-definition) {
+:is(.file-view, .code-highlight) :where(.tok-heading, .tok-definition) {
   color: var(--hljs-title);
 }
 
-.file-view :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
+:is(.file-view, .code-highlight)
+  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
   color: var(--hljs-type);
 }
 
-.file-view :where(.tok-propertyName, .tok-labelName) {
+:is(.file-view, .code-highlight) :where(.tok-propertyName, .tok-labelName) {
   color: var(--hljs-attribute);
 }
 
-.file-view :where(.tok-link, .tok-url) {
+:is(.file-view, .code-highlight) :where(.tok-link, .tok-url) {
   color: var(--accent-2);
 }
 
-.file-view .tok-meta {
+:is(.file-view, .code-highlight) .tok-meta {
   color: var(--hljs-meta);
 }
 
-.file-view .tok-deleted {
+:is(.file-view, .code-highlight) .tok-deleted {
   color: var(--hljs-deletion);
-  background: rgba(248, 81, 73, 0.12);
+  background: var(--danger-subtle);
 }
 
-.file-view .tok-inserted {
+:is(.file-view, .code-highlight) .tok-inserted {
   color: var(--hljs-addition);
-  background: rgba(46, 160, 67, 0.12);
+  background: var(--ok-subtle);
 }
 
-.file-view .tok-emphasis {
+:is(.file-view, .code-highlight) .tok-emphasis {
   font-style: italic;
 }
 
-.file-view .tok-strong {
+:is(.file-view, .code-highlight) .tok-strong {
   font-weight: 600;
-}
-
-.file-view__loading {
-  position: absolute;
-  inset: 12px;
-  pointer-events: none;
 }
 
 .file-view__save-notice {
@@ -1632,6 +1390,33 @@ openclaw-session-discussion {
   justify-content: flex-end;
   padding: 8px 10px;
   border-top: 1px solid var(--border);
+}
+
+.sidebar-attachment-preview {
+  display: grid;
+  width: 100%;
+  min-height: 0;
+}
+
+.sidebar-attachment-preview__image {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  object-fit: contain;
+}
+
+.sidebar-attachment-preview__unavailable {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--muted);
 }
 
 .sidebar-markdown-shell {
@@ -1744,7 +1529,7 @@ openclaw-session-discussion {
   margin-bottom: 0.95em;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .sidebar-markdown-shell__toolbar {
     flex-direction: column;
     align-items: stretch;
@@ -1759,58 +1544,6 @@ openclaw-session-discussion {
   .sidebar-markdown-reader {
     transition: none;
   }
-}
-
-/* Narrow pane: the tasks rail mirrors the workspace rail's bottom strip.
-   chat-view only sets --tasks-open for the side column, so the column
-   templates never fire here; these rules add the strip row instead. */
-.chat-workbench--tasks-dock-bottom {
-  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
-}
-
-/* Both strips open: workspace row 2, tasks row 3. */
-.chat-workbench--tasks-dock-bottom.chat-workbench--dock-bottom {
-  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px) minmax(160px, 236px);
-}
-
-/* A collapsed workspace rail renders nothing, so its strip row must not stay
-   reserved under the tasks strip. */
-.chat-workbench--tasks-dock-bottom.chat-workbench--dock-bottom.chat-workbench--workspace-collapsed {
-  grid-template-rows: minmax(0, 1fr) minmax(160px, 236px);
-}
-
-/* -2 is the second-from-last grid line, so the strip always lands in the last
-   row whether or not the workspace strip sits above it. */
-.chat-workbench--tasks-dock-bottom .chat-tasks-rail {
-  grid-column: 1 / -1;
-  grid-row: -2;
-  border-left: none;
-  border-top: 1px solid var(--border);
-}
-
-/* Bottom strip is short and wide: sections sit side by side as their own
-   scroll columns, matching the workspace rail's bottom dock. */
-.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll {
-  flex-direction: row;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.chat-workbench--tasks-dock-bottom .chat-tasks-rail__scroll > .chat-tasks-rail__section {
-  flex: 1 0 260px;
-  min-width: 0;
-  overflow-y: auto;
-  /* Undo the vertical split's bottom-pin cap: strip sections are full-height
-     columns and separate with border-left instead. */
-  max-height: none;
-  border-top: none;
-}
-
-.chat-workbench--tasks-dock-bottom
-  .chat-tasks-rail__scroll
-  > .chat-tasks-rail__section
-  + .chat-tasks-rail__section {
-  border-left: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
 }
 
 /* Mobile: Full-screen modal */

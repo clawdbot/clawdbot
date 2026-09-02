@@ -87,6 +87,52 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["readJob"]).toHaveBeenCalledWith("demo");
   });
 
+  it("does not load cron solely to prepare a watcher handoff", async () => {
+    const lazy = createLazyGatewayCronState(createParams());
+
+    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("preserves a watcher owner when hot reload overtakes lazy startup", async () => {
+    const finishStart = deferred();
+    const cron = createCronService();
+    cron.start = vi.fn(async () => await finishStart.promise);
+    const watchers = {
+      reconcile: vi.fn(),
+      cancel: vi.fn(),
+      cancelAll: vi.fn(async () => {}),
+      activeJobIds: vi.fn(() => ["watched-job"]),
+      updateHandlers: vi.fn(),
+    };
+    const stopOwner = vi.fn(async () => {});
+    const prepareExitWatcherHandoff = vi.fn(async () => ({
+      current: () => watchers,
+      adopt: vi.fn(),
+      stopOwner,
+    }));
+    hoisted.setState({
+      ...createCronState(cron),
+      prepareExitWatcherHandoff,
+    });
+    const lazy = createLazyGatewayCronState(createParams());
+
+    const start = lazy.cron.start();
+    await vi.waitFor(() => expect(cron["start"]).toHaveBeenCalledOnce());
+    const handoff = await lazy.prepareExitWatcherHandoff?.();
+    expect(handoff?.current()).toBe(watchers);
+
+    await handoff?.stopOwner();
+    finishStart.resolve();
+    await start;
+    await handoff?.stopOwner();
+
+    expect(prepareExitWatcherHandoff).toHaveBeenCalledOnce();
+    expect(stopOwner).toHaveBeenCalledOnce();
+    expect(watchers.cancelAll).not.toHaveBeenCalled();
+    expect(cron["stop"]).not.toHaveBeenCalled();
+  });
+
   it("forwards run payload overrides to the loaded cron service", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -337,6 +383,39 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards heartbeat reconciliation to the loaded cron service", async () => {
+    const cron = createCronService();
+    const state = createCronState(cron);
+    hoisted.setState(state);
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const cfg = { agents: { defaults: { heartbeat: { every: "5m" } } } } as OpenClawConfig;
+    await lazy.reconcileHeartbeatJobs(cfg);
+
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
+    expect(state.reconcileHeartbeatJobs).toHaveBeenCalledExactlyOnceWith(cfg);
+  });
+
+  it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {
+    const cron = createCronService();
+    const state = createCronState(cron);
+    hoisted.setState(state);
+
+    const lazy = createLazyGatewayCronState(createParams());
+
+    // Teardown before load must not force the heavy import.
+    await lazy.stopStreamWatchers();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+
+    await lazy.reconcileExitWatchers();
+    await lazy.reconcileStreamWatchers();
+    expect(state.reconcileExitWatchers).toHaveBeenCalledTimes(1);
+    expect(state.reconcileStreamWatchers).toHaveBeenCalledTimes(1);
+
+    await lazy.stopStreamWatchers();
+    expect(state.stopStreamWatchers).toHaveBeenCalledTimes(1);
+  });
+
   it("does not reconcile exit watchers when cron is disabled", async () => {
     const cron = createCronService();
     const reconcileExitWatchers = vi.fn(async () => {});
@@ -369,7 +448,11 @@ function createCronState(cron: GatewayCronServiceContract): GatewayCronState {
     cron,
     storePath: "/tmp/openclaw-cron.json",
     cronEnabled: true,
-  } as GatewayCronState;
+    reconcileExitWatchers: vi.fn(async () => {}),
+    reconcileStreamWatchers: vi.fn(async () => {}),
+    stopStreamWatchers: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+  } satisfies GatewayCronState;
 }
 
 function createCronService(): GatewayCronServiceContract {

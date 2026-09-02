@@ -95,6 +95,37 @@ describe("normalizeOpenAIResponsesToolCallIds", () => {
     expect(toolResultId(secondResult)).toBe(secondCallId);
   });
 
+  it("strips a checkpoint when rekeying a pre-checkpoint tool call", () => {
+    const rawId = "functions.gateway:0|fc_tmp_checkpoint";
+    const owner: AssistantMessage = {
+      ...buildAssistantToolCall(rawId),
+      content: [
+        { type: "toolCall", id: rawId, name: "gateway", arguments: {} },
+        { type: "text", text: "after checkpoint" },
+      ],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp_replay",
+        data: "opaque-checkpoint",
+        replayIndex: 1,
+        provider: "openrouter",
+        api: "openai-responses",
+        model: "moonshotai/kimi-k2.5",
+      },
+    };
+
+    const [rewrittenOwner, rewrittenResult] = normalizeOpenAIResponsesToolCallIds([
+      owner,
+      buildToolResult(rawId),
+    ]);
+
+    expect(rewrittenOwner?.role === "assistant" ? rewrittenOwner.providerReplay : undefined).toBe(
+      undefined,
+    );
+    expect(toolResultId(rewrittenResult)).toBe(toolCallId(rewrittenOwner));
+  });
+
   it("normalizes mixed result aliases and incomplete persisted pairings independently", () => {
     const pairedId = "functions.gateway:0|fc_tmp_paired";
     const assistantOnlyId = "functions.read:0|fc_tmp_assistant_only";
@@ -121,4 +152,22 @@ describe("normalizeOpenAIResponsesToolCallIds", () => {
     expect(toolResultId(out[4])).toMatch(/^call_[A-Za-z0-9_-]+\|fc_[A-Za-z0-9_-]+$/);
     expect(toolCallId(out[3])).not.toBe(toolResultId(out[4]));
   });
+
+  it.each(["call_id", "callId", "tool_call_id", "tool_use_id", "toolUseId"])(
+    "backfills and normalizes the %s tool-result alias",
+    (alias) => {
+      const rawId = "functions.gateway:0|fc_tmp_gateway";
+      const { toolCallId: _toolCallId, ...result } = buildToolResult(rawId);
+      const messages = [
+        buildAssistantToolCall(rawId),
+        { ...result, [alias]: rawId } as AgentMessage,
+      ];
+
+      const [assistant, rewritten] = normalizeOpenAIResponsesToolCallIds(messages);
+      const expectedId = toolCallId(assistant);
+
+      expect(toolResultId(rewritten)).toBe(expectedId);
+      expect(rewritten).toMatchObject({ [alias]: expectedId });
+    },
+  );
 });

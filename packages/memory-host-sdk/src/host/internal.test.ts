@@ -223,6 +223,109 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "primary memory file",
+      target: (workspaceDir: string) => path.join(workspaceDir, "USER.md"),
+      extraPaths: (_workspaceDir: string) => undefined,
+    },
+    {
+      label: "workspace memory directory",
+      target: (workspaceDir: string) => path.join(workspaceDir, "memory"),
+      extraPaths: (_workspaceDir: string) => undefined,
+    },
+    {
+      label: "configured extra path",
+      target: (workspaceDir: string) => path.join(workspaceDir, "extra"),
+      extraPaths: (workspaceDir: string) => [path.join(workspaceDir, "extra")],
+    },
+  ])("propagates operational scan failures for $label", async ({ target, extraPaths }) => {
+    const workspaceDir = getTmpDir();
+    const failedPath = target(workspaceDir);
+    const scanError = Object.assign(new Error(`I/O failure: ${failedPath}`), { code: "EIO" });
+    const realLstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(
+      async (...args: Parameters<typeof fs.lstat>): ReturnType<typeof fs.lstat> => {
+        if (path.resolve(String(args[0])) === failedPath) {
+          throw scanError;
+        }
+        return await realLstat(...args);
+      },
+    );
+
+    await expect(listMemoryFiles(workspaceDir, extraPaths(workspaceDir))).rejects.toMatchObject({
+      name: "MemorySourceScanError",
+      path: failedPath,
+      code: "EIO",
+      cause: scanError,
+      message: `memory source scan failed at ${failedPath} (EIO): I/O failure: ${failedPath}`,
+    });
+  });
+
+  it("propagates operational failures while discovering the canonical memory file", async () => {
+    const workspaceDir = getTmpDir();
+    const scanError = Object.assign(new Error(`I/O failure: ${workspaceDir}`), { code: "EIO" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === workspaceDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toMatchObject({
+      name: "MemorySourceScanError",
+      path: workspaceDir,
+      code: "EIO",
+      cause: scanError,
+    });
+  });
+
+  it("propagates operational failures while traversing a memory directory", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir);
+    const scanError = Object.assign(new Error(`I/O failure: ${memoryDir}`), { code: "EIO" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === memoryDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toMatchObject({
+      name: "MemorySourceScanError",
+      path: memoryDir,
+      code: "EIO",
+      cause: scanError,
+    });
+  });
+
+  it("names the nested directory that blocks a memory scan", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const nestedDir = path.join(memoryDir, "nested");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "ok.md"), "# ok\n");
+    const scanError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === nestedDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toMatchObject({
+      name: "MemorySourceScanError",
+      path: nestedDir,
+      code: "EACCES",
+      cause: scanError,
+      message: `memory source scan failed at ${nestedDir} (EACCES): permission denied`,
+    });
+  });
+
   it("filters extra directories by glob while preserving symlink skips", async () => {
     const tmpDir = getTmpDir();
     const extraDir = path.join(tmpDir, "extra");
@@ -250,6 +353,47 @@ describe("memory host SDK package internals", () => {
       "root.md",
     ]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "skips a symlinked workspace root file instead of aborting enumeration",
+    async () => {
+      const tmpDir = getTmpDir();
+      const outsideDir = path.join(tmpDir, "outside");
+      fsSync.mkdirSync(outsideDir, { recursive: true });
+      fsSync.writeFileSync(path.join(outsideDir, "shared-user.md"), "# Outside user profile");
+      fsSync.writeFileSync(path.join(tmpDir, "USER.md"), "# placeholder, replaced below");
+      fsSync.unlinkSync(path.join(tmpDir, "USER.md"));
+      expect(
+        tryCreateSymlink(path.join(outsideDir, "shared-user.md"), path.join(tmpDir, "USER.md")),
+      ).toBe(true);
+      const memoryDir = path.join(tmpDir, "memory");
+      fsSync.mkdirSync(memoryDir, { recursive: true });
+      fsSync.writeFileSync(path.join(memoryDir, "notes.md"), "# Notes");
+
+      const files = await listMemoryFiles(tmpDir);
+
+      expect(files.map((file) => path.relative(tmpDir, file))).toEqual([
+        path.join("memory", "notes.md"),
+      ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "skips a symlink when building a file entry",
+    async () => {
+      const tmpDir = getTmpDir();
+      const outsideDir = path.join(tmpDir, "outside");
+      fsSync.mkdirSync(outsideDir, { recursive: true });
+      const realPath = path.join(outsideDir, "kept.md");
+      fsSync.writeFileSync(realPath, "# Kept");
+      const linkedPath = path.join(tmpDir, "linked.md");
+      expect(tryCreateSymlink(realPath, linkedPath)).toBe(true);
+
+      await expect(buildFileEntry(linkedPath, tmpDir)).resolves.toBeNull();
+      const entry = expectFileEntry(await buildFileEntry(realPath, tmpDir));
+      expect(entry.path).toBe(path.relative(tmpDir, realPath));
+    },
+  );
 
   it("allows top-level dreams path casing variants", () => {
     expect(isMemoryPath("USER.md")).toBe(true);

@@ -76,7 +76,11 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
   return {
     ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueRoutedSystemEvent: (
+      text: unknown,
+      route: { sessionKey: unknown },
+      options: Record<string, unknown>,
+    ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
   };
 });
 
@@ -354,7 +358,10 @@ function createContext(overrides?: {
     client: listenerClient,
   };
   const runtimeLog = vi.fn();
-  const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:slack:channel:C1");
+  const resolveSessionKey = vi.fn().mockReturnValue({
+    agentId: "ops",
+    sessionKey: "agent:ops:slack:channel:C1",
+  });
   const isChannelAllowed = vi
     .fn<
       (params: {
@@ -406,7 +413,7 @@ function createContext(overrides?: {
     isChannelAllowed,
     resolveUserName,
     resolveChannelName,
-    resolveSlackSystemEventSessionKey: resolveSessionKey,
+    resolveSlackSystemEventRoute: resolveSessionKey,
   };
   return {
     ctx,
@@ -1307,6 +1314,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "ops",
       sessionKey: "agent:ops:slack:channel:C1",
       heartbeat: { target: "last" },
     });
@@ -1583,6 +1591,66 @@ describe("registerSlackInteractionEvents", () => {
     expect(respond).not.toHaveBeenCalled();
   });
 
+  it("authorizes plugin approval buttons only in the configured Grid workspace", async () => {
+    const { ctx, getHandler } = createContext({
+      installationIdentity: { kind: "enterprise", enterpriseId: "E1" },
+      cfg: {
+        channels: {
+          slack: {
+            accounts: {
+              default: {
+                allowFrom: ["team:T11111111:user:U123OWNER"],
+                execApprovals: { enabled: "auto", target: "dm" },
+              },
+            },
+          },
+        },
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+    const respond = vi.fn().mockResolvedValue(undefined);
+    const invoke = async (teamId: string) =>
+      await handler({
+        ack: vi.fn().mockResolvedValue(undefined),
+        respond,
+        context: { teamId },
+        body: {
+          user: { id: "U123OWNER" },
+          team: { id: teamId },
+          channel: { id: "C11111111" },
+          container: { channel_id: "C11111111", message_ts: "100.200" },
+          message: { ts: "100.200", text: "Plugin approval required", blocks: [] },
+        },
+        action: {
+          type: "button",
+          action_id: "openclaw:approval_button:1:1",
+          block_id: "plugin_actions",
+          value:
+            'openclaw:approval:v1:{"approvalId":"req-123","approvalKind":"plugin","decision":"allow-once"}',
+          text: { type: "plain_text", text: "Allow once" },
+        },
+      });
+
+    await invoke("T11111111");
+    await invoke("T22222222");
+
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledOnce();
+    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      approvalId: "req-123",
+      approvalKind: "plugin",
+      decision: "allow-once",
+      senderId: "team:T11111111:user:U123OWNER",
+      channel: "slack",
+      accountId: "default",
+    });
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to approve this request.",
+      response_type: "ephemeral",
+    });
+  });
+
   it("resolves typed question buttons without enqueueing an agent interaction", async () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     const { ctx, getHandler } = createContext();
@@ -1657,7 +1725,8 @@ describe("registerSlackInteractionEvents", () => {
           blocks: [
             {
               type: "section",
-              text: { type: "mrkdwn", text: "*Exec approval required*\nA command needs approval." },
+              block_id: "openclaw_approval_header",
+              text: { type: "mrkdwn", text: "Approval copy can change independently." },
             },
             { type: "section", text: { type: "mrkdwn", text: "Command preview" } },
             {
@@ -3177,6 +3246,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "ops",
       sessionKey: "agent:ops:slack:channel:C1",
       heartbeat: { target: "last" },
     });
@@ -4001,6 +4071,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "main",
       sessionKey: "agent:main:slack:channel:C99",
       heartbeat: { target: "last" },
     });

@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { resolveMxcBinaryPath } from "./binary-resolver.js";
 import { resolveConfig } from "./config.js";
@@ -43,15 +43,16 @@ export function registerMxcPlugin(api: OpenClawPluginApi): void {
     manager: mxcSandboxBackendManager,
   });
 
-  // Cleanup service unregisters backend on shutdown.
-  const cleanupService: OpenClawPluginService = {
+  // Eager CLI registrations must retire even if Gateway services never start.
+  api.lifecycle.registerRuntimeLifecycle({
     id: "mxc-sandbox-cleanup",
-    start() {
-      /* no-op */
+    cleanup: ({ reason, sessionKey, runId }) => {
+      if (sessionKey !== undefined || runId !== undefined) {
+        return;
+      }
+      if (reason === "disable" || reason === "restart") {
+        unregister();
+      }
     },
-    stop() {
-      unregister();
-    },
-  };
-  api.registerService(cleanupService);
+  });
 }

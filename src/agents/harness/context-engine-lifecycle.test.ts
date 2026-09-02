@@ -20,6 +20,7 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
   registerTestMemoryPromptBuilder,
+  type MemoryPromptSectionParams,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
@@ -132,52 +133,64 @@ describe("harness context engine lifecycle", () => {
     }
   });
 
-  it("scopes async memory preparation to non-legacy assembly with sandbox context", async () => {
-    const prepare = vi.fn(async ({ sandboxed }) => [
-      "## Prepared Memory",
-      `sandboxed=${sandboxed}`,
-      "",
-    ]);
-    registerTestMemoryPromptBuilder(() => ["## Memory Recall", ""]);
-    registerMemoryPromptPreparation("memory-wiki", prepare);
-    const availableTools = new Set(["wiki_search"]);
-    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-      messages: params.messages,
-      estimatedTokens: 0,
-      systemPromptAddition: buildMemorySystemPromptAddition({
-        availableTools: params.availableTools ?? new Set(),
-        citationsMode: params.citationsMode,
-      }),
-    }));
-
-    try {
-      const result = await assembleHarnessContextEngine({
-        contextEngine: createContextEngine({ assemble }),
-        sessionId: sessionParams.sessionId,
-        sessionKey: "global",
-        agentId: "support",
-        messages: [textMessage("user", "visible ask", 1)],
-        availableTools,
-        citationsMode: "on",
-        sandboxed: true,
-        modelId: "gpt-test",
+  it.each([false, true])(
+    "isolates prepared memory tools across non-legacy turns with sandboxed=%s",
+    async (sandboxed) => {
+      const prepare = vi.fn(async (params: MemoryPromptSectionParams) => {
+        const tools = [...params.availableTools].join(",");
+        params.availableTools.add("preparer-only");
+        await Promise.resolve();
+        return ["## Prepared Memory", `sandboxed=${params.sandboxed}; tools=${tools}`, ""];
       });
-
-      expect(result?.systemPromptAddition).toBe(
-        "## Memory Recall\n\n## Prepared Memory\nsandboxed=true",
-      );
-      expect(prepare).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "support",
-          agentSessionKey: "global",
-          sandboxed: true,
+      registerTestMemoryPromptBuilder(({ availableTools }) => {
+        availableTools.add("builder-only");
+        return ["## Memory Recall", ""];
+      });
+      registerMemoryPromptPreparation("memory-wiki", prepare);
+      const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: params.messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: params.availableTools ?? new Set(),
+          citationsMode: params.citationsMode,
         }),
-      );
-      expect(buildMemorySystemPromptAddition({ availableTools })).toBe("## Memory Recall");
-    } finally {
-      clearMemoryPluginState();
-    }
-  });
+      }));
+
+      try {
+        for (const toolNames of [undefined, [], ["wiki_search"], ["memory_search"]]) {
+          const availableTools = toolNames ? new Set(toolNames) : undefined;
+          const result = await assembleHarnessContextEngine({
+            contextEngine: createContextEngine({ assemble }),
+            sessionId: sessionParams.sessionId,
+            sessionKey: "global",
+            agentId: "support",
+            messages: [textMessage("user", "visible ask", 1)],
+            availableTools,
+            citationsMode: "on",
+            sandboxed,
+            modelId: "gpt-test",
+          });
+
+          expect(result?.systemPromptAddition).toBe(
+            `## Memory Recall\n\n## Prepared Memory\nsandboxed=${sandboxed}; tools=${(toolNames ?? []).join(",")}`,
+          );
+          expect([...(availableTools ?? [])]).toEqual(toolNames ?? []);
+          expect(prepare).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              agentId: "support",
+              agentSessionKey: "global",
+              sandboxed,
+            }),
+          );
+        }
+        expect(buildMemorySystemPromptAddition({ availableTools: new Set() })).toBe(
+          "## Memory Recall",
+        );
+      } finally {
+        clearMemoryPluginState();
+      }
+    },
+  );
 
   it("keeps hidden runtime-context custom messages out of assemble hooks", async () => {
     const visibleUser = textMessage("user", "visible ask", 1);
@@ -198,6 +211,60 @@ describe("harness context engine lifecycle", () => {
 
     const assembleParams = assemble.mock.calls.at(0)?.[0];
     expect(assembleParams?.messages).toEqual([visibleUser, visibleAssistant]);
+  });
+
+  it("isolates the authoritative history array while preserving in-place assembly", async () => {
+    const first = textMessage("user", "first", 1);
+    const second = textMessage("assistant", "second", 2);
+    const messages = [first, second];
+    const assemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => {
+      expect(params.messages).not.toBe(messages);
+      expect(params.messages).toEqual(messages);
+      expect(params.messages[0]).toBe(first);
+      expect(params.messages[1]).toBe(second);
+      params.messages.reverse();
+      return { messages: params.messages, estimatedTokens: 0 };
+    });
+
+    const assembled = await assembleHarnessContextEngine({
+      contextEngine: createContextEngine({ assemble }),
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      messages,
+      modelId: "gpt-test",
+    });
+
+    expect(messages).toEqual([first, second]);
+    expect(assembled?.messages).toEqual([second, first]);
+    expect(assembled?.messages[0]).toBe(second);
+    expect(assembled?.messages[1]).toBe(first);
+  });
+
+  it("preserves the authoritative history when assembly mutates then throws", async () => {
+    const first = textMessage("user", "first", 1);
+    const second = textMessage("assistant", "second", 2);
+    const messages = [first, second];
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async ({ messages: workingMessages }) => {
+        workingMessages.reverse();
+        workingMessages.pop();
+        throw new Error("assembly failed after windowing");
+      }),
+    });
+
+    await expect(
+      assembleHarnessContextEngine({
+        contextEngine,
+        sessionId: sessionParams.sessionId,
+        sessionKey: sessionParams.sessionKey,
+        messages,
+        modelId: "gpt-test",
+      }),
+    ).rejects.toThrow("assembly failed after windowing");
+
+    expect(messages).toEqual([first, second]);
+    expect(messages[0]).toBe(first);
+    expect(messages[1]).toBe(second);
   });
 
   it("passes declared runtime settings into assemble hooks", async () => {

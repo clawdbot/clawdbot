@@ -2,6 +2,7 @@
 import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
+import { hasMachineOutputOption } from "../machine-output-argv.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
@@ -64,6 +65,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,
     machineOutput: isDoctorMachineOutput,
+  },
+  {
+    name: "triage",
+    description: "Collect sanitized diagnostics and open a local coding agent for repair",
+    hasSubcommands: false,
+    machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
   },
   {
     name: "dashboard",

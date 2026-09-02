@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
+import { extractHttpResponseBody } from "../../shared/http-error-response.js";
 import { classifyOAuthRefreshFailure } from "../auth-profiles/oauth-refresh-failure.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import {
@@ -9,6 +10,7 @@ import {
 import { classifyFailoverReason, classifyFailoverSignal } from "../failover/classify.js";
 import { isContextOverflowErrorFromTables } from "../failover/context-overflow.js";
 import { matchesFormatErrorPattern, isTimeoutErrorMessage } from "../failover/message-patterns.js";
+import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import type { FailoverSignal } from "../failover/signal.js";
 export type ProviderRuntimeFailureKind =
   | "auth_scope"
@@ -70,7 +72,7 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   if (typeof inferred !== "number" || inferred < 400) {
     return false;
   }
-  const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
+  const rest = extractHttpResponseBody(extractLeadingHttpStatus(candidate))?.body ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
 }
 function isCloudflareChallengeResponse(message: string): boolean {
@@ -129,11 +131,15 @@ function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
 function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
 }
-function isSchemaErrorMessage(raw: string): boolean {
+function isSchemaErrorMessage(
+  raw: string,
+  opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner | null },
+): boolean {
   if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowErrorFromTables(raw)) {
     return false;
   }
-  return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
+  // Schema copy requires message evidence, not a generic HTTP 400 classification.
+  return classifyFailoverReason(raw, opts) === "format" || matchesFormatErrorPattern(raw);
 }
 function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
   if (!raw) {
@@ -168,6 +174,7 @@ function isOAuthCallbackValidationMessage(raw: string): boolean {
 }
 export function classifyProviderRuntimeFailureKind(
   signal: FailoverSignal | string,
+  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
 ): ProviderRuntimeFailureKind {
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
@@ -210,11 +217,10 @@ export function classifyProviderRuntimeFailureKind(
     }
     return status === 401 || status === 403 ? "auth_html" : "upstream_html";
   }
-  const failoverClassification = classifyFailoverSignal({
-    ...normalizedSignal,
-    status,
-    message: message || undefined,
-  });
+  const failoverClassification = classifyFailoverSignal(
+    { ...normalizedSignal, status, message: message || undefined },
+    opts,
+  );
   const failoverReason =
     failoverClassification?.kind === "reason" ? failoverClassification.reason : undefined;
   switch (failoverReason) {
@@ -234,7 +240,7 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isReplayInvalidErrorMessage(message)) {
     return "replay_invalid";
   }
-  if (message && isSchemaErrorMessage(message)) {
+  if (message && isSchemaErrorMessage(message, { ...opts, provider: normalizedSignal.provider })) {
     return "schema";
   }
   // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the

@@ -38,6 +38,17 @@ function parseDirectChatIdentity(raw: string): IMessageDirectChatIdentity | unde
   return undefined;
 }
 
+export function resolveIMessageDirectChatService(
+  configuredService?: IMessageService | null,
+  chatGuid?: string | null,
+): Exclude<IMessageService, "auto"> | undefined {
+  if (configuredService === "imessage" || configuredService === "sms") {
+    return configuredService;
+  }
+  const observedService = chatGuid ? parseDirectChatIdentity(chatGuid)?.service : undefined;
+  return observedService === "imessage" || observedService === "sms" ? observedService : undefined;
+}
+
 export function isIMessageEmailChatIdentifier(raw: string): boolean {
   const identity = parseDirectChatIdentity(raw);
   return Boolean(identity && EMAIL_HANDLE_PATTERN.test(identity.identifier));

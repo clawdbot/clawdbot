@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import OpenClawChatUI
 import SwiftUI
 
 extension RootTabs {
@@ -106,6 +107,24 @@ extension RootTabs {
         case split
     }
 
+    enum SidebarSessionPresentation: Equatable {
+        case chat
+        case dashboard
+    }
+
+    struct SidebarDashboardTarget: Equatable {
+        let sessionKey: String
+        let agentId: String?
+    }
+
+    static func sidebarPresentation(for session: OpenClawChatSessionEntry) -> SidebarSessionPresentation {
+        session.boardFace == "dashboard" ? .dashboard : .chat
+    }
+
+    static func sidebarDashboardTarget(for session: OpenClawChatSessionEntry) -> SidebarDashboardTarget {
+        SidebarDashboardTarget(sessionKey: session.key, agentId: session.agentId)
+    }
+
     static func sidebarLayoutContainerSize(contentSize: CGSize, windowSize: CGSize?) -> CGSize {
         windowSize ?? contentSize
     }
@@ -145,10 +164,6 @@ extension RootTabs {
         return max(0, min(sidebarWidth, dragOffset))
     }
 
-    static func shouldShowSidebarRevealControl(isSidebarVisible: Bool) -> Bool {
-        !isSidebarVisible
-    }
-
     static func visibleSettingsRoute(
         navigationPath: [SettingsRoute],
         baseRoute: SettingsRoute?) -> SettingsRoute?
@@ -164,7 +179,7 @@ extension RootTabs {
         case .split:
             true
         case .drawer:
-            self.shouldShowSidebarRevealControl(isSidebarVisible: isSidebarVisible)
+            !isSidebarVisible
         }
     }
 

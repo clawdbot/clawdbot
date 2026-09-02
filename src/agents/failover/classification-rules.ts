@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractLeadingHttpStatus,
   parseApiErrorInfo,
@@ -9,18 +10,9 @@ import {
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-const TIMEOUT_ERROR_CODES = new Set([
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "ECONNRESET",
-  "ECONNABORTED",
-  "ECONNREFUSED",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
+const FAILOVER_TIMEOUT_ERROR_CODES = new Set([
   "EHOSTDOWN",
   "ENETRESET",
-  "EPIPE",
-  "EAI_AGAIN",
   "ERR_STREAM_PREMATURE_CLOSE",
 ]);
 const NO_BODY_HTTP_WRAPPER_RE =
@@ -262,10 +254,11 @@ export function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("timeout");
   }
+  // Context payloads can use 5xx; preserve the compaction decision before generic status mapping.
+  if (messageClassification?.kind === "context_overflow") {
+    return messageClassification;
+  }
   if (status === 404) {
-    if (messageClassification?.kind === "context_overflow") {
-      return messageClassification;
-    }
     if (
       messageReason === "session_expired" ||
       messageReason === "billing" ||
@@ -277,13 +270,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("model_not_found");
   }
-  if (status === 503) {
-    if (messageReason === "overloaded") {
-      return messageClassification;
-    }
-    return toReasonClassification("timeout");
-  }
-  if (status === 499) {
+  if (status === 503 || status === 499) {
     if (messageReason === "overloaded") {
       return messageClassification;
     }
@@ -342,7 +329,10 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
     case "OVERLOADED_ERROR":
       return "overloaded";
     default:
-      return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
+      return FAILOVER_TIMEOUT_ERROR_CODES.has(normalized) ||
+        isTransientNetworkError({ code: normalized })
+        ? "timeout"
+        : null;
   }
 }
 export function classifyCoreFailoverReasonFromErrorType(
@@ -393,7 +383,7 @@ function hasBillingApiErrorType(raw: string): boolean {
 function isAmbiguousGeneric429BalanceMessage(raw: string): boolean {
   return /\binsufficient\s+account\s+balance\b/i.test(raw) && !hasStructuredBilling429Signal(raw);
 }
-export function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
+function isBilling429MessageForProvider(raw: string, provider: string | undefined): boolean {
   if (!isBillingErrorMessage(raw)) {
     return false;
   }
@@ -412,13 +402,15 @@ export function isExactUnknownNoDetailsError(raw: string): boolean {
     normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
   );
 }
-export function isClaudeCliLoggedOutError(raw: string, provider?: string): boolean {
-  // This upstream phrase is generic prose. Provider identity must come from
-  // the runner metadata so other providers cannot inherit Claude CLI policy.
+export function isClaudeCliAuthError(raw: string, provider?: string): boolean {
+  // These upstream phrases overlap generic session/auth wording. Provider identity
+  // must come from runner metadata so other CLIs cannot inherit Claude policy.
   if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
     return false;
   }
-  return /\bnot logged in\b\s*·\s*please run \/login\b/i.test(raw);
+  return /\bnot logged in\b\s*·\s*please run \/login\b|\bfailed to authenticate:\s*oauth session expired and could not be refreshed\b/i.test(
+    raw,
+  );
 }
 export function isUnsupportedImageInputErrorMessage(raw: string | undefined): boolean {
   const normalized = normalizeOptionalLowercaseString(raw);

@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
-import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
+import { resolveCommandConversationResolution } from "../channels/conversation-resolution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
@@ -19,39 +19,17 @@ import {
   requestPluginConversationBinding,
 } from "./conversation-binding.js";
 import { pluginCommandSupportsChannel } from "./plugin-command-metadata.js";
+import type { PluginCommandDispatchContext } from "./plugin-command-runtime.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
 const MAX_ARGS_LENGTH = 4096;
+const blockedCompaction = (reason: string) => ({ compacted: false, reason });
 
-export type PluginCommandExecutionParams = {
+export type PluginCommandExecutionParams = PluginCommandDispatchContext & {
   command: RegisteredPluginCommand;
   args?: string;
-  senderId?: string;
-  channel: string;
-  channelId?: PluginCommandContext["channelId"];
-  isAuthorizedSender: boolean;
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
-  agentId?: string;
-  sessionKey?: PluginCommandContext["sessionKey"];
-  sessionId?: PluginCommandContext["sessionId"];
-  sessionTarget?: PluginCommandContext["sessionTarget"];
-  sessionFile?: PluginCommandContext["sessionFile"];
-  authProfileId?: string;
-  commandBody: string;
-  config: OpenClawConfig;
-  from?: PluginCommandContext["from"];
-  to?: PluginCommandContext["to"];
-  originatingTo?: string;
-  accountId?: PluginCommandContext["accountId"];
-  messageThreadId?: PluginCommandContext["messageThreadId"];
-  threadParentId?: PluginCommandContext["threadParentId"];
-  diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
-  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
-  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
-  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
 };
 
 function sanitizeArgs(args: string | undefined): string | undefined {
@@ -71,7 +49,7 @@ function sanitizeArgs(args: string | undefined): string | undefined {
 
 function resolveBindingConversation(params: {
   registry: PluginRegistry;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   channel: string;
   senderId?: string;
   from?: string;
@@ -87,8 +65,9 @@ function resolveBindingConversation(params: {
   if (!channelPlugin?.bindings?.resolveCommandConversation) {
     return null;
   }
-  return resolveConversationBindingContext({
-    cfg: params.config ?? ({} as OpenClawConfig),
+  return resolveCommandConversationResolution({
+    cfg: params.config,
+    plugin: channelPlugin,
     channel: params.channel,
     accountId: params.accountId,
     threadId: params.messageThreadId,
@@ -105,19 +84,18 @@ type PluginCommandLlmCompleteParams = Parameters<
   NonNullable<PluginCommandRuntimeLlm>["complete"]
 >[0];
 
-function buildRuntimeContext(params: {
-  command: RegisteredPluginCommand;
-  config: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  authProfileId?: string;
-}): PluginCommandContext["runtimeContext"] {
+function buildRuntimeContext(
+  command: RegisteredPluginCommand,
+  params: PluginCommandDispatchContext,
+  invocationSignal: AbortSignal,
+): PluginCommandContext["runtimeContext"] {
   const sessionKey = params.sessionKey?.trim();
   const agentId = resolveBoundAgentIdForSession({
     config: params.config,
     agentId: params.agentId,
     sessionKey,
   });
+  const compactCurrent = params.runtimeContext?.compactCurrent;
   if (!sessionKey && !agentId) {
     return undefined;
   }
@@ -130,10 +108,10 @@ function buildRuntimeContext(params: {
           authority: {
             caller: {
               kind: "plugin",
-              id: params.command.pluginId,
-              name: params.command.pluginName,
+              id: command.pluginId,
+              name: command.pluginName,
             },
-            pluginIdForPolicy: params.command.pluginId,
+            pluginIdForPolicy: command.pluginId,
             requiresBoundAgent: true,
             ...(sessionKey ? { sessionKey } : {}),
             ...(agentId ? { agentId } : {}),
@@ -145,6 +123,20 @@ function buildRuntimeContext(params: {
         }).complete(request);
       },
     },
+    ...(compactCurrent && params.sessionTarget
+      ? {
+          // Command capabilities require this live invocation; retained references fail closed.
+          compactCurrent: async () => {
+            if (invocationSignal.aborted) {
+              return blockedCompaction("command invocation closed");
+            }
+            const result = await compactCurrent(invocationSignal);
+            return invocationSignal.aborted
+              ? blockedCompaction("command invocation closed")
+              : result;
+          },
+        }
+      : {}),
   };
 }
 
@@ -208,6 +200,7 @@ export async function executeRegisteredPluginCommand(
     command.pluginId === normalizeLowercaseStringOrEmpty(command.name);
   const senderIsOwner =
     canExposeSenderIsOwner(command) || trustedReservedOwner ? params.senderIsOwner : undefined;
+  const commandInvocationAbort = new AbortController();
   const ctx: PluginCommandContext = {
     senderId,
     channel,
@@ -229,13 +222,7 @@ export async function executeRegisteredPluginCommand(
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
-    runtimeContext: buildRuntimeContext({
-      command,
-      config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      authProfileId: params.authProfileId,
-    }),
+    runtimeContext: buildRuntimeContext(command, params, commandInvocationAbort.signal),
     ...(trustedReservedOwner && params.diagnosticsUploadApproved !== undefined
       ? { diagnosticsUploadApproved: params.diagnosticsUploadApproved }
       : {}),
@@ -295,5 +282,7 @@ export async function executeRegisteredPluginCommand(
   } catch (error) {
     logVerbose(`Plugin command /${command.name} error: ${(error as Error).message}`);
     return { text: "⚠️ Command failed. Please try again later." };
+  } finally {
+    commandInvocationAbort.abort("command invocation closed");
   }
 }

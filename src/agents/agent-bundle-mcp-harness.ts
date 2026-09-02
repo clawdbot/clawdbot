@@ -2,19 +2,19 @@
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import {
-  buildBundleMcpToolsFromCatalog,
-  materializeBundleMcpToolsForRun,
-} from "./agent-bundle-mcp-materialize.js";
-import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   getAdvertisedScopedMcpCatalog,
   getOrCreateRequesterScopedMcpRuntime,
   getOrCreateSessionMcpRuntime,
   rememberAdvertisedScopedMcpCatalog,
   retireSessionMcpRuntime,
-} from "./agent-bundle-mcp-runtime.js";
+} from "./agent-bundle-mcp-manager-api.js";
+import {
+  buildBundleMcpToolsFromCatalog,
+  materializeBundleMcpToolsForRun,
+} from "./agent-bundle-mcp-materialize.js";
+import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
 import type { McpToolCatalog, RequesterMcpConnect } from "./agent-bundle-mcp-types.js";
 import {
   resolveConversationCapabilityProfile,
@@ -23,7 +23,10 @@ import {
 } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { requiresMcpCodexToolApproval } from "./mcp-codex-tool-approval.js";
+import {
+  formatMcpCodexApprovalRemedy,
+  requiresMcpCodexToolApproval,
+} from "./mcp-codex-tool-approval.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type RequesterScopedHarnessMcpTools = {
@@ -59,27 +62,24 @@ function formatScheduledMcpDiagnosticNotice(messages: readonly string[]): string
   );
 }
 
-function isScheduledCodexApprovalAllowed(tool: AnyAgentTool, autoApprove: boolean): boolean {
-  const mcp = getPluginToolMeta(tool)?.mcp;
-  return (
-    mcp?.operation !== "tool" ||
-    autoApprove ||
-    (mcp.codexApproval !== undefined && !requiresMcpCodexToolApproval(mcp.codexApproval))
-  );
-}
-
 function filterScheduledCodexApproval(
   tools: readonly AnyAgentTool[],
   autoApprove: boolean,
   onOmitted?: (message: string) => void,
 ): AnyAgentTool[] {
   return tools.filter((tool) => {
-    if (isScheduledCodexApprovalAllowed(tool, autoApprove)) {
+    const mcp = getPluginToolMeta(tool)?.mcp;
+    if (
+      mcp?.operation !== "tool" ||
+      !requiresMcpCodexToolApproval({
+        ...mcp.codexApproval,
+        fullPermission: autoApprove,
+      })
+    ) {
       return true;
     }
-    const mcp = getPluginToolMeta(tool)?.mcp;
     onOmitted?.(
-      `${mcp?.serverName ?? "configured MCP"}/${mcp?.toolName ?? tool.name}: requires interactive Codex approval (${mcp?.codexApproval?.mode ?? "auto"}); configure codex.defaultToolsApprovalMode="approve" or use the host-confirmed yolo profile`,
+      `${mcp.serverName}/${mcp.toolName}: requires interactive Codex approval (${mcp.codexApproval?.mode ?? "auto"}); ${formatMcpCodexApprovalRemedy(mcp.serverName)}`,
     );
     return false;
   });
@@ -265,7 +265,7 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
 export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
-  const scopedRuntime = await getOrCreateRequesterScopedMcpRuntime({
+  const scopedRuntimeHandle = await getOrCreateRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -277,6 +277,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
   });
+  const scopedRuntime = scopedRuntimeHandle?.runtime;
 
   let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   let liveCatalog: McpToolCatalog | undefined;
@@ -288,8 +289,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
         reservedToolNames: params.reservedToolNames,
       });
       liveCatalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
-      if (liveCatalog.tools.length > 0) {
-        rememberAdvertisedScopedMcpCatalog(params.sessionId, liveCatalog);
+      if (liveCatalog.tools.length > 0 && scopedRuntimeHandle) {
+        rememberAdvertisedScopedMcpCatalog(scopedRuntimeHandle, liveCatalog);
       }
     }
 

@@ -9,7 +9,7 @@ export const PREPUBLISH_PLUGIN_REGISTRY_MANIFEST = "prepublish-plugin-registry.j
 const SCHEMA = "openclaw.prepublish-plugin-registry/v1";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/u;
-const PACKAGE_NAME_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/u;
+const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 const TARBALL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u;
 
 /**
@@ -53,7 +53,7 @@ function normalizeRequiredPackages(value) {
     !Array.isArray(value) ||
     value.some((name) => typeof name !== "string" || !PACKAGE_NAME_PATTERN.test(name))
   ) {
-    throw new Error("required packages must be an array of scoped npm package names");
+    throw new Error("required packages must be an array of npm package names");
   }
   const sorted = [...new Set(value)].toSorted((a, b) => a.localeCompare(b));
   if (sorted.length !== value.length) {
@@ -234,6 +234,47 @@ function runChecked(command, args, cwd) {
   }
 }
 
+function readPreparedRegistryPackages(preparedBundleDir, sourceSha, candidateVersion) {
+  const bundle = readJson(
+    path.join(preparedBundleDir, "package-bundle.json"),
+    "prepared npm bundle",
+  );
+  if (
+    bundle.schema !== "openclaw.npm-package-bundle/v1" ||
+    bundle.releaseSha !== sourceSha ||
+    bundle.packageName !== "openclaw" ||
+    bundle.packageVersion !== candidateVersion ||
+    !Array.isArray(bundle.corePackageTarballs) ||
+    !Array.isArray(bundle.dependencyTarballs)
+  ) {
+    throw new Error("prepared npm bundle identity differs from the selected release candidate");
+  }
+  const packages = new Map();
+  for (const entry of [bundle, ...bundle.corePackageTarballs, ...bundle.dependencyTarballs]) {
+    const value = {
+      name: entry.packageName,
+      version: entry.packageVersion,
+      tarball: entry.tarballName,
+      sha256: entry.tarballSha256,
+    };
+    // dependencyTarballs is the root install subset of the complete core set.
+    const existing = packages.get(value.name);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(value)) {
+      throw new Error(`prepared npm bundle contains conflicting package ${value.name}`);
+    }
+    packages.set(value.name, value);
+  }
+  const entries = [...packages.values()].toSorted((a, b) => a.name.localeCompare(b.name));
+  validateManifestShape({
+    schema: SCHEMA,
+    schemaVersion: 1,
+    sourceSha,
+    candidateVersion,
+    packages: entries,
+  });
+  return entries;
+}
+
 export function createPrepublishPluginRegistryArtifact(params) {
   const repoRoot = path.resolve(params.repoRoot);
   const outputDir = path.resolve(params.outputDir);
@@ -263,8 +304,24 @@ export function createPrepublishPluginRegistryArtifact(params) {
   if (fs.readdirSync(outputDir).length !== 0) {
     throw new Error(`prepublish plugin registry output directory must be empty: ${outputDir}`);
   }
-  const packages = [];
+  const packages = params.preparedBundleDir
+    ? readPreparedRegistryPackages(
+        params.preparedBundleDir,
+        params.sourceSha,
+        params.candidateVersion,
+      )
+    : [];
+  for (const entry of packages) {
+    fs.copyFileSync(
+      path.join(params.preparedBundleDir, entry.tarball),
+      path.join(outputDir, entry.tarball),
+      fs.constants.COPYFILE_EXCL,
+    );
+  }
   for (const packageName of requiredPackages) {
+    if (packages.some((entry) => entry.name === packageName)) {
+      continue;
+    }
     const { packageDir, packageJson } = findPublishablePlugin(repoRoot, packageName);
     if (packageJson.version !== params.candidateVersion) {
       throw new Error(`${packageName} version differs from the root package candidate`);
@@ -313,7 +370,7 @@ export function createPrepublishPluginRegistryArtifact(params) {
     schemaVersion: 1,
     sourceSha: params.sourceSha,
     candidateVersion: params.candidateVersion,
-    packages,
+    packages: packages.toSorted((a, b) => a.name.localeCompare(b.name)),
   };
   const manifestPath = path.join(outputDir, PREPUBLISH_PLUGIN_REGISTRY_MANIFEST);
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -359,6 +416,7 @@ function main() {
           outputDir: common.artifactDir,
           sourceSha: common.expectedSourceSha,
           candidateVersion: common.expectedCandidateVersion,
+          preparedBundleDir: options.get("--prepared-bundle-dir"),
           requiredPackages,
         })
       : command === "verify"
@@ -378,6 +436,7 @@ function main() {
 
 const isMain =
   process.argv[1] &&
+  fs.existsSync(process.argv[1]) &&
   fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (isMain) {
   try {

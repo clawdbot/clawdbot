@@ -32,9 +32,10 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
+import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
-const SUCCESS_CACHE_MS = 60_000;
+const SUCCESS_CACHE_MS = 90_000;
 // Back off refetches while GitHub reports quota exhaustion; the UI keeps
 // showing the last-known chips with the stale warning during this window.
 const RATE_LIMIT_CACHE_MS = 5 * 60_000;
@@ -55,6 +56,7 @@ type PullListItem = {
   owner: string;
   repo: string;
   state: ControlUiSessionPullRequest["state"];
+  author?: ControlUiSessionPullRequest["author"];
   headSha?: string;
   baseRef?: string;
   mergeCommitSha?: string;
@@ -136,7 +138,7 @@ async function resolveSessionPullRequestGitContext(
   if (!root) {
     return null;
   }
-  return resolveCachedGitContext(root, deps);
+  return resolveCachedGitContext(root, deps, params.refresh === true);
 }
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
@@ -269,6 +271,7 @@ async function resolveSessionBranch(
   context: SessionPullRequestGitContext,
   mergedHeads: readonly MergedPullHead[],
   deps: LoadSessionPullRequestDeps,
+  refresh: boolean,
 ): Promise<ControlUiSessionBranch | undefined> {
   const root = context.root;
   if (!root) {
@@ -303,6 +306,7 @@ async function resolveSessionBranch(
       // No createUrl until GitHub can compare, but local changes still get a row.
       return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
     },
+    refresh,
   );
   if (!facts) {
     return undefined;
@@ -312,7 +316,13 @@ async function resolveSessionBranch(
     repo: context.repo,
     branch: context.branch,
     ...(facts.creatable ? { createUrl: branchCreateUrl(context) } : {}),
-    ...(facts.stats ? { additions: facts.stats.additions, deletions: facts.stats.deletions } : {}),
+    ...(facts.stats
+      ? {
+          additions: facts.stats.additions,
+          deletions: facts.stats.deletions,
+          changedFiles: facts.stats.changedFiles,
+        }
+      : {}),
   };
 }
 
@@ -342,6 +352,8 @@ function parsePullListItem(value: unknown): PullListItem | null {
   if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
     return null;
   }
+  const user = isRecord(value.user) ? value.user : {};
+  const authorLogin = readOptionalGitHubString(user, "login");
   return {
     number,
     title,
@@ -349,6 +361,7 @@ function parsePullListItem(value: unknown): PullListItem | null {
     owner,
     repo,
     state: derivePullState(value),
+    ...(authorLogin ? { author: { login: authorLogin } } : {}),
     headSha: readOptionalGitHubString(head, "sha"),
     baseRef: readOptionalGitHubString(base, "ref"),
     mergeCommitSha: readOptionalGitHubString(value, "merge_commit_sha"),
@@ -377,13 +390,7 @@ async function fetchParentRepo(
 ): Promise<{ owner: string; repo: string } | null> {
   const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const value = await fetchGitHubJson(url, fetchImpl, token);
-  if (!isRecord(value) || value.fork !== true || !isRecord(value.parent)) {
-    return null;
-  }
-  const parentOwner = isRecord(value.parent.owner) ? value.parent.owner : {};
-  const parentLogin = readOptionalGitHubString(parentOwner, "login");
-  const parentName = readOptionalGitHubString(value.parent, "name");
-  return parentLogin && parentName ? { owner: parentLogin, repo: parentName } : null;
+  return resolveGitHubForkParent(value) ?? null;
 }
 
 // Sub-fetch degradation: quota errors abort the whole refresh (so the caller
@@ -399,7 +406,7 @@ async function fetchDiffCounts(
   item: PullListItem,
   fetchImpl: typeof fetch,
   token: string | undefined,
-): Promise<{ additions?: number; deletions?: number }> {
+): Promise<{ additions?: number; deletions?: number; changedFiles?: number }> {
   const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
   try {
     const value = await fetchGitHubJson(url, fetchImpl, token);
@@ -409,6 +416,7 @@ async function fetchDiffCounts(
     return {
       additions: optionalNumber(value, "additions"),
       deletions: optionalNumber(value, "deletions"),
+      changedFiles: optionalNumber(value, "changed_files"),
     };
   } catch (error) {
     rethrowRateLimit(error);
@@ -472,13 +480,12 @@ async function fetchChecks(
   }
 }
 
-async function finishPullRequest(
-  item: PullListItem,
-  branch: string,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
-): Promise<ControlUiSessionPullRequest> {
-  const chip: ControlUiSessionPullRequest = {
+/**
+ * The facts a chip carries without spending quota on per-PR detail calls. The
+ * rate-limited path renders exactly this, so both callers share one shape.
+ */
+function stateOnlyPullRequestChip(item: PullListItem, branch: string): ControlUiSessionPullRequest {
+  return {
     number: item.number,
     owner: item.owner,
     repo: item.repo,
@@ -486,7 +493,17 @@ async function finishPullRequest(
     title: item.title,
     url: item.url,
     state: item.state,
+    ...(item.author ? { author: item.author } : {}),
   };
+}
+
+async function finishPullRequest(
+  item: PullListItem,
+  branch: string,
+  fetchImpl: typeof fetch,
+  token: string | undefined,
+): Promise<ControlUiSessionPullRequest> {
+  const chip = stateOnlyPullRequestChip(item, branch);
   // Merged/closed chips render state only; diff counts and CI rollup are
   // live-work signals, so spend GitHub quota on open PRs alone.
   if (item.state !== "open" && item.state !== "draft") {
@@ -536,7 +553,9 @@ async function fetchBranchPullRequests(
     }
   }
   const capped = items.slice(0, MAX_PULL_REQUESTS);
-  const mergedHeads = mergedHeadsOf(capped);
+  // Landing detection needs every fetched merged head, not just the displayed
+  // slice: a squash-merged PR sorted past the cap still proves the tip landed.
+  const mergedHeads = mergedHeadsOf(items);
   try {
     const pullRequests = await Promise.all(
       capped.map((item) => finishPullRequest(item, context.branch, fetchImpl, token)),
@@ -550,15 +569,9 @@ async function fetchBranchPullRequests(
     // keep the proven PR list as state-only chips instead of dropping it, or
     // a cold cache would show a Create PR row despite a known open PR.
     return {
-      pullRequests: capped.map((item) => ({
-        number: item.number,
-        owner: item.owner,
-        repo: item.repo,
-        branch: context.branch,
-        title: item.title,
-        url: item.url,
-        state: item.state,
-      })),
+      // Author and title came from the list fetch that already succeeded, so
+      // they survive here; only the per-PR detail facts are missing.
+      pullRequests: capped.map((item) => stateOnlyPullRequestChip(item, context.branch)),
       rateLimited: true,
       mergedHeads,
     };
@@ -605,14 +618,14 @@ export async function loadControlUiSessionPullRequests(
   if (!context) {
     return { pullRequests: [], rateLimited: false };
   }
-  // Local Git uses a separate short TTL; refresh only forces the GitHub layer.
-  // Branch resolution follows the snapshot because merged head SHAs affect it.
+  // Normal polling reuses local Git facts across a poll cycle; forced
+  // structural refreshes observe the replacement checkout immediately.
   const { mergedHeads, ...snapshot } = await cachedBranchPullRequests(
     context,
     deps,
     params.refresh === true,
   );
-  const branch = await resolveSessionBranch(context, mergedHeads, deps);
+  const branch = await resolveSessionBranch(context, mergedHeads, deps, params.refresh === true);
   return branch ? { ...snapshot, branch } : snapshot;
 }
 

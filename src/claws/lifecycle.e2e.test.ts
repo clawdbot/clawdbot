@@ -28,11 +28,11 @@ async function runOpenClaw(
     VITEST: "",
   };
   try {
-    const result = await execFileAsync(
-      process.execPath,
-      ["--import", "tsx", "src/entry.ts", ...args],
-      { cwd: process.cwd(), env, maxBuffer: 1024 * 1024 },
-    );
+    const result = await execFileAsync(process.execPath, ["openclaw.mjs", ...args], {
+      cwd: process.cwd(),
+      env,
+      maxBuffer: 1024 * 1024,
+    });
     if (options?.expectFailure) {
       throw new Error(`expected command to fail: ${args.join(" ")}`);
     }
@@ -154,7 +154,7 @@ describe("claws lifecycle cli e2e", () => {
     const config = JSON.parse(await readFile(join(result.stateDir, "openclaw.json"), "utf8"));
     const canonicalStateDir = await realpath(result.stateDir);
     expect(config.agents.entries).toEqual({
-      main: { default: true },
+      main: { workspace: join(canonicalStateDir, "workspace") },
       "internal-triage": expect.objectContaining({
         name: "Internal Triage",
         tools: { deny: ["exec", "browser"] },
@@ -275,7 +275,14 @@ describe("claws lifecycle cli e2e", () => {
       agentRemoved: true,
     });
     const config = JSON.parse(await readFile(join(added.stateDir, "openclaw.json"), "utf8"));
-    expect(config.agents).toEqual({ entries: { main: { default: true } } });
+    const canonicalStateDir = await realpath(added.stateDir);
+    expect(config.agents).toEqual({
+      defaults: {
+        heartbeat: { agentId: "main" },
+        systemAgent: { agentId: "main" },
+      },
+      entries: { main: { workspace: join(canonicalStateDir, "workspace") } },
+    });
   });
 
   it("exports an installed agent as a self-contained grouped package", async () => {

@@ -4,15 +4,18 @@ import { resolveSessionKeyBySessionId as resolveTranscriptSessionKeyBySessionId 
 import { publishTranscriptUpdate } from "./session-accessor.sqlite-events.js";
 import {
   findTranscriptEvent,
+  inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   loadTranscriptTailEventsSync,
+  readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   readTranscriptEventAtSeqSync,
 } from "./session-accessor.sqlite-read.js";
+import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.sqlite-transcript-message-rewrite.js";
 import {
   appendTranscriptEvent,
   appendTranscriptEventSync,
@@ -42,6 +45,7 @@ export {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
+  inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
@@ -51,10 +55,12 @@ export {
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,
   readTranscriptRawDelta,
+  readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
   rewriteTranscriptEventRowsExact,
+  rewriteTranscriptMessageAtAnchor,
   resolveTranscriptSessionKeyBySessionId,
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
@@ -70,13 +76,13 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const events = await loadTranscriptEvents(scope).catch(() => []);
-  if (events.length === 0) {
+  const eventCount = readTranscriptStatsSync(scope).eventCount;
+  if (eventCount === 0) {
     return { compacted: false, reason: "no transcript" };
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  return events.length > maxLines ? { compacted: true } : { compacted: false, kept: events.length };
+  return eventCount > maxLines ? { compacted: true } : { compacted: false, kept: eventCount };
 }
 
 export async function trimSessionTranscriptForManualCompact(
@@ -114,7 +120,7 @@ export async function trimSessionTranscriptForManualCompact(
     return declined;
   }
 
-  return { archived: trimmed.archivedPath, compacted: true, kept: trimmed.kept };
+  return { compacted: true, kept: trimmed.kept };
 }
 
 function parseManualCompactTranscriptRecord(line: string): Record<string, unknown> | null {

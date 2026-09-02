@@ -72,6 +72,21 @@ describe("tool schema hints", () => {
     expect(compactToolOutputHint(nine)).toBeUndefined();
   });
 
+  it("renders five structural union variants and rejects six", () => {
+    const variant = (index: number) =>
+      Type.Object(
+        { kind: Type.Literal(`variant-${index}`), value: Type.Number() },
+        { additionalProperties: false },
+      );
+    const five = Type.Union(Array.from({ length: 5 }, (_unused, index) => variant(index)));
+    const six = Type.Union(Array.from({ length: 6 }, (_unused, index) => variant(index)));
+
+    expect(compactToolOutputHint(five)).toBe(
+      '{ kind: "variant-0"; value: number } | { kind: "variant-1"; value: number } | { kind: "variant-2"; value: number } | { kind: "variant-3"; value: number } | { kind: "variant-4"; value: number }',
+    );
+    expect(compactToolOutputHint(six)).toBeUndefined();
+  });
+
   it("keeps input hints small while allowing larger exact output contracts", () => {
     const schema = Type.Object(
       Object.fromEntries(
@@ -87,7 +102,6 @@ describe("tool schema hints", () => {
     const outputHint = compactToolOutputHint(schema);
 
     expect(inputHint).toBe("unknown");
-    expect(inputHint.length).toBeLessThanOrEqual(300);
     expect(outputHint).toBeDefined();
     expect(outputHint!.length).toBeGreaterThan(300);
     expect(outputHint!.length).toBeLessThanOrEqual(600);

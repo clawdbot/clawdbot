@@ -183,14 +183,8 @@ class GatewayRestartTransaction {
       acceptedConfig &&
       configDebt.restartOwnedPaths.every((path) =>
         isDeepStrictEqual(
-          getConfigValueAtPath(
-            configDebt.nextConfig as unknown as Record<string, unknown>,
-            path.split("."),
-          ),
-          getConfigValueAtPath(
-            acceptedConfig as unknown as Record<string, unknown>,
-            path.split("."),
-          ),
+          getConfigValueAtPath({ ...configDebt.nextConfig }, path.split(".")),
+          getConfigValueAtPath({ ...acceptedConfig }, path.split(".")),
         ),
       );
     if (!retainsConfigDebt) {
@@ -377,7 +371,7 @@ class GatewayRestartTransaction {
         if (!emitResult || emitResult.status === "failed") {
           this.scheduleEmissionRetry(retry);
         }
-      }).catch((err: unknown) => {
+      }, "reload:restart").catch((err: unknown) => {
         if (this.isCurrentRequest(retry.requestGeneration)) {
           this.options.params.logReload.warn(
             `gateway restart recovery retry stopped: ${String(err)}`,

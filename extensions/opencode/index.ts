@@ -14,6 +14,7 @@ import {
   buildStaticOpencodeZenProviderConfig,
   listOpencodeZenModelCatalogEntries,
   normalizeOpencodeZenBaseUrl,
+  prepareOpencodeZenModel,
   resolveOpencodeZenModel,
   resolveOpencodeZenStarterModel,
 } from "./provider-catalog.js";
@@ -102,9 +103,33 @@ export default defineSingleProviderPluginEntry({
         : undefined;
     },
     resolveDynamicModel: ({ modelId }) => resolveOpencodeZenModel(modelId),
+    prepareDynamicModel: async (ctx) => {
+      const profileProvider = ctx.authProfileId
+        ? ctx.config?.auth?.profiles?.[ctx.authProfileId]?.provider
+        : undefined;
+      const ownsProfile = Boolean(
+        ctx.authProfileId &&
+        (ctx.authProfileId.startsWith("opencode:") ||
+          ctx.authProfileId.startsWith("opencode-go:") ||
+          profileProvider === "opencode" ||
+          profileProvider === "opencode-go"),
+      );
+      const configured = Boolean(
+        ownsProfile ||
+        ctx.providerConfig ||
+        ctx.config?.models?.providers?.opencode ||
+        ctx.config?.models?.providers?.["opencode-go"] ||
+        process.env.OPENCODE_API_KEY?.trim() ||
+        process.env.OPENCODE_ZEN_API_KEY?.trim(),
+      );
+      return configured ? await prepareOpencodeZenModel({ modelId: ctx.modelId }) : undefined;
+    },
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (ctx.providerIds !== undefined && !ctx.providerIds.includes(PROVIDER_ID)) {
+          return null;
+        }
         const auth = resolveOpencodeZenCatalogAuth(ctx.resolveProviderApiKey);
         if (!auth) {
           return null;

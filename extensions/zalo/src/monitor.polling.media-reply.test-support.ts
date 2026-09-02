@@ -376,7 +376,7 @@ describe("Zalo polling media replies", () => {
     }
 
     const deliveryErrors: unknown[] = [];
-    let failedCounts: Record<"tool" | "block" | "final", number> | undefined;
+    let failedAfterSendCounts: Record<"tool" | "block" | "final", number> | undefined;
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementation(
       async ({
         dispatcherOptions,
@@ -398,8 +398,14 @@ describe("Zalo polling media replies", () => {
           dispatcher.sendBlockReply(testCase.payload);
         }
         dispatcher.markComplete();
-        await dispatcher.waitForIdle();
-        failedCounts = dispatcher.getFailedCounts();
+        const receipt = await dispatcher.waitForIdle();
+        if (receipt) {
+          failedAfterSendCounts = {
+            tool: receipt.counts.tool.failedAfterSend,
+            block: receipt.counts.block.failedAfterSend,
+            final: receipt.counts.final.failedAfterSend,
+          };
+        }
         return {
           queuedFinal: testCase.kind === "final",
           counts: dispatcher.getQueuedCounts(),
@@ -441,7 +447,7 @@ describe("Zalo polling media replies", () => {
 
     try {
       await settleAsyncWork();
-      expect(failedCounts).toEqual({
+      expect(failedAfterSendCounts).toEqual({
         block: testCase.kind === "block" ? 1 : 0,
         tool: testCase.kind === "tool" ? 1 : 0,
         final: testCase.kind === "final" ? 1 : 0,
@@ -618,7 +624,7 @@ describe("Zalo polling media replies", () => {
     },
   );
 
-  it("registers each active registry and cleans both on final release", async () => {
+  it("cleans each active registry when its own route holder stops", async () => {
     const firstRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(firstRegistry);
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
@@ -663,7 +669,7 @@ describe("Zalo polling media replies", () => {
       expect(secondRegistry.httpRoutes).toHaveLength(1);
       firstAbort.abort();
       await firstRun;
-      expect(firstRegistry.httpRoutes).toHaveLength(1);
+      expect(firstRegistry.httpRoutes).toHaveLength(0);
       expect(secondRegistry.httpRoutes).toHaveLength(1);
     } finally {
       firstAbort.abort();

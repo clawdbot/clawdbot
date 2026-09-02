@@ -1,7 +1,11 @@
 // Gateway Protocol tests cover channels.schema behavior.
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { ChannelsStatusResultSchema, WebLoginWaitParamsSchema } from "./schema/channels.js";
+import {
+  ChannelsStatusResultSchema,
+  TalkSessionCancelOutputResultSchema,
+  WebLoginWaitParamsSchema,
+} from "./schema/channels.js";
 
 /**
  * Channel schema regressions for browser login and status diagnostics.
@@ -33,8 +37,33 @@ describe("WebLoginWaitParamsSchema", () => {
   });
 });
 
+describe("TalkSessionCancelOutputResultSchema", () => {
+  const validate = Compile(TalkSessionCancelOutputResultSchema);
+
+  it("accepts only closed cancellation outcomes with an explicit ok field", () => {
+    for (const value of [
+      { ok: true },
+      { ok: true, status: "applied", turnId: "turn-7" },
+      { ok: true, status: "stale" },
+      { ok: true, status: "idle" },
+    ]) {
+      expect(validate.Check(value)).toBe(true);
+    }
+    for (const value of [
+      {},
+      { status: "applied" },
+      { ok: false },
+      { ok: true, status: "unknown" },
+      { ok: true, turnId: "" },
+      { ok: true, extra: true },
+    ]) {
+      expect(validate.Check(value)).toBe(false);
+    }
+  });
+});
+
 describe("ChannelsStatusResultSchema", () => {
-  /** Compiled status validator for channel docking diagnostics. */
+  /** Compiled validator for channel status diagnostics. */
   const validate = Compile(ChannelsStatusResultSchema);
 
   it("accepts gateway event-loop diagnostics emitted by channels.status", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
 import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -24,18 +25,30 @@ function makeTimedOutAttempt(
   };
 }
 
+type TimeoutInput = Parameters<typeof resolveEmbeddedRunTerminalTimeout>[0];
+
 function makeTimeoutInput(
   attempt: EmbeddedRunAttemptResult,
-  overrides: Partial<Parameters<typeof resolveEmbeddedRunTerminalTimeout>[0]> = {},
-): Parameters<typeof resolveEmbeddedRunTerminalTimeout>[0] {
+  preparedOverrides: Partial<TimeoutInput["terminalPrepared"]> = {},
+  overrides: Partial<Omit<TimeoutInput, "terminalPrepared">> = {},
+): TimeoutInput {
   return {
-    timedOutDuringPrompt: true,
-    hasSuccessfulFinalAssistantAfterPromptTimeout: false,
-    shouldSurfaceCodexCompletionTimeout: false,
+    terminalPrepared: {
+      timedOutDuringPrompt: true,
+      hasSuccessfulFinalAssistantAfterPromptTimeout: false,
+      hasPartialAssistantTextAfterPromptTimeout: false,
+      payloads: undefined,
+      payloadsWithToolMedia: undefined,
+      agentMeta: {
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      },
+      attemptToolSummary: undefined,
+      failureSignal: undefined,
+      ...preparedOverrides,
+    },
     attempt,
-    hasPartialAssistantTextAfterPromptTimeout: false,
-    payloads: undefined,
-    payloadsWithToolMedia: undefined,
     terminalState: resolveEmbeddedRunAttemptTerminalState({
       attempt,
       assistant: attempt.lastAssistant,
@@ -43,25 +56,43 @@ function makeTimeoutInput(
     resolveReplayInvalid: vi.fn(() => false),
     setTerminalLifecycleMeta: vi.fn(),
     startedAtMs: Date.now(),
-    agentMeta: {
-      sessionId: "session-1",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    },
-    attemptToolSummary: undefined,
-    failureSignal: undefined,
     ...overrides,
   };
 }
 
 describe("resolveEmbeddedRunTerminalTimeout", () => {
-  it("returns an explicit default timeout payload when no reply was produced", () => {
-    const result = resolveEmbeddedRunTerminalTimeout(makeTimeoutInput(makeTimedOutAttempt()));
+  it.each(["runtime", "run_budget", "idle"] as const)(
+    "records a final %s timeout without reopening model fallback",
+    (source) => {
+      const earlierToolError = { text: "HTTP 401: Invalid API key", isError: true };
+      const result = resolveEmbeddedRunTerminalTimeout(
+        makeTimeoutInput(
+          makeTimedOutAttempt({
+            terminal: { kind: "timeout", phase: "prompt", source, aborted: true },
+          }),
+          { payloadsWithToolMedia: [earlierToolError] },
+        ),
+      );
+      const timeoutText = expect.stringContaining(
+        source === "idle" ? "model idle timeout" : "timed out",
+      );
 
-    expect(result?.payloads).toEqual([
-      { text: expect.stringContaining("timed out"), isError: true },
-    ]);
-  });
+      expect(result?.payloads).toEqual([earlierToolError, { text: timeoutText, isError: true }]);
+      expect(result?.meta.error).toEqual({
+        kind: "incomplete_turn",
+        message: timeoutText,
+        fallbackSafe: false,
+      });
+      expect(result?.meta.replayInvalid).toBe(false);
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          result,
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("preserves an accepted child spawn while surfacing the parent timeout", () => {
     const acceptedSessionSpawns = [
@@ -100,7 +131,7 @@ describe("resolveEmbeddedRunTerminalTimeout", () => {
     });
 
     const result = resolveEmbeddedRunTerminalTimeout(
-      makeTimeoutInput(attempt, { setTerminalLifecycleMeta }),
+      makeTimeoutInput(attempt, {}, { setTerminalLifecycleMeta }),
     );
 
     expect(result?.payloads).toEqual([

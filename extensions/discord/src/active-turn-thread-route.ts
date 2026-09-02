@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalizeId } from "openclaw/plugin-sdk/string-coerce-runtime";
 type ActiveDiscordTurnThreadRoute = {
   accountId?: string;
   sourceChannelId: string;
@@ -91,4 +92,3 @@ function findDiscordActiveTurnThreadReplyRoute(params: {
       (!route.accountId || !params.accountId || route.accountId === params.accountId),
   );
 }
-import { normalizeOptionalString as normalizeId } from "openclaw/plugin-sdk/string-coerce-runtime";

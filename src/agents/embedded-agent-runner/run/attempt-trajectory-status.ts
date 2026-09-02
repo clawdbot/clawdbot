@@ -129,10 +129,20 @@ export function resolveAttemptTrajectoryTerminal(
       terminalError: NON_DELIVERABLE_TERMINAL_TURN_REASON,
     };
   }
+  // A length stop with visible assistant text is delivered as a partial reply by
+  // the terminal owner, so recording it as non-deliverable here would contradict
+  // what the user received. Visible text is the canonical fact to key on:
+  // finalization runs before terminal preparation turns assistant text into
+  // payloads, so synthesizedPayloadCount is still 0 for an ordinary text-only
+  // reply and cannot stand in for "nothing was delivered".
+  const hasVisibleAssistantOutput =
+    hasNonEmptyAssistantText(params.assistantTexts) || params.synthesizedPayloadCount > 0;
+
   if (
     params.lastAssistantStopReason === "length" &&
     !params.hasTerminalOutput &&
-    !hasExplicitTerminalDelivery
+    !hasExplicitTerminalDelivery &&
+    !hasVisibleAssistantOutput
   ) {
     return {
       status: "error",
@@ -143,8 +153,7 @@ export function resolveAttemptTrajectoryTerminal(
   const hasDeliverableOrProgress =
     hasExplicitTerminalDelivery ||
     params.hasTerminalOutput ||
-    params.synthesizedPayloadCount > 0 ||
-    hasNonEmptyAssistantText(params.assistantTexts) ||
+    hasVisibleAssistantOutput ||
     params.successfulCronAdds > 0;
 
   if (hasDeliverableOrProgress) {

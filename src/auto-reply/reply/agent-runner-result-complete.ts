@@ -1,37 +1,31 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveModelFallbackAvailability } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import {
   buildInlinePluginStatusPayload,
   markBeforeAgentRunBlockedPayloads,
   resolveReplyRunDeliveryContext,
   resolveSourceReplyPolicy,
+  normalizeAssistantFinalDeliveryText,
 } from "./agent-runner-core.js";
-import { normalizeAssistantFinalDeliveryText } from "./agent-runner-core.js";
 import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import {
   accumulateSessionUsageFromTranscript,
   buildInlineRawTracePayload,
   derivePromptSegments,
-} from "./agent-runner-trace.js";
-import {
   type TraceCompletionView,
   type TraceContextManagementView,
-  type TraceExecutionView,
   type TracePromptSegmentView,
   type TraceToolSummaryView,
-  mergeExecutionTrace,
 } from "./agent-runner-trace.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import {
@@ -42,7 +36,6 @@ import {
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
-import { incrementRunCompactionCount } from "./session-run-accounting.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
@@ -66,7 +59,6 @@ export async function completeReplyAgentRun(input: {
     activeIsNewSession,
     activeSessionStore,
     cfg,
-    execution,
     followupRun,
     isHeartbeat,
     opts,
@@ -85,8 +77,6 @@ export async function completeReplyAgentRun(input: {
   const {
     autoCompactionCount,
     contextTokensUsed,
-    fallbackAttempts,
-    fallbackExhausted,
     modelUsed,
     promptTokens,
     providerUsed,
@@ -106,20 +96,8 @@ export async function completeReplyAgentRun(input: {
   }
 
   if (autoCompactionCount > 0) {
-    const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
-    const count = await incrementRunCompactionCount({
-      agentId: followupRun.run.agentId,
-      cfg,
-      sessionEntry: activeSessionEntry,
-      sessionStore: activeSessionStore,
-      sessionKey,
-      storePath,
-      amount: autoCompactionCount,
-      compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
-      lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
-      contextTokensUsed,
-      newSessionId: runResult.meta?.agentMeta?.sessionId,
-    });
+    const previousSessionId = accounting.expectedSession.sessionId;
+    const count = accounting.compactionCount;
     const refreshedSessionEntry =
       sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
     if (refreshedSessionEntry) {
@@ -134,27 +112,19 @@ export async function completeReplyAgentRun(input: {
 
     // Inject post-compaction workspace context for the next agent turn
     if (sessionKey) {
-      readPostCompactionContext(followupRun.run.workspaceDir, {
+      const contextContent = await readPostCompactionContext(followupRun.run.workspaceDir, {
         cfg,
-        agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
-      })
-        .then((contextContent) => {
-          if (contextContent) {
-            enqueueSystemEvent(contextContent, { sessionKey });
-          }
-        })
-        .catch(() => {
-          // Silent failure — post-compaction context is best-effort
-        });
+        agentId: followupRun.run.agentId,
+      });
+      if (contextContent) {
+        enqueueSystemEvent(contextContent, { sessionKey });
+      }
     }
 
     if (verboseEnabled) {
       const suffix = typeof count === "number" ? ` (count ${count})` : "";
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
-  }
-  if (execution.abortReason) {
-    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
   }
   const prefixPayloads = [...prefixNotices];
   const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
@@ -165,14 +135,7 @@ export async function completeReplyAgentRun(input: {
     ? undefined
     : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
   const traceAuthorized = followupRun.run.traceAuthorized === true;
-  const executionTrace = mergeExecutionTrace({
-    fallbackAttempts,
-    executionTrace: runResult.meta?.executionTrace as TraceExecutionView | undefined,
-    provider: providerUsed,
-    model: modelUsed,
-    runner: isCliProvider(providerUsed, cfg) ? "cli" : "embedded",
-    exhausted: fallbackExhausted,
-  });
+  const executionTrace = runResult.meta?.executionTrace;
   const requestShaping = {
     authMode:
       runResult.meta?.requestShaping?.authMode ??
@@ -194,11 +157,15 @@ export async function completeReplyAgentRun(input: {
       normalizeOptionalString(activeSessionEntry?.traceLevel),
     fallbackEligible:
       runResult.meta?.requestShaping?.fallbackEligible ??
-      hasConfiguredModelFallbacks({
-        cfg,
+      resolveModelFallbackAvailability({
+        cfg: cfg ?? {},
         agentId: followupRun.run.agentId,
         sessionKey: followupRun.run.sessionKey,
-      }),
+        hasSessionModelOverride: followupRun.run.hasSessionModelOverride === true,
+        modelOverrideSource: followupRun.run.modelOverrideSource,
+        hasAutoFallbackProvenance: followupRun.run.hasAutoFallbackProvenance === true,
+        modelSelectionLocked: followupRun.run.modelSelectionLocked,
+      }).kind === "active",
     blockStreaming:
       runResult.meta?.requestShaping?.blockStreaming ??
       normalizeOptionalString(resolvedBlockStreamingBreak),

@@ -2,7 +2,8 @@ import { html, nothing } from "lit";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   addWorkboardCardComment,
   getWorkboardDependencyState,
@@ -42,13 +43,6 @@ function ensureWorkboardCardDashboardElement(): Promise<void> {
     "openclaw-workboard-card-dashboard",
     () => import("./workboard-card-dashboard.ts"),
   );
-}
-
-function boardSessionKeyForCard(sessionKey: string, agentId?: string): string {
-  if (!agentId || parseAgentSessionKey(sessionKey)) {
-    return sessionKey;
-  }
-  return `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
 }
 
 export function openCardDetails(state: WorkboardUiState, card: WorkboardCard) {
@@ -174,7 +168,14 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     [t("workboard.fieldLabels"), card.labels],
     [
       t("workboard.badgeAttempts", { count: String(attempts.length) }),
-      detailValues(attempts, "status", "model", "sessionKey", "error"),
+      attempts.map((entry) =>
+        joinDetailParts(
+          entry.status,
+          entry.model,
+          entry.sessionKey,
+          formatUiExternalText(entry.error),
+        ),
+      ),
     ],
     [
       t("workboard.badgeLinks", { count: String(links.length) }),
@@ -195,14 +196,14 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     ],
     [
       t("workboard.detailWorkerLogs"),
-      workerLogs.map((entry) => `${entry.level}: ${entry.message}`),
+      workerLogs.map((entry) => `${entry.level}: ${formatUiExternalText(entry.message)}`),
     ],
     [
       t("workboard.detailWorkerProtocol"),
       workerProtocol
         ? [
             workerProtocol.state,
-            workerProtocol.detail ?? "",
+            formatUiExternalText(workerProtocol.detail),
             workerProtocol.updatedAt
               ? t("workboard.detailUpdatedValue", {
                   time: formatUpdatedTime(workerProtocol.updatedAt),
@@ -326,7 +327,10 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           ${linkedSessionKey
             ? html`
                 <openclaw-workboard-card-dashboard
-                  .sessionKey=${boardSessionKeyForCard(linkedSessionKey, card.agentId)}
+                  .session=${{
+                    sessionKey: linkedSessionKey,
+                    agentId: parseAgentSessionKey(linkedSessionKey)?.agentId ?? card.agentId,
+                  }}
                   .client=${props.client}
                   .connected=${props.connected}
                   .canMutate=${props.canWrite !== false}

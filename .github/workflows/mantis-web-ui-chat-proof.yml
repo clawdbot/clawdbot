@@ -1,8 +1,6 @@
 name: Mantis Web UI Chat Proof
 
 on:
-  issue_comment: # zizmor: ignore[dangerous-triggers] maintainer-only Mantis command; candidate refs are trusted before execution and publishing runs in a separate job
-    types: [created]
   workflow_dispatch:
     inputs:
       candidate_ref:
@@ -93,7 +91,7 @@ jobs:
       candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -115,19 +113,35 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     outputs:
-      artifact_name: ${{ steps.run_mantis.outputs.artifact_name }}
-      output_dir: ${{ steps.run_mantis.outputs.output_dir }}
-      proof_status: ${{ steps.run_mantis.outputs.proof_status }}
+      artifact_name: ${{ steps.prepare_evidence.outputs.artifact_name }}
+      output_dir: ${{ steps.prepare_evidence.outputs.output_dir }}
+      proof_status: ${{ steps.build_evidence.outputs.proof_status }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Allocate invocation evidence directory
+        id: prepare_evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_parent="${GITHUB_WORKSPACE}/.artifacts/qa-e2e/mantis/web-ui-chat-proof"
+          mkdir -p "$output_parent"
+          root="$(mktemp -d "$output_parent/run.XXXXXX")"
+          echo "Retained Mantis invocation evidence: $root"
+          echo "artifact_name=mantis-web-ui-chat-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Git owner
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "false"
@@ -138,71 +152,68 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          worktree_root=".artifacts/qa-e2e/mantis/web-ui-chat-proof-worktrees"
-          mkdir -p "$worktree_root"
-          git worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
-          pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
+          root="${{ steps.prepare_evidence.outputs.output_dir }}"
+          {
+            worktree_root=".artifacts/qa-e2e/mantis/web-ui-chat-proof-worktrees"
+            mkdir -p "$worktree_root"
+            python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 worktree add --detach "$worktree_root/candidate" "$CANDIDATE_SHA"
+            pnpm --dir "$worktree_root/candidate" install --frozen-lockfile --prefer-offline
+          } 2>&1 | tee "$root/setup.log"
 
       - name: Run web UI chat proof
         id: run_mantis
-        env:
-          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
-          CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
         shell: bash
         run: |
           set -euo pipefail
-
-          artifact_name="mantis-web-ui-chat-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          root="${{ steps.prepare_evidence.outputs.output_dir }}"
           candidate_repo="$(pwd)/.artifacts/qa-e2e/mantis/web-ui-chat-proof-worktrees/candidate"
-          output_rel=".artifacts/qa-e2e/mantis/web-ui-chat-proof"
-          root="$candidate_repo/$output_rel"
-          mkdir -p "$root"
-          echo "artifact_name=${artifact_name}" >> "$GITHUB_OUTPUT"
-          echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
+          {
+            install -D -m 0644 \
+              "${GITHUB_WORKSPACE}/ui/src/e2e/mantis-chat-proof.e2e.test.ts" \
+              "$candidate_repo/ui/src/e2e/mantis-chat-proof.e2e.test.ts"
+            install -D -m 0644 \
+              "${GITHUB_WORKSPACE}/ui/src/test-helpers/control-ui-e2e.ts" \
+              "$candidate_repo/ui/src/test-helpers/control-ui-e2e.ts"
+            install -D -m 0644 \
+              "${GITHUB_WORKSPACE}/ui/src/test-helpers/control-ui-e2e-artifacts.ts" \
+              "$candidate_repo/ui/src/test-helpers/control-ui-e2e-artifacts.ts"
 
-          install -D -m 0644 \
-            "${GITHUB_WORKSPACE}/ui/src/e2e/mantis-chat-proof.e2e.test.ts" \
-            "$candidate_repo/ui/src/e2e/mantis-chat-proof.e2e.test.ts"
-          install -D -m 0644 \
-            "${GITHUB_WORKSPACE}/ui/src/test-helpers/control-ui-e2e.ts" \
-            "$candidate_repo/ui/src/test-helpers/control-ui-e2e.ts"
+            cd "$candidate_repo"
+            node --import tsx scripts/ensure-playwright-chromium.mts
+            OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root" \
+              OPENCLAW_UI_E2E_ARTIFACT_DIR="$root" \
+              node scripts/run-vitest.mjs run \
+                --config test/vitest/vitest.ui-e2e.config.ts \
+                --configLoader runner \
+                ui/src/e2e/mantis-chat-proof.e2e.test.ts
+          } 2>&1 | tee "$root/vitest.log"
 
-          cd "$candidate_repo"
-          node --import tsx scripts/ensure-playwright-chromium.mts
-
-          set +e
-          OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root" \
-            node scripts/run-vitest.mjs run \
-              --config test/vitest/vitest.ui-e2e.config.ts \
-              --configLoader runner \
-              ui/src/e2e/mantis-chat-proof.e2e.test.ts \
-            2>&1 | tee "$root/vitest.log"
-          vitest_exit="${PIPESTATUS[0]}"
-          set -e
-
-          proof_status="pass"
-          if [[ "$vitest_exit" -ne 0 ]]; then
-            proof_status="fail"
-          fi
-          echo "proof_status=${proof_status}" >> "$GITHUB_OUTPUT"
-
+      - name: Build invocation evidence report
+        id: build_evidence
+        if: ${{ always() && steps.prepare_evidence.outputs.output_dir != '' }}
+        env:
+          CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ needs.validate_candidate.outputs.candidate_revision }}
+          PROOF_STATUS: ${{ steps.run_mantis.outcome == 'success' && 'pass' || 'fail' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="${{ steps.prepare_evidence.outputs.output_dir }}"
+          echo "proof_status=${PROOF_STATUS}" >> "$GITHUB_OUTPUT"
           node "${GITHUB_WORKSPACE}/scripts/mantis/build-web-ui-chat-evidence.mjs" \
             --output-dir "$root" \
             --candidate-ref "$CANDIDATE_REF" \
             --candidate-sha "$CANDIDATE_SHA" \
-            --status "$proof_status"
+            --status "$PROOF_STATUS"
 
           cat "$root/mantis-report.md" >> "$GITHUB_STEP_SUMMARY"
-          if [[ "$vitest_exit" -ne 0 ]]; then
-            exit "$vitest_exit"
-          fi
 
       - name: Upload Mantis web UI chat artifacts
-        if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
+        if: ${{ always() && steps.prepare_evidence.outputs.output_dir != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: ${{ steps.run_mantis.outputs.artifact_name }}
-          path: ${{ steps.run_mantis.outputs.output_dir }}
+          name: ${{ steps.prepare_evidence.outputs.artifact_name }}
+          path: ${{ steps.prepare_evidence.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: error
 
@@ -214,7 +225,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 

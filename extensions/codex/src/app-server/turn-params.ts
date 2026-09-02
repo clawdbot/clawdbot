@@ -1,5 +1,7 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildTemporalContextText,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -10,12 +12,15 @@ import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
   CodexTurnStartParams,
+  CodexUserInput,
 } from "./protocol.js";
-import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
+import {
+  readCodexSupportedReasoningEfforts,
+  resolveCodexAppServerReasoningEffort,
+} from "./reasoning-effort.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
-  resolveReasoningEffort,
 } from "./thread-model-selection.js";
 import { buildCodexUserInput } from "./user-input.js";
 
@@ -57,6 +62,7 @@ export function buildTurnStartParams(
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
+    explicitSkillInputs?: Array<Extract<CodexUserInput, { type: "skill" }>>;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
@@ -66,6 +72,7 @@ export function buildTurnStartParams(
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
     clearInheritedServiceTier?: boolean;
+    sessionStatusAvailable?: boolean;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -78,18 +85,51 @@ export function buildTurnStartParams(
         agentDir: params.agentDir,
         config: params.config,
       });
+  const collaborationMode = modelSelection
+    ? buildTurnCollaborationMode(params, {
+        model: modelSelection.model,
+        turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
+        skillsCollaborationInstructions: options.skillsCollaborationInstructions,
+        memoryCollaborationInstructions: options.memoryCollaborationInstructions,
+      })
+    : undefined;
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
+  // Codex emits only changed values and cannot retract omitted fragments from model history.
+  // Always send configured-or-host context so warm threads see rollover and removed overrides.
+  let additionalContext = buildCodexTemporalAdditionalContext(params, {
+    sessionStatusAvailable: options.sessionStatusAvailable === true,
+  });
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  const additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
-    ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
-    : undefined;
+  if (currentSenderContext) {
+    additionalContext = {
+      ...additionalContext,
+      openclaw_current_sender: { kind: "untrusted", value: currentSenderContext },
+    };
+  }
+  if (params.permissionChange?.notice) {
+    // Application context is a developer message in Codex 0.151.0 and also
+    // reaches native-preserved threads without overriding their turn settings.
+    additionalContext = {
+      ...additionalContext,
+      openclaw_permission_change: { kind: "application", value: params.permissionChange.notice },
+    };
+  }
   return {
     threadId: options.threadId,
-    input: buildCodexUserInput(options.promptText ?? params.prompt, params.images),
+    // codex-rs/app-server-protocol/src/protocol/v2/turn.rs:292-324 at 91d6f48992ad defines
+    // UserInput::Skill; skills/src/selection.rs:60-92 blocks those names from duplicate text
+    // selection while leaving unmatched Codex-native-only names scannable.
+    input: [
+      ...buildCodexUserInput(options.promptText ?? params.prompt, params.images),
+      ...(options.explicitSkillInputs ?? []),
+    ],
     ...(additionalContext ? { additionalContext } : {}),
     cwd: options.cwd,
+    ...(options.appServer.sessionRoot
+      ? { runtimeWorkspaceRoots: [options.appServer.sessionRoot] }
+      : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     ...(useThreadPermissionProfile
@@ -99,7 +139,7 @@ export function buildTurnStartParams(
             options.sandboxPolicy ??
             codexSandboxPolicyForTurn(
               options.appServer.sandbox,
-              options.cwd,
+              options.appServer.sessionRoot ?? options.cwd,
               options.appServer.start?.args,
             ),
         }),
@@ -113,26 +153,28 @@ export function buildTurnStartParams(
       : options.clearInheritedServiceTier
         ? { serviceTier: null }
         : {}),
-    ...(modelSelection
+    ...(collaborationMode
       ? {
-          effort: resolveReasoningEffort(
-            params.thinkLevel,
-            modelSelection.model,
-            readCodexSupportedReasoningEfforts(params.model?.compat),
-          ),
+          effort: collaborationMode.settings.reasoning_effort,
+          collaborationMode,
         }
       : {}),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
-    ...(modelSelection
-      ? {
-          collaborationMode: buildTurnCollaborationMode(params, {
-            model: modelSelection.model,
-            turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
-            skillsCollaborationInstructions: options.skillsCollaborationInstructions,
-            memoryCollaborationInstructions: options.memoryCollaborationInstructions,
-          }),
-        }
-      : {}),
+  };
+}
+
+export function buildCodexTemporalAdditionalContext(
+  params: Pick<EmbeddedRunAttemptParams, "config">,
+  options: { sessionStatusAvailable: boolean },
+): NonNullable<CodexTurnStartParams["additionalContext"]> {
+  return {
+    openclaw_temporal_context: {
+      kind: "application",
+      value: buildTemporalContextText({
+        configuredTimezone: params.config?.agents?.defaults?.userTimezone,
+        sessionStatusAvailable: options.sessionStatusAvailable,
+      }),
+    },
   };
 }
 
@@ -152,11 +194,11 @@ export function buildTurnCollaborationMode(
     mode: "default",
     settings: {
       model,
-      reasoning_effort: resolveReasoningEffort(
-        params.thinkLevel,
-        model,
-        readCodexSupportedReasoningEfforts(params.model?.compat),
-      ),
+      reasoning_effort: resolveCodexAppServerReasoningEffort({
+        thinkLevel: params.thinkLevel,
+        modelId: model,
+        supportedReasoningEfforts: readCodexSupportedReasoningEfforts(params.model?.compat),
+      }),
       developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };
@@ -177,9 +219,6 @@ function buildTurnScopedCollaborationInstructions(
   );
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
-  }
-  if (params.trigger === "heartbeat") {
-    return joinPresentSections(buildHeartbeatCollaborationInstructions(), contextInstructions);
   }
   if (contextInstructions?.trim()) {
     return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
@@ -212,14 +251,6 @@ function buildCronCollaborationInstructions(): string {
     "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
     "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
-  ].join("\n\n");
-}
-
-function buildHeartbeatCollaborationInstructions(): string {
-  return [
-    "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.",
-    "When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.",
-    CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   ].join("\n\n");
 }
 

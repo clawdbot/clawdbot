@@ -52,12 +52,23 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     vi.clearAllMocks();
   });
 
-  it("re-arms the scheduler when resolving the default reaper agent fails", async () => {
+  it("runs explicit-agent jobs when no default reaper agent exists", async () => {
     const store = await makeStorePath();
     const now = Date.parse("2026-02-10T10:00:00.000Z");
-    const job = createDueIsolatedJob({ id: "recover-default-agent", nowMs: now });
+    const job = {
+      ...createDueIsolatedJob({ id: "explicit-agent", nowMs: now }),
+      agentId: "worker",
+    };
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
-    let defaultAgentAvailable = false;
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    await replaceSessionEntry(
+      {
+        agentId: "worker",
+        storePath: sessionStorePath,
+        sessionKey: "agent:worker:cron:explicit-agent:run:expired",
+      },
+      { sessionId: "worker-expired", updatedAt: now - 25 * 3_600_000 },
+    );
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
     const state = createCronServiceState({
       storePath: store.storePath,
@@ -67,25 +78,20 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
-      resolveDefaultAgentId: () => {
-        if (!defaultAgentAvailable) {
-          throw new Error("default agent temporarily unavailable");
-        }
-        return "main";
-      },
-      sessionStorePath: path.join(path.dirname(store.storePath), "sessions", "sessions.json"),
+      resolveDefaultAgentId: () => undefined,
+      resolveSessionStoreAgentIds: () => ["worker"],
+      sessionStorePath,
     });
     state.store = { version: 1, jobs: [job] };
 
     await withCronServiceStateForTest(state, async () => {
-      await expect(onTimer(state)).rejects.toThrow("default agent temporarily unavailable");
-      expect(state.running).toBe(false);
-      expect(state.timer).not.toBeNull();
-
-      defaultAgentAvailable = true;
       await expect(onTimer(state)).resolves.toBeUndefined();
       expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+      expect(
+        listSessionEntriesCore({ agentId: "worker", storePath: sessionStorePath }),
+      ).toStrictEqual([]);
       expect(state.running).toBe(false);
+      expect(state.timer).not.toBeNull();
     });
   });
 
@@ -324,6 +330,72 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       expect(
         listSessionEntriesCore({ agentId: "worker", storePath: sessionStorePath }),
       ).toStrictEqual([]);
+    });
+  });
+
+  it.each([
+    { name: "deleted persisted owner", includeStaleJob: false },
+    { name: "blocked-delete owner with unfinished job cleanup", includeStaleJob: true },
+  ])("skips an unavailable $name without hiding a live owner", async ({ includeStaleJob }) => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-10T10:00:00.000Z");
+    const liveAgentId = "live";
+    const unavailableAgentId = includeStaleJob ? "blocked" : "deleted";
+    const sessionStorePath = path.join(path.dirname(store.storePath), "sessions", "sessions.json");
+    const jobs = includeStaleJob
+      ? [
+          {
+            ...createDueIsolatedJob({ id: "unfinished-cleanup", nowMs: now }),
+            agentId: unavailableAgentId,
+            enabled: false,
+          },
+        ]
+      : [];
+    await saveCronStore(store.storePath, { version: 1, jobs });
+    await replaceSessionEntry(
+      {
+        agentId: liveAgentId,
+        storePath: sessionStorePath,
+        sessionKey: `agent:${liveAgentId}:cron:old-job:run:expired`,
+      },
+      { sessionId: "live-expired", updatedAt: now - 25 * 3_600_000 },
+    );
+    const resolveSessionStorePath = vi.fn((agentId?: string) => {
+      if (agentId === unavailableAgentId) {
+        throw new Error(
+          `OpenClaw agent database is unavailable while agent ${unavailableAgentId} is deleted.`,
+        );
+      }
+      return sessionStorePath;
+    });
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+      resolveDefaultAgentId: () => undefined,
+      resolveSessionStoreAgentIds: () => [liveAgentId, unavailableAgentId],
+      isAgentAvailable: (agentId) => agentId === liveAgentId,
+      resolveSessionStorePath,
+    });
+
+    await withCronServiceStateForTest(state, async () => {
+      await onTimer(state);
+      await onTimer(state);
+
+      expect(resolveSessionStorePath.mock.calls).toEqual([[liveAgentId], [liveAgentId]]);
+      expect(listSessionEntriesCore({ agentId: liveAgentId, storePath: sessionStorePath })).toEqual(
+        [],
+      );
+      expect(noopLogger.warn).not.toHaveBeenCalled();
+      expect(
+        noopLogger.debug.mock.calls.filter(
+          ([, message]) => message === "cron-reaper: skipped unavailable agent",
+        ),
+      ).toEqual([[{ agentId: unavailableAgentId }, "cron-reaper: skipped unavailable agent"]]);
     });
   });
 

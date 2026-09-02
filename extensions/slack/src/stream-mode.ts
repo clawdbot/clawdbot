@@ -25,6 +25,8 @@ export function applyAppendOnlyStreamUpdate(params: {
   incoming: string;
   rendered: string;
   source: string;
+  /** Joins a divergent incoming value onto the already-rendered text. */
+  separator?: string;
 }): { rendered: string; source: string; changed: boolean } {
   const incoming = params.incoming.trimEnd();
   if (!incoming) {
@@ -53,7 +55,7 @@ export function applyAppendOnlyStreamUpdate(params: {
     return { rendered: params.rendered, source: params.source, changed: false };
   }
 
-  const separator = params.rendered.endsWith("\n") ? "" : "\n";
+  const separator = params.separator ?? (params.rendered.endsWith("\n") ? "" : "\n");
   return {
     rendered: `${params.rendered}${separator}${incoming}`,
     source: incoming,

@@ -36,16 +36,16 @@ export function logConfigWarningsOnce(params: {
   const details = params.warnings
     .map(
       (warning) =>
-        `- ${sanitizeTerminalText(warning.path || "<root>")}: ${sanitizeTerminalText(warning.message)}`,
+        `${sanitizeTerminalText(warning.path || "<root>")}: ${sanitizeTerminalText(warning.message)}`,
     )
-    .join("\n");
+    .join("; ");
   const fingerprint = hashConfigRaw(details);
   if (loggedConfigWarningFingerprints.get(params.configPath) === fingerprint) {
     setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
     return;
   }
   setBoundedConfigIoWarningEntry(loggedConfigWarningFingerprints, params.configPath, fingerprint);
-  params.logger.warn(`Config warnings:\n${details}`);
+  params.logger.warn(`Config warnings: ${details}`);
 }
 
 export function warnIfConfigFromFuture(

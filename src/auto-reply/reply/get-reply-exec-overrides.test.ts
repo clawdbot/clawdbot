@@ -30,42 +30,22 @@ describe("reply exec overrides", () => {
     ).toEqual(AGENT_EXEC_DEFAULTS);
   });
 
-  it("prefers inline exec directives, then persisted session overrides, then agent defaults", () => {
+  it("uses inline exec policy and persisted placement over agent defaults", () => {
     const sessionEntry = createSessionEntry({
       execHost: "gateway",
-      execSecurity: "deny",
     });
 
     expect(
       resolveReplyExecOverrides({
-        directives: parseInlineSessionDirectives("/exec host=auto security=full"),
+        directives: parseInlineSessionDirectives("/exec host=auto security=deny ask=off"),
         sessionEntry,
         agentExecDefaults: AGENT_EXEC_DEFAULTS,
       }),
     ).toEqual({
       ...AGENT_EXEC_DEFAULTS,
       host: "auto",
-      security: "full",
-    });
-
-    expect(
-      resolveReplyExecOverrides({
-        directives: parseInlineSessionDirectives("run a command"),
-        sessionEntry,
-        agentExecDefaults: AGENT_EXEC_DEFAULTS,
-      }),
-    ).toEqual({
-      ...AGENT_EXEC_DEFAULTS,
-      host: "gateway",
       security: "deny",
-    });
-  });
-
-  it("uses persisted session exec fields for later turns", () => {
-    const sessionEntry = createSessionEntry({
-      execHost: "gateway",
-      execSecurity: "full",
-      execAsk: "always",
+      ask: "off",
     });
 
     expect(
@@ -77,8 +57,6 @@ describe("reply exec overrides", () => {
     ).toEqual({
       ...AGENT_EXEC_DEFAULTS,
       host: "gateway",
-      security: "full",
-      ask: "always",
     });
   });
 

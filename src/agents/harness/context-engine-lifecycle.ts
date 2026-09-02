@@ -189,7 +189,7 @@ export async function assembleHarnessContextEngine(params: {
     return undefined;
   }
   const contextEngine = params.contextEngine;
-  const messages = stripRuntimeContextCustomMessages(params.messages);
+  const messages = stripRuntimeContextCustomMessages(params.messages).slice();
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
   const assemble = () =>
@@ -212,7 +212,7 @@ export async function assembleHarnessContextEngine(params: {
         ? await assemble()
         : await runWithPreparedMemoryPromptSection(
             {
-              availableTools: new Set(params.availableTools),
+              availableTools: params.availableTools ?? new Set(),
               citationsMode: params.citationsMode,
               agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
               agentSessionKey: params.sessionKey,

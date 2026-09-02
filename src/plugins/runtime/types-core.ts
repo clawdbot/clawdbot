@@ -6,14 +6,16 @@ import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
-import type {
-  ListSpeechVoices,
-  PrepareTtsRequest,
-  TextToSpeech,
-  TextToSpeechStream,
-  TextToSpeechTelephony,
-} from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
+
+type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
+type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
+type PrepareTtsRequest = (
+  ...args: Parameters<TtsRuntimeApi["prepareTtsRequest"]>
+) => Promise<ReturnType<TtsRuntimeApi["prepareTtsRequest"]>>;
+type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
+type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
+type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];
 
 type RuntimeRequestHeartbeatOptions = Parameters<
   typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
@@ -86,6 +88,10 @@ type RuntimeCreateSessionEntryResult = {
   sessionId: string;
   entry: RuntimeSessionEntry;
 };
+type RuntimeCreateSessionEntryContext = RuntimeCreateSessionEntryResult & {
+  /** Host creation authority; runtimes that cannot supply it must leave it absent. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
+};
 type RuntimeCreateSessionEntryFinalPatch = {
   pluginExtensions: RuntimeSessionPluginExtensions;
 };
@@ -94,7 +100,11 @@ type RuntimeCreateSessionEntryBaseParams = {
   key: string;
   agentId?: string;
   label?: string;
+  /** Create-only title snapshot: trimmed, capped at 500 UTF-16 units without splitting pairs; not a unique label. */
+  displayName?: string;
   spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: RuntimeSessionEntry["permissionMode"];
   /** Bind the created session's CLI execution to this paired node. */
   execNode?: string;
   /** Working directory interpreted only by execNode. */
@@ -102,11 +112,13 @@ type RuntimeCreateSessionEntryBaseParams = {
   initialEntry:
     | {
         agentHarnessId: string;
+        color?: string;
         modelSelectionLocked?: true;
         pluginExtensions?: RuntimeSessionPluginExtensions;
       }
     | {
         cliBackendId: string;
+        color?: string;
         model: string;
         cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
         modelSelectionLocked: true;
@@ -116,6 +128,7 @@ type RuntimeCreateSessionEntryBaseParams = {
       }
     | {
         acpBackendId: string;
+        color?: string;
         acpSessionBinding: {
           acpAgentId: string;
           agentSessionId: string;
@@ -132,13 +145,13 @@ type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
         /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
         recoverMatchingInitialEntry: true;
         afterCreate: (
-          created: RuntimeCreateSessionEntryResult,
+          created: RuntimeCreateSessionEntryContext,
         ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
       }
     | {
         recoverMatchingInitialEntry?: never;
         afterCreate?: (
-          created: RuntimeCreateSessionEntryResult,
+          created: RuntimeCreateSessionEntryContext,
         ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
       }
   );
@@ -346,9 +359,12 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
+    /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
+    runCommandFromIngress: (
+      opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
+      runtime: import("../../runtime.js").RuntimeEnv,
+    ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: RuntimeRunEmbeddedAgent;
-    /** @deprecated Use runEmbeddedAgent. */
-    runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     /**
      * Shares the embedded runner's CLI-backend dispatch eligibility (route,
@@ -378,6 +394,21 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
     };
+  };
+  hooks: {
+    /** Dispatch untrusted external content through an isolated, contained hook agent turn. */
+    dispatchHookAgentTurn: (params: {
+      name: string;
+      agentId: string;
+      sessionKey: string;
+      message: string;
+      externalContentSource: "email";
+      deliver: boolean;
+      model?: string;
+      thinking?: import("../../auto-reply/thinking.js").ThinkLevel;
+      timeoutSeconds?: number;
+      idempotencyKey?: string;
+    }) => Promise<{ ok: true; runId: string } | { ok: false; reason: string }>;
   };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
@@ -412,6 +443,7 @@ export type PluginRuntimeCore = {
     listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {
+    resolveAudioInputBudget: MediaUnderstandingRuntime["resolveAudioInputBudget"];
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];

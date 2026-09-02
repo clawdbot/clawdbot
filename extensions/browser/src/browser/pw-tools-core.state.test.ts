@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PageState } from "./pw-session-contracts.js";
 
 const stateMocks = vi.hoisted(() => ({
   ensurePageState: vi.fn(),
@@ -35,7 +36,7 @@ const stateMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./playwright-core.runtime.js", () => ({
-  playwrightCore: { devices: stateMocks.devices },
+  getPlaywrightCore: () => ({ devices: stateMocks.devices }),
 }));
 
 vi.mock("./pw-session.js", () => ({
@@ -53,10 +54,14 @@ function createPage() {
   const send = vi.fn(async (_method: string, _params?: Record<string, unknown>) => ({}));
   const detach = vi.fn(async () => {});
   const newCDPSession = vi.fn(async () => ({ send, detach }));
-  const setViewportSize = vi.fn(async () => {});
+  let viewport: { width: number; height: number } | null = null;
+  const setViewportSize = vi.fn(async (value: { width: number; height: number }) => {
+    viewport = value;
+  });
   const page = {
     context: () => ({ newCDPSession }),
     setViewportSize,
+    viewportSize: () => viewport,
   };
   return { page, send, detach, newCDPSession, setViewportSize };
 }
@@ -124,6 +129,7 @@ describe("setDeviceViaPlaywright", () => {
         },
       ],
       ["Emulation.setTouchEmulationEnabled", { enabled: true }],
+      ["Emulation.clearDeviceMetricsOverride"],
       ["Emulation.setUserAgentOverride", { userAgent: "desktop-chrome-user-agent" }],
       [
         "Emulation.setDeviceMetricsOverride",
@@ -162,6 +168,29 @@ describe("setDeviceViaPlaywright", () => {
       screenHeight: 844,
       screenOrientation: { angle: 0, type: "portraitPrimary" },
     });
+  });
+
+  it("keeps the successful Playwright viewport when a later device override fails", async () => {
+    const fixture = createPage();
+    const state: Partial<PageState> = {};
+    stateMocks.ensurePageState.mockReturnValue(state);
+    stateMocks.getPageForTargetId.mockResolvedValue(fixture.page);
+    const target = { cdpUrl: "http://127.0.0.1:9222", targetId: "tab-1" };
+    await setDeviceViaPlaywright({ ...target, name: "iPhone 14" });
+    fixture.send.mockImplementation(async (method) => {
+      if (method === "Emulation.setDeviceMetricsOverride") {
+        throw new Error("metrics override failed");
+      }
+      return {};
+    });
+
+    await expect(setDeviceViaPlaywright({ ...target, name: "Desktop Chrome" })).rejects.toThrow(
+      "metrics override failed",
+    );
+
+    expect(fixture.page.viewportSize()).toEqual({ width: 1280, height: 720 });
+    expect(state.emulation?.metricsOwner).toBeUndefined();
+    expect(state.emulation?.touch?.enabled).toBe(true);
   });
 
   it("serializes overlapping descriptor transitions on the same page", async () => {
@@ -205,6 +234,7 @@ describe("setDeviceViaPlaywright", () => {
       "Emulation.setUserAgentOverride",
       "Emulation.setDeviceMetricsOverride",
       "Emulation.setTouchEmulationEnabled",
+      "Emulation.clearDeviceMetricsOverride",
       "Emulation.setUserAgentOverride",
       "Emulation.setDeviceMetricsOverride",
       "Emulation.setTouchEmulationEnabled",

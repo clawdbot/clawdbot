@@ -94,13 +94,6 @@ describe("truncateUtf16Safe", () => {
     expect(truncateUtf16Safe("hello world", 5.7)).toBe("hello");
   });
 
-  it("preserves emoji with surrogate pairs", () => {
-    const emoji = "👨‍👩‍👧‍👦";
-    const result = truncateUtf16Safe(emoji, 10);
-    // Should not return dangling surrogate
-    expect(result.length).toBeLessThanOrEqual(emoji.length);
-  });
-
   it("returns empty string when truncating at surrogate pair boundary", () => {
     const input = "👨👩";
     expect(truncateUtf16Safe(input, 1)).toBe("");

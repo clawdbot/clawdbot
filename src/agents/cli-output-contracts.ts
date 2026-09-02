@@ -3,6 +3,7 @@ import type {
   CliBackendJsonlUsage,
   CliBackendParseJsonlEvent,
 } from "../plugins/cli-backend.types.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -31,6 +32,10 @@ export type CliTerminalFailure =
     }
   | { reason: "synthetic_no_response" };
 
+export type CliTerminalInterruption = {
+  reason: "aborted" | "timeout";
+};
+
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
@@ -44,6 +49,8 @@ export type CliOutput = {
   toolSummary?: ToolSummaryTrace;
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
+  /** A caller interruption that ended the turn after usable assistant text was streamed. */
+  terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
     process?: CliProcessDiagnostics;
   };
@@ -54,7 +61,14 @@ export type CliOutput = {
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  /** Trust-filtered explicit outbound media captured before CLI result normalization. */
+  toolMediaUrls?: string[];
+  toolAudioAsVoice?: boolean;
+  toolTrustedLocalMedia?: boolean;
+  /** Child sessions accepted by the turn-scoped loopback tool capture. */
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   yielded?: true;
+  yieldAcknowledgment?: string;
 };
 
 export type CliStreamingDelta = {

@@ -61,9 +61,8 @@ actor CameraController {
             preferFrontCamera: facing == .front,
             deviceId: params.deviceId,
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: { setupError in
                 CameraError.captureFailed(setupError.localizedDescription)
             })
@@ -141,9 +140,8 @@ actor CameraController {
                 includeAudio: includeAudio,
                 durationMs: durationMs),
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: Self.mapMovieSetupError,
             operation: { output in
                 let recording = CameraMovieRecordingOperation(output: output, outputURL: movURL)
@@ -196,19 +194,24 @@ actor CameraController {
 
     private nonisolated static func pickCamera(
         facing: OpenClawCameraFacing,
-        deviceId: String?) -> AVCaptureDevice?
+        deviceId: String?) throws -> AVCaptureDevice
     {
-        if let deviceId, !deviceId.isEmpty {
-            if let match = discoverVideoDevices().first(where: { $0.uniqueID == deviceId }) {
-                return match
-            }
-        }
-        let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
-            return device
-        }
-        // Fall back to any default camera (e.g. simulator / unusual device configurations).
-        return AVCaptureDevice.default(for: .video)
+        try CameraCapturePipelineSupport.selectCamera(
+            deviceId: deviceId,
+            matching: { deviceId in
+                self.discoverVideoDevices().first { $0.uniqueID == deviceId }
+            },
+            fallback: {
+                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+                    AVCaptureDevice.default(for: .video)
+            },
+            unavailableError: CameraError.cameraUnavailable,
+            deviceNotFoundError: {
+                CameraError.invalidParams(
+                    "INVALID_REQUEST: camera device not found: \($0); " +
+                        "run camera.list for current device IDs")
+            })
     }
 
     private nonisolated static func mapMovieSetupError(_ setupError: CameraSessionConfigurationError) -> CameraError {

@@ -7,11 +7,13 @@ import type {
   ApprovalKind,
   ApprovalPresentation,
 } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope } from "./approval-scope.js";
+import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
-  resolveExecApprovalCommandDisplay,
+  exceedsApprovalTextLimit,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "./exec-approval-command-display.js";
+} from "./exec-approval-text-sanitize.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
   PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
@@ -20,6 +22,8 @@ import {
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
+
+const PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH = 80;
 
 function normalizeDecisionList(decisions: readonly ApprovalDecision[]): ApprovalDecision[] {
   const result: ApprovalDecision[] = [];
@@ -34,13 +38,32 @@ function normalizeDecisionList(decisions: readonly ApprovalDecision[]): Approval
   return result;
 }
 
-function isWithinCodePointLimit(value: string, maxLength: number): boolean {
-  return Array.from(value).length <= maxLength;
-}
-
 function sanitizeOptionalSingleLine(value: unknown): string | null {
   const normalized = normalizeOptionalString(value);
   return normalized ? sanitizeExecApprovalDisplayText(normalized) : null;
+}
+
+function normalizePluginExternalResolution(
+  value: PluginApprovalRequestPayload["externalResolution"],
+): NonNullable<PluginApprovalRequestPayload["externalResolution"]> | null {
+  if (!value) {
+    return null;
+  }
+  const rawLabel = value.label?.trim();
+  const label = rawLabel ? sanitizeExecApprovalDisplayText(rawLabel) : "";
+  if (!label || exceedsApprovalTextLimit(label, PLUGIN_EXTERNAL_RESOLUTION_LABEL_MAX_LENGTH)) {
+    throw new Error("invalid external approval label");
+  }
+  const decisions = value.decisions ?? ["allow-once"];
+  if (
+    decisions.length < 1 ||
+    decisions.length > 2 ||
+    decisions.some((decision) => decision !== "allow-once" && decision !== "allow-always") ||
+    new Set(decisions).size !== decisions.length
+  ) {
+    throw new Error("invalid external approval decisions");
+  }
+  return { label, decisions: [...decisions] };
 }
 
 function buildExecApprovalPresentation(params: {
@@ -59,6 +82,7 @@ function buildExecApprovalPresentation(params: {
     typeof request.warningText === "string" && request.warningText.trim()
       ? sanitizeExecApprovalWarningText(request.warningText)
       : null;
+  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
   return {
     kind: "exec",
     commandText,
@@ -67,6 +91,7 @@ function buildExecApprovalPresentation(params: {
     host: sanitizeOptionalSingleLine(request.host),
     nodeId: sanitizeOptionalSingleLine(request.nodeId),
     agentId: sanitizeOptionalSingleLine(request.agentId),
+    ...(scope ? { scope } : {}),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
   };
 }
@@ -89,8 +114,8 @@ function buildPluginApprovalPresentation(params: {
   const title = sanitizeExecApprovalDisplayText(rawTitle);
   const description = sanitizeExecApprovalWarningText(rawDescription);
   if (
-    !isWithinCodePointLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
-    !isWithinCodePointLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
+    exceedsApprovalTextLimit(title, PLUGIN_APPROVAL_TITLE_MAX_LENGTH) ||
+    exceedsApprovalTextLimit(description, PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH)
   ) {
     return null;
   }
@@ -102,6 +127,13 @@ function buildPluginApprovalPresentation(params: {
   const detail = rawDetail
     ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
     : null;
+  const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
+  let externalResolution: ReturnType<typeof normalizePluginExternalResolution>;
+  try {
+    externalResolution = normalizePluginExternalResolution(request.externalResolution);
+  } catch {
+    return null;
+  }
   return {
     kind: "plugin",
     title,
@@ -111,7 +143,16 @@ function buildPluginApprovalPresentation(params: {
     pluginId: sanitizeOptionalSingleLine(request.pluginId),
     toolName: sanitizeOptionalSingleLine(request.toolName),
     agentId: sanitizeOptionalSingleLine(request.agentId),
+    ...(scope ? { scope } : {}),
     allowedDecisions: normalizeDecisionList(params.allowedDecisions),
+    ...(externalResolution
+      ? {
+          externalResolution: {
+            label: externalResolution.label,
+            decisions: [...(externalResolution.decisions ?? ["allow-once"])],
+          },
+        }
+      : {}),
   };
 }
 

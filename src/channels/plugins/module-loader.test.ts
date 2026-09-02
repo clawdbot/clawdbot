@@ -27,13 +27,33 @@ function normalizeModuleLoaderTarget(target: string): string {
 }
 
 describe("channel plugin module loader helpers", () => {
-  it("resolves extensionless plugin module specifiers to the first existing extension", () => {
+  it.each(["mts", "mtsx", "ctsx"])(
+    "resolves extensionless plugin module specifiers to %s",
+    (extension) => {
+      const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+      const expectedPath = path.join(rootDir, "src", `checker.${extension}`);
+      fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
+      fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
+
+      expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);
+    },
+  );
+
+  it("preserves explicit JavaScript plugin module specifiers", () => {
     const rootDir = tempDirs.make("openclaw-channel-module-loader-");
-    const expectedPath = path.join(rootDir, "src", "checker.mts");
+    const expectedPath = path.join(rootDir, "checker.js");
+    fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
+
+    expect(resolveExistingPluginModulePath(rootDir, "./checker.js")).toBe(expectedPath);
+  });
+
+  it("resolves plugin module directories through their index", () => {
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+    const expectedPath = path.join(rootDir, "checker", "index.js");
     fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
     fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
 
-    expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);
+    expect(resolveExistingPluginModulePath(rootDir, "./checker")).toBe(expectedPath);
   });
 
   it("detects JavaScript module paths case-insensitively", () => {

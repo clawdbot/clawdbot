@@ -1,5 +1,8 @@
 // Delivery queue runtime helpers persist and replay outbound plugin delivery work.
-import { drainPendingDeliveriesCore, type DeliverFn } from "../infra/outbound/delivery-queue.js";
+import {
+  drainPendingDeliveriesCore,
+  type DeliverFn,
+} from "../infra/outbound/delivery-queue-recovery.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
@@ -28,6 +31,12 @@ export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions
     await drainPendingDeliveriesCore({
       ...opts,
       deliver,
+      // Conversation records belong to the Gateway recovery loop, which reconstructs current
+      // route authority before delivery. Plugin reconnect drains cannot safely consume them.
+      selectEntry: (entry, now) =>
+        entry.deliveryCompletion?.kind === "conversation"
+          ? { match: false, bypassBackoff: false }
+          : opts.selectEntry(entry, now),
     });
-  });
+  }, "delivery-queue:drain");
 }

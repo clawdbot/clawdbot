@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { callGateway } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeSpeechProviderId } from "../../tts/provider-registry.js";
@@ -95,16 +95,20 @@ export function registerTtsCapabilityCommands(capability: Command): void {
       });
     });
 
-  for (const [name, description, run] of [
-    ["providers", "List speech providers", runTtsProviders],
-    ["personas", "List TTS personas", runTtsPersonas],
-  ] as const) {
-    registerTransportTtsCommand(
-      tts.command(name).description(description),
-      "local",
-      (_, transport) => run(transport),
-    );
-  }
+  registerTransportTtsCommand(
+    tts
+      .command("providers")
+      .description("List speech providers")
+      .option("--agent <id>", "Agent whose provider state should be inspected"),
+    "local",
+    (opts, transport) => runTtsProviders(transport, opts.agent as string | undefined),
+  );
+
+  registerTransportTtsCommand(
+    tts.command("personas").description("List TTS personas"),
+    "local",
+    (_, transport) => runTtsPersonas(transport),
+  );
 
   tts
     .command("status")
@@ -159,7 +163,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
     tts
       .command("set-persona")
       .description("Set the active TTS persona")
-      .option("--persona <id>", "TTS persona id")
+      .addOption(new Option("--persona <id>", "TTS persona id").conflicts("off"))
       .option("--off", "Disable the active TTS persona", false),
     "gateway",
     (opts, transport) => {

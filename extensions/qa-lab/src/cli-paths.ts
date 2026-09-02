@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements cli paths behavior.
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { assertNoSymlinkParents, pathScope } from "openclaw/plugin-sdk/security-runtime";
 
 export function toRepoPath(filePath: string): string {
@@ -29,11 +30,10 @@ export function resolveRepoRelativeOutputDir(repoRoot: string, outputDir?: strin
 }
 
 function assertRepoRelativePath(repoRoot: string, targetPath: string, label: string) {
-  const relative = path.relative(repoRoot, targetPath);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isPathInside(repoRoot, targetPath)) {
     throw new Error(`${label} must stay within the repo root.`);
   }
-  return relative;
+  return path.relative(repoRoot, targetPath);
 }
 
 async function assertNoSymlinkSegments(repoRoot: string, targetPath: string, label: string) {

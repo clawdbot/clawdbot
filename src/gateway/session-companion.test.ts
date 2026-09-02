@@ -93,7 +93,9 @@ describe("session companion asks", () => {
 
     expect(harness.run).toHaveBeenCalledOnce();
     const call = harness.run.mock.calls[0]?.[0];
-    expect(call?.systemPrompt).toContain("read-only companion observing session agent:main:main");
+    expect(call?.systemPrompt).toContain(
+      "read-only Side chat assistant observing session agent:main:main",
+    );
     expect(call?.systemPrompt).toContain("not the session agent");
     expect(call?.systemPrompt).toContain("do not perform first-run or identity flows");
     expect(call?.systemPrompt).toContain("Answer only the operator's current question");
@@ -683,7 +685,7 @@ describe("session companion tool scope", () => {
     expect(cfg.tools?.fs?.workspaceOnly).toBe(true);
     expect(cfg.tools?.sessions?.visibility).toBe("self");
     expect(cfg.tools?.toolSearch).toMatchObject({ enabled: false });
-    expect(cfg.tools?.codeMode).toMatchObject({ enabled: false });
+    expect(cfg.tools?.codeMode).toBe(true);
 
     const targetAccess = await resolveSessionToolAccess({
       action: "history",

@@ -1,7 +1,16 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
+import type {
+  AcpSessionResolution,
+  SessionAcpMeta,
+} from "../../acp/control-plane/manager.types.js";
+import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
+import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
-import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
+import type {
+  ChannelMessagingAdapter,
+  ChannelThreadingAdapter,
+} from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type {
   AcpRuntime,
@@ -31,6 +40,7 @@ import {
   mocks,
   noAbortResult,
   parseGenericThreadSessionInfo,
+  placementContextMocks,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -71,11 +81,9 @@ export const automaticDirectReplyConfig = {
 
 export let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 
-export let dispatchFromConfigTesting: typeof import("./dispatch-from-config.test-support.js").testing;
-
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
-export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
+export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
 
 export let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
 
@@ -127,6 +135,7 @@ export function createAcpRuntime(events: AcpRuntimeEvent[]): MockAcpRuntime {
     ensureSession: vi.fn<(input: AcpRuntimeEnsureInput) => Promise<AcpRuntimeHandle>>(
       async (input) => ({
         sessionKey: input.sessionKey,
+        agentId: input.agentId,
         backend: "acpx",
         runtimeSessionName: `${input.sessionKey}:${input.mode}`,
       }),
@@ -150,30 +159,35 @@ export function createAcpRuntime(events: AcpRuntimeEvent[]): MockAcpRuntime {
 
 function createMockAcpSessionManager() {
   return {
-    resolveSession: (params: { cfg: OpenClawConfig; sessionKey: string }) => {
+    resolveSession: (params: {
+      cfg: OpenClawConfig;
+      sessionKey: string;
+      agentId?: string;
+    }): AcpSessionResolution => {
+      const target = resolveAcpSessionTarget(params);
       const entry = acpMocks.readAcpSessionEntry({
         cfg: params.cfg,
-        sessionKey: params.sessionKey,
-      }) as { acp?: Record<string, unknown> } | null;
+        ...target,
+      }) as { acp?: SessionAcpMeta } | null;
       if (entry?.acp) {
         return {
-          kind: "ready" as const,
-          sessionKey: params.sessionKey,
+          kind: "ready",
+          ...target,
           meta: entry.acp,
         };
       }
-      return params.sessionKey.startsWith("agent:")
+      return target.sessionKey.startsWith("agent:")
         ? {
-            kind: "stale" as const,
-            sessionKey: params.sessionKey,
-            error: {
-              code: "ACP_SESSION_INIT_FAILED",
-              message: `ACP metadata is missing for ${params.sessionKey}.`,
-            },
+            kind: "stale",
+            ...target,
+            error: new AcpRuntimeError(
+              "ACP_SESSION_INIT_FAILED",
+              `ACP metadata is missing for ${target.sessionKey}.`,
+            ),
           }
         : {
-            kind: "none" as const,
-            sessionKey: params.sessionKey,
+            kind: "none",
+            ...target,
           };
     },
     getObservabilitySnapshot: () => ({
@@ -196,6 +210,7 @@ function createMockAcpSessionManager() {
       async (params: {
         cfg: OpenClawConfig;
         sessionKey: string;
+        agentId?: string;
         text?: string;
         attachments?: unknown[];
         mode: string;
@@ -206,6 +221,7 @@ function createMockAcpSessionManager() {
         const entry = acpMocks.readAcpSessionEntry({
           cfg: params.cfg,
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
         }) as {
           acp?: {
             agent?: string;
@@ -220,6 +236,7 @@ function createMockAcpSessionManager() {
         }
         const handle = await runtimeBackend.runtime.ensureSession({
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
           mode: (entry?.acp?.mode || "persistent") as AcpRuntimeEnsureInput["mode"],
           agent: entry?.acp?.agent || "codex",
         });
@@ -288,7 +305,11 @@ export function firstRouteReplyCall(): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
-export function installThreadingTestPlugin(params: { defaultAccountId?: string; id: string }) {
+export function installThreadingTestPlugin(params: {
+  defaultAccountId?: string;
+  id: string;
+  resolveReplyToMode?: NonNullable<ChannelThreadingAdapter["resolveReplyToMode"]>;
+}) {
   const plugin = createChannelTestPluginBase({ id: params.id });
   const defaultAccountId = params.defaultAccountId;
   const registry = createTestRegistry([
@@ -301,7 +322,7 @@ export function installThreadingTestPlugin(params: { defaultAccountId?: string; 
           ? { ...plugin.config, defaultAccountId: () => defaultAccountId }
           : plugin.config,
         threading: {
-          resolveReplyToMode: () => "all",
+          resolveReplyToMode: params.resolveReplyToMode ?? (() => "all"),
         },
       },
     },
@@ -369,11 +390,11 @@ export function messageAuditEvents(): Array<Record<string, unknown>> {
 
 export const globalBeforeAll0 = async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-  ({ testing: dispatchFromConfigTesting } = await import("./dispatch-from-config.test-support.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-  ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
+  // The broad facade imports the real manager outside this fixture's mocked dispatch boundary.
+  ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
   ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
   ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
@@ -622,6 +643,10 @@ export const describe2BeforeEach0 = () => {
   mocks.routeReply.mockReset();
   mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
   sessionStoreMocks.currentEntry = undefined;
+  placementContextMocks.getMany.mockReset().mockReturnValue(new Map());
+  placementContextMocks.resolveSessionWorkerPlacementContext
+    .mockReset()
+    .mockReturnValue(placementContextMocks.context);
   sessionBindingMocks.resolveByConversation.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();

@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -42,7 +43,12 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+      agentIdBySessionKey: new Map(),
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {},
+    })),
   };
 });
 
@@ -94,8 +100,8 @@ describe("gateway usage helpers", () => {
     endDate: string,
   ) {
     const range = expectDateRange(result);
-    expect(range.startMs).toBe(testApi.parseDateToMs(startDate));
-    expect(range.endMs).toBe(testApi.parseDateToMs(endDate)! + dayMs - 1);
+    expect(range.startMs).toBe(Date.parse(`${startDate}T00:00:00.000Z`));
+    expect(range.endMs).toBe(Date.parse(`${endDate}T00:00:00.000Z`) + dayMs - 1);
   }
 
   function expectDateRange(result: ReturnType<typeof testApi.resolveDateRange>) {
@@ -125,26 +131,6 @@ describe("gateway usage helpers", () => {
     testApi.sessionsUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
-  });
-
-  it("parseDateToMs accepts YYYY-MM-DD and rejects invalid input", () => {
-    expect(testApi.parseDateToMs("2026-02-05")).toBe(Date.UTC(2026, 1, 5));
-    expect(testApi.parseDateToMs(" 2026-02-05 ")).toBe(Date.UTC(2026, 1, 5));
-    expect(testApi.parseDateToMs("2026-2-5")).toBeUndefined();
-    expect(testApi.parseDateToMs("nope")).toBeUndefined();
-    expect(testApi.parseDateToMs(undefined)).toBeUndefined();
-  });
-
-  it("parseDateToMs rejects out-of-range calendar dates instead of rolling them over", () => {
-    // Impossible dates that still match the YYYY-MM-DD shape must not silently shift to a real day.
-    expect(testApi.parseDateToMs("2026-02-30")).toBeUndefined(); // would roll to Mar 2
-    expect(testApi.parseDateToMs("2026-04-31")).toBeUndefined(); // would roll to May 1
-    expect(testApi.parseDateToMs("2025-02-29")).toBeUndefined(); // non-leap Feb 29
-    expect(testApi.parseDateToMs("2026-13-01")).toBeUndefined(); // month too large
-    expect(testApi.parseDateToMs("2026-00-10")).toBeUndefined(); // month zero
-    expect(testApi.parseDateToMs("2026-01-00")).toBeUndefined(); // day zero
-    // Real leap day must stay valid (guard against over-rejection).
-    expect(testApi.parseDateToMs("2024-02-29")).toBe(Date.UTC(2024, 1, 29));
   });
 
   it.each([
@@ -274,34 +260,6 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(discoverAllSessions)).not.toHaveBeenCalled();
   });
 
-  it("parseUtcOffsetToMinutes supports whole-hour and half-hour offsets", () => {
-    expect(testApi.parseUtcOffsetToMinutes("UTC-4")).toBe(-240);
-    expect(testApi.parseUtcOffsetToMinutes("UTC+5:30")).toBe(330);
-    expect(testApi.parseUtcOffsetToMinutes(" UTC+14 ")).toBe(14 * 60);
-  });
-
-  it("parseUtcOffsetToMinutes rejects invalid offsets", () => {
-    expect(testApi.parseUtcOffsetToMinutes("UTC+14:30")).toBeUndefined();
-    expect(testApi.parseUtcOffsetToMinutes("UTC+5:99")).toBeUndefined();
-    expect(testApi.parseUtcOffsetToMinutes("UTC+25")).toBeUndefined();
-    expect(testApi.parseUtcOffsetToMinutes("GMT+5")).toBeUndefined();
-    expect(testApi.parseUtcOffsetToMinutes(undefined)).toBeUndefined();
-  });
-
-  it("parseDays coerces strings/numbers to integers", () => {
-    expect(testApi.parseDays(7.9)).toBe(7);
-    expect(testApi.parseDays("30")).toBe(30);
-    expect(testApi.parseDays("")).toBeUndefined();
-    expect(testApi.parseDays("nope")).toBeUndefined();
-  });
-
-  it("parseDays caps day counts before Date arithmetic can overflow", () => {
-    expect(testApi.parseDays(1e300)).toBe(36600);
-    expect(testApi.parseDays("1e300")).toBe(36600);
-    expect(testApi.parseDays(Number.MAX_SAFE_INTEGER)).toBe(36600);
-    expect(testApi.parseDays(366 * 100)).toBe(36600);
-  });
-
   it("resolveDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
     const result = testApi.resolveDateRange({
       startDate: "2026-02-01",
@@ -310,45 +268,51 @@ describe("gateway usage helpers", () => {
     expectUtcDateRange(result, "2026-02-01", "2026-02-02");
   });
 
-  it("resolveDateRange uses explicit UTC mode", () => {
+  it("resolveDateRange accepts a leap day in explicit UTC mode", () => {
     const result = testApi.resolveDateRange({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
+      startDate: "2024-02-29",
+      endDate: "2024-03-01",
       mode: "utc",
     });
-    expectUtcDateRange(result, "2026-02-01", "2026-02-02");
+    expectUtcDateRange(result, "2024-02-29", "2024-03-01");
   });
 
-  it("resolveDateRange uses specific UTC offset for explicit dates", () => {
+  it.each([
+    ["UTC+14:00", "2026-01-31T10:00:00.000Z", "2026-02-02T09:59:59.999Z"],
+    ["UTC-12:00", "2026-02-01T12:00:00.000Z", "2026-02-03T11:59:59.999Z"],
+    ["UTC+5:30", "2026-01-31T18:30:00.000Z", "2026-02-02T18:29:59.999Z"],
+    ["UTC-0:30", "2026-02-01T00:30:00.000Z", "2026-02-03T00:29:59.999Z"],
+    ["UTC+0", "2026-02-01T00:00:00.000Z", "2026-02-02T23:59:59.999Z"],
+    ["UTC-0", "2026-02-01T00:00:00.000Z", "2026-02-02T23:59:59.999Z"],
+  ])("resolveDateRange applies valid explicit UTC offset %s", (utcOffset, start, end) => {
     const range = expectDateRange(
       testApi.resolveDateRange({
         startDate: "2026-02-01",
         endDate: "2026-02-02",
         mode: "specific",
-        utcOffset: "UTC+5:30",
+        utcOffset,
       }),
     );
-    const start = Date.UTC(2026, 1, 1) - 5.5 * 60 * 60 * 1000;
-    const endStart = Date.UTC(2026, 1, 2) - 5.5 * 60 * 60 * 1000;
-    expect(range.startMs).toBe(start);
-    expect(range.endMs).toBe(endStart + dayMs - 1);
+    expect(range.startMs).toBe(Date.parse(start));
+    expect(range.endMs).toBe(Date.parse(end));
   });
 
-  it("resolveDateRange uses IANA timezone boundaries across a DST transition", () => {
-    const range = expectDateRange(
-      testApi.resolveDateRange({
-        startDate: "2026-10-25",
-        endDate: "2026-10-25",
-        mode: "specific",
-        timeZone: "Europe/Vienna",
-        // The IANA zone must take precedence over this pre-transition fixed offset.
-        utcOffset: "UTC+2",
-      }),
-    );
-
-    expect(range.startMs).toBe(Date.UTC(2026, 9, 24, 22));
-    expect(range.endMs).toBe(Date.UTC(2026, 9, 25, 23) - 1);
-  });
+  it.each(["UTC+2", "UTC+99", "UTC-12:01"])(
+    "resolveDateRange gives IANA DST boundaries precedence over %s",
+    (utcOffset) => {
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          startDate: "2026-10-25",
+          endDate: "2026-10-25",
+          mode: "specific",
+          timeZone: "Europe/Vienna",
+          utcOffset,
+        }),
+      );
+      expect(range.startMs).toBe(Date.UTC(2026, 9, 24, 22));
+      expect(range.endMs).toBe(Date.UTC(2026, 9, 25, 23) - 1);
+    },
+  );
 
   it("resolveDateRange crosses a skipped IANA civil date for the prior day's end", () => {
     const range = expectDateRange(
@@ -375,27 +339,66 @@ describe("gateway usage helpers", () => {
     });
   });
 
-  it("resolveDateRange falls back to UTC when specific mode offset is missing or invalid", () => {
-    const missingOffset = expectDateRange(
-      testApi.resolveDateRange({
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        mode: "specific",
-      }),
-    );
-    const invalidOffset = expectDateRange(
-      testApi.resolveDateRange({
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        mode: "specific",
-        utcOffset: "bad-value",
-      }),
-    );
-    expect(missingOffset.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(missingOffset.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
-    expect(invalidOffset.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(invalidOffset.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
-  });
+  it.each([undefined, null, "", "  "])(
+    "resolveDateRange retains UTC for omitted or blank offset %j",
+    (utcOffset) => {
+      expectUtcDateRange(
+        testApi.resolveDateRange({
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          mode: "specific",
+          utcOffset,
+        }),
+        "2026-02-01",
+        "2026-02-02",
+      );
+    },
+  );
+
+  it.each(["UTC+14:01", "UTC-12:01", "UTC+99", "UTC+5:60", "UTC+5.5", "bad", 330])(
+    "resolveDateRange rejects malformed explicit UTC offset %j",
+    (utcOffset) => {
+      expect(
+        testApi.resolveDateRange({
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          mode: "specific",
+          utcOffset,
+        }),
+      ).toEqual({
+        ok: false,
+        error: "invalid utcOffset: expected UTC-12:00 through UTC+14:00",
+      });
+    },
+  );
+
+  it.each(["usage.cost", "sessions.usage"] as const)(
+    "%s rejects invalid explicit offsets before loading usage",
+    async (method) => {
+      for (const utcOffset of ["UTC+14:01", "UTC-12:01", "UTC+99"]) {
+        const respond = vi.fn();
+        await expectDefined(
+          usageHandlers[method],
+          "usage handler",
+        )({
+          respond,
+          params: { mode: "specific", utcOffset },
+          context: { getRuntimeConfig: () => ({}) },
+        } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "invalid utcOffset: expected UTC-12:00 through UTC+14:00",
+          ),
+        );
+      }
+      expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+      expect(vi.mocked(discoverAllSessions)).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolveDateRange uses specific offset for today/day math after UTC midnight", () => {
     vi.useFakeTimers();
@@ -551,6 +554,22 @@ describe("gateway usage helpers", () => {
     });
   });
 
+  it("refreshes aggregate cost usage when the configured agent set changes", async () => {
+    const request = { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" };
+    const respond = vi.fn();
+    for (const entries of [{ main: {} }, { main: {}, research: {} }]) {
+      await expectDefined(
+        usageHandlers["usage.cost"],
+        "cost handler",
+      )({
+        respond,
+        params: request,
+        context: { getRuntimeConfig: () => ({ agents: { entries } }) },
+      } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+    }
+    expect(respond.mock.calls.map((call) => call[1].totals.totalTokens)).toEqual([1, 2]);
+  });
+
   it("keeps cost usage cache entries scoped by the complete day bucket", async () => {
     const config = {} as OpenClawConfig;
 
@@ -686,6 +705,32 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
     );
+  });
+
+  it("aggregates all-agent cost over the gateway agent universe, including on-disk system agents", async () => {
+    await withTestDir({ prefix: "openclaw-usage-universe-" }, async (stateDir) => {
+      await fs.mkdir(`${stateDir}/agents/openclaw`, { recursive: true });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expectDefined(
+          usageHandlers["usage.cost"],
+          'usageHandlers["usage.cost"] test invariant',
+        )({
+          respond: vi.fn(),
+          params: { startDate: "2026-02-03", endDate: "2026-02-04", agentScope: "all" },
+          context: {
+            getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+          },
+        } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+      });
+
+      const loadedAgentIds = vi
+        .mocked(loadCostUsageSummaryFromCache)
+        .mock.calls.map((call) => (call[0] as { agentId?: string }).agentId);
+      expect(loadedAgentIds).toContain("main");
+      // sessions.usage discovers this on-disk system agent's sessions; cost
+      // totals must cover the same agent set or the two views diverge.
+      expect(loadedAgentIds).toContain("openclaw");
+    });
   });
 
   it("does not project local avatar bytes for usage-only agent enumeration", async () => {

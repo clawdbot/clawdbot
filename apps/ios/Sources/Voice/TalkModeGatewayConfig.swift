@@ -9,6 +9,8 @@ enum TalkModeExecutionMode: Equatable {
 
 struct TalkRuntimeIssue: Equatable {
     enum Code: String {
+        case audioInputUnavailable = "audio_input_unavailable"
+        case realtimeOutputCancelFailed = "realtime_output_cancel_failed"
         case realtimeUnavailable = "realtime_unavailable"
     }
 
@@ -370,37 +372,24 @@ enum TalkModeGatewayConfigParser {
             allowLegacyFallback: false)
         let activeProvider = selection?.provider ?? defaultProvider
         let activeConfig = selection?.config
-        let voiceAliases: [String: String]
-        if let aliases = activeConfig?["voiceAliases"]?.dictionaryValue {
-            var resolved: [String: String] = [:]
-            for (key, value) in aliases {
-                guard let id = value.stringValue else { continue }
-                let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                let trimmedId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !normalizedKey.isEmpty, !trimmedId.isEmpty else { continue }
-                resolved[normalizedKey] = trimmedId
-            }
-            voiceAliases = resolved
-        } else {
-            voiceAliases = [:]
-        }
-        let model = Self.firstString(activeConfig, keys: ["modelId", "model"])
+        let voiceAliases = TalkVoiceAliases.normalizedMap(activeConfig?["voiceAliases"])
+        let model = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["modelId", "model"])
         let defaultModelId = (model?.isEmpty == false) ? model! : defaultModelIdFallback
-        let defaultVoiceId = Self.firstString(activeConfig, keys: ["voiceId", "voice"])
-        let defaultOutputFormat = Self.firstString(activeConfig, keys: ["outputFormat"])
+        let defaultVoiceId = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["voiceId", "voice"])
+        let defaultOutputFormat = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["outputFormat"])
         let realtime = talk?["realtime"]?.dictionaryValue
         let realtimeProviders = realtime?["providers"]?.dictionaryValue
-        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
-            ?? Self.singleRealtimeProviderId(realtimeProviders)
-        let realtimeProviderConfig = Self.realtimeProviderConfig(
+        let realtimeProvider = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["provider"])
+            ?? TalkConfigParsing.singleRealtimeProviderID(realtimeProviders)
+        let realtimeProviderConfig = TalkConfigParsing.realtimeProviderConfig(
             providers: realtimeProviders,
             provider: realtimeProvider)
-        let realtimeModel = Self.firstString(realtime, keys: ["model"])
-            ?? Self.firstString(realtimeProviderConfig, keys: ["model"])
+        let realtimeModel = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["model"])
+            ?? TalkConfigParsing.firstNonEmptyString(realtimeProviderConfig, keys: ["model"])
         let realtimeModelId = realtimeModel ?? defaultRealtimeModelIdFallback
-        let realtimeVoiceId = Self.firstString(realtime, keys: ["voice"])
-            ?? Self.firstString(realtimeProviderConfig, keys: ["voice"])
-        let realtimeTransport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
+        let realtimeVoiceId = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["voice"])
+            ?? TalkConfigParsing.firstNonEmptyString(realtimeProviderConfig, keys: ["voice"])
+        let realtimeTransport = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["transport"])?.lowercased()
         // Direct provider WebRTC can answer before consulting the agent, so this explicit
         // policy must stay on the relay that enforces final-transcript consultations.
         let requiresForcedAgentConsultRelay = Self.requiresForcedAgentConsultRelay(realtime)
@@ -408,7 +397,7 @@ enum TalkModeGatewayConfigParser {
             || realtimeTransport == "gateway-relay"
             || realtimeTransport == "provider-websocket"
             || Self.usesAzureOpenAI(provider: realtimeProvider, config: realtimeProviderConfig)
-        let openAIProviderConfig = Self.realtimeProviderConfig(
+        let openAIProviderConfig = TalkConfigParsing.realtimeProviderConfig(
             providers: realtimeProviders,
             provider: "openai")
         let openAIRequiresGatewayRealtimeTransport = requiresForcedAgentConsultRelay
@@ -446,17 +435,8 @@ enum TalkModeGatewayConfigParser {
             speechLocaleID: speechLocaleID)
     }
 
-    private static func firstString(_ config: [String: AnyCodable]?, keys: [String]) -> String? {
-        guard let config else { return nil }
-        for key in keys {
-            let value = config[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if value?.isEmpty == false { return value }
-        }
-        return nil
-    }
-
     private static func requiresForcedAgentConsultRelay(_ realtime: [String: AnyCodable]?) -> Bool {
-        self.firstString(realtime, keys: ["consultRouting"])?.lowercased() == "force-agent-consult"
+        TalkConfigParsing.firstNonEmptyString(realtime, keys: ["consultRouting"])?.lowercased() == "force-agent-consult"
     }
 
     private static func resolvedExecutionMode(
@@ -464,11 +444,11 @@ enum TalkModeGatewayConfigParser {
         requiresGatewayRealtimeTransport: Bool) -> TalkModeExecutionMode
     {
         guard let realtime else { return .native }
-        let mode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
-        let transport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
-        let provider = Self.firstString(realtime, keys: ["provider"])?.lowercased()
-            ?? Self.singleRealtimeProviderId(realtime["providers"]?.dictionaryValue)?.lowercased()
-        let brain = Self.firstString(realtime, keys: ["brain"])?.lowercased()
+        let mode = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["mode"])?.lowercased()
+        let transport = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["transport"])?.lowercased()
+        let provider = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["provider"])?.lowercased()
+            ?? TalkConfigParsing.singleRealtimeProviderID(realtime["providers"]?.dictionaryValue)?.lowercased()
+        let brain = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["brain"])?.lowercased()
         guard mode == "realtime" else {
             return .native
         }
@@ -504,32 +484,6 @@ enum TalkModeGatewayConfigParser {
         config: [String: AnyCodable]?) -> Bool
     {
         guard provider?.caseInsensitiveCompare("openai") == .orderedSame else { return false }
-        return self.firstString(config, keys: ["azureEndpoint", "azureDeployment"]) != nil
-    }
-
-    private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {
-        guard let providers, providers.count == 1 else { return nil }
-        let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return provider?.isEmpty == false ? provider : nil
-    }
-
-    private static func realtimeProviderConfig(
-        providers: [String: AnyCodable]?,
-        provider: String?) -> [String: AnyCodable]?
-    {
-        guard let providers else { return nil }
-        if let provider {
-            if let exact = providers[provider]?.dictionaryValue {
-                return exact
-            }
-            return providers.first { key, _ in
-                key.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .caseInsensitiveCompare(provider) == .orderedSame
-            }?.value.dictionaryValue
-        }
-        if providers.count == 1 {
-            return providers.values.first?.dictionaryValue
-        }
-        return nil
+        return TalkConfigParsing.firstNonEmptyString(config, keys: ["azureEndpoint", "azureDeployment"]) != nil
     }
 }

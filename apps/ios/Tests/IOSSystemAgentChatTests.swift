@@ -432,7 +432,7 @@ struct IOSSystemAgentChatTests {
     }
 
     @Test func `settings route is visible and handoff uses root chat navigation`() throws {
-        #expect(SettingsProTab().title(for: .systemAgent) == "OpenClaw")
+        #expect(SettingsProTab(navigateToRoute: { _ in }).title(for: .systemAgent) == "OpenClaw")
 
         let iosRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

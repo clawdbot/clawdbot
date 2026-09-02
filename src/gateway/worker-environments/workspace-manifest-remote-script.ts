@@ -30,11 +30,12 @@ function compareManifestPaths(left, right) {
   return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
 }
 function serializeManifest(baseCommit, entries, comparePaths = compareManifestPaths) {
+  const stagedInputs = stagedInputDirectoriesFromEntries(entries);
   return JSON.stringify({
     version: 1,
     baseCommit,
     entries: entries
-      .filter((entry) => !isDerivedWorkspacePath(entry.path))
+      .filter((entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)))
       .map(canonicalEntry)
       .sort(comparePaths),
   });

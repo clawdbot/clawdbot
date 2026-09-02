@@ -6,6 +6,7 @@ import type {
   DeferredPluginToolApproval,
   HookContext,
 } from "../agent-tools.before-tool-call.js";
+import type { CodexMcpServersConfig } from "../codex-mcp-config.types.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 
 type NativeHookRelayApprovalContext = Pick<
@@ -76,6 +77,7 @@ export type NativeHookRelayRegistration = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  deferMcpToolApprovals?: boolean;
   runId: string;
   channelId?: string;
   requester?: PluginHookToolRequesterContext;
@@ -116,6 +118,8 @@ export type RegisterNativeHookRelayParams = {
   sessionId: string;
   sessionKey?: string;
   config?: OpenClawConfig;
+  autoApproveMcpTools?: boolean;
+  projectedMcpServers?: CodexMcpServersConfig;
   runId: string;
   channelId?: string;
   requester?: PluginHookToolRequesterContext;
@@ -195,6 +199,7 @@ export type NativeHookRelayProviderAdapter = {
 export type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision
   | "allow-always"
+  | "timed-out"
   | "defer";
 
 export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
@@ -257,5 +262,5 @@ export type NativeHookRelaySharedState = {
   pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
   pendingPreToolUseApprovals: Map<string, NativeHookRelayPreToolUseApproval>;
   permissionApprovalWindows: Map<string, number[]>;
-  permissionAllowAlwaysApprovals: Map<string, { expiresAtMs: number }>;
+  permissionAllowAlwaysApprovals: Map<string, { relayId: string; expiresAtMs?: number }>;
 };

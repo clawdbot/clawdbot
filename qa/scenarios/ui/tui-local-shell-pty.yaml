@@ -36,10 +36,10 @@ scenario:
           testNamePattern: ^TUI PTY real backends keeps whitespace-prefixed bang input in chat after local shell approval$
         - coverageId: tui.approval-prompt
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends confirms and renders local shell output and environment through a real local PTY$
+          testNamePattern: ^TUI PTY real backends confirms and renders local shell output, then extinguishes descendants before TUI exit$
         - coverageId: tui.command-output-display
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends confirms and renders local shell output and environment through a real local PTY$
+          testNamePattern: ^TUI PTY real backends confirms and renders local shell output, then extinguishes descendants before TUI exit$
         - coverageId: tui.execution-environment-marker
           testFile: src/tui/tui-pty-local.e2e.test.ts
-          testNamePattern: ^TUI PTY real backends confirms and renders local shell output and environment through a real local PTY$
+          testNamePattern: ^TUI PTY real backends confirms and renders local shell output, then extinguishes descendants before TUI exit$

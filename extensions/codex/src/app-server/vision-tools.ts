@@ -1,17 +1,16 @@
 /**
- * Filters Codex dynamic tools for turns that already contain image inputs so
- * models with native vision do not get redundant image-inspection tools.
+ * Codex's enabled native surface includes its stable view_image loader. Keep
+ * OpenClaw's view_image tool only when that surface or model vision is unavailable.
  */
-/** Removes the image tool when the model can directly consume inbound images. */
-export function filterToolsForVisionInputs<T extends { name?: string }>(
+export function filterCodexVisionTools<T extends { name?: string }>(
   tools: T[],
   params: {
     modelHasVision: boolean;
-    hasInboundImages: boolean;
+    nativeImageInspectionEnabled: boolean;
   },
 ): T[] {
-  if (!params.modelHasVision || !params.hasInboundImages) {
+  if (!params.modelHasVision || !params.nativeImageInspectionEnabled) {
     return tools;
   }
-  return tools.filter((tool) => tool.name !== "image");
+  return tools.filter((tool) => tool.name !== "view_image");
 }

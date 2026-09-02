@@ -1,25 +1,15 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
-import org.gradle.api.DefaultTask
-import org.gradle.api.file.ConfigurableFileCollection
-import org.gradle.api.file.DirectoryProperty
-import org.gradle.api.tasks.InputFiles
-import org.gradle.api.tasks.Internal
-import org.gradle.api.tasks.OutputDirectory
-import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.PathSensitivity
-import org.gradle.api.tasks.TaskAction
-import org.gradle.process.ExecOperations
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Properties
-import javax.inject.Inject
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
+val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
-val openClawRepositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
-val canvasA2uiAssetsDir = layout.buildDirectory.dir("generated/canvasA2uiAssets")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
@@ -108,22 +98,6 @@ val resolvedAndroidStoreFile =
 val hasAndroidReleaseSigning =
   listOf(resolvedAndroidStoreFile, androidStorePassword, androidKeyAlias, androidKeyPassword).all { it != null }
 
-val wantsAndroidReleaseBuild =
-  gradle.startParameter.taskNames.any { taskName ->
-    taskName.contains("Release", ignoreCase = true) ||
-      Regex("""(^|:)(bundle|assemble)$""").containsMatchIn(taskName)
-  }
-val missingAndroidBuildMetadata =
-  explicitOpenClawBuildCommit == null || explicitOpenClawBuildTimestamp == null
-
-if (wantsAndroidReleaseBuild && !hasAndroidReleaseSigning) {
-  error(
-    "Missing Android release signing properties. Set OPENCLAW_ANDROID_STORE_FILE, " +
-      "OPENCLAW_ANDROID_STORE_PASSWORD, OPENCLAW_ANDROID_KEY_ALIAS, and " +
-      "OPENCLAW_ANDROID_KEY_PASSWORD in ~/.gradle/gradle.properties.",
-  )
-}
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.ktlint)
@@ -131,58 +105,6 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.ksp)
 }
-
-abstract class StageCanvasA2uiTask
-  @Inject
-  constructor(
-    private val execOperations: ExecOperations,
-  ) : DefaultTask() {
-    @get:Internal abstract val repoRoot: DirectoryProperty
-
-    @get:InputFiles
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val sourceFiles: ConfigurableFileCollection
-
-    @get:OutputDirectory abstract val outputDirectory: DirectoryProperty
-
-    @TaskAction
-    fun stage() {
-      val root = repoRoot.get().asFile
-      execOperations.exec {
-        workingDir(root)
-        commandLine(
-          "node",
-          "--import",
-          "tsx",
-          "scripts/sync-native-a2ui.mts",
-          "--write",
-          "--output",
-          outputDirectory
-            .get()
-            .dir("CanvasA2UI")
-            .asFile.absolutePath,
-        )
-      }
-    }
-  }
-
-val stageCanvasA2ui =
-  tasks.register<StageCanvasA2uiTask>("stageCanvasA2ui") {
-    group = "build"
-    description = "Stages the plugin-owned Canvas A2UI renderer for native apps."
-    repoRoot.set(openClawRepositoryRoot)
-    sourceFiles.from(
-      openClawRepositoryRoot.resolve("package.json"),
-      openClawRepositoryRoot.resolve("pnpm-lock.yaml"),
-      openClawRepositoryRoot.resolve("scripts/bundle-a2ui.mts"),
-      openClawRepositoryRoot.resolve("scripts/sync-native-a2ui.mts"),
-      openClawRepositoryRoot.resolve("extensions/canvas/package.json"),
-      openClawRepositoryRoot.resolve("extensions/canvas/scripts/bundle-a2ui.mjs"),
-      openClawRepositoryRoot.resolve("extensions/canvas/src/host/a2ui/index.html"),
-    )
-    sourceFiles.from(openClawRepositoryRoot.resolve("extensions/canvas/src/host/a2ui-app"))
-    outputDirectory.set(canvasA2uiAssetsDir)
-  }
 
 ksp {
   arg("room.schemaLocation", "$projectDir/schemas")
@@ -209,12 +131,15 @@ android {
   sourceSets {
     getByName("main") {
       assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
+      assets.directories.add(rootProject.file("../../ui/public/provider-icons").path)
+      assets.directories.add("../../shared/mermaid/assets")
       assets.directories.add(thirdPartyLicensesDir.path)
     }
   }
 
   defaultConfig {
-    applicationId = "ai.openclaw.app"
+    applicationId = openClawAndroidApplicationId
+    resValue("string", "application_id", openClawAndroidApplicationId)
     minSdk = 31
     targetSdk = 36
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -254,6 +179,9 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
     }
     debug {
+      applicationIdSuffix = ".debug"
+      versionNameSuffix = "-debug"
+      resValue("string", "application_id", "$openClawAndroidApplicationId.debug")
       isMinifyEnabled = false
     }
   }
@@ -269,6 +197,7 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+    resValues = true
   }
 
   androidResources {
@@ -333,11 +262,8 @@ android {
 }
 
 androidComponents {
+  val adbExecutable = sdkComponents.adb
   onVariants { variant ->
-    variant.sources.assets?.addGeneratedSourceDirectory(
-      stageCanvasA2ui,
-      StageCanvasA2uiTask::outputDirectory,
-    )
     variant.outputs
       .filterIsInstance<VariantOutputImpl>()
       .forEach { output ->
@@ -352,6 +278,24 @@ androidComponents {
           }
         output.outputFileName = outputFileName
       }
+
+    if (variant.buildType == "debug") {
+      val variantNameCapitalized = variant.name.replaceFirstChar(Char::titlecase)
+      tasks.register<Exec>("run$variantNameCapitalized") {
+        group = "install"
+        description = "Installs and launches the ${variant.name} app."
+        dependsOn("install$variantNameCapitalized")
+        commandLine(
+          adbExecutable.get().asFile.absolutePath,
+          "shell",
+          "am",
+          "start",
+          "-W",
+          "-n",
+          "${variant.applicationId.get()}/$openClawAndroidApplicationId.MainActivity",
+        )
+      }
+    }
   }
 }
 kotlin {
@@ -362,6 +306,7 @@ kotlin {
 }
 
 ktlint {
+  version.set(libs.versions.ktlint.cli)
   android.set(true)
   ignoreFailures.set(false)
   filter {
@@ -387,7 +332,6 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.compose.material3)
-  implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
   // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
   // R8 will tree-shake unused icons when minify is enabled on release builds.
   implementation(libs.androidx.compose.material.icons.extended)
@@ -452,30 +396,44 @@ tasks.withType<Test>().configureEach {
   }
 }
 
+val validateOpenClawReleaseSigning =
+  tasks.register("validateOpenClawReleaseSigning") {
+    val signingConfigured = hasAndroidReleaseSigning
+    doLast {
+      check(signingConfigured) {
+        "Missing Android release signing properties. Set OPENCLAW_ANDROID_STORE_FILE, " +
+          "OPENCLAW_ANDROID_STORE_PASSWORD, OPENCLAW_ANDROID_KEY_ALIAS, and " +
+          "OPENCLAW_ANDROID_KEY_PASSWORD in ~/.gradle/gradle.properties."
+      }
+    }
+  }
+
 val validateOpenClawReleaseBuildMetadata =
   tasks.register("validateOpenClawReleaseBuildMetadata") {
+    val metadataProvided =
+      explicitOpenClawBuildCommit != null && explicitOpenClawBuildTimestamp != null
     doLast {
-      if (missingAndroidBuildMetadata) {
-        error(
-          "Android release builds require -PopenclawBuildCommit and -PopenclawBuildTimestamp. " +
-            "Use the repository Android release helper.",
-        )
+      check(metadataProvided) {
+        "Android release builds require -PopenclawBuildCommit and -PopenclawBuildTimestamp. " +
+          "Use the repository Android release helper."
       }
     }
   }
 
 val validateThirdPartyLicenseAssets =
   tasks.register("validateThirdPartyLicenseAssets") {
-    inputs.dir(thirdPartyLicensesDir)
+    val licensesDir = thirdPartyLicensesDir
+    val licensesPath = licensesDir.relativeTo(rootProject.projectDir).path
+    inputs.dir(licensesDir)
     doLast {
-      if (!thirdPartyLicensesDir.isDirectory) {
-        error("Missing Android third-party license directory: ${thirdPartyLicensesDir.relativeTo(rootProject.projectDir)}")
+      if (!licensesDir.isDirectory) {
+        error("Missing Android third-party license directory: $licensesPath")
       }
       val invalidFiles =
-        thirdPartyLicensesDir
+        licensesDir
           .walkTopDown()
           .filter { file -> file.isFile && file.extension.lowercase() != "txt" }
-          .map { file -> file.relativeTo(thirdPartyLicensesDir).path }
+          .map { file -> file.relativeTo(licensesDir).path }
           .toList()
 
       if (invalidFiles.isNotEmpty()) {
@@ -487,15 +445,39 @@ val validateThirdPartyLicenseAssets =
     }
   }
 
+val generateMermaidAssets =
+  tasks.register<Exec>("generateMermaidAssets") {
+    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    workingDir(repositoryRoot)
+    commandLine("pnpm", "--filter", "@openclaw/mermaid-renderer", "build")
+    inputs
+      .files(
+        fileTree(repositoryRoot.resolve("packages/mermaid-renderer")) {
+          exclude("node_modules/**", "dist/**")
+        },
+        fileTree(repositoryRoot.resolve("packages/normalization-core")) {
+          include("src/**", "package.json")
+        },
+        repositoryRoot.resolve("tsconfig.json"),
+      ).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(repositoryRoot.resolve("pnpm-lock.yaml"))
+    outputs.dir(repositoryRoot.resolve("apps/shared/mermaid/assets/mermaid"))
+  }
+
 tasks.matching { task -> task.name == "preBuild" }.configureEach {
-  dependsOn(validateThirdPartyLicenseAssets)
+  dependsOn(validateThirdPartyLicenseAssets, generateMermaidAssets)
+}
+
+tasks.matching { task -> task.name.startsWith("merge") && task.name.endsWith("Assets") }.configureEach {
+  dependsOn(generateMermaidAssets)
 }
 
 androidComponents {
   onVariants(selector().withBuildType("release")) { variant ->
+    // Validate the selected variant graph, not task arguments that can also contain "Release".
+    variant.lifecycleTasks.registerPreBuild(validateOpenClawReleaseSigning, validateOpenClawReleaseBuildMetadata)
     val variantName = variant.name
     val variantNameCapitalized = variantName.replaceFirstChar(Char::titlecase)
-    val preBuildTaskName = "pre${variantNameCapitalized}Build"
     val stripTaskName = "strip${variantNameCapitalized}DnsjavaServiceDescriptor"
     val mergeTaskName = "merge${variantNameCapitalized}JavaResource"
     val minifyTaskName = "minify${variantNameCapitalized}WithR8"
@@ -503,10 +485,6 @@ androidComponents {
       layout.buildDirectory.file(
         "intermediates/merged_java_res/$variantName/$mergeTaskName/base.jar",
       )
-
-    tasks.matching { task -> task.name == preBuildTaskName }.configureEach {
-      dependsOn(validateOpenClawReleaseBuildMetadata)
-    }
 
     val stripTask =
       tasks.register(stripTaskName) {

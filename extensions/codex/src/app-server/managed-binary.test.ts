@@ -1,12 +1,13 @@
 // Codex tests cover managed binary plugin behavior.
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
   resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand,
+  setManagedCodexPluginRoot,
 } from "./managed-binary.js";
 
 function startOptions(
@@ -33,6 +34,8 @@ const MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND =
   "/Applications/ChatGPT.app/Contents/Resources/codex";
 
 describe("managed Codex app-server binary", () => {
+  afterEach(() => setManagedCodexPluginRoot(undefined));
+
   it("resolves the platform-native artifact behind the managed npm launcher", () => {
     const packageJsonPath =
       "/repo/extensions/codex/node_modules/@openai/codex-darwin-arm64/package.json";
@@ -53,6 +56,51 @@ describe("managed Codex app-server binary", () => {
     ).toBe(expected);
   });
 
+  it("resolves native dependencies from the real package behind an isolated install shim", async () => {
+    const installRoot = await realpath(
+      await mkdtemp(path.join(os.tmpdir(), "openclaw-codex-isolated-")),
+    );
+    try {
+      const platform = process.platform === "win32" ? "win32" : "linux";
+      const modulesDir = path.join(installRoot, "node_modules");
+      const realScopeDir = path.join(modulesDir, ".pnpm", "codex-slot", "node_modules", "@openai");
+      const packageRoot = path.join(realScopeDir, "codex");
+      const platformPackage = `@openai/codex-${platform}-x64`;
+      const platformRoot = path.join(realScopeDir, `codex-${platform}-x64`);
+      const native = path.join(
+        platformRoot,
+        "vendor",
+        platform === "win32" ? "x86_64-pc-windows-msvc" : "x86_64-unknown-linux-musl",
+        "bin",
+        platform === "win32" ? "codex.exe" : "codex",
+      );
+      const command = managedCommandPath(installRoot, platform);
+      await mkdir(packageRoot, { recursive: true });
+      await mkdir(path.dirname(native), { recursive: true });
+      await mkdir(path.dirname(command), { recursive: true });
+      await mkdir(path.join(modulesDir, "@openai"), { recursive: true });
+      await writeFile(
+        path.join(packageRoot, "package.json"),
+        JSON.stringify({ name: "@openai/codex" }),
+      );
+      await writeFile(
+        path.join(platformRoot, "package.json"),
+        JSON.stringify({ name: platformPackage }),
+      );
+      await writeFile(native, "native artifact fixture");
+      await writeFile(command, "launcher fixture");
+      await symlink(
+        packageRoot,
+        path.join(modulesDir, "@openai", "codex"),
+        platform === "win32" ? "junction" : "dir",
+      );
+
+      expect(resolveManagedCodexNativeCommand(command, { platform, arch: "x64" })).toBe(native);
+    } finally {
+      await rm(installRoot, { recursive: true, force: true });
+    }
+  });
+
   it("reports the desktop bundle binary as its native artifact", () => {
     expect(
       resolveManagedCodexNativeCommand(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, {
@@ -62,7 +110,28 @@ describe("managed Codex app-server binary", () => {
     ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
   });
 
-  it("leaves explicit command overrides unchanged", async () => {
+  it.each([true, false])(
+    "uses embedded vendor binaries only when the platform package is absent (present=%s)",
+    (platformPackagePresent) => {
+      const packageRoot = "/repo/node_modules/@openai/codex";
+      const embedded = `${packageRoot}/vendor/aarch64-apple-darwin/bin/codex`;
+      expect(
+        resolveManagedCodexNativeCommand(`${packageRoot}/bin/codex.js`, {
+          platform: "darwin",
+          arch: "arm64",
+          resolvePackageJson: (name) =>
+            name === "@openai/codex"
+              ? `${packageRoot}/package.json`
+              : platformPackagePresent
+                ? "/repo/node_modules/@openai/codex-darwin-arm64/package.json"
+                : undefined,
+          pathExists: (candidate) => candidate === embedded,
+        }),
+      ).toBe(platformPackagePresent ? undefined : embedded);
+    },
+  );
+
+  it("leaves explicit command overrides unchanged without probing managed paths", async () => {
     const explicitOptions = startOptions("config");
     const pathExists = vi.fn(async () => false);
 
@@ -146,7 +215,7 @@ describe("managed Codex app-server binary", () => {
     });
   });
 
-  it("falls back to the plugin-local binary when neither desktop bundle exists", async () => {
+  it("falls back to the source plugin-local binary when neither desktop bundle exists", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
     const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
     const pathExists = vi.fn(async (filePath: string) => filePath === pluginLocalCommand);
@@ -185,6 +254,50 @@ describe("managed Codex app-server binary", () => {
     });
   });
 
+  it("prefers the bundled plugin binary over a stale hoisted package binary", async () => {
+    const installRoot = path.join("/tmp", "openclaw-package");
+    const packageRoot = path.join(installRoot, "node_modules", "openclaw");
+    const bundledPluginRoot = path.join(packageRoot, "dist", "extensions", "codex");
+    const bundledCommand = managedCommandPath(bundledPluginRoot, "linux");
+    const hoistedCommand = managedCommandPath(installRoot, "linux");
+    const pathExists = vi.fn(
+      async (filePath: string) => filePath === bundledCommand || filePath === hoistedCommand,
+    );
+    setManagedCodexPluginRoot(bundledPluginRoot);
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: bundledCommand,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [hoistedCommand],
+    });
+  });
+
+  it("falls back to the hoisted package when the bundled plugin binary is absent", async () => {
+    const installRoot = path.join("/tmp", "openclaw-package");
+    const packageRoot = path.join(installRoot, "node_modules", "openclaw");
+    const bundledPluginRoot = path.join(packageRoot, "dist", "extensions", "codex");
+    const hoistedCommand = managedCommandPath(installRoot, "linux");
+    const pathExists = vi.fn(async (filePath: string) => filePath === hoistedCommand);
+    setManagedCodexPluginRoot(bundledPluginRoot);
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: hoistedCommand,
+      commandSource: "resolved-managed",
+    });
+  });
+
   it("finds Codex bins hoisted into an isolated npm project root", async () => {
     const projectRoot = path.join("/tmp", "state", "npm", "projects", "openclaw-codex-hash");
     const pluginRoot = path.join(projectRoot, "node_modules", "@openclaw", "codex");
@@ -204,7 +317,7 @@ describe("managed Codex app-server binary", () => {
     });
   });
 
-  it("finds Windows Codex shims hoisted into an isolated npm project root", async () => {
+  it("finds a Windows codex.cmd shim in an isolated npm root using win32 paths", async () => {
     const projectRoot = path.win32.join(
       "C:\\",
       "Users",

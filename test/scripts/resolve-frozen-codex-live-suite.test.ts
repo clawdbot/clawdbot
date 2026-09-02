@@ -14,21 +14,33 @@ afterEach(() => {
 
 function runResolver(params: {
   allow?: boolean;
+  catalog?: boolean;
+  harnessModel?: string;
   modelIds?: string[];
   selectedSha?: string;
   suiteId: string;
 }) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-frozen-codex-"));
   tempRoots.push(root);
-  const catalogDir = join(root, "extensions/codex");
-  mkdirSync(catalogDir, { recursive: true });
-  const models = (params.modelIds ?? ["gpt-5.5"])
-    .map((id) => `  { id: "${id}", model: "${id}" },`)
-    .join("\n");
-  writeFileSync(
-    join(catalogDir, "provider-catalog.ts"),
-    `export const FALLBACK_CODEX_MODELS = [\n${models}\n] satisfies unknown[];\n`,
-  );
+  if (params.catalog !== false) {
+    const catalogDir = join(root, "extensions/codex");
+    mkdirSync(catalogDir, { recursive: true });
+    const models = (params.modelIds ?? ["gpt-5.5"])
+      .map((id) => `  { id: "${id}", model: "${id}" },`)
+      .join("\n");
+    writeFileSync(
+      join(catalogDir, "provider-catalog.ts"),
+      `export const FALLBACK_CODEX_MODELS = [\n${models}\n] satisfies unknown[];\n`,
+    );
+  }
+  if (params.harnessModel) {
+    const scriptsDir = join(root, "scripts");
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(
+      join(scriptsDir, "test-live-codex-harness-docker.sh"),
+      `model="\${OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-${params.harnessModel}}"\n`,
+    );
+  }
   const output = join(root, "output");
   const envFile = join(root, "env");
   const summary = join(root, "summary");
@@ -88,6 +100,44 @@ describe("frozen Codex live-suite resolver", () => {
     expect(dedicated.output).toBe("run_lane=true\n");
     expect(generic.status).toBe(0);
     expect(generic.envFile).toBe("OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna\n");
+  });
+
+  it("uses the frozen harness contract after the target catalog was removed", () => {
+    const result = runResolver({
+      catalog: false,
+      harnessModel: "openai/gpt-5.6-luna",
+      suiteId: "live-codex-harness-docker",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe("run_lane=true\n");
+    expect(result.envFile).toBe("OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna\n");
+  });
+
+  it("does not infer specialized GPT-5.6 support from a catalog-free harness default", () => {
+    const result = runResolver({
+      catalog: false,
+      harnessModel: "openai/gpt-5.6-luna",
+      suiteId: "live-codex-harness-gpt56-sol-docker",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe("run_lane=false\n");
+    expect(result.envFile).toBe("");
+    expect(result.summary).toContain("omitted unsupported current-only suite");
+  });
+
+  it("omits GPT-5.6 suites for a catalog-free target with the older harness default", () => {
+    const result = runResolver({
+      catalog: false,
+      harnessModel: "codex/gpt-5.5",
+      suiteId: "live-codex-harness-gpt56-sol-docker",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe("run_lane=false\n");
+    expect(result.envFile).toBe("");
+    expect(result.summary).toContain("omitted unsupported current-only suite");
   });
 
   it("does nothing without the trusted frozen-target opt-in", () => {

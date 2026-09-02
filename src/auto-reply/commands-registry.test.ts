@@ -21,7 +21,11 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition, NativeCommandSpec } from "./commands-registry.types.js";
+import type {
+  ChatCommandDefinition,
+  CommandArgValues,
+  NativeCommandSpec,
+} from "./commands-registry.types.js";
 
 type NativeCommandNameResolver = (params: { commandKey: string; defaultName: string }) => string;
 
@@ -569,11 +573,9 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("scopes configured-default wording to direct model selections", () => {
+  it("documents explicit model persistence scopes", () => {
     const model = requireChatCommand("model");
-    expect(model.description).toBe(
-      "Show or set the model; direct owner/admin selections request a default update.",
-    );
+    expect(model.description).toBe("Show or set the model; use -s, -a, or -g to choose scope.");
   });
 
   it("detects known text commands", () => {
@@ -604,18 +606,7 @@ describe("commands registry", () => {
   });
 
   it("respects text command gating", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          plugin: createChannelTestPluginBase({
-            id: "discord",
-            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
-          }),
-          source: "test",
-        },
-      ]),
-    );
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
     const cfg = { commands: { text: false } };
     expect(
       shouldHandleTextCommands({
@@ -638,6 +629,14 @@ describe("commands registry", () => {
         commandSource: "native",
       }),
     ).toBe(true);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    for (const [surface, expected] of [
+      ["discord", true],
+      [" SLACK ", false],
+    ] as const) {
+      expect(shouldHandleTextCommands({ cfg, surface, commandSource: "text" })).toBe(expected);
+    }
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {
@@ -660,8 +659,23 @@ describe("commands registry", () => {
     );
   });
 
-  it("keeps unregistered dock underscore aliases unchanged", () => {
-    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock_telegram");
+  it("normalizes targeted command bodies before bot identity only when requested", () => {
+    expect(
+      normalizeCommandBody("/help@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe("/help");
+    expect(normalizeCommandBody("/help@unresolved_bot")).toBe("/help@unresolved_bot");
+    expect(
+      normalizeCommandBody("/help@some_other_bot", {
+        botUsername: "openclaw_bot",
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe("/help@some_other_bot");
+  });
+
+  it("keeps unregistered underscore aliases unchanged", () => {
+    expect(normalizeCommandBody("/unknown_command")).toBe("/unknown_command");
   });
 });
 
@@ -725,6 +739,54 @@ describe("commands registry args", () => {
       "/model gpt-5.4",
     );
   });
+
+  const structuredArgCases: Array<{
+    command: string;
+    values: CommandArgValues;
+    expected: string;
+  }> = [
+    {
+      command: "config",
+      values: { action: " GET ", path: " agents.defaults.model " },
+      expected: "/config get agents.defaults.model",
+    },
+    {
+      command: "config",
+      values: { action: "set", path: "agents.defaults.model" },
+      expected: "/config set agents.defaults.model",
+    },
+    {
+      command: "mcp",
+      values: { action: "get", path: "servers.github" },
+      expected: "/mcp get servers.github",
+    },
+    { command: "mcp", values: { action: "get" }, expected: "/mcp get" },
+    {
+      command: "plugins",
+      values: { action: "get", path: "discord" },
+      expected: "/plugins get discord",
+    },
+    {
+      command: "plugins",
+      values: { action: "list", path: "ignored" },
+      expected: "/plugins list",
+    },
+    {
+      command: "debug",
+      values: { action: "show", path: "ignored" },
+      expected: "/debug show",
+    },
+    { command: "debug", values: { action: "unset" }, expected: "/debug unset" },
+  ];
+
+  it.each(structuredArgCases)(
+    "serializes structured $command args through its registry definition",
+    (testCase) => {
+      expect(buildCommandTextFromArgs(requireChatCommand(testCase.command), testCase)).toBe(
+        testCase.expected,
+      );
+    },
+  );
 
   it("resolves auto arg menus when missing a choice arg", () => {
     const command = createUsageModeCommand();

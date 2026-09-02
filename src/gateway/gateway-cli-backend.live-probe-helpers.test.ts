@@ -55,8 +55,6 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
 function preflightParams(env: NodeJS.ProcessEnv = {}) {
   return {
     sessionKey: "session-key",
-    port: 12345,
-    token: "gateway-token",
     env,
   };
 }
@@ -72,40 +70,65 @@ describe("gateway CLI backend live probe helpers", () => {
     clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
   });
 
-  it("reads loopback JSON-RPC responses without invoking cron verification when cron is absent", async () => {
-    const methods: string[] = [];
-    const server = createHttpServer((request, response) => {
-      void (async () => {
-        const body = JSON.parse(await readRequestBody(request)) as {
-          id?: unknown;
-          method?: string;
-        };
-        if (body.method) {
-          methods.push(body.method);
+  it.each([false, true])(
+    "checks read-only loopback discovery with automations present=%s",
+    async (present) => {
+      const methods: string[] = [];
+      const server = createHttpServer((request, response) => {
+        void (async () => {
+          const body = JSON.parse(await readRequestBody(request)) as {
+            id?: unknown;
+            method?: string;
+          };
+          if (body.method) {
+            methods.push(body.method);
+          }
+          if (body.method === "notifications/initialized") {
+            response.writeHead(202);
+            response.end();
+            return;
+          }
+          writeJson(response, 200, {
+            jsonrpc: "2.0",
+            id: body.id ?? null,
+            result:
+              body.method === "tools/list"
+                ? {
+                    tools: present
+                      ? [{ name: "automations", inputSchema: { type: "object", properties: {} } }]
+                      : [],
+                  }
+                : body.method === "tools/call"
+                  ? {
+                      isError: true,
+                      content: [
+                        {
+                          type: "text",
+                          text: "trusted operational run instance required for this gateway call",
+                        },
+                      ],
+                    }
+                  : {},
+          });
+        })();
+      });
+      const port = await listen(server);
+      activateLoopbackRuntime(port);
+      try {
+        const preflight = verifyCliCronMcpLoopbackPreflight(preflightParams());
+        if (present) {
+          await expect(preflight).resolves.toBeUndefined();
+        } else {
+          await expect(preflight).rejects.toThrow(
+            "mcp loopback tools/list did not expose automations",
+          );
         }
-        if (body.method === "notifications/initialized") {
-          response.writeHead(202);
-          response.end();
-          return;
-        }
-        writeJson(response, 200, {
-          jsonrpc: "2.0",
-          id: body.id ?? null,
-          result: body.method === "tools/list" ? { tools: [] } : {},
-        });
-      })();
-    });
-    const port = await listen(server);
-    activateLoopbackRuntime(port);
-    try {
-      await expect(verifyCliCronMcpLoopbackPreflight(preflightParams())).rejects.toThrow(
-        "mcp loopback tools/list did not expose automations",
-      );
-      expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
-    } finally {
-      server.close();
-    }
-  });
+        expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
+      } finally {
+        server.close();
+      }
+    },
+  );
 
   it("bounds loopback JSON-RPC calls when the server accepts connections but never responds", async () => {
     const sockets = new Set<Socket>();

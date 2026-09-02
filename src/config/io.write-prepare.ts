@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasAgentRosterProperty,
   listAgentEntries,
+  listAgentEntriesWithSource,
   readAgentRosterProperty,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
@@ -12,8 +13,18 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
+import { containsEnvVarReference } from "./env-substitution.js";
+import { coerceConfig } from "./io.read-helpers.js";
+import { parseLegacyAgentRoster, projectLegacyAgentRosterEntries } from "./legacy.roster.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
+import { isSecretRefShape } from "./redact-snapshot.secret-ref.js";
+import {
+  getConfigResolutionFacts,
+  hasUnresolvedConfigPath,
+  hasUnresolvedConfigPathInSubtree,
+} from "./resolution-facts.js";
+import { projectSourceOntoRuntimeShape } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
 const AGENT_ROSTER_PATHS = [
@@ -40,27 +51,6 @@ function assertUniqueNormalizedLegacyRosterIds(value: readonly unknown[]): void 
     }
     normalizedIds.add(agentId);
   }
-}
-
-// Clone config fragments before patching so mutation preparation never aliases callers.
-function cloneUnknown<T>(value: T): T {
-  return structuredClone(value);
-}
-
-export function projectSourceOntoRuntimeShape(source: unknown, runtime: unknown): unknown {
-  if (!isRecord(source) || !isRecord(runtime)) {
-    return cloneUnknown(source);
-  }
-
-  const next: Record<string, unknown> = {};
-  for (const [key, sourceValue] of Object.entries(source)) {
-    if (!(key in runtime)) {
-      next[key] = cloneUnknown(sourceValue);
-      continue;
-    }
-    next[key] = projectSourceOntoRuntimeShape(sourceValue, runtime[key]);
-  }
-  return next;
 }
 
 function hasOwnValidIncludeDirective(value: unknown): value is Record<string, unknown> {
@@ -196,7 +186,7 @@ function getPathValue(value: unknown, path: string[]): unknown {
 
 function setPathValue(value: unknown, path: string[], nextValue: unknown): unknown {
   if (path.length === 0) {
-    return cloneUnknown(nextValue);
+    return structuredClone(nextValue);
   }
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
@@ -255,7 +245,7 @@ function findOverlappingIncludeOwnedPath(
 
 function setPathValueCreatingParents(value: unknown, path: string[], nextValue: unknown): unknown {
   if (path.length === 0) {
-    return cloneUnknown(nextValue);
+    return structuredClone(nextValue);
   }
   const head = expectDefined(path[0], "config path head");
   const tail = path.slice(1);
@@ -509,7 +499,7 @@ function projectRootAuthoredIncludeSibling(params: {
     params.baselinePresent &&
     isDeepStrictEqual(params.next, params.baseline)
   ) {
-    return { ok: true, present: true, value: cloneUnknown(params.authored) };
+    return { ok: true, present: true, value: structuredClone(params.authored) };
   }
   if (!params.nextPresent) {
     return collectIncludeOwnedPaths(params.authored).length > 0
@@ -517,7 +507,7 @@ function projectRootAuthoredIncludeSibling(params: {
       : { ok: true, present: false };
   }
   if (!params.baselinePresent) {
-    return { ok: true, present: true, value: cloneUnknown(params.next) };
+    return { ok: true, present: true, value: structuredClone(params.next) };
   }
   if (hasOwnValidIncludeDirective(params.authored)) {
     return { ok: false };
@@ -525,21 +515,21 @@ function projectRootAuthoredIncludeSibling(params: {
   if (Array.isArray(params.authored)) {
     return Array.isArray(params.next)
       ? { ok: false }
-      : { ok: true, present: true, value: cloneUnknown(params.next) };
+      : { ok: true, present: true, value: structuredClone(params.next) };
   }
   if (!isRecord(params.authored)) {
-    return { ok: true, present: true, value: cloneUnknown(params.next) };
+    return { ok: true, present: true, value: structuredClone(params.next) };
   }
   if (!isRecord(params.next)) {
     return collectIncludeOwnedPaths(params.authored).length > 0
       ? { ok: false }
-      : { ok: true, present: true, value: cloneUnknown(params.next) };
+      : { ok: true, present: true, value: structuredClone(params.next) };
   }
   if (!isRecord(params.baseline)) {
-    return { ok: true, present: true, value: cloneUnknown(params.next) };
+    return { ok: true, present: true, value: structuredClone(params.next) };
   }
 
-  const value: Record<string, unknown> = cloneUnknown(params.authored);
+  const value: Record<string, unknown> = structuredClone(params.authored);
   const keys = new Set([
     ...Object.keys(params.authored),
     ...Object.keys(params.baseline),
@@ -677,18 +667,6 @@ function preserveUntouchedIncludes(params: {
   return next;
 }
 
-export function preserveIncludeOwnedConfigForWrite(params: {
-  runtimeConfig: unknown;
-  sourceConfig: unknown;
-  nextConfig: unknown;
-  rootAuthoredConfig: unknown;
-}): unknown {
-  return preserveUntouchedIncludes({
-    ...params,
-    persistedCandidate: params.nextConfig,
-  });
-}
-
 function hasPathValue(value: unknown, path: readonly string[]): boolean {
   if (path.length === 0) {
     return true;
@@ -730,7 +708,7 @@ function mergeMissingExplicitValues(
         continue;
       }
       if (index >= next.length || next[index] === undefined) {
-        next[index] = cloneUnknown(childExplicitValue);
+        next[index] = structuredClone(childExplicitValue);
         changed = true;
         continue;
       }
@@ -749,7 +727,7 @@ function mergeMissingExplicitValues(
       continue;
     }
     if (!Object.hasOwn(next, key)) {
-      next[key] = cloneUnknown(childExplicitValue);
+      next[key] = structuredClone(childExplicitValue);
       changed = true;
       continue;
     }
@@ -847,6 +825,7 @@ function shouldPersistCanonicalAgentRoster(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
   nextConfig: unknown;
+  persistCanonicalAgentRoster?: boolean;
   explicitSetPaths?: readonly (readonly string[])[];
   unsetPaths?: readonly (readonly string[])[];
 }): boolean {
@@ -854,6 +833,7 @@ function shouldPersistCanonicalAgentRoster(params: {
     return false;
   }
   if (
+    params.persistCanonicalAgentRoster === true ||
     params.explicitSetPaths?.some(pathTouchesAgentRoster) ||
     params.unsetPaths?.some(pathTouchesAgentRoster)
   ) {
@@ -884,7 +864,13 @@ function assertCanonicalAgentRosterRetainsEntries(params: {
       normalizeAgentId(entry.id),
     ),
   );
-  const droppedIds = listAgentEntries(params.currentConfig as OpenClawConfig)
+  // Legacy rows can share or omit ids; retain the identities Doctor assigns to each occurrence.
+  const currentRoster = readAgentRosterProperty(params.currentConfig);
+  const currentEntries =
+    currentRoster?.kind === "list" && Array.isArray(currentRoster.value)
+      ? projectLegacyAgentRosterEntries(currentRoster.value).entries
+      : listAgentEntries(params.currentConfig as OpenClawConfig);
+  const droppedIds = currentEntries
     .filter((entry) => {
       const agentId = normalizeAgentId(entry.id);
       return !canonicalIds.has(agentId) && !allowedRemovals.has(agentId);
@@ -901,20 +887,41 @@ function assertCanonicalAgentRosterRetainsEntries(params: {
 
 type ProjectedRosterValue = { present: false } | { present: true; value: unknown };
 
-function containsAuthoredRosterReference(value: unknown): boolean {
+function containsAuthoredRosterReference(value: unknown, includeEnvStrings: boolean): boolean {
   if (typeof value === "string") {
-    return value.includes("${");
+    return includeEnvStrings && containsEnvVarReference(value);
   }
   if (Array.isArray(value)) {
-    return value.some(containsAuthoredRosterReference);
+    return value.some((entry) => containsAuthoredRosterReference(entry, includeEnvStrings));
   }
   if (!isRecord(value)) {
     return false;
   }
-  if (typeof value.source === "string" && typeof value.id === "string") {
-    return true;
-  }
-  return Object.values(value).some(containsAuthoredRosterReference);
+  return (
+    isSecretRefShape(value) ||
+    Object.values(value).some((entry) => containsAuthoredRosterReference(entry, includeEnvStrings))
+  );
+}
+
+function indexAgentRosterSourcePaths(
+  config: OpenClawConfig,
+  legacyIdsByIndex: ReadonlyMap<number, string>,
+): Map<string, string> {
+  return new Map(
+    listAgentEntriesWithSource(config).flatMap(({ entry, source }): [string, string][] => {
+      const id = source.kind === "list" ? legacyIdsByIndex.get(source.index) : entry.id;
+      return id === undefined
+        ? []
+        : [
+            [
+              normalizeAgentId(id),
+              source.kind === "list"
+                ? `agents.list[${source.index}]`
+                : `agents.entries.${source.key}`,
+            ],
+          ];
+    }),
+  );
 }
 
 function projectAuthoredRosterValue(params: {
@@ -967,7 +974,7 @@ function projectAuthoredRosterValue(params: {
   }
   if (Array.isArray(params.next)) {
     if (explicitlySet && params.explicitPresent && Array.isArray(params.explicit)) {
-      return { present: true, value: cloneUnknown(params.explicit) };
+      return { present: true, value: structuredClone(params.explicit) };
     }
     const authored = Array.isArray(params.authored) ? params.authored : [];
     const explicit = Array.isArray(params.explicit) ? params.explicit : [];
@@ -1039,7 +1046,7 @@ function projectAuthoredRosterValue(params: {
     };
   }
   if (explicitlySet && params.explicitPresent) {
-    return { present: true, value: cloneUnknown(params.explicit) };
+    return { present: true, value: structuredClone(params.explicit) };
   }
   const unchangedFromRuntime =
     params.runtimePresent && isDeepStrictEqual(params.runtime, params.next);
@@ -1048,9 +1055,29 @@ function projectAuthoredRosterValue(params: {
     present: true,
     value:
       params.authoredPresent && (unchangedFromRuntime || unchangedFromSource)
-        ? cloneUnknown(params.authored)
-        : cloneUnknown(params.next),
+        ? structuredClone(params.authored)
+        : structuredClone(params.next),
   };
+}
+
+function indexAgentRosterForWrite(config: unknown, legacyIdsByIndex: ReadonlyMap<number, string>) {
+  const roster = readAgentRosterProperty(config);
+  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
+    return toAgentEntriesRecord(listAgentEntries(config as OpenClawConfig)) as Record<
+      string,
+      unknown
+    >;
+  }
+  return Object.fromEntries(
+    roster.value.flatMap((entry, index): [string, Record<string, unknown>][] => {
+      const id = legacyIdsByIndex.get(index);
+      if (!isRecord(entry) || id === undefined) {
+        return [];
+      }
+      const { id: _legacyId, ...value } = entry;
+      return [[id, value]];
+    }),
+  );
 }
 
 function canonicalizeAgentRosterForExplicitWrite(params: {
@@ -1069,36 +1096,28 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     preMigrationRoster?.kind === "list" && Array.isArray(preMigrationRoster.value)
       ? preMigrationRoster.value
       : undefined;
-  const authoredEntries =
-    authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)
-      ? Object.fromEntries(
-          authoredRoster.value.flatMap((entry, index) => {
-            if (!isRecord(entry)) {
-              return [];
-            }
-            const resolvedEntry = resolvedLegacyList?.[index];
-            const resolvedId = isRecord(resolvedEntry) ? resolvedEntry.id : undefined;
-            const id = typeof resolvedId === "string" ? resolvedId : entry.id;
-            if (typeof id !== "string") {
-              return [];
-            }
-            const { id: _authoredId, ...config } = entry;
-            return [[id, config]];
-          }),
-        )
-      : (toAgentEntriesRecord(
-          listAgentEntries(params.rootAuthoredConfig as OpenClawConfig),
-        ) as Record<string, unknown>);
-  const runtimeEntries = toAgentEntriesRecord(
-    listAgentEntries(params.runtimeConfig as OpenClawConfig),
-  ) as Record<string, unknown>;
-  const sourceEntries = toAgentEntriesRecord(
-    listAgentEntries(params.sourceConfig as OpenClawConfig),
-  ) as Record<string, unknown>;
+  // Use Doctor's original occurrences before any map can collapse duplicate or unnamed ids.
+  // Reindex the three prior views without applying migrations to their field values.
+  const legacyIdsByIndex = new Map(
+    projectLegacyAgentRosterEntries(
+      resolvedLegacyList ??
+        (authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)
+          ? authoredRoster.value
+          : []),
+    ).entries.map(({ sourceIndex, id }) => [sourceIndex, id]),
+  );
+  const authoredEntries = indexAgentRosterForWrite(params.rootAuthoredConfig, legacyIdsByIndex);
+  const runtimeEntries = indexAgentRosterForWrite(params.runtimeConfig, legacyIdsByIndex);
+  const sourceEntries = indexAgentRosterForWrite(params.sourceConfig, legacyIdsByIndex);
   const nextEntries = toAgentEntriesRecord(
     listAgentEntries(params.nextConfig as OpenClawConfig),
   ) as Record<string, unknown>;
   const explicitRoster = readAgentRosterProperty(params.valueSource);
+  const rosterFactOwner = coerceConfig(
+    params.sourceConfigBeforeMigrations ?? params.rootAuthoredConfig,
+  );
+  const sourcePathsByAgentId = indexAgentRosterSourcePaths(rosterFactOwner, legacyIdsByIndex);
+  const resolutionEvaluated = getConfigResolutionFacts(rosterFactOwner) !== null;
   const renamedLegacyIndexes = new Set(
     (params.explicitSetPaths ?? []).flatMap((path) => {
       if (path[0] !== "agents" || path[1] !== "list" || path.length !== 4 || path[3] !== "id") {
@@ -1133,7 +1152,12 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)
         ? explicitRoster.value[index]
         : undefined;
-    if (isRecord(entry) && typeof entry.id === "string" && entry.id.includes("${")) {
+    if (
+      isRecord(entry) &&
+      typeof entry.id === "string" &&
+      (hasUnresolvedConfigPath(rosterFactOwner, `agents.list[${index}].id`) ||
+        (!resolutionEvaluated && containsEnvVarReference(entry.id)))
+    ) {
       throw new Error(
         "Config write cannot safely resolve an env-backed renamed agent id; set the resolved literal id or rename the authored entry directly.",
       );
@@ -1156,7 +1180,10 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         return resolvedEntry.id;
       }
     }
-    return explicitId.includes("${") ? undefined : explicitId;
+    return hasUnresolvedConfigPath(rosterFactOwner, `agents.list[${index}].id`) ||
+      containsEnvVarReference(explicitId)
+      ? undefined
+      : explicitId;
   };
   if (explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value)) {
     const normalizedIds = new Set<string>();
@@ -1182,13 +1209,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
             if (!isRecord(entry)) {
               return [];
             }
-            const resolvedEntry = resolvedLegacyList?.[index];
-            const resolvedId = isRecord(resolvedEntry) ? resolvedEntry.id : undefined;
             const id = structurallyExplicitLegacyIndexes.has(index)
               ? resolveExplicitLegacyEntryId(entry, index)
-              : typeof resolvedId === "string"
-                ? resolvedId
-                : entry.id;
+              : (legacyIdsByIndex.get(index) ?? entry.id);
             if (typeof id !== "string") {
               if (structurallyExplicitLegacyIndexes.has(index) && typeof entry.id === "string") {
                 throw new Error(
@@ -1222,15 +1245,10 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       return [[]];
     }
     const index = parseArrayIndexPathSegment(path[2] ?? "");
-    const authoredEntry =
-      authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value) && index !== undefined
-        ? authoredRoster.value[index]
-        : undefined;
     const explicitEntry =
       explicitRoster?.kind === "list" && Array.isArray(explicitRoster.value) && index !== undefined
         ? explicitRoster.value[index]
         : undefined;
-    const resolvedEntry = index === undefined ? undefined : resolvedLegacyList?.[index];
     const usesExplicitId =
       index !== undefined &&
       (renamedLegacyIndexes.has(index) ||
@@ -1238,11 +1256,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     const id =
       usesExplicitId && isRecord(explicitEntry)
         ? explicitEntry.id
-        : isRecord(resolvedEntry) && typeof resolvedEntry.id === "string"
-          ? resolvedEntry.id
-          : isRecord(authoredEntry)
-            ? authoredEntry.id
-            : undefined;
+        : index === undefined
+          ? undefined
+          : legacyIdsByIndex.get(index);
     return typeof id === "string" ? [[id, ...path.slice(3)]] : [];
   });
   const entryIdentityByNextId = new Map<string, string>();
@@ -1262,14 +1278,8 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         continue;
       }
       const index = parseArrayIndexPathSegment(path[2] ?? "");
-      const authoredEntry = index === undefined ? undefined : authoredRoster.value[index];
       const explicitEntry = index === undefined ? undefined : explicitRoster.value[index];
-      const resolvedEntry = index === undefined ? undefined : resolvedLegacyList?.[index];
-      const oldId = isRecord(resolvedEntry)
-        ? resolvedEntry.id
-        : isRecord(authoredEntry)
-          ? authoredEntry.id
-          : undefined;
+      const oldId = index === undefined ? undefined : legacyIdsByIndex.get(index);
       const nextId = isRecord(explicitEntry) ? explicitEntry.id : undefined;
       if (typeof oldId === "string" && typeof nextId === "string") {
         entryIdentityByNextId.set(nextId, oldId);
@@ -1300,7 +1310,13 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
   const ambiguousRemovedIds = removedIds.filter((id) => !claimedPriorIds.has(id));
   if (
     ambiguousAddedIds.length > 0 &&
-    ambiguousRemovedIds.some((id) => containsAuthoredRosterReference(authoredEntries[id]))
+    ambiguousRemovedIds.some((id) => {
+      const sourcePath = sourcePathsByAgentId.get(normalizeAgentId(id));
+      return (
+        containsAuthoredRosterReference(authoredEntries[id], !resolutionEvaluated) ||
+        Boolean(sourcePath && hasUnresolvedConfigPathInSubtree(rosterFactOwner, sourcePath))
+      );
+    })
   ) {
     throw new Error(
       "Config write cannot safely match renamed agent entries with authored references; rename agents one at a time.",
@@ -1326,9 +1342,14 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       const value = projected.present ? projected.value : nextEntry;
       if (isRecord(value) && isRecord(nextEntry)) {
         if (Object.hasOwn(nextEntry, "default")) {
+          const sourcePath = sourcePathsByAgentId.get(normalizeAgentId(priorId));
           const preservesAuthoredReference =
             Object.hasOwn(value, "default") &&
-            containsAuthoredRosterReference(value.default) &&
+            (containsAuthoredRosterReference(value.default, !resolutionEvaluated) ||
+              Boolean(
+                sourcePath &&
+                hasUnresolvedConfigPathInSubtree(rosterFactOwner, `${sourcePath}.default`),
+              )) &&
             ((Object.hasOwn(runtimeEntries, priorId) &&
               isRecord(runtimeEntries[priorId]) &&
               isDeepStrictEqual(runtimeEntries[priorId].default, nextEntry.default)) ||
@@ -1336,7 +1357,7 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
                 isRecord(sourceEntries[priorId]) &&
                 isDeepStrictEqual(sourceEntries[priorId].default, nextEntry.default)));
           if (!preservesAuthoredReference) {
-            value.default = cloneUnknown(nextEntry.default);
+            value.default = structuredClone(nextEntry.default);
           }
         } else {
           delete value.default;
@@ -1346,7 +1367,6 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     }),
   );
   if (authoredRoster?.kind === "list" && Array.isArray(authoredRoster.value)) {
-    const authoredList = authoredRoster.value;
     const nextIdByPriorId = new Map(
       [...entryIdentityByNextId].map(([nextId, priorId]) => [priorId, nextId]),
     );
@@ -1400,8 +1420,6 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
         );
       }
       const index = parseArrayIndexPathSegment(unsetPath[2] ?? "");
-      const authoredEntry = index === undefined ? undefined : authoredList[index];
-      const resolvedEntry = index === undefined ? undefined : resolvedLegacyList?.[index];
       const usesExplicitIdentity =
         index !== undefined && structurallyExplicitLegacyIndexes.has(index);
       const explicitResolvedId =
@@ -1409,11 +1427,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
       const id =
         explicitResolvedId !== undefined
           ? explicitResolvedId
-          : isRecord(resolvedEntry)
-            ? resolvedEntry.id
-            : isRecord(authoredEntry)
-              ? authoredEntry.id
-              : undefined;
+          : index === undefined
+            ? undefined
+            : legacyIdsByIndex.get(index);
       if (typeof id !== "string") {
         continue;
       }
@@ -1431,16 +1447,17 @@ function restoreAuthoredAgentRoster(value: unknown, rootAuthoredConfig: unknown)
   let next = deletePathValue(value, ["agents", "entries"]);
   next = deletePathValue(next, ["agents", "list"]);
   const authoredRoster = readAgentRosterProperty(rootAuthoredConfig);
-  return authoredRoster
-    ? setPathValueCreatingParents(
-        next,
-        ["agents", authoredRoster.kind],
-        cloneUnknown(authoredRoster.value),
-      )
+  if (authoredRoster) {
+    return setPathValueCreatingParents(next, ["agents", authoredRoster.kind], authoredRoster.value);
+  }
+  // Roster injection must not leave an unauthored parent, but empty authored sections are intent.
+  return !hasPathValue(rootAuthoredConfig, ["agents"]) &&
+    isDeepStrictEqual(getPathValue(next, ["agents"]), {})
+    ? deletePathValue(next, ["agents"])
     : next;
 }
 
-function projectAuthoredAgentRosterForCanonicalIncludes(params: {
+export function projectAuthoredAgentRosterForWrite(params: {
   rootAuthoredConfig: unknown;
   sourceConfigBeforeMigrations?: unknown;
 }): unknown {
@@ -1453,21 +1470,21 @@ function projectAuthoredAgentRosterForCanonicalIncludes(params: {
     preMigrationRoster?.kind === "list" && Array.isArray(preMigrationRoster.value)
       ? preMigrationRoster.value
       : undefined;
-  const entries = Object.fromEntries(
-    authoredRoster.value.flatMap((entry, index) => {
-      if (!isRecord(entry)) {
-        return [];
-      }
-      const resolvedEntry = resolvedLegacyList?.[index];
-      const resolvedId = isRecord(resolvedEntry) ? resolvedEntry.id : undefined;
-      const id = typeof resolvedId === "string" ? resolvedId : entry.id;
-      if (typeof id !== "string") {
-        return [];
-      }
-      const { id: _authoredId, ...config } = entry;
-      return [[normalizeAgentId(id), config]];
-    }),
+  // Doctor may rename malformed or duplicate ids; includes must keep an unambiguous owner.
+  if (
+    collectIncludeOwnedPaths(authoredRoster.value).length > 0 &&
+    !parseLegacyAgentRoster(resolvedLegacyList ?? authoredRoster.value)
+  ) {
+    throw new Error(
+      "Config write cannot safely match $include-owned legacy agent entries; repair their ids in the authored config first.",
+    );
+  }
+  const legacyIdsByIndex = new Map(
+    projectLegacyAgentRosterEntries(resolvedLegacyList ?? authoredRoster.value).entries.map(
+      ({ sourceIndex, id }) => [sourceIndex, id],
+    ),
   );
+  const entries = indexAgentRosterForWrite(params.rootAuthoredConfig, legacyIdsByIndex);
   const withoutLegacyRoster = deletePathValue(
     deletePathValue(params.rootAuthoredConfig, ["agents", "list"]),
     ["agents", "entries"],
@@ -1478,6 +1495,7 @@ function projectAuthoredAgentRosterForCanonicalIncludes(params: {
 export function resolvePersistCandidateForWrite(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
+  sourceConfigValid?: boolean;
   sourceConfigBeforeMigrations?: unknown;
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
@@ -1485,6 +1503,7 @@ export function resolvePersistCandidateForWrite(params: {
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
+  persistCanonicalAgentRoster?: boolean;
   allowedAgentRosterRemovals?: readonly string[];
   allowIncludeAncestorExplicitSetPaths?: boolean;
   preserveLegacyAgentRoster?: boolean;
@@ -1513,7 +1532,7 @@ export function resolvePersistCandidateForWrite(params: {
     );
   }
   const projectedAuthoredRoster = persistCanonicalRoster
-    ? projectAuthoredAgentRosterForCanonicalIncludes({
+    ? projectAuthoredAgentRosterForWrite({
         rootAuthoredConfig,
         sourceConfigBeforeMigrations: params.sourceConfigBeforeMigrations,
       })
@@ -1594,14 +1613,16 @@ export function resolvePersistCandidateForWrite(params: {
     nextConfig: params.nextConfig,
     persistedCandidate: withAuthoredRoster,
   });
-  const withAuthoredParams = preserveAuthoredAgentParams({
-    sourceConfig: params.sourceConfig,
-    nextConfig: params.nextConfig,
-    rootAuthoredConfig,
-    persistedCandidate: withSchema,
-    unsetPaths: params.unsetPaths,
-  });
-  return withAuthoredParams;
+  // Invalid snapshots are complete repairs; omitted params must stay omitted.
+  return params.sourceConfigValid === false
+    ? withSchema
+    : preserveAuthoredAgentParams({
+        sourceConfig: params.sourceConfig,
+        nextConfig: params.nextConfig,
+        rootAuthoredConfig,
+        persistedCandidate: withSchema,
+        unsetPaths: params.unsetPaths,
+      });
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {

@@ -10,20 +10,17 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import {
-  resetServerUiPref,
-  resolveServerUiPrefState,
-  type ServerUiPrefState,
-} from "../../app/server-prefs.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
+import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
+import { resetServerUiPref, resolveServerUiPrefState } from "../../app/server-prefs.ts";
 import {
   loadSettings,
   normalizeCatalogOpenTarget,
@@ -31,12 +28,11 @@ import {
   normalizeChatSendShortcut,
   patchSettings,
   UI_APPEARANCE_DEFAULTS,
-  type ChatFollowUpMode,
-  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import type { TypefaceId } from "../../app/typography.ts";
 import { confirmAndStartUpdate, type UpdateProgress } from "../../app/update-confirmation.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
@@ -44,15 +40,19 @@ import {
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
+import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { loadModels } from "../chat/models.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
@@ -63,12 +63,14 @@ import {
 } from "../chat/realtime-talk-input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/realtime-talk.ts";
 import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
+import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 import {
   configSectionKeysForPage,
   SCOPED_CONFIG_SECTION_KEYS,
   type ConfigPageId,
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
+import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { renderMcp } from "./mcp.ts";
 import { renderMemoryPage } from "./memory-page.ts";
 import { narrowMemorySchema } from "./memory-schema.ts";
@@ -87,6 +89,8 @@ import {
   type ConfigViewState,
 } from "./view.ts";
 
+registerSettingsEnglish();
+
 export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
@@ -97,11 +101,13 @@ type ConfigPageSetting =
   | "textScale"
   | "sidebarLiveActivity"
   | "chatMessageMaxWidth"
+  | "chatCollapseTaskProgress"
   | "showAdvancedSettings"
   | "chatSendShortcut"
   | "chatFollowUpMode"
   | "catalogOpenTarget"
-  | "composerHoldToRecord";
+  | "composerHoldToRecord"
+  | "openLinksInControlUiBrowser";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -111,6 +117,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "communications:talk": { routeId: "talk", keepSection: true },
+  "appearance:wizard": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
@@ -178,6 +185,26 @@ function configPageTitle(pageId: ConfigPageId): string {
   return titleForRoute(pageId);
 }
 
+function renderConfigPageSubtitle(pageId: ConfigPageId) {
+  switch (pageId) {
+    case "appearance":
+      return html`${t("configView.appearance.intro")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/web/control-ui")}`;
+    case "mcp":
+      return html`${t("mcpPage.intro")} ${renderLearnMoreLink("https://docs.openclaw.ai/tools/mcp")}`;
+    case "security":
+      return html`${t("quickSettings.security.intro")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/gateway/security")}`;
+    case "talk":
+      return html`${t("talkPage.intro")}
+      ${renderLearnMoreLink("https://docs.openclaw.ai/nodes/talk")}`;
+    case "updates":
+      return t("updates.page.intro");
+    default:
+      return subtitleForRoute(pageId);
+  }
+}
+
 export function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
   const root =
     asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
@@ -186,7 +213,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
     return {
       gatewayAuth: "unknown",
       execPolicy: "unknown",
-      deviceAuth: false,
       browserEnabled: true,
       browserEnabledOverridden: false,
       toolProfile: "full",
@@ -198,7 +224,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
   const tools = asConfigRecord(root.tools);
   const exec = asConfigRecord(tools?.exec) ?? {};
   const browser = asConfigRecord(root.browser);
-  const controlUi = asConfigRecord(gateway?.controlUi);
   let gatewayAuth = "unknown";
   if (auth) {
     const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
@@ -217,7 +242,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
   return {
     gatewayAuth,
     execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
-    deviceAuth: controlUi?.dangerouslyDisableDeviceAuth !== true,
     browserEnabled: browser?.enabled !== false,
     browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
     toolProfile: typeof profile === "string" && profile.trim() ? profile.trim() : "full",
@@ -302,7 +326,12 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private updateStatusClient: GatewayBrowserClient | null = null;
   private sessionObserverModelsClient: GatewayBrowserClient | null = null;
-  private readonly sessionObserverModelLoads = new WeakMap<GatewayBrowserClient, Promise<void>>();
+  private sessionObserverModelsAgentId: string | null = null;
+  private sessionObserverModelsRequest: {
+    client: GatewayBrowserClient;
+    agentId: string;
+    promise: Promise<void>;
+  } | null = null;
   private readonly systemInfoPolling = new PollController(
     this,
     SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS,
@@ -331,7 +360,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfo = systemInfo;
       const client = this.systemInfoRequestClient();
       if (client) {
-        void this.ensureSessionObserverModels(client);
+        void this.ensureSessionObserverModels(client, this.context.agentSelection.state.selectedId);
       }
     },
     onError: (error) => {
@@ -397,6 +426,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
       (gateway) => this.synchronizeSystemInfoGateway(gateway),
+    )
+    .watch(
+      () => this.context?.agentSelection,
+      (selection, notify) => selection.subscribe(notify),
+      (selection) => this.synchronizeSessionObserverAgent(selection.state.selectedId),
     )
     .watch(
       () => this.context?.nativeNotifications ?? undefined,
@@ -482,7 +516,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.syncUpdateCountdownPolling();
     this.scrollToPendingRouteTarget();
     // Device labels stay hidden until the user grants media permission; each
-    // refresh button next to a picker requests its permission explicitly.
+    // picker requests its permission explicitly when opened.
     if (this.pageId === "appearance" && !this.microphoneLoaded) {
       this.microphoneLoaded = true;
       void this.refreshMicrophones(false);
@@ -513,7 +547,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     } catch (error) {
       // Discovery is best-effort in blocked/inactive contexts; a rejection
       // must not wedge the picker in its loading state.
-      this.microphoneError = error instanceof Error ? error.message : String(error);
+      this.microphoneError = formatUiError(error);
     } finally {
       this.microphoneLoading = false;
       this.microphoneRefreshRequestsPermission = false;
@@ -542,7 +576,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? realtimeTalkDeviceIssueMessage(result.issue, "videoinput")
         : null;
     } catch (error) {
-      this.cameraError = error instanceof Error ? error.message : String(error);
+      this.cameraError = formatUiError(error);
     } finally {
       this.cameraLoading = false;
       this.cameraRefreshRequestsPermission = false;
@@ -589,7 +623,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (!target) {
       return;
     }
-    target.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
     this.pendingRouteTargetId = null;
   }
 
@@ -667,9 +701,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.updateStatusClient = null;
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
-      this.sessionObserverModelsClient = null;
-      this.sessionObserverModels = [];
-      this.sessionObserverModelsUnavailable = false;
+      this.resetSessionObserverModels();
     }
     this.handleSystemInfoGatewaySnapshot(gateway.snapshot);
     this.syncUpdateStatusRefresh();
@@ -688,9 +720,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
       this.systemInfoUnavailable = false;
-      this.sessionObserverModelsClient = null;
-      this.sessionObserverModels = [];
-      this.sessionObserverModelsUnavailable = false;
+      this.resetSessionObserverModels();
     } else if (snapshot.phase !== "connected") {
       this.invalidateSystemInfoRequest();
       this.systemInfo = null;
@@ -745,45 +775,72 @@ export class ConfigPage extends OpenClawLightDomElement {
     return gateway.client;
   }
 
-  private ensureSessionObserverModels(client: GatewayBrowserClient): Promise<void> {
-    if (this.sessionObserverModelsClient === client) {
+  private synchronizeSessionObserverAgent(agentId: string | null) {
+    if (
+      this.sessionObserverModelsAgentId === agentId &&
+      (agentId !== null || this.sessionObserverModelsUnavailable)
+    ) {
+      return;
+    }
+    this.resetSessionObserverModels(!agentId);
+    const client = this.systemInfoRequestClient();
+    if (this.systemInfo && client) {
+      void this.ensureSessionObserverModels(client, agentId);
+    }
+  }
+
+  private ensureSessionObserverModels(
+    client: GatewayBrowserClient,
+    agentId: string | null,
+  ): Promise<void> {
+    if (!agentId) {
+      this.resetSessionObserverModels(true);
       return Promise.resolve();
     }
-    const existing = this.sessionObserverModelLoads.get(client);
-    if (existing) {
-      return existing;
+    if (
+      this.sessionObserverModelsClient === client &&
+      this.sessionObserverModelsAgentId === agentId
+    ) {
+      return Promise.resolve();
+    }
+    const existing = this.sessionObserverModelsRequest;
+    if (existing?.client === client && existing.agentId === agentId) {
+      return existing.promise;
     }
     const gatewaySource = this.systemInfoGatewaySource;
-    const promise = loadModels(client)
-      .then((models) => {
-        if (
-          this.isConnected &&
-          this.systemInfoGatewaySource === gatewaySource &&
-          this.context.gateway.snapshot.client === client
-        ) {
+    const isCurrent = () =>
+      this.isConnected &&
+      this.systemInfoGatewaySource === gatewaySource &&
+      this.context.gateway.snapshot.client === client &&
+      this.context.agentSelection.state.selectedId === agentId;
+    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
+      .then(({ models }) => {
+        if (isCurrent()) {
           this.sessionObserverModels = models;
           this.sessionObserverModelsClient = client;
+          this.sessionObserverModelsAgentId = agentId;
           this.sessionObserverModelsUnavailable = false;
         }
       })
       .catch(() => {
-        if (
-          this.isConnected &&
-          this.systemInfoGatewaySource === gatewaySource &&
-          this.context.gateway.snapshot.client === client
-        ) {
-          this.sessionObserverModels = [];
-          this.sessionObserverModelsClient = null;
-          this.sessionObserverModelsUnavailable = true;
+        if (isCurrent()) {
+          this.resetSessionObserverModels(true);
         }
       })
       .finally(() => {
-        if (this.sessionObserverModelLoads.get(client) === promise) {
-          this.sessionObserverModelLoads.delete(client);
+        if (this.sessionObserverModelsRequest?.promise === promise) {
+          this.sessionObserverModelsRequest = null;
         }
       });
-    this.sessionObserverModelLoads.set(client, promise);
+    this.sessionObserverModelsRequest = { client, agentId, promise };
     return promise;
+  }
+
+  private resetSessionObserverModels(unavailable = false) {
+    this.sessionObserverModels = [];
+    this.sessionObserverModelsClient = null;
+    this.sessionObserverModelsAgentId = null;
+    this.sessionObserverModelsUnavailable = unavailable;
   }
 
   private setFormMode(mode: ConfigFormMode) {
@@ -821,65 +878,50 @@ export class ConfigPage extends OpenClawLightDomElement {
     void i18n.setLocale(locale);
   }
 
-  private currentLocalePref(): ServerUiPrefState<string> {
+  private currentSyncedPref<K extends ResettableServerUiPrefKey>(key: K) {
     return resolveServerUiPrefState(
       this.context.runtimeConfig.state.configSnapshot?.config,
-      "locale",
+      key,
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
+      isAppearancePref(key)
+        ? {
+            canSync: this.serverUiPrefsCanSync(key),
+            profileId: this.context.gateway.snapshot?.selfUser?.id,
+          }
+        : { canSync: this.serverUiPrefsCanSync() },
     );
   }
 
-  private currentThemePref(): ServerUiPrefState<ThemeName> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "theme",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
-    );
+  private setFont(key: "fontUi" | "fontChat", font: TypefaceId | undefined) {
+    const preference = this.currentSyncedPref(key);
+    if (preference.overridden && font === preference.resetValue) {
+      this.resetSyncedAppearancePref(key);
+    } else {
+      this.applySettings({ [key]: font });
+    }
   }
 
-  private currentThemeModePref(): ServerUiPrefState<ThemeMode> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "themeMode",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
-    );
-  }
-
-  private currentChatSendShortcutPref(): ServerUiPrefState<ChatSendShortcut> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "chatSendShortcut",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
-    );
-  }
-
-  private currentChatFollowUpModePref(): ServerUiPrefState<ChatFollowUpMode> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "chatFollowUpMode",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
-    );
-  }
-
-  private serverUiPrefsCanSync(): boolean | null {
+  private serverUiPrefsCanSync(
+    key?: "theme" | "themeMode" | "accent" | "fontUi" | "fontChat",
+  ): boolean | null {
     const runtimeConfig = this.context.runtimeConfig;
-    return runtimeConfig.state.connected ? runtimeConfig.canPatch !== false : null;
+    if (!runtimeConfig.state.connected) {
+      return null;
+    }
+    const gateway = this.context.gateway.snapshot;
+    if ((key === "fontUi" || key === "fontChat") && !gateway?.selfUser) {
+      return false;
+    }
+    return key && gateway?.selfUser
+      ? hasOperatorWriteAccess(gateway.hello?.auth ?? null)
+      : runtimeConfig.canPatch !== false;
   }
 
   private resetLocale() {
     this.settings = resetServerUiPref(
       "locale",
-      this.currentLocalePref(),
+      this.currentSyncedPref("locale"),
       this.context.gateway.connection.gatewayUrl,
     );
     if (isSupportedLocale(this.settings.locale)) {
@@ -889,40 +931,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
   }
 
-  private resetSyncedAppearancePref(
-    key: "theme" | "themeMode" | "chatSendShortcut" | "chatFollowUpMode",
-  ) {
-    switch (key) {
-      case "theme":
-        this.customThemeImportOwner.recordActivation(null);
-        this.settings = resetServerUiPref(
-          "theme",
-          this.currentThemePref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-      case "themeMode":
-        this.settings = resetServerUiPref(
-          "themeMode",
-          this.currentThemeModePref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-      case "chatSendShortcut":
-        this.settings = resetServerUiPref(
-          "chatSendShortcut",
-          this.currentChatSendShortcutPref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-      case "chatFollowUpMode":
-        this.settings = resetServerUiPref(
-          "chatFollowUpMode",
-          this.currentChatFollowUpModePref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-    }
+  private resetSyncedAppearancePref(key: Exclude<ResettableServerUiPrefKey, "locale">) {
+    this.settings = resetServerUiPref(
+      key,
+      this.currentSyncedPref(key),
+      this.context.gateway.connection.gatewayUrl,
+    );
     this.context.theme.refresh();
   }
 
@@ -930,13 +944,16 @@ export class ConfigPage extends OpenClawLightDomElement {
     theme: ThemeName,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
-    this.customThemeImportOwner.recordActivation(theme);
+    const preference = this.currentSyncedPref("theme");
+    const reset = preference.overridden && theme === preference.resetValue;
+    this.customThemeImportOwner.recordActivation(reset ? null : theme);
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     startThemeTransition({
       currentTheme,
       nextTheme: resolveTheme(theme, this.settings.themeMode),
       context,
-      applyTheme: () => this.applySettings({ theme }),
+      applyTheme: () =>
+        reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({ theme }),
     });
   }
 
@@ -944,12 +961,17 @@ export class ConfigPage extends OpenClawLightDomElement {
     mode: ThemeMode,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
+    const preference = this.currentSyncedPref("themeMode");
+    const reset = preference.overridden && mode === preference.resetValue;
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     startThemeTransition({
       currentTheme,
       nextTheme: resolveTheme(this.settings.theme, mode),
       context,
-      applyTheme: () => this.applySettings({ themeMode: mode }),
+      applyTheme: () =>
+        reset
+          ? this.resetSyncedAppearancePref("themeMode")
+          : this.applySettings({ themeMode: mode }),
     });
   }
 
@@ -979,7 +1001,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       });
     } catch (error) {
       if (request === this.cameraSelectionRequest) {
-        this.cameraError = error instanceof Error ? error.message : String(error);
+        this.cameraError = formatUiError(error);
       }
     }
   }
@@ -1018,7 +1040,9 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private isUpdateBusy(): boolean {
     const update = this.context.overlays.snapshot;
-    return update.updateRunning || update.updateReconciliationPending;
+    return (
+      update.updateRunning || update.updateStatusRefreshing || update.updateReconciliationPending
+    );
   }
 
   // The update dialog outlives this page and the connection, so it reads live
@@ -1074,12 +1098,16 @@ export class ConfigPage extends OpenClawLightDomElement {
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
         updateAvailable: overlaySnapshot.updateAvailable,
         statusBanner: overlaySnapshot.updateStatusBanner,
+        recordedAttempt: overlaySnapshot.recordedUpdateAttempt,
         configBusy: this.isCuratedConfigMutationDisabled(),
         canAdmin,
         canUpdate: canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin"),
+        canCheckStatus: canCallGatewayMethod(gatewaySnapshot, "update.status", "operator.admin"),
         canHoldUpdate: canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin"),
         updateBusy: this.isUpdateBusy(),
         onChannelChange: (channel) => runtimeConfig.patchForm(["update", "channel"], channel),
+        onUpdateChecksChange: (enabled) =>
+          runtimeConfig.patchForm(["update", "checkOnStart"], enabled),
         onAutomaticUpdatesChange: (enabled) =>
           runtimeConfig.patchForm(["update", "auto", "enabled"], enabled),
         onUpdateNow: () =>
@@ -1093,6 +1121,7 @@ export class ConfigPage extends OpenClawLightDomElement {
             viaNativeApp: false,
           }),
         onHoldUpdate: () => this.context.overlays.holdUpdate(),
+        onCheckStatus: () => this.context.overlays.refreshUpdateStatus(),
       });
     }
     const includeSections = this.includeSections();
@@ -1105,15 +1134,17 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.selections[this.pageId].activeSubsection,
     );
     const activeSection = this.pageId === "mcp" ? "mcp" : selection.activeSection;
+    const browserPanelAvailable = isBrowserPanelAvailable(this.context.gateway.snapshot);
     const activeSubsection = this.pageId === "mcp" ? null : selection.activeSubsection;
     const gatewayConfig = asConfigRecord(configObject.gateway);
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const themePref = this.currentThemePref();
-    const themeModePref = this.currentThemeModePref();
-    const localePref = this.currentLocalePref();
-    const chatSendShortcutPref = this.currentChatSendShortcutPref();
-    const chatFollowUpModePref = this.currentChatFollowUpModePref();
+    const themePref = this.currentSyncedPref("theme");
+    const themeModePref = this.currentSyncedPref("themeMode");
+    const accentPref = this.currentSyncedPref("accent");
+    const localePref = this.currentSyncedPref("locale");
+    const chatSendShortcutPref = this.currentSyncedPref("chatSendShortcut");
+    const chatFollowUpModePref = this.currentSyncedPref("chatFollowUpMode");
     const sessionObserverBusy =
       !configState.connected ||
       configState.configSaving ||
@@ -1177,6 +1208,15 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeModeOverridden: themeModePref.overridden,
       themeModeProvenance: themeModePref.provenance,
       themeModeResetValue: themeModePref.resetValue ?? UI_APPEARANCE_DEFAULTS.themeMode,
+      accent: this.settings.accent,
+      accentOverridden: accentPref.overridden,
+      accentProvenance: accentPref.provenance,
+      fontUi: this.settings.fontUi,
+      fontChat: this.settings.fontChat,
+      fontUiProvenance: this.currentSyncedPref("fontUi").provenance,
+      fontChatProvenance: this.currentSyncedPref("fontChat").provenance,
+      setFontUi: (font) => this.setFont("fontUi", font),
+      setFontChat: (font) => this.setFont("fontChat", font),
       systemLocale: i18n.getSystemLocale(),
       localeOverride: isSupportedLocale(localePref.value) ? localePref.value : undefined,
       localeOverridden: localePref.overridden,
@@ -1185,11 +1225,12 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? localePref.resetValue
         : undefined,
       onLocaleChange: (locale) => this.setLocale(locale),
-      resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
-      resetTheme: () => this.resetSyncedAppearancePref("theme"),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
-      resetThemeMode: () => this.resetSyncedAppearancePref("themeMode"),
+      setAccent: (accent) =>
+        accent === undefined
+          ? this.resetSyncedAppearancePref("accent")
+          : this.applySettings({ accent }),
       hasCustomTheme: Boolean(this.settings.customTheme),
       customThemeLabel: this.settings.customTheme?.label ?? null,
       customThemeSourceUrl: this.settings.customTheme?.sourceUrl ?? null,
@@ -1204,8 +1245,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => this.customThemeImportOwner.open(),
       textScale: this.settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: this.settings.textScale !== undefined,
-      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
-      resetTextScale: () => this.setSetting("textScale", undefined),
+      setTextScale: (value) =>
+        this.setSetting(
+          "textScale",
+          value === UI_APPEARANCE_DEFAULTS.textScale ? undefined : normalizeTextScale(value),
+        ),
       sidebarLiveActivity:
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
@@ -1217,6 +1261,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
+      chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
+      setChatCollapseTaskProgress: (enabled) =>
+        this.setSetting("chatCollapseTaskProgress", enabled),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
       forceShowAdvanced: this.pageId === "advanced",
@@ -1261,7 +1308,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatSendShortcutResetValue:
         chatSendShortcutPref.resetValue ?? UI_APPEARANCE_DEFAULTS.chatSendShortcut,
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
-      resetChatSendShortcut: () => this.resetSyncedAppearancePref("chatSendShortcut"),
       chatFollowUpMode: this.settings.chatFollowUpMode,
       chatFollowUpModeOverridden: chatFollowUpModePref.overridden,
       chatFollowUpModeProvenance: chatFollowUpModePref.provenance,
@@ -1298,6 +1344,14 @@ export class ConfigPage extends OpenClawLightDomElement {
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
       navRootLabel: this.pageId === "advanced" ? undefined : configPageTitle(this.pageId),
+      showSectionDocs: this.pageId !== "communications",
+      sectionPrelude:
+        activeSection === "browser" && browserPanelAvailable
+          ? renderBrowserLinkPreferencesRow({
+              enabled: this.settings.openLinksInControlUiBrowser === true,
+              onChange: (enabled) => this.setSetting("openLinksInControlUiBrowser", enabled),
+            })
+          : undefined,
       showRootTab: !includeSections?.length,
       includeSections: includeSections ? [...includeSections] : undefined,
       excludeSections,
@@ -1308,9 +1362,13 @@ export class ConfigPage extends OpenClawLightDomElement {
         this.context.nativeNotifications?.requestPermission(),
       onNativeNotificationsSendTest: () => this.context.nativeNotifications?.sendTest(),
       webPush: this.context.webPush.snapshot,
-      onWebPushSubscribe: () => void this.context.webPush.enable(),
-      onWebPushUnsubscribe: () => void this.context.webPush.disable(),
-      onWebPushTest: () => void this.context.webPush.sendTest(),
+      onWebPushSubscribe: () => void this.context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => void this.context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => void this.context.webPush.run({ kind: "test" }),
+      onWebPushSetUserPreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "user", preferences }),
+      onWebPushSetDevicePreferences: (preferences) =>
+        void this.context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
     if (this.pageId === "mcp") {
       return renderMcp({
@@ -1377,7 +1435,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           }
           runtimeConfig.patchForm(["browser", "enabled"], false);
         },
-        onBrowserEnabledReset: () => runtimeConfig.removeFormValue(["browser", "enabled"]),
         onToolProfileChange: (profile) => {
           if (profile === "full") {
             runtimeConfig.removeFormValue(["tools", "profile"]);
@@ -1385,7 +1442,6 @@ export class ConfigPage extends OpenClawLightDomElement {
           }
           runtimeConfig.patchForm(["tools", "profile"], profile);
         },
-        onToolProfileReset: () => runtimeConfig.removeFormValue(["tools", "profile"]),
         editor: renderConfig({ ...props, embeddedEditor: true }),
       });
     }
@@ -1401,11 +1457,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       ${this.pageId === "memory"
         ? nothing
         : html`
-            <section class="content-header">
-              <div>
-                <div class="page-title">${configPageTitle(this.pageId)}</div>
-              </div>
-            </section>
+            ${renderSettingsPageHeader({
+              title: configPageTitle(this.pageId),
+              subtitle: renderConfigPageSubtitle(this.pageId),
+            })}
           `}
       ${renderSettingsWorkspace(body)}
     `;

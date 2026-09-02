@@ -11,6 +11,8 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
@@ -18,6 +20,7 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
+import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
 import {
   CodexAppServerStartupError,
   isCodexAppServerStartupError,
@@ -27,12 +30,14 @@ import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import {
   isCodexAppServerBrokenPipeError,
   isCodexAppServerConnectionClosedError,
+  isCodexAppServerOverloadError,
   isCodexAppServerRequestTimeoutError,
   type CodexAppServerClient,
 } from "./client.js";
 import { startCodexComputerUseHealthMonitor } from "./computer-use-health.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
+  hasCodexMcpToolApprovalOverrides,
   withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
@@ -72,7 +77,9 @@ import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrent,
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+  createIsolatedCodexAppServerClient,
   isCodexAppServerStartSelectionChangedError,
+  readCodexAppServerClientDesktopGenerationFingerprint,
   releaseLeasedSharedCodexAppServerClient,
   retireSharedCodexAppServerClientIfCurrent,
   type CodexAppServerClientOptions,
@@ -90,7 +97,7 @@ import {
 } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
-const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
+const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED =
   "CODEX_APP_SERVER_CONTEXT_RESTART_SELECTION_CHANGED";
 
@@ -130,6 +137,7 @@ type StartCodexAttemptThreadResult = {
 export async function startCodexAttemptThread(params: {
   attemptClientFactory: CodexAppServerClientFactory;
   bindingStore: CodexAppServerBindingStore;
+  runtime?: PluginRuntime;
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
   computerUseConfig: ResolvedCodexComputerUseConfig;
@@ -144,7 +152,10 @@ export async function startCodexAttemptThread(params: {
   startupEnvApiKeyCacheKey: string | undefined;
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
+  shellEnvironment?: Readonly<Record<string, string>>;
+  disableLoginShell?: boolean;
   buildAttemptParams: () => EmbeddedRunAttemptParams;
+  runtimeModelId?: string;
   sessionAgentId: string;
   effectiveWorkspace: string;
   effectiveCwd: string;
@@ -152,9 +163,11 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  agentWorkspaceDeveloperInstructions?: string;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
+  nativeHookRelayRequired?: boolean;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   /** OpenClaw owns configured MCP dynamically for this scheduled turn. */
   configuredMcpOwnershipVersion?: 1;
@@ -166,6 +179,7 @@ export async function startCodexAttemptThread(params: {
   startupTimeoutMs: number;
   signal: AbortSignal;
   onStartupTimeout: () => void | Promise<void>;
+  onExecutionDisconnect?: (error: Error) => void;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
@@ -213,9 +227,16 @@ export async function startCodexAttemptThread(params: {
           resolvedPluginPolicy,
           enabledPluginConfigKeys,
         } = pluginStartupPolicy;
-        const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true ||
+          params.computerUseConfig.enabled ||
+          (params.nativeToolSurfaceEnabled &&
+            params.configuredMcpOwnershipVersion !== 1 &&
+            hasCodexMcpToolApprovalOverrides(
+              params.config?.mcp?.servers,
+              params.bundleMcpThreadConfig.userStaticServerNames,
+              params.bundleMcpThreadConfig.configPatch?.mcp_servers,
+            ));
         pluginAppServer = mcpElicitationDelegationRequired
           ? {
               ...params.appServer,
@@ -269,7 +290,11 @@ export async function startCodexAttemptThread(params: {
                 return;
               }
               startupClientLeaseReleased = true;
-              releaseLeasedSharedCodexAppServerClient(activeStartupClient);
+              if (params.attemptClientFactory === createIsolatedCodexAppServerClient) {
+                activeStartupClient.close();
+              } else {
+                releaseLeasedSharedCodexAppServerClient(activeStartupClient);
+              }
             };
             releaseSharedClientLease = startupClientLease;
             attemptedClient = activeStartupClient;
@@ -280,39 +305,11 @@ export async function startCodexAttemptThread(params: {
             if (startupAbandonController.signal.aborted) {
               throw new CodexAppServerStartupError("aborted");
             }
-            let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
-            if (params.runtimeArtifactRequest) {
-              const {
-                readCodexAppServerClientRuntimeArtifact,
-                validateCodexAppServerRuntimeArtifact,
-              } = await import("./runtime-artifact.js");
-              runtimeArtifact = readCodexAppServerClientRuntimeArtifact(activeStartupClient);
-              const expected = params.runtimeArtifactRequest.expected;
-              const matchesExpected =
-                !expected ||
-                Boolean(
-                  runtimeArtifact &&
-                  runtimeArtifact.id === expected.id &&
-                  runtimeArtifact.fingerprint === expected.fingerprint,
-                );
-              if (
-                !runtimeArtifact ||
-                !matchesExpected ||
-                !(await validateCodexAppServerRuntimeArtifact(
-                  runtimeArtifact,
-                  startupAbandonController.signal,
-                ))
-              ) {
-                // Never let an unattested physical generation reach Computer Use,
-                // plugin discovery, or a native thread request.
-                retireSharedCodexAppServerClientIfCurrent(activeStartupClient);
-                throw new Error(
-                  expected
-                    ? "Codex app-server runtime artifact does not match verified inference"
-                    : "Codex app-server runtime artifact is unavailable or stale",
-                );
-              }
-            }
+            const runtimeArtifact = await verifyStartupArtifact({
+              client: activeStartupClient,
+              request: params.runtimeArtifactRequest,
+              signal: startupAbandonController.signal,
+            });
             ensureCodexAppServerClientRuntime(activeStartupClient, {
               agentDir: params.agentDir,
               authProfileId: startupRuntimeAuthProfileId,
@@ -332,7 +329,10 @@ export async function startCodexAttemptThread(params: {
                 signal: startupAbandonController.signal,
               });
             } catch (error) {
-              if (startupAbandonController.signal.aborted) {
+              if (
+                startupAbandonController.signal.aborted ||
+                isCodexAppServerStartSelectionChangedError(error)
+              ) {
                 throw error;
               }
               throw new AgentHarnessPreflightError(
@@ -349,6 +349,8 @@ export async function startCodexAttemptThread(params: {
               envApiKeyFingerprint: params.startupEnvApiKeyCacheKey,
               appServerVersion: activeStartupClient.getServerVersion(),
               runtimeIdentity: startupRuntimeIdentity,
+              desktopGenerationFingerprint:
+                readCodexAppServerClientDesktopGenerationFingerprint(activeStartupClient),
             });
             const appServerRuntimeFingerprint = buildCodexAppServerRuntimeFingerprint({
               appServer: params.appServer,
@@ -385,22 +387,28 @@ export async function startCodexAttemptThread(params: {
             const releaseStartupSandboxEnvironment = async () => {
               if (startupSandboxEnvironmentAcquired) {
                 startupSandboxEnvironmentAcquired = false;
-                await releaseCodexSandboxExecServerEnvironment(params.sandbox);
+                await releaseCodexSandboxExecServerEnvironment(
+                  params.sandbox,
+                  startupSandboxEnvironment,
+                );
               }
             };
             releaseStartupResourcesOnTimeout = releaseStartupSandboxEnvironment;
             try {
-              startupSandboxEnvironment = shouldRequireCodexSandboxExecServerEnvironment({
+              const sandboxEnvironmentRequired = shouldRequireCodexSandboxExecServerEnvironment({
                 sandbox: params.sandbox,
                 nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
                 sandboxExecServerEnabled: params.sandboxExecServerEnabled,
-              })
+              });
+              startupSandboxEnvironment = sandboxEnvironmentRequired
                 ? await ensureCodexSandboxExecServerEnvironment({
                     client: activeStartupClient,
                     sandbox: params.sandbox ?? null,
+                    runtime: params.runtime,
                     appServerStartOptions: params.appServer.start,
                     timeoutMs: params.appServer.requestTimeoutMs,
-                    signal: startupAbandonController.signal,
+                    signal: AbortSignal.any([params.signal, startupAbandonController.signal]),
+                    onExecutionDisconnect: params.onExecutionDisconnect,
                   })
                 : undefined;
               startupSandboxEnvironmentAcquired = Boolean(startupSandboxEnvironment);
@@ -408,12 +416,7 @@ export async function startCodexAttemptThread(params: {
                 await releaseStartupSandboxEnvironment();
                 throw new CodexAppServerStartupError("aborted");
               }
-              if (
-                params.sandbox?.enabled &&
-                params.nativeToolSurfaceEnabled &&
-                params.sandboxExecServerEnabled &&
-                !startupSandboxEnvironment
-              ) {
+              if (sandboxEnvironmentRequired && !startupSandboxEnvironment) {
                 throw new Error(
                   "Codex app-server did not register an OpenClaw sandbox exec-server environment.",
                 );
@@ -469,17 +472,23 @@ export async function startCodexAttemptThread(params: {
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
                 params: params.buildAttemptParams(),
+                runtimeModelId: params.runtimeModelId,
                 agentId: params.sessionAgentId,
+                agentDir: params.agentDir,
                 cwd: startupExecutionCwd,
                 dynamicTools: params.dynamicTools,
                 persistentWebSearchAllowed: params.persistentWebSearchAllowed,
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,
+                shellEnvironment: params.shellEnvironment,
+                disableLoginShell: params.disableLoginShell,
                 finalConfigPatch: params.finalConfigPatch,
                 buildFinalConfigPatch: params.buildFinalConfigPatch,
                 nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+                nativeHookRelayRequired: params.nativeHookRelayRequired,
                 nativeCodeModeEnabled: params.nativeToolSurfaceEnabled,
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
@@ -612,10 +621,7 @@ export async function startCodexAttemptThread(params: {
               } else if (
                 !isCodexAppServerStartSelectionChangedError(startupAttemptError) &&
                 (shouldClearSharedClientAfterStartupRace(startupAttemptError) ||
-                  shouldClearSharedClientAfterStartupFailure({
-                    error: startupAttemptError,
-                    spawnedBy: params.spawnedBy,
-                  }))
+                  shouldClearSharedClientAfterStartupFailure(startupAttemptError, params.spawnedBy))
               ) {
                 if (startupClientForAbandonedRequestCleanup === startupClient) {
                   startupClientForAbandonedRequestCleanup = undefined;
@@ -626,11 +632,7 @@ export async function startCodexAttemptThread(params: {
           }
         };
 
-        for (
-          let attempt = 1;
-          attempt <= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS;
-          attempt += 1
-        ) {
+        for (let attempt = 1; attempt <= CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS; attempt += 1) {
           try {
             return await startupAttempt();
           } catch (error) {
@@ -642,27 +644,27 @@ export async function startCodexAttemptThread(params: {
             ) {
               throw error;
             }
-            const failedClient = attemptedClient;
             const refreshedSharedClient = selectionChanged
-              ? retireSharedCodexAppServerClientIfCurrent(failedClient)
-              : clearSharedCodexAppServerClientIfCurrent(failedClient);
-            if (startupClientForAbandonedRequestCleanup === failedClient) {
+              ? retireSharedCodexAppServerClientIfCurrent(attemptedClient)
+              : clearSharedCodexAppServerClientIfCurrent(attemptedClient);
+            if (startupClientForAbandonedRequestCleanup === attemptedClient) {
               startupClientForAbandonedRequestCleanup = undefined;
             }
-            if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
+            if (attempt >= CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS) {
               embeddedAgentLog.warn(
                 selectionChanged
                   ? "codex app-server executable selection kept changing during startup; retries exhausted"
                   : "codex app-server connection closed during startup; retries exhausted",
                 {
                   attempt,
-                  maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                  maxAttempts: CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS,
                   refreshedSharedClient,
                   error: formatErrorMessage(error),
                 },
               );
               throw error;
             }
+            const retryDelayMs = selectionChanged ? 0 : 1_000 * 2 ** (attempt - 1);
             embeddedAgentLog.warn(
               selectionChanged
                 ? "codex app-server executable selection changed during startup; restarting app-server and retrying"
@@ -670,11 +672,14 @@ export async function startCodexAttemptThread(params: {
               {
                 attempt,
                 nextAttempt: attempt + 1,
-                maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                maxAttempts: CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS,
                 refreshedSharedClient,
                 error: formatErrorMessage(error),
               },
             );
+            // Codex exits after its five-second SQLite busy timeout; a bounded,
+            // abortable backoff avoids immediately racing the same transient lock.
+            await sleepWithAbort(retryDelayMs, startupAbandonController.signal);
           }
         }
         throw new Error("codex app-server startup retry loop exited unexpectedly");
@@ -690,7 +695,7 @@ export async function startCodexAttemptThread(params: {
       releaseSharedClientLease,
     };
   } catch (error) {
-    if (params.signal.aborted || shouldClearSharedClientAfterStartupAbandon(error)) {
+    if (params.signal.aborted || isCodexAppServerStartupError(error)) {
       releaseSharedClientLease?.();
       releaseSharedClientLease = undefined;
       await closeCodexStartupClientBestEffort(startupClientForAbandonedRequestCleanup);
@@ -698,10 +703,7 @@ export async function startCodexAttemptThread(params: {
     } else if (
       !isCodexAppServerStartSelectionChangedError(error) &&
       (shouldClearSharedClientAfterStartupRace(error) ||
-        shouldClearSharedClientAfterStartupFailure({
-          error,
-          spawnedBy: params.spawnedBy,
-        }))
+        shouldClearSharedClientAfterStartupFailure(error, params.spawnedBy))
     ) {
       releaseSharedClientLease?.();
       releaseSharedClientLease = undefined;
@@ -714,19 +716,19 @@ export async function startCodexAttemptThread(params: {
   }
 }
 
-function shouldClearSharedClientAfterStartupAbandon(error: unknown): boolean {
-  return isCodexAppServerStartupError(error);
-}
-
 function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
-  return (
-    shouldClearSharedClientAfterStartupAbandon(error) || isCodexAppServerRequestTimeoutError(error)
-  );
+  return isCodexAppServerStartupError(error) || isCodexAppServerRequestTimeoutError(error);
 }
 
-function shouldClearSharedClientAfterStartupFailure(params: {
-  error: unknown;
-  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
-}): boolean {
-  return isCodexAppServerBrokenPipeError(params.error) || !params.spawnedBy;
+function shouldClearSharedClientAfterStartupFailure(
+  error: unknown,
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
+): boolean {
+  // Model-independent preflights preserve healthy conversations. A handoff with
+  // an uncertain native write owns its retirement at the resume boundary.
+  return (
+    !isCodexAppServerOverloadError(error) &&
+    !(error instanceof AgentHarnessPreflightError && error.scope === undefined) &&
+    (isCodexAppServerBrokenPipeError(error) || !spawnedBy)
+  );
 }

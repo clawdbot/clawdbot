@@ -1,10 +1,12 @@
 import { html, nothing } from "lit";
 import "./web-awesome-select.ts";
+import "../styles/select-picker.css";
 
 export type PickerOption = {
   value: string;
   label: string;
   description?: string;
+  labelStyle?: string;
   disabled?: boolean;
 };
 
@@ -17,14 +19,16 @@ export type PickerParams<Option extends PickerOption> = {
   className?: string;
   title?: string;
   placement?: "top" | "bottom";
+  onOpen?: () => void;
   onChange: (value: string) => void;
   onChangeTarget?: (value: string, select: HTMLElement) => void;
   renderLeading?: (option: Option) => unknown;
 };
 
 export function renderPicker<Option extends PickerOption>(params: PickerParams<Option>) {
-  // Web Awesome syncs the listbox to its trigger; keep 8ch for the label after
-  // its fixed check and leading-icon columns instead of collapsing the options.
+  // Web Awesome syncs the listbox to its trigger; keep a 138px label floor so
+  // option text does not collapse to an ellipsis at phone widths, but never
+  // exceed the host container (cron/channel grids legitimately shrink below it).
   const options =
     params.value === null ||
     params.value === "" ||
@@ -41,11 +45,13 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
     <wa-select
       id=${params.id ?? nothing}
       class=${`settings-select picker-select ${params.className ?? ""}`}
-      style="width:100%;min-width:138px"
+      style="width:100%;min-width:min(138px,100%)"
       title=${params.title ?? nothing}
+      placeholder=${params.value === null ? params.label : nothing}
       placement=${params.placement ?? nothing}
       .value=${params.value}
       ?disabled=${params.disabled}
+      @wa-show=${() => params.onOpen?.()}
       @change=${(event: Event) => {
         const value = (event.currentTarget as HTMLElement & { value?: unknown }).value;
         const option = typeof value === "string" && options.find((entry) => entry.value === value);
@@ -71,7 +77,9 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
           >
             ${leading(option)}
             <span class="picker-select__copy">
-              <span class="picker-select__label">${option.label}</span>
+              <span class="picker-select__label" style=${option.labelStyle ?? nothing}
+                >${option.label}</span
+              >
               ${option.description
                 ? html`<span class="picker-select__description">${option.description}</span>`
                 : nothing}

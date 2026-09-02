@@ -1,11 +1,16 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
+import {
+  applyDelegationCapability,
+  type DelegationCapability,
+} from "../agents/delegation-capability.js";
 import {
   resolveExecDefaults,
   type ExecPolicyOverrides,
@@ -15,7 +20,10 @@ import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-t
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
-import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  type ScheduledToolPolicyContext,
+} from "../agents/scheduled-tool-policy.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
@@ -43,13 +51,15 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { ExecMode } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../security/dangerous-tools.js";
+import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 
@@ -70,11 +80,13 @@ export function resolveGatewayScopedTools(params: {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
-  onYield?: (message: string) => Promise<void> | void;
+  modelHasVision?: boolean;
+  onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  replyToMode?: "off" | "first" | "all" | "batched";
   currentInboundAudio?: boolean;
   clientCaps?: string[];
   accountId?: string;
@@ -90,6 +102,12 @@ export function resolveGatewayScopedTools(params: {
   allowGatewaySubagentBinding?: boolean;
   allowMediaInvokeCommands?: boolean;
   surface?: GatewayScopedToolSurface;
+  /**
+   * Attempt-local authority to start or redirect delegated work. Loopback
+   * grants carry it so CLI backends get the same fallback gate as embedded
+   * attempts; unset keeps the full delegation surface.
+   */
+  delegationCapability?: DelegationCapability;
   excludeToolNames?: Iterable<string>;
   /** Server-minted coding tools that must be mediated through the loopback surface. */
   mediatedToolNames?: Iterable<string>;
@@ -97,8 +115,10 @@ export function resolveGatewayScopedTools(params: {
   gatewayRequestedTools?: string[];
   /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
   includeNodeExecTool?: boolean;
+  /** Current node inventory predicate; evaluated with the resolved exec binding. */
+  nodeExecAvailable?: (node?: string) => boolean;
   execSession?: ExecSessionDefaults;
-  execOverrides?: ExecPolicyOverrides;
+  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
   approvalReviewerDeviceId?: string;
@@ -110,6 +130,7 @@ export function resolveGatewayScopedTools(params: {
   groupChannel?: string;
   groupSpace?: string;
   spawnedBy?: string;
+  skillWorkshop?: SkillWorkshopRunOptions;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 }) {
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
@@ -152,6 +173,11 @@ export function resolveGatewayScopedTools(params: {
   const nodeExecSurface = surface === "loopback" && params.includeNodeExecTool === true;
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
   const messageProvider = params.messageProvider?.trim().toLowerCase();
+  const gatewayCaller = resolveScheduledToolCallerContext({
+    scheduledToolPolicy: params.scheduledToolPolicy,
+    accountId: params.accountId,
+    channel: messageProvider,
+  });
   const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
     params.sourceReplyDeliveryMode ??
     (params.inboundEventKind === "room_event" && messageProvider !== "webchat"
@@ -185,7 +211,7 @@ export function resolveGatewayScopedTools(params: {
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.accountId ?? null,
+    accountId: gatewayCaller.accountId ?? null,
     senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
@@ -273,9 +299,17 @@ export function resolveGatewayScopedTools(params: {
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     runId: params.runId,
+    execSession: params.execSession,
+    execOverrides: params.execOverrides,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceId
+      ? [params.approvalReviewerDeviceId]
+      : undefined,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
+    gatewayCallerAccountId: gatewayCaller.accountId,
+    gatewayCallerChannel: gatewayCaller.channel,
+    gatewayCallerLocal: gatewayCaller.local,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
     sourceReplyOnly: params.sourceReplyOnly,
@@ -285,6 +319,7 @@ export function resolveGatewayScopedTools(params: {
     currentChannelId: params.currentChannelId ?? params.agentTo,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
+    replyToMode: params.replyToMode,
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     onYield: params.onYield,
@@ -292,14 +327,17 @@ export function resolveGatewayScopedTools(params: {
     senderIsOwner: params.senderIsOwner,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+    skillWorkshop: params.skillWorkshop,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
+    sessionConfigSource: "runtime",
     agentDir: params.agentDir,
     authProfileStore: params.authProfileStore,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelHasVision: params.modelHasVision,
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
@@ -334,7 +372,11 @@ export function resolveGatewayScopedTools(params: {
         })
       : undefined;
   const nodeExecDefaults =
-    nodeExecSurface && execDefaults?.canRequestNode === true ? execDefaults : undefined;
+    nodeExecSurface &&
+    execDefaults?.canRequestNode === true &&
+    params.nodeExecAvailable?.(execDefaults.node) === true
+      ? execDefaults
+      : undefined;
   const includeNodeExecTool = nodeExecDefaults !== undefined;
   const execConfig = includeNodeExecTool
     ? resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId })
@@ -349,6 +391,7 @@ export function resolveGatewayScopedTools(params: {
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
       ? createOpenClawCodingTools({
           config: params.cfg,
+          sessionConfigSource: "runtime",
           agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,
@@ -358,6 +401,7 @@ export function resolveGatewayScopedTools(params: {
           cwd: params.cwd?.trim() || workspaceDir,
           modelProvider: params.modelProvider,
           modelId: params.modelId,
+          modelHasVision: params.modelHasVision,
           messageProvider: params.messageProvider,
           messageChannel: params.messageProvider,
           clientCaps: params.clientCaps,
@@ -403,7 +447,6 @@ export function resolveGatewayScopedTools(params: {
           },
           // The MCP dispatcher is the shared hook and abort boundary for these tools.
           wrapBeforeToolCallHook: false,
-          toolPolicyAuditLogLevel: "debug",
         })
       : [];
   // CLI backends already own their local shell. This extra surface is deliberately
@@ -467,7 +510,7 @@ export function resolveGatewayScopedTools(params: {
           },
           {
             description:
-              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.",
+              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands when it is available. Commands run synchronously. The sole connected node that can execute commands is selected automatically; set node when several can.",
             displaySummary: "Run commands on a connected node",
             parameters: nodeExecSchema,
           },
@@ -507,13 +550,20 @@ export function resolveGatewayScopedTools(params: {
     }),
   });
 
-  const gatewayDenySet = new Set([
-    ...defaultGatewayDeny,
-    ...ownerOnlyGatewayDeny,
-    ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
-    ...excludedToolNames,
-  ]);
-  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  const gatewayDenySet = new Set(
+    [
+      ...defaultGatewayDeny,
+      ...ownerOnlyGatewayDeny,
+      ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+      ...excludedToolNames,
+    ].map(normalizeToolPolicyName),
+  );
+  const tools = applyToolAvailabilityDescriptions(
+    applyDelegationCapability(
+      policyFiltered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+      params.delegationCapability,
+    ),
+  );
   // The loopback exec tool is node-only. Do not let a raw `exec` capability get
   // reinterpreted as generic Gateway/sandbox exec by spawned sessions or cron jobs.
   const inheritableTools = includeNodeExecTool

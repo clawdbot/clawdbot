@@ -1,11 +1,22 @@
 import { createServer } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticRunProgress,
+  resetDiagnosticRunActivityForTest,
+} from "../../../../src/logging/diagnostic-run-activity.js";
+import { registerBuiltInApiProviders } from "../providers/register-builtins.js";
+import { createLlmRuntime } from "../stream.js";
 import { shouldEmitOpenAICompletionsReasoning } from "./openai-completions-stream.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 describe("openai completions stream", () => {
+  afterAll(() => {
+    resetDiagnosticRunActivityForTest();
+  });
+
   it("emits Qwen thinking streams when enabled without reasoning_effort support", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const server = createServer((req, res) => {
@@ -126,7 +137,89 @@ describe("openai completions stream", () => {
     ).toBe(true);
   });
 
-  it.each(["reasoning_content", "reasoning"] as const)(
+  it.each([
+    { finishReason: "tool_call", emitsTool: true, stopReason: "toolUse" },
+    { finishReason: "tool_call", emitsTool: false, stopReason: "stop" },
+    { finishReason: "tool_calls", emitsTool: true, stopReason: "toolUse" },
+    { finishReason: "function_call", emitsTool: true, stopReason: "toolUse" },
+    { finishReason: "unknown", emitsTool: true, stopReason: "error" },
+  ])(
+    "handles $finishReason with emitsTool=$emitsTool through the public LLM runtime",
+    async ({ finishReason, emitsTool, stopReason }) => {
+      const server = createServer((req, res) => {
+        req.resume();
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
+          const delta = emitsTool
+            ? {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_lookup",
+                    type: "function",
+                    function: { name: "lookup", arguments: '{"query":"local"}' },
+                  },
+                ],
+              }
+            : { role: "assistant", content: "No tool required." };
+          for (const chunk of [
+            makeCompletionsChunk(delta),
+            makeCompletionsChunk({}, finishReason),
+          ]) {
+            res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          }
+          res.end("data: [DONE]\n\n");
+        });
+      });
+
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Missing loopback server address");
+        }
+        const model = makeCompletionsModel({
+          id: "minimax-m2.5-8bit",
+          provider: "mlx-lm",
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          reasoning: false,
+        });
+        const runtime = createLlmRuntime();
+        registerBuiltInApiProviders(runtime.registry);
+        const stream = runtime.streamSimple(
+          model,
+          { messages: [{ role: "user", content: "Look it up.", timestamp: 1 }] },
+          { apiKey: "synthetic-test-key" },
+        );
+        const result = await stream.result();
+
+        expect(result.stopReason).toBe(stopReason);
+        const toolCalls = result.content.filter((block) => block.type === "toolCall");
+        if (stopReason === "toolUse") {
+          expect(toolCalls).toEqual([
+            expect.objectContaining({
+              id: "call_lookup",
+              name: "lookup",
+              arguments: { query: "local" },
+            }),
+          ]);
+        } else {
+          expect(toolCalls).toEqual([]);
+        }
+        if (finishReason === "unknown") {
+          expect(result.errorMessage).toBe("Provider finish_reason: unknown");
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    },
+  );
+
+  it.concurrent.each(["reasoning_content", "reasoning"] as const)(
     "keeps hidden local %s streams alive beyond the model idle timeout",
     async (reasoningField) => {
       // The regression under guard is "hidden reasoning stops resetting the idle
@@ -135,9 +228,16 @@ describe("openai completions stream", () => {
       // a loaded runner stretches every inter-chunk gap, and one gap wider than
       // the timeout inverts the ratio into a false idle timeout.
       const idleTimeoutMs = 1_000;
+      const sessionProgressStaleMs = 750;
       const reasoningChunkDelayMs = 5;
       const hiddenReasoningDurationMs = idleTimeoutMs + 200;
+      const runId = `hidden-${reasoningField}-run`;
       let hiddenReasoningElapsedMs = 0;
+      let crossedSessionProgressThreshold = false;
+      let resolveSessionProgressThreshold!: () => void;
+      const sessionProgressThresholdReached = new Promise<void>((resolve) => {
+        resolveSessionProgressThreshold = resolve;
+      });
       const server = createServer((req, res) => {
         req.resume();
         req.on("end", () => {
@@ -153,6 +253,13 @@ describe("openai completions stream", () => {
               return;
             }
             hiddenReasoningElapsedMs = Date.now() - hiddenReasoningStartedAt;
+            if (
+              !crossedSessionProgressThreshold &&
+              hiddenReasoningElapsedMs > sessionProgressStaleMs + 100
+            ) {
+              crossedSessionProgressThreshold = true;
+              resolveSessionProgressThreshold();
+            }
             if (hiddenReasoningElapsedMs < hiddenReasoningDurationMs) {
               const reasoningChunk = {
                 id: "chatcmpl-local-reasoning",
@@ -200,10 +307,16 @@ describe("openai completions stream", () => {
           reasoning: false,
         });
         const onIdleTimeout = vi.fn();
+        markDiagnosticRunProgress({
+          runId,
+          sessionId: runId,
+          reason: "model_call:started",
+        });
         const streamFn = streamWithIdleTimeout(
           createOpenAICompletionsTransportStreamFn(),
           idleTimeoutMs,
           onIdleTimeout,
+          { runId },
         );
         const stream = streamFn(
           model,
@@ -217,14 +330,23 @@ describe("openai completions stream", () => {
 
         let text = "";
         let thinking = "";
-        for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
-          if (event.type === "text_delta") {
-            text += event.delta ?? "";
+        const collectStream = (async () => {
+          for await (const event of stream as AsyncIterable<{ type: string; delta?: string }>) {
+            if (event.type === "text_delta") {
+              text += event.delta ?? "";
+            }
+            if (event.type === "thinking_delta") {
+              thinking += event.delta ?? "";
+            }
           }
-          if (event.type === "thinking_delta") {
-            thinking += event.delta ?? "";
-          }
-        }
+        })();
+
+        await sessionProgressThresholdReached;
+        const activity = getDiagnosticSessionActivitySnapshot({ sessionId: runId });
+        expect(activity.lastProgressAgeMs).toBeLessThan(sessionProgressStaleMs);
+        expect(activity.lastProgressReason).toBe("model_call:stream_progress");
+
+        await collectStream;
 
         expect(text).toBe("OK");
         expect(thinking).toBe("");

@@ -4,6 +4,8 @@ import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol
 import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
 import { pseudonymizeExecutionIdentityRef } from "./audit-identity.js";
 import type { ExecutionIdentityAdmissionEnvelope } from "./execution-identity-admission.js";
+import { sortUniqueExecutionIdentityEntries } from "./execution-identity-ordering.js";
+import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
 
 const EXECUTION_IDENTITY_CONTEXT_MAX_BYTES = 16 * 1024;
 
@@ -47,14 +49,6 @@ function hmacRef(
   });
 }
 
-function uniqueSorted<T>(values: readonly T[], key: (value: T) => string): T[] {
-  return [...new Map(values.map((value) => [key(value), value])).values()].toSorted((a, b) => {
-    const left = key(a);
-    const right = key(b);
-    return left < right ? -1 : left > right ? 1 : 0;
-  });
-}
-
 export function buildExecutionIdentityContext(
   db: DatabaseSync,
   envelope: ExecutionIdentityAdmissionEnvelope,
@@ -92,7 +86,7 @@ export function buildExecutionIdentityContext(
       : envelope.invoker?.state === "unknown"
         ? { state: "unknown" as const }
         : { state: "absent" as const };
-  const assurance = uniqueSorted(
+  const assurance = sortUniqueExecutionIdentityEntries(
     envelope.assurance.map((item) => ({
       kind: item.kind,
       evidenceRef: hmacRef(db, "evidence", `${domainRef}:${item.kind}`, item.rawEvidenceRef),
@@ -100,15 +94,59 @@ export function buildExecutionIdentityContext(
     })),
     (item) => `${item.kind}\0${item.evidenceRef}\0${item.strength}`,
   );
-  const applicableGrants = uniqueSorted(
+  const applicableGrants = sortUniqueExecutionIdentityEntries(
     envelope.applicableGrants.map((grant) => ({
       grantRef: hmacRef(db, "grant", domainRef, grant.rawGrantRef),
       state: grant.state,
     })),
     (grant) => `${grant.grantRef}\0${grant.state}`,
   );
-  const missingEvidence = envelope.invoker?.state === "present" ? [] : ["invoker.principal"];
-  const context: ExecutionIdentityContextV1 = {
+  const serializedSpawnFacts = executionIdentitySpawnAdmission({
+    operation: "read",
+    value: envelope,
+  });
+  const [lineageFacts, spawnMissingEvidence] = serializedSpawnFacts
+    ? executionIdentitySpawnAdmission({ operation: "parse", value: serializedSpawnFacts })
+    : [undefined, []];
+  const lineage = lineageFacts
+    ? {
+        ...(typeof lineageFacts.parentContextId === "string"
+          ? { parentContextId: lineageFacts.parentContextId }
+          : {}),
+        ...(typeof lineageFacts.parentExecutionId === "string"
+          ? { parentExecutionId: lineageFacts.parentExecutionId }
+          : {}),
+        ...(typeof lineageFacts.parentRunId === "string"
+          ? { parentRunId: lineageFacts.parentRunId }
+          : {}),
+        parentAgentPrincipal: {
+          kind: "agent" as const,
+          domainRef,
+          principalRef: lineageFacts.parentAgentId,
+        },
+        delegationRef: hmacRef(
+          db,
+          "grant",
+          `${domainRef}:delegation`,
+          JSON.stringify([
+            lineageFacts.relation,
+            lineageFacts.rawRequesterRef,
+            lineageFacts.rawControllerRef,
+            lineageFacts.localPolicyRefs,
+            lineageFacts.targetPolicyRefs,
+          ]),
+        ),
+        depth: lineageFacts.depth,
+      }
+    : undefined;
+  const missingEvidence = sortUniqueExecutionIdentityEntries(
+    [
+      ...(envelope.invoker?.state === "present" ? [] : ["invoker.principal"]),
+      ...spawnMissingEvidence,
+    ],
+    (item) => item,
+  );
+  const context: Record<string, unknown> = {
     schemaVersion: 1,
     contextId,
     executionId,
@@ -136,8 +174,10 @@ export function buildExecutionIdentityContext(
     runtimeInstance: { runtimeRef, kind: envelope.runtime.kind, state: "present" },
     applicableGrants,
     assurance,
-    coverageState:
-      envelope.invoker?.state === "present"
+    ...(lineage ? { lineage } : {}),
+    coverageState: lineage
+      ? "attribution-only"
+      : envelope.invoker?.state === "present"
         ? "attribution-only"
         : envelope.invoker?.state === "unknown"
           ? "unknown"

@@ -1,10 +1,7 @@
-import {
-  type ManagedNpmOverrideOmissions,
-  syncManagedNpmRootPeerDependencies,
-} from "../infra/npm-managed-root.js";
+import { syncManagedNpmRootPeerDependencies } from "../infra/npm-managed-root.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { classifyNpmManagedOverrideCompatibilityError } from "./install-managed-npm-state.js";
+import { isNpmAliasOverrideCompatibilityError } from "./install-managed-npm-state.js";
 
 const MANAGED_NPM_PEER_CLEANUP_ARGS = [
   "npm",
@@ -35,15 +32,12 @@ export async function pruneManagedNpmPeerDependenciesAfterUninstall(params: {
       quiet: true,
     }),
   };
-  let overrideOmissions: Required<ManagedNpmOverrideOmissions> = {
-    npmAliases: false,
-    pnpmParentChildSelectors: false,
-  };
+  let omitNpmAliasOverrides = false;
   const syncPeerDependencies = async () =>
     await syncManagedNpmRootPeerDependencies({
       npmRoot: params.npmRoot,
       managedOverrides: params.managedOverrides,
-      overrideOmissions,
+      omitNpmAliasOverrides,
       runCommand: command,
     });
 
@@ -52,26 +46,8 @@ export async function pruneManagedNpmPeerDependenciesAfterUninstall(params: {
   }
 
   let cleanup = await command([...MANAGED_NPM_PEER_CLEANUP_ARGS], commandOptions);
-  while (cleanup.code !== 0) {
-    const compatibility = classifyNpmManagedOverrideCompatibilityError(cleanup);
-    if (!compatibility) {
-      break;
-    }
-    const nextOverrideOmissions = {
-      npmAliases: overrideOmissions.npmAliases || compatibility.npmAliases,
-      pnpmParentChildSelectors:
-        overrideOmissions.pnpmParentChildSelectors || compatibility.pnpmParentChildSelectors,
-    };
-    if (
-      nextOverrideOmissions.npmAliases === overrideOmissions.npmAliases &&
-      nextOverrideOmissions.pnpmParentChildSelectors === overrideOmissions.pnpmParentChildSelectors
-    ) {
-      break;
-    }
-    overrideOmissions = nextOverrideOmissions;
-    // The first sync can only rewrite a manifest that npm rejected. Run the
-    // plan again against that compatible manifest so peer pins are refreshed.
-    await syncPeerDependencies();
+  if (cleanup.code !== 0 && isNpmAliasOverrideCompatibilityError(cleanup)) {
+    omitNpmAliasOverrides = true;
     await syncPeerDependencies();
     cleanup = await command([...MANAGED_NPM_PEER_CLEANUP_ARGS], commandOptions);
   }

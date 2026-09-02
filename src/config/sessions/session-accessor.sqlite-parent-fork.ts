@@ -45,9 +45,13 @@ function formatParentForkTooLargeMessage(params: {
 export function planParentForkDecision(
   parentEntry: SessionEntry,
   transcriptEstimate?: SqliteTranscriptParentTokenEstimate,
+  options: { maxTokens?: number; preferTranscriptEstimate?: boolean } = {},
 ): SessionParentForkDecision {
-  const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens = resolveFreshSessionTotalTokens(parentEntry) ?? transcriptEstimate?.tokens;
+  const maxTokens =
+    normalizePositiveTokenCount(options.maxTokens) ?? DEFAULT_PARENT_FORK_MAX_TOKENS;
+  const parentTokens = options.preferTranscriptEstimate
+    ? transcriptEstimate?.tokens
+    : (resolveFreshSessionTotalTokens(parentEntry) ?? transcriptEstimate?.tokens);
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
       status: "skip",
@@ -72,6 +76,9 @@ export function estimateTranscriptPromptTokens(
   let latestUsageEstimateIsExactContext = false;
   let trailingBytes = 0;
   for (const event of selectParentForkTokenEstimateEvents(events)) {
+    if (isRecord(event) && isRecord(event.message) && event.message.excludeFromContext === true) {
+      continue;
+    }
     const serializedBytes = Buffer.byteLength(JSON.stringify(event)) + 1;
     byteEstimate += serializedBytes;
     if (!isRecord(event)) {
@@ -182,6 +189,7 @@ function readTranscriptContextUsage(
 
 export function resolveParentForkSourceTranscript(
   fileEntries: readonly TranscriptEvent[],
+  forkFrom?: "last-completed",
 ): ParentForkSourceTranscript | null {
   if (fileEntries.length === 0) {
     return null;
@@ -198,28 +206,47 @@ export function resolveParentForkSourceTranscript(
     appendPath,
     appendParentId: tree.appendParentId,
   });
-  const branchEntries = mergedPath.nodes.flatMap((node) => {
+  const visibleBranchEntries = mergedPath.nodes.flatMap((node) => {
     if (!isRecord(node.entry)) {
       return [];
     }
     const parentId = node.selectedParentId;
     return [node.entry.parentId === parentId ? node.entry : { ...node.entry, parentId }];
   });
+  const branchEntries =
+    forkFrom === "last-completed"
+      ? visibleBranchEntries.slice(0, findLastCompletedAssistantIndex(visibleBranchEntries) + 1)
+      : visibleBranchEntries;
   const pathEntryIds = new Set(
     branchEntries.flatMap((entry) =>
       isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
     ),
   );
   const lastLeafUpdateNode = tree.nodes.findLast((node) => node.leafId !== undefined);
+  const lastBranchEntry = branchEntries.at(-1);
+  const lastBranchEntryId =
+    isRecord(lastBranchEntry) && typeof lastBranchEntry.id === "string" ? lastBranchEntry.id : null;
   return {
-    appendParentId: mergedPath.appendParentId,
-    ...(lastLeafUpdateNode?.appendMode ? { appendMode: lastLeafUpdateNode.appendMode } : {}),
+    appendParentId: forkFrom === "last-completed" ? lastBranchEntryId : mergedPath.appendParentId,
+    ...(forkFrom !== "last-completed" && lastLeafUpdateNode?.appendMode
+      ? { appendMode: lastLeafUpdateNode.appendMode }
+      : {}),
     branchEntries,
     cwd: typeof header?.cwd === "string" ? header.cwd : undefined,
     labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
-    leafId: tree.leafId,
-    preserveLeafControl: isSessionTranscriptLeafControl(lastLeafUpdateNode?.entry),
+    leafId: forkFrom === "last-completed" ? lastBranchEntryId : tree.leafId,
+    preserveLeafControl:
+      forkFrom !== "last-completed" && isSessionTranscriptLeafControl(lastLeafUpdateNode?.entry),
   };
+}
+
+function findLastCompletedAssistantIndex(entries: readonly TranscriptEvent[]): number {
+  return entries.findLastIndex((entry) => {
+    const message = isRecord(entry) && isRecord(entry.message) ? entry.message : undefined;
+    // Tool-use assistant messages are mid-turn checkpoints. Any other persisted
+    // assistant message is a stable boundary, including legacy rows without a reason.
+    return message?.role === "assistant" && message.stopReason !== "toolUse";
+  });
 }
 
 function collectBranchLabels(params: {

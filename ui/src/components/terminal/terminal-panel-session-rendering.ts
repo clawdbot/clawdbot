@@ -8,7 +8,8 @@ export function updateTerminalSessionTheme(
   tabs: readonly TerminalPanelSessionTab[],
   themeMode: "dark" | "light",
 ): void {
-  const theme = terminalTheme(themeMode);
+  // Unopened panels still observe theme changes; resolve colors only for live renderers.
+  let theme: ReturnType<typeof terminalTheme> | undefined;
   for (const tab of tabs) {
     // ghostty-web 0.4.0 ignores options.theme after open() (its option
     // handler only warns), so update the renderer directly and force one
@@ -16,7 +17,7 @@ export function updateTerminalSessionTheme(
     // leave a static screen on the old palette.
     const term = tab.controller.terminal;
     if (term.renderer && term.wasmTerm) {
-      term.renderer.setTheme(theme);
+      term.renderer.setTheme((theme ??= terminalTheme(themeMode)));
       forceTerminalRender(tab.controller);
     }
   }

@@ -12,15 +12,15 @@ import {
 } from "./bash-tools.exec-approval-followup-state.js";
 import {
   buildExecApprovalPendingToolResult,
-  createAndRegisterDefaultExecApprovalRequest,
-  createExecApprovalDecisionState,
-  enforceStrictInlineEvalApprovalBoundary,
+  buildHeadlessExecApprovalDeniedMessage,
+  createExecApprovalRequestRoute,
+  resolveExecApprovalWaitOutcome,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
-  shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
 
 const mocks = vi.hoisted(() => ({
+  followupImports: 0,
   resolveExecApprovals: vi.fn(async () => ({
     defaults: {
       security: "allowlist",
@@ -38,13 +38,29 @@ const mocks = vi.hoisted(() => ({
     file: { version: 1, agents: {} },
     hash: "approvals-hash",
   })),
+  approvalRunAbortedError: new Error("approval owning run aborted"),
+  resolveRegisteredExecApprovalDecision: vi.fn(async (): Promise<string | null> => "allow-once"),
 }));
+
+vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
+  mocks.followupImports += 1;
+  return importOriginal<typeof import("./bash-tools.exec-approval-followup.js")>();
+});
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   return {
     ...mod,
     resolveExecApprovalsLocked: mocks.resolveExecApprovals,
+  };
+});
+
+vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("./bash-tools.exec-approval-request.js")>();
+  return {
+    ...mod,
+    isExecApprovalRunAbortedError: (error: unknown) => error === mocks.approvalRunAbortedError,
+    resolveRegisteredExecApprovalDecision: mocks.resolveRegisteredExecApprovalDecision,
   };
 });
 
@@ -94,6 +110,31 @@ describe("sendExecApprovalFollowupResult", () => {
         }
       | undefined;
   }
+
+  it("does not load delivery when importing shared approval helpers", () => {
+    expect(mocks.followupImports).toBe(0);
+  });
+
+  it("logs default delivery import failures through the deduplicated dispatch handler", async () => {
+    const loadDelivery = vi.fn(() => {
+      throw new Error("synthetic delivery import failure");
+    });
+    vi.doMock("./bash-tools.exec-approval-followup.js", loadDelivery);
+    try {
+      const target = { approvalId: "approval-import-failure" };
+      await sendExecApprovalFollowupResult(target, "Exec finished", { logWarn });
+      await sendExecApprovalFollowupResult(target, "Exec finished", { logWarn });
+
+      expect(loadDelivery).toHaveBeenCalled();
+      expect(logWarn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "exec approval followup dispatch failed (id=approval-import-failure):",
+        ),
+      );
+    } finally {
+      vi.doUnmock("./bash-tools.exec-approval-followup.js");
+    }
+  });
 
   it("logs repeated followup dispatch failures once per approval id and error message", async () => {
     sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
@@ -487,67 +528,93 @@ describe("resolveExecHostApprovalContext", () => {
   });
 });
 
-describe("enforceStrictInlineEvalApprovalBoundary", () => {
-  it("denies unanswered approvals when ask fallback is fail-closed", () => {
-    expect(
-      createExecApprovalDecisionState({
-        decision: null,
+describe("resolveExecApprovalWaitOutcome", () => {
+  beforeEach(() => {
+    mocks.resolveRegisteredExecApprovalDecision.mockReset();
+    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue("allow-once");
+  });
+
+  it.each([
+    ["allow-once", true, null],
+    ["allow-always", true, null],
+    ["deny", false, "user-denied"],
+  ] as const)("returns a resolved %s decision", async (decision, approvedByAsk, deniedReason) => {
+    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(decision);
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-1",
+        preResolvedDecision: undefined,
         askFallback: "deny",
+        requiresExplicitApproval: false,
       }),
-    ).toEqual({
-      baseDecision: {
-        approvedByAsk: false,
-        deniedReason: "approval-timeout",
-        timedOut: true,
-      },
-      approvedByAsk: false,
-      deniedReason: "approval-timeout",
+    ).resolves.toMatchObject({
+      kind: "resolved",
+      decision,
+      state: { approvedByAsk, deniedReason },
     });
   });
 
-  it("denies timeout-based fallback when strict inline-eval approval is required", () => {
-    expect(
-      enforceStrictInlineEvalApprovalBoundary({
-        baseDecision: { timedOut: true },
-        approvedByAsk: true,
-        deniedReason: null,
-        requiresInlineEvalApproval: true,
+  it("applies timeout policy before returning a resolved outcome", async () => {
+    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(null);
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-timeout",
+        preResolvedDecision: undefined,
+        askFallback: "full",
+        resolveTimedOut: async () => ({ approvedByAsk: false, deniedReason: "policy-revoked" }),
+        requiresExplicitApproval: false,
       }),
-    ).toEqual({
-      approvedByAsk: false,
-      deniedReason: "approval-timeout",
+    ).resolves.toMatchObject({
+      kind: "resolved",
+      decision: null,
+      state: { approvedByAsk: false, deniedReason: "policy-revoked" },
     });
   });
 
-  it("denies timeout-based fallback when auto-review defers to human approval", () => {
-    const params = {
-      baseDecision: { timedOut: true },
-      approvedByAsk: true,
-      deniedReason: null,
-      requiresInlineEvalApproval: false,
-      requiresAutoReviewHumanApproval: true,
-    } satisfies Parameters<typeof enforceStrictInlineEvalApprovalBoundary>[0] & {
-      requiresAutoReviewHumanApproval: true;
-    };
+  it("classifies an approval waiter failure", async () => {
+    mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(new Error("store unavailable"));
 
-    expect(enforceStrictInlineEvalApprovalBoundary(params)).toEqual({
-      approvedByAsk: false,
-      deniedReason: "approval-timeout",
-    });
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-failed",
+        preResolvedDecision: undefined,
+        askFallback: "deny",
+        requiresExplicitApproval: false,
+      }),
+    ).resolves.toEqual({ kind: "request-failed" });
   });
 
-  it("keeps explicit approvals intact for strict inline-eval commands", () => {
-    expect(
-      enforceStrictInlineEvalApprovalBoundary({
-        baseDecision: { timedOut: false },
-        approvedByAsk: true,
-        deniedReason: null,
-        requiresInlineEvalApproval: true,
+  it("classifies owning-run cancellation", async () => {
+    mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(mocks.approvalRunAbortedError);
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-aborted",
+        preResolvedDecision: undefined,
+        askFallback: "deny",
+        requiresExplicitApproval: false,
       }),
-    ).toEqual({
-      approvedByAsk: true,
-      deniedReason: null,
+    ).resolves.toEqual({ kind: "run-aborted" });
+  });
+
+  it("does not consume a decision after the owning signal aborts", async () => {
+    const controller = new AbortController();
+    mocks.resolveRegisteredExecApprovalDecision.mockImplementation(async () => {
+      controller.abort(new Error("run stopped"));
+      return "allow-once";
     });
+
+    await expect(
+      resolveExecApprovalWaitOutcome({
+        approvalId: "approval-aborted-after-wait",
+        preResolvedDecision: undefined,
+        signal: controller.signal,
+        askFallback: "deny",
+        requiresExplicitApproval: false,
+      }),
+    ).resolves.toEqual({ kind: "run-aborted" });
   });
 });
 
@@ -579,7 +646,7 @@ describe("buildExecApprovalPendingToolResult", () => {
   }
 
   it("does not infer approver DM delivery from unavailable approval state", async () => {
-    const state = await createAndRegisterDefaultExecApprovalRequest({
+    const state = await createExecApprovalRequestRoute({
       warnings: [],
       approvalRunningNoticeMs: 1_000,
       createApprovalSlug: (approvalId) => approvalId,
@@ -590,45 +657,58 @@ describe("buildExecApprovalPendingToolResult", () => {
         expiresAtMs: Date.now() + 60_000,
         finalDecision: null,
       }),
+      askFallback: "deny",
+      requiresExplicitApproval: false,
     });
     expect(state.sentApproverDms).toBe(false);
     expect(state.unavailableReason).toBe("no-approval-route");
   });
 
-  it("resolves terminal no-route approvals inline", () => {
-    expect(
-      shouldResolveExecApprovalUnavailableInline({
-        unavailableReason: "no-approval-route",
-        preResolvedDecision: null,
-      }),
-    ).toBe(true);
+  const createRoute = (finalDecision: string | null | undefined, turnSourceChannel?: string) =>
+    createExecApprovalRequestRoute({
+      warnings: [],
+      approvalRunningNoticeMs: 1_000,
+      createApprovalSlug: (approvalId) => approvalId,
+      turnSourceChannel,
+      register: async (approvalId) => ({ id: approvalId, expiresAtMs: 60_000, finalDecision }),
+      askFallback: "deny",
+      requiresExplicitApproval: false,
+    });
+
+  it("resolves terminal no-route approvals inline", async () => {
+    await expect(createRoute(null)).resolves.toMatchObject({
+      kind: "inline",
+      preResolvedDecision: null,
+      state: { approvedByAsk: false, deniedReason: "approval-timeout" },
+    });
   });
 
-  it("keeps waiting when a route exists or a decision arrived", () => {
-    expect(
-      shouldResolveExecApprovalUnavailableInline({
-        unavailableReason: null,
-        preResolvedDecision: null,
+  it.each([
+    ["a live route", undefined, "webchat"],
+    ["an explicit decision", "allow-once", undefined],
+    ["a disabled initiating platform without a terminal decision", undefined, "discord"],
+  ])("keeps waiting for %s", async (_name, finalDecision, channel) => {
+    await expect(createRoute(finalDecision, channel)).resolves.toMatchObject({ kind: "wait" });
+  });
+
+  it("applies strict approval ordering to an inline route", async () => {
+    await expect(
+      createExecApprovalRequestRoute({
+        warnings: [],
+        approvalRunningNoticeMs: 1_000,
+        createApprovalSlug: (approvalId) => approvalId,
+        register: async (approvalId) => ({
+          id: approvalId,
+          expiresAtMs: 60_000,
+          finalDecision: null,
+        }),
+        askFallback: "full",
+        requiresExplicitApproval: true,
       }),
-    ).toBe(false);
-    expect(
-      shouldResolveExecApprovalUnavailableInline({
-        unavailableReason: "no-approval-route",
-        preResolvedDecision: "allow-once",
-      }),
-    ).toBe(false);
-    expect(
-      shouldResolveExecApprovalUnavailableInline({
-        unavailableReason: "no-approval-route",
-        preResolvedDecision: undefined,
-      }),
-    ).toBe(false);
-    expect(
-      shouldResolveExecApprovalUnavailableInline({
-        unavailableReason: "initiating-platform-disabled",
-        preResolvedDecision: null,
-      }),
-    ).toBe(false);
+    ).resolves.toMatchObject({
+      kind: "inline",
+      state: { approvedByAsk: false, deniedReason: "approval-timeout" },
+    });
   });
 
   it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
@@ -718,5 +798,37 @@ describe("buildExecApprovalPendingToolResult", () => {
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Approver DMs were sent");
+  });
+});
+
+describe("buildHeadlessExecApprovalDeniedMessage", () => {
+  it("points gateway automation runs at card-capable approval clients, not the TUI", () => {
+    const text = buildHeadlessExecApprovalDeniedMessage({
+      trigger: "cron",
+      host: "gateway",
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+
+    expect(text).toContain("Automation runs cannot wait for interactive exec approval");
+    expect(text).toContain("Control UI or a macOS/iOS/Android app");
+    expect(text).toContain("standing grant");
+    expect(text).not.toContain("TUI,");
+    expect(text).not.toContain("terminal UI");
+  });
+
+  it("offers the interactive rerun surfaces for non-automation headless runs", () => {
+    const text = buildHeadlessExecApprovalDeniedMessage({
+      host: "node",
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+
+    expect(text).toContain("Headless runs cannot wait for interactive exec approval");
+    expect(text).toContain("rerun interactively");
+    expect(text).toContain("Control UI, TUI, or a chat channel with exec approvals");
+    expect(text).not.toContain("standing grant");
   });
 });

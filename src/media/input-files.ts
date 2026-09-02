@@ -1,4 +1,5 @@
 // Input file helpers normalize inline, fetched, and local media inputs.
+import { MIMEType } from "node:util";
 import {
   classifyAttachmentBytes,
   type AttachmentClassification,
@@ -7,13 +8,10 @@ import { canonicalizeBase64, estimateBase64DecodedBytes } from "@openclaw/media-
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { detectMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
@@ -105,7 +103,6 @@ type InputFileSource =
 /** Guarded URL fetch result before final MIME allowlist validation. */
 type InputFetchResult = {
   buffer: Buffer;
-  mimeType: string;
   contentType?: string;
 };
 
@@ -167,12 +164,13 @@ function parseContentType(value: string | undefined): {
   if (!value) {
     return {};
   }
-  const parts = value.split(";").map((part) => part.trim());
-  const mimeType = normalizeMimeType(parts[0]);
-  const charset = parts
-    .map((part) => normalizeOptionalString(part.match(/^charset=(.+)$/i)?.[1]))
-    .find((part) => part && part.length > 0);
-  return { mimeType, charset };
+  const mimeType = normalizeMimeType(value);
+  try {
+    return { mimeType, charset: new MIMEType(value).params.get("charset") ?? undefined };
+  } catch {
+    // Invalid metadata still goes through byte classification and MIME allowlists.
+    return { mimeType };
+  }
 }
 
 /** Converts configured MIME lists into a normalized allowlist, using fallback defaults when empty. */
@@ -218,7 +216,7 @@ async function fetchWithGuard(params: {
 
   try {
     if (!response.ok) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
     }
 
@@ -226,11 +224,11 @@ async function fetchWithGuard(params: {
     try {
       contentLength = parseMediaContentLength(response.headers.get("content-length"));
     } catch (err) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw err;
     }
     if (contentLength !== null && contentLength > params.maxBytes) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw new Error(
         `Content too large: ${contentLength} bytes (limit: ${params.maxBytes} bytes)`,
       );
@@ -238,24 +236,10 @@ async function fetchWithGuard(params: {
 
     const buffer = await readResponseWithLimit(response, params.maxBytes);
 
-    const contentType = response.headers.get("content-type") || undefined;
-    const parsed = parseContentType(contentType);
-    const mimeType = parsed.mimeType ?? "application/octet-stream";
-    return { buffer, mimeType, contentType };
+    const contentType = response.headers.get("content-type") ?? undefined;
+    return { buffer, contentType };
   } finally {
     await release();
-  }
-}
-
-async function discardIgnoredResponseBody(response: Response): Promise<void> {
-  const body = response.body;
-  if (!body) {
-    return;
-  }
-  try {
-    await body.cancel();
-  } catch {
-    // Best-effort cleanup after rejecting a response body.
   }
 }
 
@@ -266,13 +250,6 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined): string 
   } catch {
     return new TextDecoder("utf-8").decode(buffer);
   }
-}
-
-function clampText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return truncateUtf16Safe(text, maxChars);
 }
 
 function withInputFileTimeout<T>(params: {
@@ -306,7 +283,10 @@ async function normalizeInputImage(params: {
   if (declaredMime.startsWith("image/") && detectedMime && !detectedMime.startsWith("image/")) {
     throw new Error(`Unsupported image MIME type: ${detectedMime}`);
   }
-  const sourceMime = detectedMime?.startsWith("image/") ? detectedMime : declaredMime;
+  const sourceMime = (detectedMime?.startsWith("image/") ? detectedMime : declaredMime).replace(
+    /^(image\/hei[cf])-sequence$/,
+    "$1",
+  );
   if (!params.limits.allowedMimes.has(sourceMime)) {
     throw new Error(`Unsupported image MIME type: ${sourceMime}`);
   }
@@ -374,7 +354,7 @@ export async function extractImageContentFromSource(
     });
     return await normalizeInputImage({
       buffer: result.buffer,
-      mimeType: result.mimeType,
+      mimeType: parseContentType(result.contentType).mimeType,
       limits,
     });
   }
@@ -387,7 +367,6 @@ export async function extractFileContentFromSource(params: {
   source: InputFileSource;
   limits: InputFileLimits;
   config?: OpenClawConfig;
-  classification?: AttachmentClassification;
 }): Promise<InputFileExtractResult> {
   const { source, limits } = params;
   const filename = source.filename || "file";
@@ -422,11 +401,33 @@ export async function extractFileContentFromSource(params: {
       auditContext: "openresponses.input_file",
     });
     const parsed = parseContentType(result.contentType);
-    mimeType = parsed.mimeType ?? normalizeMimeType(result.mimeType);
+    mimeType = parsed.mimeType;
     charset = parsed.charset;
     buffer = result.buffer;
   }
 
+  return await extractFileContentFromBuffer({
+    buffer,
+    filename,
+    mimeType,
+    charset,
+    limits,
+    config: params.config,
+  });
+}
+
+/** Extracts owned bytes after shared size and MIME checks; no source encoding is required. */
+export async function extractFileContentFromBuffer(params: {
+  buffer: Buffer;
+  filename?: string;
+  mimeType?: string;
+  charset?: string;
+  limits: InputFileLimits;
+  config?: OpenClawConfig;
+  classification?: AttachmentClassification;
+}): Promise<InputFileExtractResult> {
+  const { buffer, limits } = params;
+  const filename = params.filename || "file";
   if (buffer.byteLength > limits.maxBytes) {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
@@ -434,9 +435,10 @@ export async function extractFileContentFromSource(params: {
   // Direct input_file callers declare their content type; the filename is
   // display metadata and must not override an explicitly allowlisted MIME.
   const classification =
-    params.classification ?? (await classifyAttachmentBytes({ buffer, declaredMime: mimeType }));
-  mimeType = classification.mime;
-  charset = classification.charset ?? charset;
+    params.classification ??
+    (await classifyAttachmentBytes({ buffer, declaredMime: params.mimeType }));
+  const mimeType = classification.mime;
+  const charset = classification.charset ?? params.charset;
 
   if (!mimeType) {
     throw new Error("input_file missing media type");
@@ -460,7 +462,7 @@ export async function extractFileContentFromSource(params: {
         },
       }),
     });
-    const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
+    const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
     return {
       filename,
       text,
@@ -468,6 +470,6 @@ export async function extractFileContentFromSource(params: {
     };
   }
 
-  const text = clampText(decodeTextContent(buffer, charset), limits.maxChars);
+  const text = truncateUtf16Safe(decodeTextContent(buffer, charset), limits.maxChars);
   return { filename, text };
 }

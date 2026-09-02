@@ -550,6 +550,38 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
   });
 });
 
+test("sessions.reset of an incognito session broadcasts a delete, not a reset", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "incognito-chat": sessionStoreEntry("sess-incognito", { incognito: true }),
+    },
+  });
+  const broadcast = vi.fn();
+  const reset = await directSessionReq<{ ok: true; key: string; deleted?: boolean }>(
+    "sessions.reset",
+    { key: "incognito-chat", reason: "reset" },
+    {
+      context: {
+        broadcastToConnIds: broadcast,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-incognito"]),
+      },
+    },
+  );
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.deleted).toBe(true);
+  // The row is gone; only reason "delete" makes clients drop it and navigate away.
+  expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+  expect(broadcast.mock.calls[0]?.[1]).toEqual({
+    sessionKey: reset.payload?.key,
+    agentId: "main",
+    sessionId: "sess-incognito",
+    reason: "delete",
+    ts: expect.any(Number),
+  });
+});
+
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
   await createSessionStoreDir();
   await writeMainTranscriptSession({
@@ -599,7 +631,12 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(reset.ok).toBe(false);
   expect(reset.error?.code).toBe("UNAVAILABLE");
   expect(reset.error?.message ?? "").toMatch(/still active/i);
-  expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
+  expectActiveRunCleanup(
+    "agent:main:main",
+    ["main", "agent:main:main", "sess-main"],
+    "sess-main",
+    "main",
+  );
   expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();

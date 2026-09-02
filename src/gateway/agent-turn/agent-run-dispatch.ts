@@ -1,9 +1,12 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { withAgentCommandExecutionIdentitySpawnFacts } from "../../agents/agent-command-execution-identity-spawn.js";
 import {
   buildAgentRunTerminalOutcome,
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import type { PreparedAgentCommandRuntimeContext } from "../../agents/command/prepare.js";
+import type { AgentCommandOpts } from "../../agents/command/types.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -12,15 +15,25 @@ import { isTimeoutError } from "../../agents/failover-error.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { normalizeAgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
+import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
+import {
+  createExecutionStartedOwnerBinding,
+  isRetainedExecutionOwnerBinding,
+} from "../../audit/execution-owner-binding.js";
+import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { readErrorName } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
+import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
+import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { errorShapeFromError } from "../error-shape.js";
 import {
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,
@@ -28,6 +41,7 @@ import {
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
+import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
 function resolveResolvedAgentTimeoutStopReason(
@@ -121,7 +135,9 @@ export function dispatchAgentRunFromGateway(params: {
   io: AgentTurnIo;
   context: AgentTurnContext;
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  canonicalSkillWorkspaceDir?: string;
   restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+  commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   onSettled?: (outcome: {
     terminalOutcome: AgentRunTerminalOutcome;
     onRecovered?: () => void;
@@ -129,9 +145,10 @@ export function dispatchAgentRunFromGateway(params: {
 }) {
   const shouldTrackTask = params.taskTrackingMode === "cli";
   let taskTracked = false;
+  let trackedTask: TaskRecord | undefined;
   if (shouldTrackTask) {
     try {
-      taskTracked = Boolean(
+      trackedTask =
         createRunningTaskRun({
           runtime: "cli",
           sourceId: params.runId,
@@ -148,8 +165,8 @@ export function dispatchAgentRunFromGateway(params: {
           task: params.ingressOpts.message,
           deliveryStatus: "not_applicable",
           startedAt: Date.now(),
-        }),
-      );
+        }) ?? undefined;
+      taskTracked = Boolean(trackedTask);
     } catch (err) {
       // Best-effort only: background task tracking must not block agent runs.
       // Still surface the swallowed error so non-transient tracking failures stay observable.
@@ -171,19 +188,75 @@ export function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
+  let runOwnerCleanedUp = false;
+  const cleanupRunOwner = () => {
+    if (runOwnerCleanedUp) {
+      return;
+    }
+    runOwnerCleanedUp = true;
+    clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
+    params.cleanupAbortController();
+  };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
-    ? createCronCreatorAuthorityCapability(params.cronCreatorAuthority.runId)
+    ? createCronCreatorAuthorityCapability(
+        params.cronCreatorAuthority.runId,
+        params.cronCreatorAuthority.callerOrigin,
+      )
     : undefined;
+  const ingressOptsWithSpawnFacts = withAgentCommandExecutionIdentitySpawnFacts(
+    params.ingressOpts,
+    readAgentRunDispatchExecutionIdentity(params),
+  );
+  const trackedTaskBinding = trackedTask
+    ? createExecutionStartedOwnerBinding(
+        (admitted: Parameters<NonNullable<AgentCommandOpts["onPostAdmittedRunContext"]>>[0]) => {
+          try {
+            const taskResult = bindTaskRunExecution({ admitted, taskId: trackedTask.taskId });
+            const flowResult = trackedTask.parentFlowId
+              ? isRetainedExecutionOwnerBinding(taskResult)
+                ? bindTaskFlowExecution({ admitted, flowId: trackedTask.parentFlowId })
+                : taskResult
+              : undefined;
+            if (
+              [taskResult, flowResult].some(
+                (result) => result === "mismatch" || result === "missing",
+              )
+            ) {
+              params.context.logGateway.warn(
+                `exact tracked-task execution binding was not retained for ${params.runId}`,
+              );
+            }
+          } catch (error) {
+            params.context.logGateway.warn(
+              `failed to retain tracked-task execution binding ${params.runId}: ${formatForLog(error)}`,
+            );
+          }
+        },
+      )
+    : undefined;
+  const ingressOptsWithTaskBinding = trackedTask
+    ? {
+        ...ingressOptsWithSpawnFacts,
+        onPostAdmittedRunContext: trackedTaskBinding?.onPostAdmission,
+        onExecutionStarted: () => {
+          ingressOptsWithSpawnFacts.onExecutionStarted?.();
+          trackedTaskBinding?.onExecutionStarted();
+        },
+      }
+    : ingressOptsWithSpawnFacts;
   const runAgent = () =>
-    agentCommandFromGatewayIngress(
-      cronCreatorAuthorityCapability
-        ? { ...params.ingressOpts, cronCreatorAuthorityCapability }
-        : params.ingressOpts,
-      defaultRuntime,
-      params.context.deps,
-      {
-        restoreAdmittedRecovery: params.restoreAdmittedRecovery,
-      },
+    runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
+      agentCommandFromGatewayIngress(
+        cronCreatorAuthorityCapability
+          ? { ...ingressOptsWithTaskBinding, cronCreatorAuthorityCapability }
+          : ingressOptsWithTaskBinding,
+        defaultRuntime,
+        params.context.deps,
+        {
+          restoreAdmittedRecovery: params.restoreAdmittedRecovery,
+        },
+        params.commandRuntimeContext,
+      ),
     );
   const agentRun = cronCreatorAuthorityCapability
     ? runWithCronCreatorAuthorityCapability(
@@ -194,6 +267,7 @@ export function dispatchAgentRunFromGateway(params: {
     : runAgent();
   void agentRun
     .then(async (result) => {
+      const recordedOutcome = readAgentRunTerminalOutcome(result);
       const signalStopReason = resolveResolvedAgentTimeoutStopReason(
         result?.meta,
         params.abortController.signal,
@@ -209,7 +283,9 @@ export function dispatchAgentRunFromGateway(params: {
         status:
           aborted || result?.meta?.stopReason === "timeout" || timeoutPhase
             ? "timeout"
-            : result?.meta?.error || result?.meta?.stopReason === "error"
+            : recordedOutcome === "failed" ||
+                result?.meta?.error ||
+                result?.meta?.stopReason === "error"
               ? "error"
               : "ok",
         error: result?.meta?.error,
@@ -276,6 +352,7 @@ export function dispatchAgentRunFromGateway(params: {
           keys: params.dedupeKeys,
           entry: { ts: Date.now(), ok: false, payload: failedPayload, error },
         });
+        cleanupRunOwner();
         params.io.emitFinal([false, failedPayload, error], {
           runId: params.runId,
           error: summary,
@@ -283,13 +360,17 @@ export function dispatchAgentRunFromGateway(params: {
         return;
       }
       persistTerminalDedupe();
+      // A final response resumes durable delivery cleanup. Release the terminal
+      // run owner first so exact-session deletion cannot race this admission.
+      cleanupRunOwner();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
       params.io.emitFinal([true, payload, undefined], { runId: params.runId });
     })
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const renderedErr = formatForLog(err);
+      const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
+      const renderedErr = error.message;
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
         : isAbortError(err)
@@ -311,7 +392,6 @@ export function dispatchAgentRunFromGateway(params: {
           log: params.context.logGateway,
         });
       }
-      const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       Object.defineProperty(error, "cause", { value: err });
       const payload = {
         runId: params.runId,
@@ -343,13 +423,11 @@ export function dispatchAgentRunFromGateway(params: {
         onRecovered: () => persistTerminalDedupe(true),
       });
       persistTerminalDedupe(settled);
+      cleanupRunOwner();
       params.io.emitFinal([aborted && settled, payload, aborted && settled ? undefined : error], {
         runId: params.runId,
-        ...(aborted ? {} : { error: formatForLog(err) }),
+        ...(aborted ? {} : { error: renderedErr }),
       });
     })
-    .finally(() => {
-      clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
-      params.cleanupAbortController();
-    });
+    .finally(cleanupRunOwner);
 }

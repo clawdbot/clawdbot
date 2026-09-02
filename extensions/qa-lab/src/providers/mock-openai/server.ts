@@ -1,7 +1,13 @@
 // QA Lab mock Responses dispatcher, HTTP transport, and debug endpoints.
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeQaHttpServer } from "../../bus-server.js";
+import { format as formatUrl } from "node:url";
+import {
+  closeQaHttpServer,
+  dispatchQaHttpRequest,
+  writeQaRequestBodyLimitError,
+} from "../../bus-server.js";
 import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 import {
@@ -15,6 +21,7 @@ import {
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import {
   buildAssistantText,
+  readForkedContextCompletion,
   isCanonicalCompactionRetryWriteResult,
   QA_COMPACTION_RETRY_FINAL_MARKER,
 } from "./mock-openai-assistant-text.js";
@@ -39,18 +46,20 @@ import {
   QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE,
   QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE,
   QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE,
+  QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE,
   QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE,
   QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
   QA_STREAMING_PROMPT_RE,
   QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE,
   QA_BLOCK_STREAMING_PROMPT_RE,
-  QA_TOOL_PROGRESS_ERROR_PROMPT_RE,
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
   QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
+  QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
+  QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
   QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE,
   QA_STRANDED_FINAL_RECOVERY_PROMPT_RE,
@@ -61,6 +70,8 @@ import {
   QA_TELEGRAM_LONG_FINAL_PROMPT_RE,
   QA_WHATSAPP_LONG_FINAL_PROMPT_RE,
   QA_SLACK_CHART_PRESENTATION_PROMPT_RE,
+  QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE,
+  QA_MESSAGE_DECISION_SEND_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE,
   QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE,
   buildSlackMpimHistoryBotReply,
@@ -68,6 +79,9 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE,
+  QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE,
   QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
   QA_SUBAGENT_SELF_YIELD_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
@@ -93,6 +107,8 @@ import {
   QA_MCP_CODE_MODE_PROMPT_RE,
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
   QA_RESTART_RECOVERY_PROMPT_RE,
+  QA_KILL_RESTART_PROMPT_RE,
+  QA_KILL_RESTART_RECOVERED_MARKER,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
   sourceDiscoveryReadPathForProvider,
@@ -101,13 +117,9 @@ import {
   MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
   readBody,
   parseJsonObjectBody,
-  writeOpenAiMalformedJsonError,
   transcriptionTextForAudioRequest,
   writeSse,
   isRemoteCompactionV2Request,
-  buildRemoteCompactionV2Events,
-  writeSseWithPreviewPause,
-  writeAnthropicSse,
   countApproxTokens,
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
@@ -131,9 +143,10 @@ import {
   buildQaA2aMessageToolMirrorSessionsSendArgs,
   hasToolErrorOutput,
   extractSessionStatusSessionKey,
-  isHeartbeatPrompt,
+  resolveHeartbeatPromptReply,
 } from "./mock-openai-directives.js";
 import {
+  buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,
@@ -143,6 +156,7 @@ import {
   buildQaLongFinalText,
   buildAssistantThenToolCallEvents,
   buildAssistantEvents,
+  buildStreamingFinalAnswerEvents,
   buildPartialFailureEvents,
   buildReasoningOnlyEvents,
   buildReasoningAndAssistantEvents,
@@ -151,6 +165,8 @@ import {
 import {
   extractLastUserText,
   extractLastMatchingUserTurn,
+  extractMockSubagentContext,
+  splitMockConversationContext,
   hasToolOutput,
   extractToolOutput,
   extractToolOutputValue,
@@ -187,6 +203,13 @@ import {
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
+const MOCK_HTTP_POST_ROUTES = new Map([
+  ["/v1/images/generations", "OpenAI Images"],
+  ["/v1/audio/transcriptions", "OpenAI Audio"],
+  ["/v1/embeddings", "OpenAI Embeddings"],
+  ["/v1/responses", "OpenAI Responses"],
+  ["/v1/messages", "Anthropic Messages"],
+]);
 const QA_COMPACTION_RETRY_PROMPT_RE = /compaction retry mutating tool check/i;
 const QA_COMPACTION_SUMMARY_INSTRUCTIONS_RE =
   /context summarization assistant[\s\S]*structured summary[\s\S]*do not continue/i;
@@ -287,13 +310,18 @@ const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
 const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
   /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
 const QA_CODE_MODE_TARGET_MARKER = "qa-code-mode-target:";
+const QA_RESTART_CHECKPOINT_COUNT = 3;
+const QA_RESTART_FINAL_TEXT = "unsafeVisible=false\nRESTART-CODE-MODE-WAIT-OK";
 const QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE = /failed tool terminal recovery qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_PROMPT_RE = /telegram visible partial failure qa check/i;
 const QA_TELEGRAM_UNSENT_FAILURE_PROMPT_RE = /telegram unsent failure qa check/i;
 const QA_TELEGRAM_VISIBLE_PARTIAL_FAILURE_MARKER = "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE";
-// Keep each real provider request active long enough for retries to span the
-// unchanged five-minute recovery bound while remaining below first-byte timeout.
-const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 110_000;
+// Complete ordinary retries inside their diagnostic request allowance, then
+// leave the fifth request active so recovery can honor both the cumulative
+// no-progress bound and the current request's own allowance.
+const QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS = 80_000;
+const QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS = 180_000;
+const QA_REPEATED_REQUEST_STALL_ATTEMPT = 5;
 
 function isStreamingToolProgressContinuationText(text: string) {
   const trimmed = text.trim();
@@ -566,6 +594,27 @@ function isGeneratedCodeModeWaitCall(input: ResponsesInputItem[], toolCall: Resp
   });
 }
 
+function readRestartCheckpointProgress(input: ResponsesInputItem[]) {
+  const checkpoints = new Set<number>();
+  for (const item of input) {
+    if (item.name !== "exec") {
+      continue;
+    }
+    const source = readGeneratedCodeModeExecSource(item);
+    if (!source?.includes("qa_restart_wait")) {
+      continue;
+    }
+    for (const match of source.matchAll(/\bCHECKPOINT-([1-3])\b/gu)) {
+      checkpoints.add(Number(match[1]));
+    }
+  }
+  const waitCount = input.filter((item) => isGeneratedCodeModeWaitCall(input, item)).length;
+  return {
+    checkpoints: [...checkpoints].toSorted((left, right) => left - right),
+    waitCount,
+  };
+}
+
 function isCodeModeControlToolOutput(body: Record<string, unknown>, input: ResponsesInputItem[]) {
   if (!hasCodeModeExecSurface(body)) {
     return false;
@@ -637,9 +686,9 @@ function buildScenarioToolCallEvents(
       `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
       `const targetName = ${JSON.stringify(name)};`,
       `const targetArgs = ${JSON.stringify(args)};`,
-      "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
+      "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
       "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-      "const value = await tools.callValue(target.id, targetArgs);",
+      "const value = await target(targetArgs);",
       'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
       "  return { ...value, content: value.content.slice(0, 2048) };",
       "}",
@@ -881,6 +930,86 @@ async function buildResponsesPayload(
     return buildFailedResponseEvents();
   }
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  // The hard-kill fixture shares the first real checkpoint below, but recovery
+  // must settle without scheduling the repeated-restart fixture's later waits.
+  if (
+    QA_KILL_RESTART_PROMPT_RE.test(allInputText) &&
+    QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)
+  ) {
+    return buildAssistantEvents(QA_KILL_RESTART_RECOVERED_MARKER);
+  }
+  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
+    const progress = readRestartCheckpointProgress(input);
+    const currentControlCallId = extractToolOutputCallId(input);
+    const latestControlCall = input.findLast(
+      (item) => item.name === "exec" || item.name === "wait",
+    );
+    const currentControlOutputIsLatest =
+      currentControlCallId.length > 0 && latestControlCall?.call_id === currentControlCallId;
+    const nextCheckpoint = Array.from(
+      { length: QA_RESTART_CHECKPOINT_COUNT },
+      (_, index) => index + 1,
+    ).find((checkpoint) => !progress.checkpoints.includes(checkpoint));
+    if (toolOutput.includes("unsafe-probe-executed")) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (currentControlOutputIsLatest) {
+      if (
+        codeModeControlJson?.status === "waiting" &&
+        "cellId" in codeModeControlJson &&
+        typeof codeModeControlJson.cellId === "string"
+      ) {
+        return buildRawToolCallEventsWithArgs("wait", { cell_id: codeModeControlJson.cellId });
+      }
+      if (
+        codeModeControlJson?.status === "waiting" &&
+        "runId" in codeModeControlJson &&
+        typeof codeModeControlJson.runId === "string" &&
+        hasDeclaredTool(body, "wait")
+      ) {
+        return buildToolCallEventsWithArgs("wait", { runId: codeModeControlJson.runId });
+      }
+      if (
+        toolJson?.status === "waiting" &&
+        typeof toolJson.runId === "string" &&
+        hasDeclaredTool(body, "wait")
+      ) {
+        return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+      }
+    }
+    if (progress.waitCount < progress.checkpoints.length) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (nextCheckpoint !== undefined) {
+      if (nextCheckpoint > 1 && !QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+      }
+      if (hasDeclaredTool(body, "exec")) {
+        const encodedTarget = encodeCodeModeTarget("qa_restart_wait", {});
+        return buildToolCallEventsWithArgs("exec", {
+          language: "javascript",
+          restartSafe: true,
+          code: [
+            `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
+            'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
+            'if (!target) throw new Error("qa_restart_wait unavailable");',
+            // Bridge calls drain inside exec; explicitly yield while this hold is pending.
+            // The restart scenario must interrupt a real wait call, not a timing guess.
+            'await Promise.all([target({}), yield_control("restart checkpoint")]);',
+            `return "CHECKPOINT-${nextCheckpoint}";`,
+          ].join("\n"),
+        });
+      }
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (!QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+    }
+    if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+      return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
+    }
+    return buildAssistantEvents(QA_RESTART_FINAL_TEXT);
+  }
   if (codeModeControlJson?.status === "waiting" && hasToolDefinition(toolDeclarationBody, "wait")) {
     if ("cellId" in codeModeControlJson && typeof codeModeControlJson.cellId === "string") {
       return buildRawToolCallEventsWithArgs("wait", { cell_id: codeModeControlJson.cellId });
@@ -944,31 +1073,15 @@ async function buildResponsesPayload(
     QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
       QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
-  const isActiveFailedToolTerminalRecovery =
-    QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt) ||
+  const isActiveEmptyResponseSideEffectExhaustion =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(prompt) ||
     (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
-      QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(allInputText));
+      QA_EMPTY_RESPONSE_SIDE_EFFECT_EXHAUSTION_PROMPT_RE.test(allInputText));
   const hasCallableCodeMode = hasCodeModeExecSurface(toolDeclarationBody);
   const canCallSessionsSpawn =
     hasToolDefinition(toolDeclarationBody, "sessions_spawn") || hasCallableCodeMode;
   const canCallSessionsYield =
     hasToolDefinition(toolDeclarationBody, "sessions_yield") || hasCallableCodeMode;
-  const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
-  // Progress scenarios share full session transcripts. Scope completion to
-  // the selected prompt so an older turn's tool output cannot finish this one.
-  const toolProgressToolOutput = toolProgressTurn
-    ? extractToolOutput(input.slice(toolProgressTurn.index))
-    : "";
-  const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
-  const buildToolProgressReadEvents = () => {
-    return buildToolCallEventsWithArgs("read", {
-      path: readTargetFromPrompt(scenarioFamilyPrompt),
-    });
-  };
-  const buildToolProgressExecEvents = () => {
-    const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
-    return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
-  };
   const slackProgressTurn = extractLastMatchingUserTurn(
     input,
     QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE,
@@ -998,7 +1111,11 @@ async function buildResponsesPayload(
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
     const plannedArgs = targetTool
-      ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+      ? buildQaToolSearchArgs(
+          targetTool,
+          QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText),
+          allInputText,
+        )
       : {};
     if (
       targetTool &&
@@ -1049,39 +1166,6 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
   }
-  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
-    if (QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
-      if (toolOutput.includes("unsafe-probe-executed")) {
-        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-      }
-      if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
-        return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
-      }
-      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
-    }
-    if (toolJson?.status === "completed" && toolJson.value === "RESTART-CODE-MODE-WAIT-OK") {
-      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
-    }
-    if (
-      toolJson?.status === "waiting" &&
-      typeof toolJson.runId === "string" &&
-      hasDeclaredTool(body, "wait")
-    ) {
-      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
-    }
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "exec")) {
-      return buildToolCallEventsWithArgs("exec", {
-        language: "javascript",
-        restartSafe: true,
-        code: [
-          'const matches = await tools.search("qa_restart_wait");',
-          "await tools.call(matches[0].id, {});",
-          'return "RESTART-CODE-MODE-WAIT-OK";',
-        ].join("\n"),
-      });
-    }
-    return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
-  }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||
     QA_MCP_CODE_MODE_PROMPT_RE.test(allInputText)
@@ -1092,17 +1176,24 @@ async function buildResponsesPayload(
         language: "javascript",
         code: useApiFiles
           ? [
-              'const files = await API.list("mcp");',
-              'const root = await API.read("mcp/index.d.ts");',
-              'const api = await API.read("mcp/fixture.d.ts");',
-              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "const [files, root, api, result, failure, resources, resource, prompts, prompt] = await Promise.all([",
+              '  API.list("mcp"), API.read("mcp/index.d.ts"), API.read("mcp/fixture.d.ts"),',
+              '  MCP.fixture.lookupNote({ id: "alpha" }), MCP.fixture.lookupNote({ id: "missing" }),',
+              '  MCP.fixture.resources.list(), MCP.fixture.resources.read({ uri: "memo://fixture/alpha" }),',
+              '  MCP.fixture.prompts.list(), MCP.fixture.prompts.get({ name: "fixture_brief", arguments: { id: "alpha" } }),',
+              "]);",
+              'if (result.structuredContent?.note !== "fixture-note-alpha" || result.isError !== false) throw new Error("MCP success lost its top-level result shape");',
+              'if (failure.structuredContent?.note !== "missing-note" || failure.isError !== true) throw new Error("MCP resolved failure lost its top-level result shape");',
+              'if (result._meta !== undefined || result.content?.[0]?._meta?.proof !== "fixture-content-metadata") throw new Error("MCP result metadata crossed the wrong boundary");',
+              'if (!resources.resources?.some((entry) => entry.uri === "memo://fixture/alpha") || resource.contents?.[0]?.text !== "fixture-note-alpha") throw new Error("MCP resources lost their native result shape");',
+              'if (!prompts.prompts?.some((entry) => entry.name === "fixture_brief") || prompt.messages?.[0]?.content?.text !== "fixture-note-alpha") throw new Error("MCP prompts lost their native result shape");',
               "return {",
               '  marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",',
               "  files: files.files.map((file) => file.path),",
               "  rootHasFixture: root.content.includes('fixture'),",
               "  headerHasLookup: api.content.includes('function lookupNote'),",
               "  resultText: result.content?.[0]?.text,",
-              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
               "};",
             ].join("\n")
           : [
@@ -1115,7 +1206,7 @@ async function buildResponsesPayload(
               "  headerHasLookup: api.header.includes('function lookupNote'),",
               "  schemaKeys: Object.keys(api.schemas),",
               "  resultText: result.content?.[0]?.text,",
-              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
               "};",
             ].join("\n"),
       });
@@ -1226,13 +1317,15 @@ async function buildResponsesPayload(
         content: "empty terminal QA side effect completed\n",
       });
     }
-    return buildAssistantEvents(
-      [
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
-        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      ].join("\n"),
-    );
+    return QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE.test(allInputText)
+      ? buildAssistantEvents("")
+      : buildAssistantEvents(
+          [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+        );
   }
   if (terminalWorkerCase === "fallback") {
     return buildAssistantEvents(
@@ -1249,8 +1342,13 @@ async function buildResponsesPayload(
   }
   if (terminalCompletionCase) {
     if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      const task =
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+          ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
+          : `Subagent terminal reply QA worker: ${terminalCompletionCase}.`;
       return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: `Subagent terminal reply QA worker: ${terminalCompletionCase}.`,
+        task,
         label: `qa-terminal-${terminalCompletionCase}`,
         thread: false,
         mode: "run",
@@ -1259,6 +1357,12 @@ async function buildResponsesPayload(
     if (hasCompletedToolOutput) {
       // End the requester turn before the delayed worker settles. The terminal
       // result must therefore use the runtime's direct channel fallback.
+      if (
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+      ) {
+        return buildAssistantEvents(QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER);
+      }
       return buildAssistantEvents("NO_REPLY");
     }
   }
@@ -1288,35 +1392,36 @@ async function buildResponsesPayload(
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body));
   }
-  if (isActiveEmptyResponseSideEffectRecovery) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      return buildAssistantEvents(
-        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
-      );
-    }
+  if (isActiveEmptyResponseSideEffectRecovery || isActiveEmptyResponseSideEffectExhaustion) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("write", {
         path: "qa-empty-response-side-effect.txt",
         content: "side effect completed once\n",
       });
     }
+    if (isActiveEmptyResponseSideEffectExhaustion) {
+      return buildAssistantEvents("");
+    }
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      return buildAssistantEvents(
+        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+      );
+    }
     return buildAssistantEvents("");
   }
-  if (isActiveFailedToolTerminalRecovery) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
-        return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
-      }
-      const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
-      return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
-    }
+  if (QA_FAILED_TOOL_TERMINAL_RECOVERY_PROMPT_RE.test(prompt)) {
     if (!hasCompletedToolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "qa-failed-terminal-missing-file.txt" });
     }
-    return buildAssistantEvents("FAILED-TOOL-TERMINAL-WAS-REPLAYED");
+    if (!hasToolErrorOutput(parseToolOutputJson(rawToolOutput), rawToolOutput)) {
+      return buildAssistantEvents("BUG-TOOL-DID-NOT-FAIL");
+    }
+    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";
+    return buildAssistantEvents(`The requested file could not be read: ENOENT. ${marker}`);
   }
-  if (isHeartbeatPrompt(prompt)) {
-    return buildAssistantEvents("HEARTBEAT_OK");
+  const heartbeatReply = resolveHeartbeatPromptReply(prompt);
+  if (heartbeatReply) {
+    return buildAssistantEvents(heartbeatReply);
   }
   if (/fanout worker alpha/i.test(prompt)) {
     return buildAssistantEvents("ALPHA-OK");
@@ -1408,25 +1513,11 @@ async function buildResponsesPayload(
       segmentCount: 96,
       startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
     });
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_long_final_three_chunk",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final_three_chunk", text);
   }
   if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(allInputText)) {
     const text = buildQaLongFinalText();
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_long_final",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_telegram_long_final", text);
   }
   if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(allInputText)) {
     const text = buildQaLongFinalText({
@@ -1435,14 +1526,7 @@ async function buildResponsesPayload(
       segmentCount: 64,
       startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
     });
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_whatsapp_long_final",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(text),
-        text,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_whatsapp_long_final", text);
   }
   const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
   if (whatsAppPendingHistoryReply) {
@@ -1485,6 +1569,31 @@ async function buildResponsesPayload(
       return buildAssistantEvents(slackChartMatch[2]);
     }
   }
+  if (QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message:
+          "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+      });
+    }
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
+    }
+  }
+  if (QA_MESSAGE_DECISION_SEND_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: "QA-MESSAGE-DELIVERY-OK",
+        final: true,
+        presentation: { blocks: [{ type: "text", text: "QA-MESSAGE-DELIVERY-OK" }] },
+      });
+    }
+    if (hasCompletedToolOutput) {
+      return buildAssistantEvents("NO_REPLY");
+    }
+  }
   if (QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE.test(allInputText)) {
     if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
       return buildToolCallEventsWithArgs("message", {
@@ -1515,48 +1624,30 @@ async function buildResponsesPayload(
     QA_STREAMING_PROMPT_RE.test(allInputText) &&
     allInputText.includes(QA_TELEGRAM_STREAM_SINGLE_MARKER)
   ) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_telegram_quiet_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(QA_TELEGRAM_STREAM_SINGLE_MARKER),
-        text: QA_TELEGRAM_STREAM_SINGLE_MARKER,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_telegram_quiet_stream",
+      QA_TELEGRAM_STREAM_SINGLE_MARKER,
+    );
   }
   if (
     QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) &&
     scenarioFamilyReplyDirective
   ) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_final_only_marker_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
-        text: scenarioFamilyReplyDirective,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents(
+      "msg_mock_final_only_marker_stream",
+      scenarioFamilyReplyDirective,
+      "QA streaming preview in progress",
+    );
   }
   if (QA_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && scenarioFamilyReplyDirective) {
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_quiet_stream",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(scenarioFamilyReplyDirective),
-        text: scenarioFamilyReplyDirective,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_quiet_stream", scenarioFamilyReplyDirective);
   }
   if (slackProgressDirectives) {
     if (hasSlackProgressToolOutput) {
-      return buildAssistantEvents([
-        {
-          id: "msg_mock_slack_progress_final",
-          phase: "final_answer",
-          streamDeltas: splitMockStreamingText(slackProgressDirectives.finalMarker),
-          text: slackProgressDirectives.finalMarker,
-        },
-      ]);
+      return buildStreamingFinalAnswerEvents(
+        "msg_mock_slack_progress_final",
+        slackProgressDirectives.finalMarker,
+      );
     }
     if (hasDeclaredTool(body, "exec")) {
       return buildAssistantThenToolCallEvents(
@@ -1571,28 +1662,31 @@ async function buildResponsesPayload(
       );
     }
   }
-  const toolProgressReplyDirective =
-    extractExactReplyDirective(toolProgressToolOutput) ??
-    extractExactMarkerDirective(toolProgressToolOutput) ??
-    scenarioFamilyReplyDirective;
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt)) {
-    if (!toolProgressToolOutput) {
-      return buildToolProgressReadEvents();
-    }
-    if (toolProgressReplyDirective) {
-      return buildAssistantEvents(
-        hasToolErrorOutput(toolProgressToolJson, toolProgressToolOutput)
-          ? toolProgressReplyDirective
-          : "BUG-TOOL-DID-NOT-FAIL",
+  const toolProgress = QA_TOOL_PROGRESS_PROMPT_RE.exec(scenarioFamilyPrompt);
+  if (toolProgress) {
+    const expectsError = Boolean(toolProgress[1]);
+    const turn = extractLastMatchingUserTurn(input, QA_TOOL_PROGRESS_PROMPT_RE);
+    // Progress scenarios share transcripts. Only the selected prompt's result can finish it.
+    const progressInput = turn ? input.slice(turn.index) : [];
+    if (!hasToolOutput(progressInput)) {
+      const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
+      return buildToolCallEventsWithArgs(
+        command ? "exec" : "read",
+        command ? { command } : { path: readTargetFromPrompt(scenarioFamilyPrompt) },
       );
     }
-  }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(scenarioFamilyPrompt)) {
-    if (!toolProgressToolOutput) {
-      return buildToolProgressExecEvents() ?? buildToolProgressReadEvents();
-    }
-    if (toolProgressReplyDirective) {
-      return buildAssistantEvents(toolProgressReplyDirective);
+    const output = extractToolOutput(progressInput);
+    const reply =
+      extractExactReplyDirective(output) ??
+      extractExactMarkerDirective(output) ??
+      scenarioFamilyReplyDirective;
+    if (reply) {
+      // A successful CodeMode runner can still return a failed capability result.
+      const structuredError = extractToolOutputStructuredError(progressInput);
+      const failed =
+        (hasCodeModeControlOutput ? structuredError || undefined : structuredError) ??
+        hasToolErrorOutput(parseToolOutputJson(output), output);
+      return buildAssistantEvents(expectsError && !failed ? "BUG-TOOL-DID-NOT-FAIL" : reply);
     }
   }
   if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
@@ -1610,14 +1704,7 @@ async function buildResponsesPayload(
         },
       );
     }
-    return buildAssistantEvents([
-      {
-        id: "msg_mock_block_2",
-        phase: "final_answer",
-        streamDeltas: splitMockStreamingText(blockStreamingMarkers.second),
-        text: blockStreamingMarkers.second,
-      },
-    ]);
+    return buildStreamingFinalAnswerEvents("msg_mock_block_2", blockStreamingMarkers.second);
   }
   if (isStrandedFinalRetryFailureRequest(allInputText)) {
     return buildAssistantEvents(buildStrandedFinalRetryFailureText());
@@ -1643,6 +1730,31 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("sessions_send", sessionsSendArgs);
     }
   }
+  const threadReplyReceiptPrompt = extractLastMatchingUserTurn(
+    input,
+    QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
+  )?.text;
+  const threadReplyReceiptMatch = threadReplyReceiptPrompt
+    ? QA_THREAD_REPLY_RECEIPT_PROMPT_RE.exec(threadReplyReceiptPrompt)
+    : null;
+  if (threadReplyReceiptPrompt && threadReplyReceiptMatch) {
+    const marker =
+      extractExactMarkerDirective(threadReplyReceiptPrompt) ??
+      extractExactReplyDirective(threadReplyReceiptPrompt) ??
+      "QA-THREAD-RECEIPT-OK";
+    const divergentFinal = /divergent final:\s*`([^`]+)`/iu
+      .exec(threadReplyReceiptPrompt)?.[1]
+      ?.trim();
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "thread-reply",
+        channelId: threadReplyReceiptMatch[1],
+        threadId: threadReplyReceiptMatch[2],
+        message: marker,
+      });
+    }
+    return buildAssistantEvents(divergentFinal || marker);
+  }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
     if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
@@ -1652,6 +1764,15 @@ async function buildResponsesPayload(
       });
     }
     return buildAssistantEvents("");
+  }
+  if (QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE.test(allInputText)) {
+    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: exactMarkerDirective ?? "QA-MSTEAMS-AMBIGUOUS-504",
+      });
+    }
+    return buildAssistantEvents("QA-MSTEAMS-AMBIGUOUS-FINAL");
   }
   if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";
@@ -2241,17 +2362,47 @@ async function buildResponsesPayload(
   if (explicitSessionsSpawnArgs && canCallSessionsSpawn && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
+  const forkTask = extractMockSubagentContext(input);
+  if (forkTask && /^Report the visible code from the requester transcript\./i.test(forkTask.task)) {
+    return buildAssistantEvents(buildAssistantText(input, body));
+  }
+  const forkCompletion = readForkedContextCompletion(input);
   if (
-    canCallSessionsSpawn &&
-    /forked subagent context qa check/i.test(prompt) &&
-    !hasCompletedToolOutput
+    /forked subagent context qa check/i.test(splitMockConversationContext(prompt).current) ||
+    forkCompletion
   ) {
-    return buildToolCallEventsWithArgs("sessions_spawn", {
-      task: "Report the visible code from the requester transcript.",
-      label: "qa-fork-context",
-      mode: "run",
-      context: "fork",
-    });
+    if (forkCompletion) {
+      // Completion must be delivered by the parent, not synthesized from its
+      // kickoff or spawn receipt. Never replay the inherited spawn instruction.
+      if (completedToolName === "message") {
+        return buildAssistantEvents("NO_REPLY");
+      }
+      return hasToolDefinition(toolDeclarationBody, "message") || hasCallableCodeMode
+        ? buildToolCallEventsWithArgs("message", {
+            action: "send",
+            message: forkCompletion,
+            final: true,
+          })
+        : buildAssistantEvents(forkCompletion);
+    }
+    if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      return buildToolCallEventsWithArgs("sessions_spawn", {
+        task: "Report the visible code from the requester transcript.",
+        label: "qa-fork-context",
+        mode: "run",
+        context: "fork",
+      });
+    }
+    if (
+      hasCompletedToolOutput &&
+      canCallSessionsYield &&
+      !hasToolErrorOutput(toolJson, toolOutput)
+    ) {
+      return buildToolCallEventsWithArgs("sessions_yield", {
+        message: "Waiting for the forked child to recover the visible code.",
+      });
+    }
+    return buildAssistantEvents(buildAssistantText(input, body));
   }
   if (/tool continuity check/i.test(prompt) && !hasCompletedToolOutput) {
     return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
@@ -2350,7 +2501,7 @@ async function buildResponsesPayload(
     return buildToolCallEventsWithArgs("sessions_spawn", {
       task: subagentHandoffTaskForProvider(providerVariant),
       label: "qa-sidecar",
-      thread: false,
+      ...(!/nested worker lineage handoff/i.test(allInputText) ? { thread: false } : {}),
     });
   }
   if (
@@ -2404,6 +2555,7 @@ export async function startQaMockOpenAiServer(params?: {
       subagentFanoutCompletedWorkers: new Set<"alpha" | "beta">(),
       subagentFanoutPhase: 0,
       subagentHandoffSpawned: false,
+      repeatedRequestRecoveryAttempts: 0,
       toolLoopReadAttempts: 0,
     };
     scenarioStates.set(key, state);
@@ -2593,6 +2745,12 @@ export async function startQaMockOpenAiServer(params?: {
       toolOutputCallId: extractToolOutputCallId(input) || undefined,
       ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
     });
+    const repeatedRequestRecovery =
+      QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
+      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt);
+    if (repeatedRequestRecovery) {
+      scenarioState.repeatedRequestRecoveryAttempts += 1;
+    }
     return {
       events,
       model,
@@ -2609,16 +2767,26 @@ export async function startQaMockOpenAiServer(params?: {
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
-      ...(QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE.test(allInputText) &&
-      !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)
-        ? { responsePauseMs: QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS }
+      ...(repeatedRequestRecovery
+        ? {
+            responsePauseMs:
+              scenarioState.repeatedRequestRecoveryAttempts >= QA_REPEATED_REQUEST_STALL_ATTEMPT
+                ? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS
+                : QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS,
+          }
         : {}),
     };
   };
-  const dispatchResponses = (request: Omit<QaMockProviderDispatchRequest, "route">) =>
-    dispatchProvider({ ...request, route: "responses" });
+  const dispatchResponses = async (request: Omit<QaMockProviderDispatchRequest, "route">) => {
+    const dispatched = await dispatchProvider({ ...request, route: "responses" });
+    const created = dispatched.events[0];
+    if (created?.type === "response.created") {
+      created.response.model = typeof request.body.model === "string" ? request.body.model : "";
+    }
+    return dispatched;
+  };
   const server = createServer((req, res) => {
-    void (async () => {
+    dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
         writeJson(res, 200, { ok: true, status: "live" });
@@ -2687,13 +2855,36 @@ export async function startQaMockOpenAiServer(params?: {
         writeJson(res, 200, imageGenerationRequests);
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/images/generations") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Images");
-          return;
+      const requestLabel = req.method === "POST" && MOCK_HTTP_POST_ROUTES.get(url.pathname);
+      if (!requestLabel) {
+        writeJson(res, 404, { error: "not found" });
+        return;
+      }
+      let raw: string;
+      try {
+        raw = await readBody(req);
+      } catch (error) {
+        if (!(await writeQaRequestBodyLimitError(req, res, error))) {
+          throw error;
         }
+        return;
+      }
+      if (url.pathname === "/v1/audio/transcriptions") {
+        writeJson(res, 200, { text: transcriptionTextForAudioRequest(raw) });
+        return;
+      }
+      const body = parseJsonObjectBody(raw);
+      if (!body) {
+        writeJson(res, 400, {
+          ...(url.pathname === "/v1/messages" ? { type: "error" } : {}),
+          error: {
+            type: "invalid_request_error",
+            message: `Malformed JSON body for ${requestLabel} request.`,
+          },
+        });
+        return;
+      }
+      if (url.pathname === "/v1/images/generations") {
         imageGenerationRequests.push(body);
         if (imageGenerationRequests.length > 20) {
           imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
@@ -2708,20 +2899,7 @@ export async function startQaMockOpenAiServer(params?: {
         });
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
-        const raw = await readBody(req);
-        writeJson(res, 200, {
-          text: transcriptionTextForAudioRequest(raw),
-        });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/v1/embeddings") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Embeddings");
-          return;
-        }
+      if (url.pathname === "/v1/embeddings") {
         const inputs = extractEmbeddingInputTexts(body.input);
         writeJson(res, 200, {
           object: "list",
@@ -2741,13 +2919,7 @@ export async function startQaMockOpenAiServer(params?: {
         });
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/responses") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw);
-        if (!body) {
-          writeOpenAiMalformedJsonError(res, "OpenAI Responses");
-          return;
-        }
+      if (url.pathname === "/v1/responses") {
         const dispatched = await dispatchResponses({ body, raw });
         if (dispatched.failure) {
           writeJson(res, dispatched.failure.status, {
@@ -2763,7 +2935,7 @@ export async function startQaMockOpenAiServer(params?: {
         if (dispatched.responsePauseMs !== undefined) {
           await sleep(dispatched.responsePauseMs);
         }
-        if (body.stream === false) {
+        if (body.stream !== true) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
             writeJson(res, 500, { error: "mock completion failed" });
@@ -2773,60 +2945,30 @@ export async function startQaMockOpenAiServer(params?: {
           dispatched.onResponseSent?.();
           return;
         }
-        if (dispatched.previewPauseMs !== undefined) {
-          await writeSseWithPreviewPause(res, events, dispatched.previewPauseMs);
-        } else {
-          writeSse(res, events);
-        }
+        await writeSse(res, events, "responses", dispatched.previewPauseMs);
         dispatched.onResponseSent?.();
         return;
       }
-      if (req.method === "POST" && url.pathname === "/v1/messages") {
-        const raw = await readBody(req);
-        const body = parseJsonObjectBody(raw) as AnthropicMessagesRequest | null;
-        if (!body) {
-          writeJson(res, 400, {
-            type: "error",
-            error: {
-              type: "invalid_request_error",
-              message: "Malformed JSON body for Anthropic Messages request.",
-            },
-          });
-          return;
-        }
-        const dispatched = await dispatchProvider({
-          route: "anthropic-messages",
-          body: body as Record<string, unknown>,
-          raw,
-        });
-        const { responseBody, streamEvents } = buildMessagesPayload(dispatched);
-        if (dispatched.failure?.presentation !== "anthropic-thinking") {
-          if (dispatched.failure) {
-            writeJson(res, dispatched.failure.status, responseBody);
-            return;
-          }
-        }
-        if (body.stream === true) {
-          writeAnthropicSse(res, streamEvents);
-          dispatched.onResponseSent?.();
-          return;
-        }
-        writeJson(res, dispatched.failure?.status ?? 200, responseBody);
-        dispatched.onResponseSent?.();
+      const dispatched = await dispatchProvider({ route: "anthropic-messages", body, raw });
+      const { status, responseBody, streamEvents } = buildMessagesPayload(dispatched);
+      if (!streamEvents) {
+        writeJson(res, status, responseBody);
         return;
       }
-      writeJson(res, 404, { error: "not found" });
-    })();
+      if (body.stream === true) {
+        await writeSse(res, streamEvents, "anthropic");
+      } else {
+        writeJson(res, status, responseBody);
+      }
+      dispatched.onResponseSent?.();
+    });
   });
   const responsesWebSocket = attachQaMockResponsesWebSocketServer({
     server,
     dispatch: dispatchResponses,
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params?.port ?? 0, host, () => resolve());
-  });
+  await once(server.listen(params?.port ?? 0, host), "listening");
 
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -2834,7 +2976,7 @@ export async function startQaMockOpenAiServer(params?: {
   }
 
   return {
-    baseUrl: `http://${host}:${address.port}`,
+    baseUrl: formatUrl({ protocol: "http", hostname: host, port: address.port }),
     async stop() {
       await responsesWebSocket.close();
       await closeQaHttpServer(server);

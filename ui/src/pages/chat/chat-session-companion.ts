@@ -12,6 +12,7 @@ const COMPANION_ASK_TIMEOUT_MS = 70_000;
 
 export type ChatSessionCompanionThread = {
   exchanges: SessionCompanionExchange[];
+  loading: boolean;
   pendingQuestion: string | null;
   failedQuestion: string | null;
   hint:
@@ -68,6 +69,7 @@ function errorIsRetryable(error: unknown): boolean {
 function createThread(): MutableCompanionThread {
   return {
     exchanges: [],
+    loading: false,
     pendingQuestion: null,
     failedQuestion: null,
     failedQuestionKnownExchanges: null,
@@ -118,6 +120,8 @@ export class ChatSessionCompanionThreads {
     const revision = thread.revision;
     const token = Symbol(key);
     this.hydrationTokens.set(key, token);
+    thread.loading = true;
+    this.notify();
     try {
       const result = await load(targetSessionKey);
       if (this.hydrationTokens.get(key) !== token || thread.revision !== revision) {
@@ -149,6 +153,8 @@ export class ChatSessionCompanionThreads {
     } finally {
       if (this.hydrationTokens.get(key) === token) {
         this.hydrationTokens.delete(key);
+        thread.loading = false;
+        this.notify();
       }
     }
   }
@@ -229,11 +235,15 @@ export class ChatSessionCompanionThreads {
     if (!targetSessionKey) {
       return;
     }
-    const key = companionThreadKey(targetSessionKey, agentId);
     await clear(targetSessionKey);
-    this.hydrationTokens.delete(key);
-    this.submissionTokens.delete(key);
-    this.threads.set(key, createThread());
+    this.retire(targetSessionKey, agentId);
+  }
+
+  retire(sessionKey?: string, agentId?: string | null): void {
+    const key = sessionKey ? companionThreadKey(sessionKey, agentId) : null;
+    for (const store of [this.threads, this.hydrationTokens, this.submissionTokens]) {
+      void (key ? store.delete(key) : store.clear());
+    }
     this.notify();
   }
 

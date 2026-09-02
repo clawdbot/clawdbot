@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 const excludeOptionalEnv = { OPENCLAW_INCLUDE_OPTIONAL_BUNDLED: "0" } as const;
@@ -268,7 +269,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "bundled-skills"))).toBe(
       false,
     );
-    expect(fs.existsSync(staleNodeModulesDir)).toBe(true);
+    expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
   });
 
   it("retries transient skill copy races from concurrent runtime postbuilds", () => {
@@ -400,34 +401,52 @@ describe("copyBundledPluginMetadata", () => {
       packageName: "@openclaw/acpx-plugin",
       packageOpenClaw: { extensions: ["./index.ts"] },
       env: excludeOptionalEnv,
+      seedStaleDist: true,
       expectedExists: false,
     },
     {
-      name: "removes externalized optional plugin metadata from the core dist",
+      name: "omits external-only metadata without a publishable source-checkout build",
       pluginId: "whatsapp",
       packageName: "@openclaw/whatsapp",
       packageOpenClaw: {
         extensions: ["./index.ts"],
+        build: { bundledDist: false },
         install: { npmSpec: "@openclaw/whatsapp" },
       },
       env: {},
+      seedStaleDist: false,
       expectedExists: false,
     },
-  ] as const)("$name", ({ pluginId, packageName, packageOpenClaw, env, expectedExists }) => {
-    const repoRoot = makeRepoRoot(`openclaw-bundled-plugin-${pluginId}-`);
-    createPlugin(repoRoot, {
-      id: pluginId,
-      packageName,
-      packageOpenClaw,
-    });
+  ] as const)(
+    "$name",
+    ({ pluginId, packageName, packageOpenClaw, env, seedStaleDist, expectedExists }) => {
+      const repoRoot = makeRepoRoot(`openclaw-bundled-plugin-${pluginId}-`);
+      createPlugin(repoRoot, {
+        id: pluginId,
+        packageName,
+        packageOpenClaw,
+      });
+      if (seedStaleDist) {
+        const staleDistDir = path.join(repoRoot, "dist", "extensions", pluginId);
+        fs.mkdirSync(staleDistDir, { recursive: true });
+        fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {};\n", "utf8");
+      }
 
-    copyBundledPluginMetadataWithEnv({ repoRoot, env });
+      copyBundledPluginMetadataWithEnv({ repoRoot, env });
 
-    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(expectedExists);
-  });
+      expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(
+        expectedExists,
+      );
+    },
+  );
 
   it("removes build-excluded bundled plugin metadata", () => {
     const repoRoot = makeRepoRoot("openclaw-bundled-plugin-excluded-meta-");
+    createPlugin(repoRoot, {
+      id: "selected",
+      packageName: "@openclaw/selected",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
     createPlugin(repoRoot, {
       id: "whatsapp",
       packageName: "@openclaw/whatsapp",
@@ -440,9 +459,37 @@ describe("copyBundledPluginMetadata", () => {
     fs.mkdirSync(staleDistDir, { recursive: true });
     fs.writeFileSync(path.join(staleDistDir, "index.js"), "export default {}\n", "utf8");
 
-    copyBundledPluginMetadata({ repoRoot });
+    copyBundledPluginMetadata({
+      repoRoot,
+      env: { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "selected" },
+    });
 
     expect(fs.existsSync(staleDistDir)).toBe(false);
+    expect(readBundledPackageJson(repoRoot, "selected").openclaw?.extensions).toEqual([
+      "./index.js",
+    ]);
+  });
+
+  it("preserves isolated source-checkout output for an external plugin", () => {
+    const repoRoot = makeRepoRoot("openclaw-external-plugin-local-dist-meta-");
+    createPlugin(repoRoot, {
+      id: "sms",
+      packageName: "@openclaw/sms",
+      packageOpenClaw: {
+        extensions: ["./index.ts"],
+        build: { bundledDist: false },
+        release: { publishToNpm: true },
+      },
+    });
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "sms");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(distPluginDir, "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(distPluginDir, "openclaw.plugin.json"))).toBe(true);
+    expect(readBundledPackageJson(repoRoot, "sms").openclaw?.extensions).toEqual(["./index.js"]);
   });
 
   it("preserves manifest-less runtime support package outputs and copies package metadata", () => {

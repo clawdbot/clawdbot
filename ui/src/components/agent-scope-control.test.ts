@@ -48,7 +48,7 @@ describe("renderAgentScopeControl", () => {
     expect(container.querySelector(".agent-scope-control")).not.toBeNull();
   });
 
-  it("does not wrap dropdown options in a label that reactivates the trigger", async () => {
+  it("moves the scope label into the dropdown title without wrapping its options", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
@@ -67,6 +67,8 @@ describe("renderAgentScopeControl", () => {
     await select?.updateComplete;
 
     expect(select?.closest("label")).toBeNull();
+    expect(container.querySelector(".agent-scope-control__label")).toBeNull();
+    expect(select?.querySelector(".agent-select__menu-title")?.textContent).toBe("Agent");
     expect(select?.querySelector(".agent-select__trigger")?.getAttribute("aria-label")).toContain(
       "Agent",
     );
@@ -168,7 +170,9 @@ describe("renderAgentScopeControl", () => {
   it("supports a concrete-agent selector without an all-agents option", async () => {
     const container = document.createElement("div");
     document.body.append(container);
-    const setScope = vi.fn();
+    const set = vi.fn();
+    const selection = createSelection(vi.fn());
+    selection.set = set;
 
     render(
       renderAgentScopeControl({
@@ -176,7 +180,7 @@ describe("renderAgentScopeControl", () => {
           { id: "main", name: "Main agent" },
           { id: "writer", name: "Writer" },
         ],
-        selection: createSelection(setScope),
+        selection,
         allowAll: false,
         selectedId: "writer",
       }),
@@ -187,7 +191,7 @@ describe("renderAgentScopeControl", () => {
     expect(select?.value).toBe("writer");
     expect(select?.options.map((option) => option.value)).toEqual(["main", "writer"]);
     select?.onSelect("main");
-    expect(setScope).toHaveBeenCalledWith("main");
+    expect(set).toHaveBeenCalledWith("main");
     container.remove();
   });
 });

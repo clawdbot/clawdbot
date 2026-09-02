@@ -1,20 +1,24 @@
 import type { AssistantMessage } from "../../llm/types.js";
-import { isReplayUnsafeAssistantError } from "../../llm/utils/retry.js";
-import { extractLeadingHttpStatus } from "../../shared/assistant-error-format.js";
+import { isTerminalAssistantError } from "../../llm/utils/retry.js";
+import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import {
   classifyFailoverSignal,
   isAuthErrorMessage,
   isBillingErrorMessage,
   isRateLimitErrorMessage,
 } from "../failover/classify.js";
+import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
+import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
 import { extractFailoverSignalDetails } from "../failover/signal-details.js";
 import type { FailoverReason, FailoverSignal } from "../failover/signal.js";
 export function buildAssistantFailoverSignal(
   msg: AssistantMessage,
   opts?: { provider?: string },
 ): FailoverSignal {
+  const retryAfterMs = resolveRetryAfterMs(msg.errorMessage);
   return {
-    status: extractLeadingHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
+    status: extractErrorHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     code: msg.errorCode,
     errorType: msg.errorType,
     message: msg.errorMessage?.trim() || undefined,
@@ -24,12 +28,18 @@ export function buildAssistantFailoverSignal(
 }
 export function classifyAssistantFailoverReason(
   msg: AssistantMessage | undefined,
-  opts?: { provider?: string },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
-  if (!msg || msg.stopReason !== "error" || isReplayUnsafeAssistantError(msg)) {
+  if (!msg || msg.stopReason !== "error" || isTerminalAssistantError(msg)) {
     return null;
   }
-  const classification = classifyFailoverSignal(buildAssistantFailoverSignal(msg, opts));
+  // Runtime preparation carries the resolved owner here so packaged runs do
+  // not rediscover provider policy through a source-relative loader.
+  const providerOwner = opts?.providerOwner;
+  const classification = classifyFailoverSignal(
+    buildAssistantFailoverSignal(msg, { provider: providerOwner?.id ?? opts?.provider }),
+    { providerPlugin: providerOwner },
+  );
   return classification?.kind === "reason"
     ? classification.reason
     : classification

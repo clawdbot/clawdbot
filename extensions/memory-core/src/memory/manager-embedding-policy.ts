@@ -1,50 +1,16 @@
 // Memory Core plugin module implements manager embedding policy behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  estimateStructuredEmbeddingInputBytes,
+  estimateUtf8Bytes,
+  type EmbeddingInput,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
-
-type MemoryEmbeddingTextPart = {
-  type: "text";
-  text: string;
-};
-
-type MemoryEmbeddingInlineDataPart = {
-  type: "inline-data";
-  mimeType: string;
-  data: string;
-};
-
-type MemoryEmbeddingInput = {
-  text: string;
-  parts?: Array<MemoryEmbeddingTextPart | MemoryEmbeddingInlineDataPart>;
-};
 
 type MemoryEmbeddingChunk = {
   text: string;
-  embeddingInput?: MemoryEmbeddingInput;
+  embeddingInput?: EmbeddingInput;
 };
-
-function estimateUtf8Bytes(text: string): number {
-  if (!text) {
-    return 0;
-  }
-  return Buffer.byteLength(text, "utf8");
-}
-
-function estimateStructuredEmbeddingInputBytes(input: MemoryEmbeddingInput): number {
-  if (!input.parts?.length) {
-    return estimateUtf8Bytes(input.text);
-  }
-  let total = 0;
-  for (const part of input.parts) {
-    if (part.type === "text") {
-      total += estimateUtf8Bytes(part.text);
-    } else {
-      total += estimateUtf8Bytes(part.mimeType);
-      total += estimateUtf8Bytes(part.data);
-    }
-  }
-  return total;
-}
 
 export function filterNonEmptyMemoryChunks<T extends MemoryEmbeddingChunk>(chunks: T[]): T[] {
   return chunks.filter((chunk) => chunk.text.trim().length > 0);
@@ -83,26 +49,23 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
 }
 
 const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
-  /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i;
+  /(rate[_ ]limit|too many requests|\b(?:429|5\d\d)\b|resource has been exhausted|cloudflare|tokens per day)/i;
 
 const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
 
-const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
-  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted))/i;
+const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
+  /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b)/i;
 
-function isRetryableMemoryEmbeddingTransportError(message: string): boolean {
-  return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
-}
-
-export function isSplittableMemoryEmbeddingTransportError(message: string): boolean {
-  return SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message);
+export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
+  return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
 }
 
 export function isRetryableMemoryEmbeddingError(message: string): boolean {
   return (
-    RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message) ||
-    isRetryableMemoryEmbeddingTransportError(message)
+    RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message) ||
+    (!isSplittableMemoryEmbeddingBatchError(message) &&
+      RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message))
   );
 }
 
@@ -172,6 +135,6 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   }
 }
 
-export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): MemoryEmbeddingInput[] {
+export function buildTextEmbeddingInputs(chunks: MemoryEmbeddingChunk[]): EmbeddingInput[] {
   return chunks.map((chunk) => chunk.embeddingInput ?? { text: chunk.text });
 }

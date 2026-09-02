@@ -3,28 +3,32 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
+import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { changedServerUiPrefs, resetServerUiPrefsSync } from "../../app/server-prefs.ts";
+import {
+  changedServerUiPrefs,
+  refreshProfileAppearancePrefs,
+  resetServerUiPrefsSync,
+} from "../../app/server-prefs.ts";
 import { loadSettings } from "../../app/settings.ts";
+import * as modelCatalogStore from "../../lib/model-catalog-store.ts";
 import {
   installDialogPolyfill,
   nextFrame,
   waitForRenderedModalDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import * as chatModels from "../chat/models.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
 import {
   ConfigPage,
   configSelectionFromSearch,
   extractQuickSettingsSecurity,
 } from "./config-page.ts";
-import { configSectionKeysForPage } from "./config-sections.ts";
+import { serverUiPrefProvenanceHint } from "./view-appearance-preferences.ts";
 import type { ConfigViewState } from "./view.ts";
 
 const switchActiveRealtimeTalkCameras =
@@ -75,14 +79,6 @@ describe("configSelectionFromSearch", () => {
   });
 
   it("keeps MCP separate from Infrastructure", () => {
-    expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
-    expect(configSectionKeysForPage("infrastructure")).toEqual([
-      "gateway",
-      "browser",
-      "nodeHost",
-      "discovery",
-      "acp",
-    ]);
     expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
       activeSection: "mcp",
       activeSubsection: null,
@@ -93,24 +89,11 @@ describe("configSelectionFromSearch", () => {
     });
   });
 
-  it("keeps Communications focused on messages and text-to-speech", () => {
-    expect(configSectionKeysForPage("communications")).toEqual(["messages", "tts"]);
-  });
-
-  it("gives Talk its own curated page", () => {
-    expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
-  });
-
-  it("gives Updates ownership of the update config section", () => {
-    expect(configSectionKeysForPage("updates")).toEqual(["update"]);
+  it("keeps the Updates section off Advanced", () => {
     expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
       activeSection: null,
       activeSubsection: null,
     });
-  });
-
-  it("keeps provider models off Agent Defaults", () => {
-    expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
   });
 });
 
@@ -140,6 +123,146 @@ describe("extractQuickSettingsSecurity", () => {
 });
 
 describe("ConfigPage synced preference provenance", () => {
+  it.each([
+    {
+      label: "lets a profile-bound operator write appearance without config admin access",
+      selfUser: { id: "profile-owner" },
+      scopes: ["operator.write"],
+      canPatch: false,
+      appearanceCanSync: true,
+      localeCanSync: false,
+    },
+    {
+      label: "keeps read-only profile appearance device-local even when config patching is exposed",
+      selfUser: { id: "profile-viewer" },
+      scopes: ["operator.read"],
+      canPatch: true,
+      appearanceCanSync: false,
+      localeCanSync: true,
+    },
+    {
+      label: "preserves config-patch authorization when no profile is bound",
+      selfUser: null,
+      scopes: ["operator.write"],
+      canPatch: false,
+      appearanceCanSync: false,
+      localeCanSync: false,
+    },
+  ])("$label", ({ selfUser, scopes, canPatch, appearanceCanSync, localeCanSync }) => {
+    const page = new ConfigPage() as unknown as {
+      context: ApplicationContext;
+      serverUiPrefsCanSync: (
+        key?: "theme" | "themeMode" | "accent" | "fontUi" | "fontChat",
+      ) => boolean | null;
+    };
+    page.context = {
+      gateway: {
+        snapshot: { selfUser, hello: { auth: { role: "operator", scopes } } },
+      },
+      runtimeConfig: { state: { connected: true }, canPatch },
+    } as unknown as ApplicationContext;
+
+    expect(page.serverUiPrefsCanSync("theme")).toBe(appearanceCanSync);
+    expect(page.serverUiPrefsCanSync("themeMode")).toBe(appearanceCanSync);
+    expect(page.serverUiPrefsCanSync("accent")).toBe(appearanceCanSync);
+    expect(page.serverUiPrefsCanSync("fontUi")).toBe(Boolean(selfUser) && appearanceCanSync);
+    expect(page.serverUiPrefsCanSync("fontChat")).toBe(Boolean(selfUser) && appearanceCanSync);
+    expect(page.serverUiPrefsCanSync()).toBe(localeCanSync);
+  });
+
+  it("describes profile-owned appearance without changing gateway or device-local hints", () => {
+    expect(serverUiPrefProvenanceHint("profile")).toBe(
+      "Saved to your profile — follows you on every device.",
+    );
+    expect(serverUiPrefProvenanceHint("synced")).toBe(
+      "Synced across your devices through the gateway.",
+    );
+    expect(serverUiPrefProvenanceHint("device-local")).toBe("Stored in this browser only.");
+  });
+
+  it("restores the gateway appearance default while queuing deletion of the profile override", async () => {
+    const configObject = { ui: { prefs: { theme: "dash" } } };
+    const client = {
+      request: vi.fn(async () => ({ status: "ok", entries: { "ui.theme": "knot" } })),
+    } as unknown as GatewayBrowserClient;
+    await refreshProfileAppearancePrefs({
+      client,
+      profileId: "profile-owner",
+      configObject,
+      scope: "ws://profile.test",
+      onApplied: vi.fn(),
+    });
+    const page = new ConfigPage() as unknown as {
+      context: ApplicationContext;
+      settings: ReturnType<typeof loadSettings>;
+      resetSyncedAppearancePref: (key: "theme") => void;
+    };
+    page.context = {
+      gateway: {
+        connection: { gatewayUrl: "ws://profile.test" },
+        snapshot: {
+          selfUser: { id: "profile-owner" },
+          hello: { auth: { role: "operator", scopes: ["operator.write"] } },
+        },
+      },
+      runtimeConfig: {
+        state: { connected: true, configSnapshot: { config: configObject } },
+        canPatch: false,
+      },
+      theme: { refresh: vi.fn() },
+    } as unknown as ApplicationContext;
+    const beforeReset = loadSettings();
+    page.settings = beforeReset;
+
+    page.resetSyncedAppearancePref("theme");
+
+    expect(page.settings.theme).toBe("dash");
+    expect(changedServerUiPrefs(beforeReset, page.settings)).toEqual({ theme: null });
+  });
+
+  it.each(["fontUi", "fontChat"] as const)(
+    "resets the %s profile override when its picker sentinel is selected",
+    async (key) => {
+      const gatewayUrl = "ws://font-profile.test";
+      const configObject = {};
+      const client = {
+        request: vi.fn(async () => ({ status: "ok", entries: { [`ui.${key}`]: "lora" } })),
+      } as unknown as GatewayBrowserClient;
+      await refreshProfileAppearancePrefs({
+        client,
+        profileId: "font-owner",
+        configObject,
+        scope: gatewayUrl,
+        onApplied: vi.fn(),
+      });
+      const page = new ConfigPage() as unknown as {
+        context: ApplicationContext;
+        settings: ReturnType<typeof loadSettings>;
+        setFont: (key: "fontUi" | "fontChat", font: undefined) => void;
+      };
+      page.context = {
+        gateway: {
+          connection: { gatewayUrl },
+          snapshot: {
+            selfUser: { id: "font-owner" },
+            hello: { auth: { role: "operator", scopes: ["operator.write"] } },
+          },
+        },
+        runtimeConfig: {
+          state: { connected: true, configSnapshot: { config: configObject } },
+          canPatch: false,
+        },
+        theme: { refresh: vi.fn() },
+      } as unknown as ApplicationContext;
+      const previous = loadSettings();
+      page.settings = previous;
+      page.setFont(key, undefined);
+      expect(page.settings[key]).toBeUndefined();
+      expect(changedServerUiPrefs(previous, page.settings)).toEqual({ [key]: null });
+      expect(page.context.theme.refresh).toHaveBeenCalledOnce();
+    },
+  );
+
   it("uses the committed snapshot for both display and reset while the form draft differs", () => {
     const page = new ConfigPage();
     const committedConfig = { ui: { prefs: { theme: "claw" } } };
@@ -223,27 +346,45 @@ describe("ConfigPage synced preference provenance", () => {
     expect(themeSection?.textContent).not.toContain("Default: Knot");
     expect(themeSection?.textContent).not.toContain("Stored in this browser only");
 
-    themeSection
-      ?.querySelector<HTMLButtonElement>(
-        ":scope > .settings-section__header button[aria-label='Reset to default']",
-      )
-      ?.click();
+    themeSection?.querySelector<HTMLButtonElement>(".settings-theme-card--claw")?.click();
 
     expect(changedServerUiPrefs(beforeReset, state.settings)).toEqual({ theme: null });
   });
 });
 
+describe("ConfigPage header", () => {
+  it("renders the route subtitle for Communications", () => {
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      pageId: "communications";
+      renderAdvancedConfig: () => undefined;
+    };
+    state.context = { runtimeConfig: { state: {} } } as unknown as ApplicationContext;
+    state.pageId = "communications";
+    state.renderAdvancedConfig = () => undefined;
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    expect(container.querySelector(".page-subtitle")?.textContent?.trim()).toBe(
+      "Messages and text-to-speech settings.",
+    );
+  });
+});
+
 describe("ConfigPage moved section routes", () => {
   it.each([
-    ["channels", "channels", ""],
-    ["broadcast", "advanced", "?section=broadcast"],
-    ["talk", "talk", "?section=talk"],
-  ])("redirects the former Communications %s section", (section, routeId, search) => {
+    ["communications", "channels", "channels", ""],
+    ["communications", "broadcast", "advanced", "?section=broadcast"],
+    ["communications", "talk", "talk", "?section=talk"],
+    ["appearance", "wizard", "advanced", "?section=wizard"],
+  ])("redirects the former %s %s section", (pageId, section, routeId, search) => {
     const navigate = vi.fn();
     const page = new ConfigPage();
     const state = page as unknown as {
       context: { navigate: typeof navigate };
-      pageId: "communications";
+      pageId: string;
       routeData: {
         pathname: string;
         search: string;
@@ -256,9 +397,9 @@ describe("ConfigPage moved section routes", () => {
       syncRouteData: () => void;
     };
     state.context = { navigate };
-    state.pageId = "communications";
+    state.pageId = pageId;
     state.routeData = {
-      pathname: "/settings/communications",
+      pathname: `/settings/${pageId}`,
       search: `?section=${section}`,
       hash: "",
       section,
@@ -428,9 +569,9 @@ describe("ConfigPage camera selection", () => {
 
 describe("ConfigPage session observer models", () => {
   it("lets a replacement Gateway load while the stale client is still pending", async () => {
-    const first = deferred<ModelCatalogEntry[]>();
-    const second = deferred<ModelCatalogEntry[]>();
-    vi.spyOn(chatModels, "loadModels")
+    const first = deferred<ModelCatalogResult>();
+    const second = deferred<ModelCatalogResult>();
+    vi.spyOn(modelCatalogStore, "loadModelCatalog")
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     const firstClient = {} as GatewayBrowserClient;
@@ -443,36 +584,51 @@ describe("ConfigPage session observer models", () => {
       context: ApplicationContext;
       systemInfoGatewaySource: ApplicationGateway;
       sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
       sessionObserverModelsClient: GatewayBrowserClient | null;
-      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
     };
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = { gateway } as ApplicationContext;
+    state.context = {
+      gateway,
+      agentSelection: { state: { selectedId: "main" } },
+    } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 
-    const firstLoad = state.ensureSessionObserverModels(firstClient);
+    const firstLoad = state.ensureSessionObserverModels(firstClient, "main");
     (gateway as { snapshot: ApplicationGatewaySnapshot }).snapshot = {
       client: secondClient,
       phase: "connected",
     } as ApplicationGatewaySnapshot;
-    const secondLoad = state.ensureSessionObserverModels(secondClient);
+    const secondLoad = state.ensureSessionObserverModels(secondClient, "main");
     const currentModels = [{ id: "small", name: "Small", provider: "openai" }];
-    second.resolve(currentModels);
+    second.resolve({ models: currentModels });
     await secondLoad;
     expect(state.sessionObserverModels).toEqual(currentModels);
     expect(state.sessionObserverModelsClient).toBe(secondClient);
 
-    first.resolve([{ id: "stale", name: "Stale", provider: "old" }]);
+    first.resolve({ models: [{ id: "stale", name: "Stale", provider: "old" }] });
     await firstLoad;
     expect(state.sessionObserverModels).toEqual(currentModels);
-    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, firstClient, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, secondClient, {
+      agentId: "main",
+      preparedOnly: true,
+    });
   });
 
   it("retries a transient catalog failure on the next status refresh", async () => {
     const recoveredModels = [{ id: "small", name: "Small", provider: "openai" }];
-    vi.spyOn(chatModels, "loadModels")
+    vi.spyOn(modelCatalogStore, "loadModelCatalog")
       .mockRejectedValueOnce(new Error("catalog unavailable"))
-      .mockResolvedValueOnce(recoveredModels);
+      .mockResolvedValueOnce({ models: recoveredModels });
     const client = {} as GatewayBrowserClient;
     const gateway = {
       snapshot: { client, phase: "connected" },
@@ -483,21 +639,86 @@ describe("ConfigPage session observer models", () => {
       systemInfoGatewaySource: ApplicationGateway;
       sessionObserverModels: ModelCatalogEntry[];
       sessionObserverModelsUnavailable: boolean;
-      ensureSessionObserverModels: (client: GatewayBrowserClient) => Promise<void>;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
     };
     Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = { gateway } as ApplicationContext;
+    state.context = {
+      gateway,
+      agentSelection: { state: { selectedId: "main" } },
+    } as ApplicationContext;
     state.systemInfoGatewaySource = gateway;
 
-    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client, "main");
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
 
-    await state.ensureSessionObserverModels(client);
+    await state.ensureSessionObserverModels(client, "main");
 
     expect(state.sessionObserverModels).toEqual(recoveredModels);
     expect(state.sessionObserverModelsUnavailable).toBe(false);
-    expect(chatModels.loadModels).toHaveBeenCalledTimes(2);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenLastCalledWith(client, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+  });
+
+  it("keeps a same-client agent switch from restoring stale observer models", async () => {
+    const main = deferred<ModelCatalogResult>();
+    const writer = deferred<ModelCatalogResult>();
+    vi.spyOn(modelCatalogStore, "loadModelCatalog").mockImplementation((_client, options) =>
+      options.agentId === "writer" ? writer.promise : main.promise,
+    );
+    const client = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client, phase: "connected" },
+    } as unknown as ApplicationGateway;
+    const selectionState = { selectedId: "main" as string | null };
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      sessionObserverModelsUnavailable: boolean;
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = {
+      gateway,
+      agentSelection: { state: selectionState },
+    } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    const mainLoad = state.ensureSessionObserverModels(client, "main");
+    selectionState.selectedId = "writer";
+    const writerLoad = state.ensureSessionObserverModels(client, "writer");
+    const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
+    writer.resolve({ models: writerModels });
+    await writerLoad;
+    main.resolve({ models: [{ id: "main-model", name: "Main Model", provider: "openai" }] });
+    await mainLoad;
+
+    expect(state.sessionObserverModels).toEqual(writerModels);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, client, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, client, {
+      agentId: "writer",
+      preparedOnly: true,
+    });
+
+    selectionState.selectedId = null;
+    await state.ensureSessionObserverModels(client, null);
+    expect(state.sessionObserverModels).toEqual([]);
+    expect(state.sessionObserverModelsUnavailable).toBe(true);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -630,7 +851,20 @@ describe("ConfigPage Updates integration", () => {
     }
     channel.value = "beta";
     channel.dispatchEvent(new Event("change"));
-    const automatic = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const policySwitches = [
+      ...container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch"),
+    ];
+    const checks = policySwitches.find(
+      (control) => control.textContent?.trim() === "Check for updates",
+    );
+    if (!checks) {
+      throw new Error("Missing update checks control");
+    }
+    checks.checked = false;
+    checks.dispatchEvent(new Event("change"));
+    const automatic = policySwitches.find(
+      (control) => control.textContent?.trim() === "Automatic updates",
+    );
     if (!automatic) {
       throw new Error("Missing automatic update control");
     }
@@ -642,6 +876,7 @@ describe("ConfigPage Updates integration", () => {
     await nextFrame();
 
     expect(patchForm).toHaveBeenCalledWith(["update", "channel"], "beta");
+    expect(patchForm).toHaveBeenCalledWith(["update", "checkOnStart"], false);
     expect(patchForm).toHaveBeenCalledWith(["update", "auto", "enabled"], true);
     // Settings shares the sidebar card's confirmation gate: nothing runs on the click itself.
     expect(runUpdate).not.toHaveBeenCalled();

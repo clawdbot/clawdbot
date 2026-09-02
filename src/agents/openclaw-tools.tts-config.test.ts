@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
   return {
     stubTool,
     createCronToolOptions: vi.fn(),
+    createTranscriptsToolOptions: vi.fn(),
     createSessionStatusToolOptions: vi.fn(),
     createImageGenerateToolOptions: vi.fn(),
     createMusicGenerateToolOptions: vi.fn(),
@@ -63,7 +64,7 @@ vi.mock("./tools/image-generate-tool.js", () => ({
 }));
 
 vi.mock("./tools/image-tool.js", () => ({
-  createImageTool: () => mocks.stubTool("image"),
+  createImageTool: () => mocks.stubTool("view_image"),
 }));
 
 vi.mock("./tools/message-tool-execution.js", () => ({
@@ -116,8 +117,11 @@ vi.mock("./tools/subagents-tool.js", () => ({
   createSubagentsTool: () => mocks.stubTool("subagents"),
 }));
 
-vi.mock("./tools/update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => mocks.stubTool("update_plan"),
+vi.mock("./tools/transcripts-tool.js", () => ({
+  createTranscriptsTool: (options: unknown) => {
+    mocks.createTranscriptsToolOptions(options);
+    return mocks.stubTool("transcripts");
+  },
 }));
 
 vi.mock("./tools/video-generate-tool.js", () => ({
@@ -153,6 +157,7 @@ function getTextToSpeechParams() {
 describe("createOpenClawTools TTS config wiring", () => {
   beforeEach(() => {
     mocks.createCronToolOptions.mockClear();
+    mocks.createTranscriptsToolOptions.mockClear();
     mocks.createImageGenerateToolOptions.mockClear();
     mocks.createMusicGenerateToolOptions.mockClear();
     mocks.createVideoGenerateToolOptions.mockClear();
@@ -263,6 +268,104 @@ describe("createOpenClawTools TTS config wiring", () => {
     expect(ttsParams?.cfg).toBe(injectedConfig);
     expect(ttsParams?.channel).toBe("feishu");
     expect(ttsParams?.accountId).toBe("feishu-main");
+  });
+});
+
+describe("createOpenClawTools transcript ownership wiring", () => {
+  beforeEach(() => {
+    mocks.createTranscriptsToolOptions.mockClear();
+  });
+
+  it("uses trusted caller authority instead of the delivery account", () => {
+    const injectedConfig = { transcripts: { enabled: true } } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config: injectedConfig,
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: "telegram",
+      gatewayCallerScheduled: true,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentChannel: "telegram",
+        agentAccountId: "creator",
+        caller: { kind: "operator", source: "scheduled" },
+        config: injectedConfig,
+      }),
+    );
+  });
+
+  it("uses the delivery account when no separate authority exists", () => {
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      requesterSenderId: "requester",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentChannel: "discord",
+        agentAccountId: "delivery",
+        caller: expect.objectContaining({
+          kind: "channel",
+          channel: "discord",
+          accountId: "delivery",
+          senderId: "requester",
+        }),
+      }),
+    );
+  });
+
+  it("hides transcripts when scheduled caller-channel provenance is unavailable", () => {
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: null,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).not.toHaveBeenCalled();
+
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerLocal: true,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).not.toHaveBeenCalled();
+  });
+
+  it("keeps transcripts channel-less for explicit local scheduled provenance", () => {
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerLocal: true,
+      gatewayCallerScheduled: true,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentChannel: undefined,
+        agentAccountId: "creator",
+        caller: { kind: "operator", source: "scheduled" },
+      }),
+    );
   });
 });
 

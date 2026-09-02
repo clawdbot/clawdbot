@@ -36,29 +36,9 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
-import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
-
-function projectSessionEntryForPersistenceRevision(params: {
-  storePath: string;
-  entry: SessionEntry;
-}): SessionEntry {
-  const snapshot = params.entry.skillsSnapshot;
-  const stripped =
-    snapshot?.resolvedSkills === undefined
-      ? params.entry
-      : {
-          ...params.entry,
-          skillsSnapshot: (({ resolvedSkills: _drop, ...rest }) => rest)(snapshot),
-        };
-  const projected = projectSessionStoreForPersistence({
-    storePath: params.storePath,
-    store: { entry: stripped },
-  });
-  return projected.store.entry ?? stripped;
-}
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,
@@ -89,11 +69,10 @@ export async function createSessionEntryWithTranscript<TError = string>(
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
   const storePath = resolveAccessStorePath(scope);
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  // The incognito sentinel is scoped to env; its path alone cannot identify the memory store.
+  const storeScope = { agentId, env: scope.env, storePath };
   const store = Object.fromEntries(
-    listSessionEntriesCore({ agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesCore(storeScope).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: scope.sessionKey });
   const created = await createEntry({
@@ -105,17 +84,19 @@ export async function createSessionEntryWithTranscript<TError = string>(
   }
 
   try {
-    options.commitGuard?.();
     await appendTranscriptEvent(
       {
-        agentId,
+        ...storeScope,
         sessionId: created.entry.sessionId,
         sessionKey: resolved.normalizedKey,
-        storePath,
       },
       createSessionTranscriptHeader({ cwd: options.cwd, sessionId: created.entry.sessionId }),
+      options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : undefined,
     );
   } catch (err) {
+    // Preserve authority errors from the commit guard instead of projecting
+    // them as transcript failures at the Gateway boundary.
+    options.commitGuard?.();
     return {
       ok: false,
       error: formatErrorMessage(err),
@@ -125,8 +106,7 @@ export async function createSessionEntryWithTranscript<TError = string>(
 
   const entry = created.entry;
   await applySessionEntryLifecycleMutation({
-    agentId,
-    storePath,
+    ...storeScope,
     removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
     upserts: [{ sessionKey: resolved.normalizedKey, entry }],
     skipMaintenance: true,
@@ -231,28 +211,14 @@ export function mergeConcurrentReplySessionMetadata(params: {
   return merged;
 }
 
-export function createReplySessionInitializationRevision(params: {
-  entry: SessionEntry | undefined;
-  storePath: string;
-}): string {
-  const { entry, storePath } = params;
+export function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
   if (!entry) {
     return JSON.stringify(null);
   }
   // The guard only rejects a true session-identity rebind. Same-session
   // activity/context writes are merged below; comparing them here would reject
   // before the merge can preserve the concurrent metadata.
-  const projected = projectSessionEntryForPersistenceRevision({ storePath, entry });
-  return JSON.stringify({ sessionId: projected.sessionId });
-}
-
-export function resolveInitializedReplySessionEntry(params: {
-  agentId: string;
-  currentEntry?: SessionEntry;
-  sessionEntry: SessionEntry;
-  storePath: string;
-}): SessionEntry {
-  return params.sessionEntry;
+  return JSON.stringify({ sessionId: entry.sessionId });
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */
@@ -328,13 +294,13 @@ export async function markSessionAbortTarget(params: {
   scope: SessionAccessScope;
   now?: () => number;
 }): Promise<SessionAbortTargetResult | null> {
-  let resolvedTarget: SessionAbortTargetResult | null = null;
+  const resolution: { target: SessionAbortTargetResult | null } = { target: null };
   try {
     const sessionKey = normalizeStoreSessionKey(params.scope.sessionKey);
     const updated = await patchSessionEntryCore(
       params.scope,
       (currentEntry) => {
-        resolvedTarget = {
+        resolution.target = {
           entry: { ...currentEntry },
           persisted: false,
           sessionId: currentEntry.sessionId,
@@ -368,7 +334,7 @@ export async function markSessionAbortTarget(params: {
         }
       : null;
   } catch (error) {
-    const fallbackTarget = resolvedTarget as unknown as SessionAbortTargetResult | null;
+    const fallbackTarget = resolution.target;
     if (fallbackTarget) {
       return {
         entry: fallbackTarget.entry,

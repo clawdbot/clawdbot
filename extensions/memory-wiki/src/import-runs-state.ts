@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenKeyedStoreOptions,
@@ -12,7 +13,6 @@ import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap, { pMapSkip } from "p-map";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 
 const LEGACY_IMPORT_RUN_READ_CONCURRENCY = 16;
@@ -510,12 +510,16 @@ export async function readLegacyMemoryWikiImportRunRecords(
     }
     throw error;
   });
-  return await pMap(
-    entries.filter((entry) => entry.kind === "file"),
-    async (entry) => {
-      const raw = await fs.readFile(path.join(importRunsDir, entry.relativePath), "utf8");
-      return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown) ?? pMapSkip;
-    },
-    { concurrency: LEGACY_IMPORT_RUN_READ_CONCURRENCY, stopOnError: true },
-  );
+  const { results } = await runTasksWithConcurrency({
+    tasks: entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => async () => {
+        const raw = await fs.readFile(path.join(importRunsDir, entry.relativePath), "utf8");
+        return normalizeMemoryWikiImportRunRecord(JSON.parse(raw) as unknown);
+      }),
+    limit: LEGACY_IMPORT_RUN_READ_CONCURRENCY,
+    errorMode: "stop",
+    throwOnError: true,
+  });
+  return results.filter((record): record is ChatGptImportRunRecord => record !== null);
 }

@@ -29,7 +29,6 @@ export function buildSubagentLaunchRequest(params: {
   childSystemPrompt: string;
   thinkingOverride?: string;
   runTimeoutSeconds: number;
-  label?: string;
   lightContext: boolean;
   expectsCompletionMessage: boolean;
   requesterOrigin?: {
@@ -111,7 +110,7 @@ export function buildSubagentLaunchRequest(params: {
     extraSystemPrompt: params.childSystemPrompt,
     thinking: params.thinkingOverride,
     timeout: params.runTimeoutSeconds,
-    label: params.label,
+    // Creation owns the label; delayed launches must preserve operator renames.
     ...(bootstrapContextMode
       ? {
           bootstrapContextMode,

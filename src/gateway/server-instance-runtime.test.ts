@@ -8,7 +8,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { waitForActiveGatewayRootWork } from "../process/gateway-work-admission.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
@@ -28,6 +28,7 @@ function createContext(): GatewayRequestContext {
       error: vi.fn(),
     },
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
 }
@@ -49,7 +50,12 @@ describe("createGatewayInstanceRuntime", () => {
     const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {
       respond(true, { raw: true });
     });
-    const registry = createRegistry({ agent: rawAgent });
+    const rawAbort = vi.fn<NonNullable<GatewayRequestHandlers["chat.abort"]>>(
+      ({ params, respond }) => {
+        respond(true, { aborted: true, runIds: [(params as { runId: string }).runId] });
+      },
+    );
+    const registry = createRegistry({ agent: rawAgent, "chat.abort": rawAbort });
     const context = createContext();
     const runtime = createGatewayInstanceRuntime({
       getContext: () => context,
@@ -62,11 +68,25 @@ describe("createGatewayInstanceRuntime", () => {
       runtime.recovery.dispatchAgent({ message: "test", idempotencyKey: "run-unavailable" }),
     ).rejects.toThrow("Gateway instance dispatch unavailable");
     available = true;
+    await expect(
+      runtime.recovery.abortAgent({
+        agentId: "main",
+        runId: "run-1",
+        sessionKey: "agent:main:main",
+      }),
+    ).resolves.toEqual({ aborted: true, runIds: ["run-1"] });
+    expect(rawAbort).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: {
+          agentId: "main",
+          runId: "run-1",
+          sessionKey: "agent:main:main",
+        },
+      }),
+    );
     await expect(runtime.recovery.waitForAgent({ runId: "run-1", timeoutMs: 0 })).resolves.toEqual({
       runId: "run-1",
       status: "timeout",
-      timeoutPhase: "queue",
-      providerStarted: false,
     });
     context.dedupe.set("agent:run-cached-recovery", {
       ts: Date.now(),
@@ -79,6 +99,24 @@ describe("createGatewayInstanceRuntime", () => {
         idempotencyKey: "run-cached-recovery",
       }),
     ).resolves.toEqual({ runId: "run-cached-recovery", status: "ok", summary: "replayed" });
+    const onExecutionStarted = vi.fn();
+    context.dedupe.set("agent:run-cached-active", {
+      ts: Date.now(),
+      ok: true,
+      payload: { runId: "run-cached-active", status: "accepted" },
+    });
+    context.chatAbortControllers.set("run-cached-active", {
+      controller: new AbortController(),
+      executionStarted: true,
+    } as never);
+    await expect(
+      runtime.recovery.dispatchAgent(
+        { message: "test", idempotencyKey: "run-cached-active" },
+        undefined,
+        { onExecutionStarted },
+      ),
+    ).resolves.toMatchObject({ runId: "run-cached-active", status: "in_flight" });
+    expect(onExecutionStarted).toHaveBeenCalledOnce();
     await expect(
       runtime.recovery.dispatchAgent({
         message: "test",
@@ -88,9 +126,18 @@ describe("createGatewayInstanceRuntime", () => {
     ).rejects.toThrow("cwd must be absolute");
     expect(rawAgent).not.toHaveBeenCalled();
 
+    const retainedFacade = await runtime.createAgentTurnFacade({
+      client: createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] }),
+    });
     runtime.close();
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
+      "Gateway instance dispatch unavailable",
+    );
+    await expect(
+      retainedFacade.dispatch({ message: "stale completion", idempotencyKey: "closed-host" }),
+    ).rejects.toThrow("Gateway instance dispatch unavailable");
+    await expect(retainedFacade.wait({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",
     );
   });
@@ -104,7 +151,11 @@ describe("createGatewayInstanceRuntime", () => {
       internalDeliverySuppressText: true,
       pluginRuntimeOwnerId: "memory-core",
       delegatedToolPolicyHandoffId: "handoff-1",
-      sessionCreation: { via: "spawn", actor: { type: "agent", id: "agent:main:main" } },
+      sessionCreation: {
+        via: "spawn",
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: "agent:main:main",
+      },
     });
 
     const principal = captureAgentTurnPrincipal(client);
@@ -320,7 +371,7 @@ describe("createGatewayInstanceRuntime", () => {
         expect((caught as Error).message).toContain("gateway request timeout for send");
       } finally {
         finishHandler();
-        await waitForActiveGatewayRootWork();
+        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         runtime.close();
       }
     } finally {

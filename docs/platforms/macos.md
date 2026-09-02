@@ -8,8 +8,8 @@ title: "macOS app"
 ---
 
 The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
-permission prompts, notifications, WebChat, voice input, Canvas, and
-Mac-hosted node tools such as `system.run`.
+permission prompts, notifications, WebChat, voice input, a hosted-widget panel,
+and Mac-hosted node tools such as `system.run`.
 
 Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
 
@@ -36,8 +36,9 @@ has no macOS app asset, use the newest one that does, or build from source with
 
 1. Install and launch **OpenClaw.app**.
 2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
-3. Wait while the app installs the matching CLI runtime. In local mode it also
-   installs and starts the Gateway.
+3. For a new local Gateway, wait while the app installs its external CLI runtime
+   and starts the Gateway. Connecting to a remote or independently managed local
+   Gateway does not require installing a CLI on this Mac.
 4. Establish inference with a live model check. If the app reused a login you
    did not want, **Choose a different AI** on the success banner reopens the
    picker, including the API-key option.
@@ -53,6 +54,9 @@ recovery.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).
+
+Resize the Settings window to fit your display. Long settings panes scroll
+independently of the sidebar, keeping permission and capability controls reachable.
 
 ## Updates
 
@@ -77,9 +81,10 @@ downgrades a newer Gateway or overrides an `extended-stable` channel pin.
 After a successful update, the app finds the most recently human-used,
 top-level direct session and gives that agent a one-time update event. Heartbeat
 and cron activity do not affect this choice. The agent can then welcome you back
-from the conversation you were most likely using. In remote mode, the app
-updates only the local Mac node runtime and skips the notification when the
-remote Gateway is older than the app.
+from the conversation you were most likely using. In remote mode, a separately
+installed, app-managed node service retains its own runtime update and recovery
+flow; the app skips the notification when the remote Gateway is older than the
+app. The app's private node worker updates with the app bundle itself.
 
 Sparkle follows the Gateway's `update.channel` setting. `beta` and `dev` opt in
 to beta app builds; `extended-stable` accepts only extended-stable app releases,
@@ -88,15 +93,25 @@ unknown values stay on stable app builds.
 
 ## Open dashboard links
 
-In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width while keeping the dashboard navigation visible. Drag the divider to choose another width; the app remembers it. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
+In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar at half the window width. Drag the divider in either direction to choose another width; the app remembers it. Widening the browser lets the dashboard switch to compact navigation, with a 400-point minimum for the dashboard and a 320-point minimum for the browser. Each link opens in its own tab, the tab strip appears when multiple pages are open, and clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls.
 
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
+
+Drag the empty header space or title in the docked OpenClaw chat panel to move the app window. Its dock-position and close buttons remain clickable.
 
 Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links from the dashboard continue to open in the default browser; new-window links inside the sidebar open as new sidebar tabs. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
 
 ## Import browser logins
 
 The first time the browser sidebar opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
+
+## Sync cookies to a remote computer
+
+Import copies cookies once into a profile on the same Mac. When your Gateway and agent browser run on a **separate computer** (a dedicated box, a headless Linux host, or a cloud container), turn on cookie sync so this Mac keeps that remote browser signed in to the sites you choose.
+
+Open **Settings → General → Cookie sync**. It is **off by default** and only takes effect while the app runs in remote mode. Turn on **Sync cookies to the remote computer**, add the sites you want kept in sync to the **Domains** allowlist (for example `github.com` and `accounts.google.com`), and set the **Target profile** that receives them (the managed profile name on the remote Gateway, `imported` by default). A status row shows whether sync is running.
+
+While enabled, the app supervises the [`openclaw browser cookie-sync --watch`](/cli/browser#cookie-sync-to-a-remote-gateway) command against the connected Gateway. Cookies are decrypted locally on this Mac (one macOS Keychain or Touch ID prompt per session) and pushed to the remote profile over the app's existing encrypted Gateway connection; only the domains on the allowlist are ever sent, and cookie values are never written to logs. An empty allowlist syncs nothing. As with import, some Google sessions use device-bound session credentials (DBSC) that stay tied to this Mac and may still require re-authentication after sync; for those sites, drive the browser on the Mac itself through the [browser node proxy](/cli/browser#remote-browser-control-node-host-proxy) instead.
 
 ## Choose a Gateway mode
 
@@ -105,17 +120,18 @@ The first time the browser sidebar opens while the app runs against a local Gate
 | Local  | This Mac should run the Gateway and keep it alive with launchd.                | [Gateway on macOS](/platforms/mac/bundled-gateway) |
 | Remote | Another host runs the Gateway; this Mac controls it over SSH, LAN, or Tailnet. | [Remote control](/platforms/mac/remote)            |
 
-Both modes need an installed `openclaw` CLI because the app reuses its node-host
-runtime. On a fresh Mac, the app installs the matching CLI automatically; local
-mode then starts the Gateway wizard, while remote mode connects to the selected
-Gateway without starting a second local Gateway.
+The app's Mac node uses its bundled private runtime in both modes. Only setup
+and management of an app-owned local Gateway require the separate CLI install.
+Remote mode and attachment to an independently managed local Gateway skip that
+installation. Optional cookie sync still requires an external CLI on this Mac,
+and an existing separate node service keeps its own CLI lifecycle.
 See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 
 - Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
-- One Mac node that combines native Canvas, camera/screen capture, notifications,
+- One Mac node that combines the native widget panel, camera/screen capture, notifications,
   location, and computer control with the CLI node host's system, browser,
   plugin, skill, and MCP commands.
 - Exec approval prompts for Mac-hosted commands.
@@ -144,7 +160,7 @@ own docs.
 | Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
 | Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |
 | Use voice wake or push-to-talk           | [Voice wake](/platforms/mac/voicewake)                                                      |
-| Use Canvas and Canvas deep links         | [Canvas](/platforms/mac/canvas)                                                             |
+| Present hosted widgets in the Mac panel  | [Widget panel](/platforms/mac/canvas)                                                       |
 | Host PeekabooBridge for UI automation    | [Peekaboo bridge](/platforms/mac/peekaboo)                                                  |
 | Configure command approvals              | [Exec approvals](/tools/exec-approvals), [advanced details](/tools/exec-approvals-advanced) |
 | Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |

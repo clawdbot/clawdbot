@@ -12,6 +12,8 @@ type PendingChatAttachmentHandoff = {
   scopeKey: string;
   attachments: ChatAttachment[];
   fallbacks: Record<string, ChatComposerMemoryFallback>;
+  message: string;
+  preparedAt: number;
 };
 
 export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff {
@@ -48,11 +50,11 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
   };
 
   return {
-    prepare: ({ owner, paneId, scopeKey, attachments, fallbacks }) => {
+    prepare: ({ owner, paneId, scopeKey, attachments, fallbacks, message = "" }) => {
       const key = entryKey(paneId, scopeKey);
       const previous = take(key);
       const fallbackEntries = Object.entries(fallbacks);
-      if (attachments.length === 0 && fallbackEntries.length === 0) {
+      if (!message && attachments.length === 0 && fallbackEntries.length === 0) {
         releaseHandoff(previous);
         return;
       }
@@ -72,9 +74,11 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
       }
       pending.set(key, {
         owner,
+        preparedAt: Date.now(),
         paneId,
         scopeKey,
         attachments: [...attachments],
+        message,
         fallbacks: Object.fromEntries(
           fallbackEntries.map(([fallbackKey, fallback]) => [
             fallbackKey,
@@ -96,10 +100,23 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
       // A Gateway mismatch is terminal for this exact presentation. Other
       // retained session scopes under the same logical pane remain independent.
       if (match?.owner === owner) {
-        return { attachments: match.attachments, fallbacks: match.fallbacks };
+        return {
+          attachments: match.attachments,
+          fallbacks: match.fallbacks,
+          ...(match.message ? { message: match.message } : {}),
+        };
       }
       releaseHandoff(match);
       return null;
+    },
+    retireScope: (scopeKey, beforeRevision) => {
+      // Optimistic navigation may unmount the pane before deletion confirms.
+      // Retire that package without touching a later edit or another session.
+      for (const [key, handoff] of pending) {
+        if (handoff.scopeKey === scopeKey && handoff.preparedAt < beforeRevision) {
+          releaseHandoff(take(key));
+        }
+      }
     },
     clearPane: (paneId) => {
       for (const [key, handoff] of pending) {

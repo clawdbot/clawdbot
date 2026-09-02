@@ -13,12 +13,7 @@ import {
 import { loadWorkboard } from "./loading.ts";
 import { formatError } from "./normalization-utils.ts";
 import { normalizeCardPayload } from "./normalization.ts";
-import {
-  getWorkboardState,
-  invalidateWorkboardLoads,
-  waitForWorkboardLifecycleWrites,
-  type WorkboardHost,
-} from "./runtime.ts";
+import { getWorkboardState, invalidateWorkboardLoads, type WorkboardHost } from "./runtime.ts";
 import type { WorkboardCard, WorkboardStatus } from "./types.ts";
 
 const SESSION_CAPTURE_HISTORY_LIMIT = 40;
@@ -95,6 +90,9 @@ function sessionTitle(session: GatewaySessionRow, recentUserText: string | null)
 }
 
 function sessionCaptureStatus(session: GatewaySessionRow): WorkboardStatus {
+  if (session.status === "queued") {
+    return "todo";
+  }
   if (session.hasActiveRun === true || session.status === "running") {
     return "running";
   }
@@ -174,7 +172,6 @@ export async function captureSessionToWorkboard(params: {
   let captureStarted = false;
   try {
     if (!state.loaded) {
-      await waitForWorkboardLifecycleWrites(params.host);
       await loadWorkboard({
         host: params.host,
         client: params.client,
@@ -212,7 +209,7 @@ export async function captureSessionToWorkboard(params: {
     const recentUserText = extractChatHistoryText(messages, "user", "last");
     const lastAssistantText = extractChatHistoryText(messages, "assistant", "last");
     invalidateWorkboardLoads(params.host);
-    const payload = await params.client.request("workboard.cards.create", {
+    const payload = await params.client.request("workboard.cards.captureSession", {
       title: sessionTitle(params.session, recentUserText),
       notes: buildSessionCaptureNotes({
         session: params.session,

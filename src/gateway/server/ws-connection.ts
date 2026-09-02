@@ -5,6 +5,7 @@ import type { RawData, WebSocket, WebSocketServer } from "ws";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
+import { recordPairedNodeDisconnection } from "../../infra/device-pairing-node.js";
 import { touchPresence, upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -14,6 +15,7 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
+import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
@@ -23,11 +25,18 @@ import {
   MAX_BUFFERED_BYTES,
   MAX_PAYLOAD_BYTES,
   MAX_PREAUTH_PAYLOAD_BYTES,
+  WEBSOCKET_OPEN_READY_STATE,
 } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
+import {
+  classifyGatewayStaleInstall,
+  GATEWAY_STALE_INSTALL_CLOSE_REASON,
+} from "../stale-install.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
+import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { formatForLog, logWs } from "../ws-log.js";
+import { refreshClientPresence } from "./client-presence.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -56,20 +65,16 @@ import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
-  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   WS_HANDSHAKE_PHASES,
   type GatewayIngressWebSocket,
-  type GatewayWorkerIngress,
   type GatewayWsClient,
   type WsHandshakePhase,
 } from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-
-const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
-
 type GatewayWsSharedHandlerParams = {
+  bootId: string;
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
@@ -77,21 +82,15 @@ type GatewayWsSharedHandlerParams = {
   gatewayHost?: string;
   pluginSurfaceScheme?: "http" | "https";
   getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
-  /**
-   * Auth is read per connection, not per process: a reload can rotate it while
-   * this handler stays attached. One getter keeps that the only source, so no
-   * caller can hand over a snapshot that silently outlives the config it came from.
-   */
+  // Read per connection so reloads cannot leave a stale auth snapshot.
   getResolvedAuth: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
-  /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
-  /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
-  isControlUiDeviceAuthMigrationPending?: () => boolean;
+  isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -120,7 +119,7 @@ function attachGatewayWsMessageHandlerOnDemand(
 ): void {
   const queued: RawData[] = [];
   const queueMessage = (data: RawData) => {
-    if (queued.length >= MAX_QUEUED_MESSAGE_HANDLER_FRAMES) {
+    if (queued.length >= 16) {
       params.setCloseCause("message-handler-loading-overflow", {
         queuedFrames: queued.length,
       });
@@ -143,11 +142,25 @@ function attachGatewayWsMessageHandlerOnDemand(
     })
     .catch((error: unknown) => {
       params.socket.off("message", queueMessage);
+      const formattedError = formatError(error);
+      const staleInstall = classifyGatewayStaleInstall(error);
+      if (staleInstall) {
+        params.setCloseCause("message-handler-load-failed", {
+          error: formattedError,
+          staleInstall: true,
+          restartCommand: staleInstall.restartCommand,
+        });
+        params.logWsControl.error(
+          `failed to load ws message handler because the OpenClaw installation changed while the Gateway was running conn=${params.connId}; run: ${staleInstall.restartCommand}; error: ${formattedError}`,
+        );
+        params.close(1011, GATEWAY_STALE_INSTALL_CLOSE_REASON);
+        return;
+      }
       params.setCloseCause("message-handler-load-failed", {
-        error: formatError(error),
+        error: formattedError,
       });
-      params.logWsControl.warn(
-        `failed to load ws message handler conn=${params.connId}: ${formatError(error)}`,
+      params.logWsControl.error(
+        `failed to load ws message handler conn=${params.connId}: ${formattedError}`,
       );
       params.close(1011, "gateway message handler unavailable");
     });
@@ -171,7 +184,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     nodeReapprovalCoordinator,
     isStartupPending,
-    isControlUiDeviceAuthMigrationPending,
+    isPendingWorkerNodeSetup,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -185,18 +198,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     workerConnectionService,
   } = params;
   const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
-
   wss.on("connection", (socket, upgradeReq) => {
-    let client: GatewayWsClient | null = null;
-    let closed = false;
-    const openedAt = Date.now();
-    const connId = randomUUID();
+    let client: GatewayWsClient | null = null,
+      closed = false;
+    const [openedAt, connId] = [Date.now(), randomUUID()];
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
-    const workerIngress: GatewayWorkerIngress =
-      ingressSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] ?? "loopback";
     const publicWorkerIngress =
-      workerIngress === "public" ? takePublicWorkerIngress(socket) : undefined;
+      connectionKind === "worker" ? takePublicWorkerIngress(socket) : undefined;
     const connectionPreauthBudget =
       ingressSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] ?? preauthConnectionBudget;
     const { remoteAddr, remotePort, localAddr, localPort, endpoint } = resolveSocketAddress(socket);
@@ -219,7 +228,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
     const openedDuringStartup = isStartupPending?.() === true;
-
     const pluginNodeCapabilities =
       connectionKind === "gateway" ? (getPluginNodeCapabilities?.() ?? []) : [];
     const pluginSurfaceBaseUrl =
@@ -281,9 +289,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     };
 
-    let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let stopKeepalive: (() => void) | undefined;
     let cleanupWorkerConnection: (() => void) | undefined;
-    let awaitingPong = false;
     let retainClientUntilNodeDrain = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
@@ -313,7 +320,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       closed = true;
       clearTimeout(handshakeTimer);
-      clearInterval(pingTimer);
+      stopKeepalive?.();
       cleanupWorkerConnection?.();
       releasePreauthBudget();
       try {
@@ -324,6 +331,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     const close = (code = 1000, reason?: string) => {
+      retainClientUntilNodeDrain ||=
+        !closed && client?.connect.role === "node" && nodeLifecycleDispatch.hasActive();
       retireTransport(code, reason);
       if (client && !retainClientUntilNodeDrain) {
         clients.delete(client);
@@ -332,7 +341,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const send = (obj: unknown) => {
       if (closed) {
-        return;
+        return { kind: "unavailable" } as const;
+      }
+      if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+        close();
+        return { kind: "unavailable" } as const;
       }
       if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
         logRejectedLargePayload({
@@ -346,12 +359,22 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           limitBytes: MAX_BUFFERED_BYTES,
         });
         close(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
-        return;
+        socket.terminate();
+        return { kind: "unavailable" } as const;
+      }
+      let encoded: string;
+      try {
+        encoded = JSON.stringify(obj);
+      } catch (error) {
+        return { kind: "serialization", error } as const;
       }
       try {
-        socket.send(JSON.stringify(obj));
+        socket.send(encoded);
+        return { kind: "sent" } as const;
       } catch {
-        /* ignore */
+        socket.terminate();
+        close();
+        return { kind: "unavailable" } as const;
       }
     };
 
@@ -367,14 +390,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     socket.once("error", (err) => {
       if (isWsPayloadLimitError(err)) {
-        const workerPayload = connectionKind === "worker";
         logRejectedLargePayload({
           surface: client ? "gateway.ws.frame" : "gateway.ws.preauth",
-          limitBytes: workerPayload
-            ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
-            : client
-              ? MAX_PAYLOAD_BYTES
-              : MAX_PREAUTH_PAYLOAD_BYTES,
+          limitBytes:
+            connectionKind === "worker"
+              ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
+              : client
+                ? MAX_PAYLOAD_BYTES
+                : MAX_PREAUTH_PAYLOAD_BYTES,
           reason: client ? "ws_frame_limit" : "preauth_frame_limit",
         });
       }
@@ -387,7 +410,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     socket.on("pong", () => {
-      awaitingPong = false;
       if (client?.presenceKey) {
         touchPresence(client.presenceKey);
       }
@@ -434,16 +456,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
         const logFn =
           isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
-          isExpectedStartupRetryClose ||
+          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE ||
           isExpectedLocalAppStartupAbort(code)
             ? logWsControl.debug
             : logWsControl.warn;
         const authReason = stringMetaValue(closeMeta, "authReason");
-        // This pre-connect close path has no client object yet; treat only
-        // missing shared credentials as suppressible startup retry noise.
+        // Only missing shared credentials are suppressible startup retry noise.
         const shouldLimitMissingAuthClose =
           closeCause === "unauthorized" &&
           shouldLimitMissingCredentialAuthLog({
@@ -488,14 +508,27 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         const context = buildRequestContext();
         cleanupTalkConnection(connId, logGateway);
         context.unsubscribeAllSessionEvents(connId);
-        // Detach (or, with a zero grace period, kill) any PTY shells this
-        // connection owned; detached sessions stay reattachable via
-        // terminal.attach until their reaper fires.
+        // Detach or kill owned PTY shells; detached sessions remain reattachable until reaped.
         context.terminalSessions?.handleDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
+        let disconnectedNodeHistory:
+          | Parameters<typeof recordPairedNodeDisconnection>[0]
+          | undefined;
         if (client?.connect?.role === "node") {
-          // Retire I/O immediately, but keep the client revocable until admitted
-          // lifecycle work drains; pairing/token removal must still fence it.
+          const nodeId = client.connect.device?.id ?? client.connect.client.id;
+          const nodeSession = context.nodeRegistry.get(nodeId);
+          if (nodeSession?.connId === connId && nodeSession.pairingGeneration) {
+            disconnectedNodeHistory = {
+              nodeId: nodeSession.nodeId,
+              connectedAtMs: nodeSession.connectedAtMs,
+              disconnectedAtMs: Date.now(),
+              expectedPairingGeneration: {
+                nodeId: nodeSession.nodeId,
+                key: nodeSession.pairingGeneration,
+              },
+            };
+          }
+          // Retire I/O now, but retain revocation until admitted lifecycle work drains.
           retainClientUntilNodeDrain = true;
           retireTransport();
           try {
@@ -512,6 +545,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
             retainClientUntilNodeDrain = false;
           }
         }
+        // Retire node-owned projections before history persistence yields; a reconnect
+        // may own this node id by the time the write finishes.
         if (
           client?.presenceKey &&
           (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
@@ -526,6 +561,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           removeRemoteNodeInfo(currentDisconnectedNodeId);
           context.nodeUnsubscribeAll(currentDisconnectedNodeId);
           clearNodeWakeState(currentDisconnectedNodeId);
+        }
+        if (
+          disconnectedNodeHistory &&
+          currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
+        ) {
+          try {
+            await recordPairedNodeDisconnection(disconnectedNodeHistory);
+          } catch (error) {
+            logGateway.warn(
+              `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
+            );
+          }
         }
       }
       logWs("out", "close", {
@@ -551,15 +598,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     });
 
     const setClient = (next: GatewayWsClient) => {
-      // Concurrent connect frames can finish authentication out of order. Keep
-      // one socket owner so a raced finalizer cannot leak a client or ping loop.
+      // Keep one socket owner when concurrent connect frames finish out of order.
       if (closed || client) {
         return false;
       }
       if (next.worker) {
         for (const existing of clients) {
           if (existing.worker?.environmentId === next.worker.environmentId) {
-            // Fence queued frames before transport teardown releases the old handler and timers.
             existing.invalidated = true;
             clients.delete(existing);
             try {
@@ -573,25 +618,19 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       releasePreauthBudget();
       client = next;
       clients.add(next);
-      pingTimer = setInterval(() => {
-        // A half-open TCP connection can remain OPEN indefinitely. Terminate
-        // after one missed pong so the normal close handler releases node state.
-        if (awaitingPong) {
-          setCloseCause("heartbeat-timeout");
-          try {
-            socket.terminate();
-          } catch {
-            close();
-          }
-          return;
-        }
-        awaitingPong = true;
+      if (next.presenceKey && next.authenticatedUserId && next.connect.role !== "node") {
+        next.personPresence = { onlineSince: Date.now() };
+        refreshClientPresence(clients, next);
+      }
+      stopKeepalive = startWebSocketKeepalive(socket, () => {
+        // A half-open control connection must release its node and worker owners.
+        setCloseCause("heartbeat-timeout");
         try {
-          socket.ping();
+          socket.terminate();
         } catch {
-          // close() clears the timer; ping can race with a socket already entering CLOSING.
+          close();
         }
-      }, 25_000);
+      });
       return true;
     };
 
@@ -601,7 +640,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         connId,
         service: workerConnectionService,
         isStartupPending,
-        ingress: workerIngress,
         send,
         close,
         isClosed: () => closed,
@@ -621,10 +659,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       return;
     }
 
+    const ingressAttribution = readPreparedGatewayIngressAttribution(upgradeReq);
+    if (!ingressAttribution || ingressAttribution.kind === "unattributable-proxy") {
+      setCloseCause("missing-ingress-attribution");
+      logWsControl.warn(`gateway websocket missing prepared ingress attribution conn=${connId}`);
+      close(1008, "gateway ingress attribution required");
+      return;
+    }
+
     attachGatewayWsMessageHandlerOnDemand({
       socket,
       upgradeReq,
+      ingressAttribution,
       connId,
+      bootId: params.bootId,
       remoteAddr,
       remotePort,
       localAddr,
@@ -644,7 +692,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       browserRateLimiter,
       nodeReapprovalCoordinator,
       isStartupPending,
-      isControlUiDeviceAuthMigrationPending,
+      isPendingWorkerNodeSetup,
       gatewayMethods,
       events,
       extraHandlers,

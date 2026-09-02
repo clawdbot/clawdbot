@@ -1,4 +1,5 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import type { CodexCliApiKeyCredential } from "../agents/cli-credentials.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
@@ -13,15 +14,20 @@ import { createMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   applyProviderPluginAuthMethodResultConfig,
   runProviderPluginAuthMethodUnpersisted,
 } from "../plugins/provider-auth-choice.js";
-import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
+import {
+  resolveManifestProviderAuthChoice,
+  type ProviderAuthChoiceMetadata,
+} from "../plugins/provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
@@ -47,6 +53,98 @@ import {
 } from "./setup-inference-plan-helpers.js";
 import { runProviderManualSecretMethod } from "./setup-inference-plan-provider-auth.js";
 
+function buildPreparedProviderTestPlan(params: {
+  cfg: OpenClawConfig;
+  sourceCfg: OpenClawConfig;
+  preparedConfig: OpenClawConfig;
+  profiles: ProviderAuthResult["profiles"];
+  selectedProfileId?: string;
+  modelRef: string;
+  pluginId?: string;
+  routeAgentId: string;
+  agentDir: string;
+}): SetupInferenceTestPlan {
+  const ref = parseRef(params.modelRef);
+  const projection = {
+    baseConfig: params.cfg,
+    preparedConfig: params.preparedConfig,
+    modelRef: params.modelRef,
+    providerId: ref.provider,
+    pluginId: params.pluginId,
+    agentId: params.routeAgentId,
+  };
+  const prepared = params.selectedProfileId
+    ? prepareManualAuthForActivation({
+        ...projection,
+        profiles: params.profiles,
+        selectedProfileId: params.selectedProfileId,
+      })
+    : {
+        config: projectManualInferenceConfig(projection),
+        profiles: [],
+        selectedProfileId: undefined,
+      };
+  return {
+    runner: "embedded",
+    ...ref,
+    modelRef: params.modelRef,
+    agentDir: params.agentDir,
+    config: prepared.config,
+    agentId: "openclaw",
+    routeAgentId: params.routeAgentId,
+    ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
+    persistModelRef: params.modelRef,
+    manualAuth: {
+      profiles: prepared.profiles,
+      runtimeConfigBase: params.cfg,
+      sourceConfigBase: params.sourceCfg,
+      configPatch: createMergePatch(params.cfg, prepared.config),
+      ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    },
+  };
+}
+
+async function prepareSetupProviderAuthChoice(
+  params: Parameters<typeof buildTestPlan>[0],
+  choice: ProviderAuthChoiceMetadata,
+) {
+  // Carry callable auth methods past the lease, never an unbound enabled config.
+  return await withPluginLifecycleLease({}, async () => {
+    const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
+    const enableResult = await enablePluginWithCapabilityConsent(params.cfg, choice.pluginId, {
+      workspaceDir: params.pluginWorkspaceDir,
+      onCapabilityConsent: params.prompter
+        ? createPluginCapabilityConsentPrompter(params.prompter, () =>
+            throwIfSetupInferenceCancelled(params),
+          )
+        : undefined,
+    });
+    if (!enableResult.enabled) {
+      return { error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).` };
+    }
+    const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
+    if (!sourceEnableResult.enabled) {
+      return {
+        error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
+      };
+    }
+    const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
+      config: enableResult.config,
+      workspaceDir: params.pluginWorkspaceDir,
+      mode: "setup",
+      includeUntrustedWorkspacePlugins: false,
+      onlyPluginIds: [choice.pluginId],
+    });
+    const provider = providers.find(
+      (candidate) =>
+        candidate.pluginId === choice.pluginId &&
+        normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
+    );
+    const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+    return { enableResult, sourceEnableResult, provider, method };
+  });
+}
+
 export async function buildTestPlan(params: {
   kind: SetupInferenceKind | "api-key" | "provider-auth";
   modelRef?: string;
@@ -67,6 +165,7 @@ export async function buildTestPlan(params: {
   deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
+  const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.routeAgentId);
   const resolveRouteModelRef = (defaultModelRef: string): string | { error: string } => {
     const modelRef = params.modelRef?.trim() || defaultModelRef;
     const selected = parseRef(modelRef);
@@ -96,30 +195,11 @@ export async function buildTestPlan(params: {
     ) {
       return { error: "That detected provider is no longer available on this Gateway." };
     }
-    const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
-    const enableResult = enablePlugin(cfg, choice.pluginId);
-    if (!enableResult.enabled) {
-      return { error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).` };
+    const providerChoice = await prepareSetupProviderAuthChoice(params, choice);
+    if (providerChoice.error !== undefined) {
+      return { error: providerChoice.error };
     }
-    const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
-    if (!sourceEnableResult.enabled) {
-      return {
-        error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
-      };
-    }
-    const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
-      config: enableResult.config,
-      workspaceDir: params.pluginWorkspaceDir,
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-      onlyPluginIds: [choice.pluginId],
-    });
-    const provider = providers.find(
-      (candidate) =>
-        candidate.pluginId === choice.pluginId &&
-        normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
-    );
-    const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+    const { enableResult, sourceEnableResult, provider, method } = providerChoice;
     if (!provider || !method?.appGuidedSetup) {
       return { error: "That detected provider is no longer available on this Gateway." };
     }
@@ -163,45 +243,17 @@ export async function buildTestPlan(params: {
           error: `${choice.choiceLabel} did not return credentials for its detected model.`,
         };
       }
-      const prepared = matchingProfile
-        ? prepareManualAuthForActivation({
-            baseConfig: enableResult.config,
-            preparedConfig,
-            profiles: result.profiles,
-            selectedProfileId: matchingProfile.profileId,
-            modelRef,
-            providerId: ref.provider,
-            pluginId: choice.pluginId,
-          })
-        : {
-            config: projectManualInferenceConfig({
-              baseConfig: enableResult.config,
-              preparedConfig,
-              modelRef,
-              providerId: ref.provider,
-              pluginId: choice.pluginId,
-            }),
-            profiles: [] as ProviderAuthResult["profiles"],
-            selectedProfileId: undefined,
-          };
-      return {
-        runner: "embedded",
-        ...ref,
+      return buildPreparedProviderTestPlan({
+        cfg: enableResult.config,
+        sourceCfg: sourceEnableResult.config,
+        preparedConfig,
+        profiles: result.profiles,
+        selectedProfileId: matchingProfile?.profileId,
         modelRef,
+        pluginId: choice.pluginId,
         agentDir: params.agentDir,
-        config: prepared.config,
-        agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(prepared.config),
-        ...(prepared.selectedProfileId ? { authProfileId: prepared.selectedProfileId } : {}),
-        persistModelRef: modelRef,
-        manualAuth: {
-          profiles: prepared.profiles,
-          runtimeConfigBase: enableResult.config,
-          sourceConfigBase: sourceEnableResult.config,
-          configPatch: createMergePatch(enableResult.config, prepared.config),
-          pluginId: choice.pluginId,
-        },
-      };
+        routeAgentId,
+      });
     } catch (error) {
       return {
         error: `${choice.choiceLabel} could not prepare app-guided setup: ${formatErrorMessage(error)}`,
@@ -259,14 +311,23 @@ export async function buildTestPlan(params: {
         return modelRef;
       }
       const ref = parseRef(modelRef);
+      // Backend metadata owns whether a CLI runtime aliases a canonical provider.
+      // Standalone CLI backends keep their runtime provider as the durable key.
+      const persistProvider =
+        resolveCliRuntimeCanonicalProvider({
+          runtime: ref.provider,
+          config: cfg,
+          env: process.env,
+          includeSetupRegistry: true,
+        }) ?? ref.provider;
       return {
         runner: "cli",
         ...ref,
         modelRef,
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
-        persistModelRef: modelRef,
+        routeAgentId,
+        persistModelRef: `${persistProvider}/${ref.model}`,
       };
     }
     case "gemini-cli": {
@@ -281,7 +342,7 @@ export async function buildTestPlan(params: {
         modelRef,
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         persistModelRef: modelRef,
       };
     }
@@ -304,6 +365,7 @@ export async function buildTestPlan(params: {
           selectedProfileId: "openai:codex-cli-api-key",
           modelRef,
           providerId: ref.provider,
+          agentId: routeAgentId,
         });
         return {
           runner: "embedded",
@@ -312,7 +374,7 @@ export async function buildTestPlan(params: {
           agentHarnessRuntimeOverride: "codex",
           config: preparedAuth.config,
           agentId: "openclaw",
-          routeAgentId: resolveDefaultAgentId(preparedAuth.config),
+          routeAgentId,
           agentDir: params.agentDir,
           cleanupBundleMcpOnRunEnd: true,
           authProfileId: preparedAuth.selectedProfileId,
@@ -332,7 +394,7 @@ export async function buildTestPlan(params: {
         agentHarnessRuntimeOverride: "codex",
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         agentDir: params.agentDir,
         cleanupBundleMcpOnRunEnd: true,
         persistModelRef: modelRef,
@@ -350,7 +412,7 @@ export async function buildTestPlan(params: {
         modelRef,
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         persistModelRef: modelRef,
       };
     }
@@ -366,7 +428,7 @@ export async function buildTestPlan(params: {
         modelRef,
         config: cfg,
         agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(cfg),
+        routeAgentId,
         persistModelRef: modelRef,
       };
     }
@@ -378,6 +440,39 @@ export async function buildTestPlan(params: {
         return { error: "Enter an API key or token first." };
       }
       const authChoice = params.authChoice?.trim();
+      if (interactive && authChoice === "custom-api-key") {
+        if (params.isRemoteProviderAuth) {
+          return { error: "For a custom provider, run openclaw onboard on the Gateway host." };
+        }
+        if (!params.prompter) {
+          return { error: "Custom provider setup requires an interactive CLI session." };
+        }
+        const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
+        throwIfSetupInferenceCancelled(params);
+        const prepared = await waitForProviderAuth(
+          promptCustomApiConfig({
+            config: cfg,
+            runtime: params.runtime,
+            prompter: params.prompter,
+            target: {
+              agentId: routeAgentId,
+              agentDir: params.agentDir,
+              workspaceDir: params.pluginWorkspaceDir,
+            },
+            // Endpoint verification prepares config; only the real completion may select it.
+            setAsPrimary: false,
+          }),
+          params.signal,
+        );
+        throwIfSetupInferenceCancelled(params);
+        return buildPreparedProviderTestPlan({
+          ...params,
+          preparedConfig: prepared.config,
+          profiles: [],
+          modelRef: `${prepared.providerId}/${prepared.modelId}`,
+          routeAgentId,
+        });
+      }
       const choice = authChoice
         ? (params.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
             authChoice,
@@ -403,32 +498,11 @@ export async function buildTestPlan(params: {
             : "That key-based provider is not available on this Gateway.",
         };
       }
-      const enablePlugin = params.deps.enablePluginInConfig ?? enablePluginInConfig;
-      const enableResult = enablePlugin(cfg, choice.pluginId);
-      if (!enableResult.enabled) {
-        return {
-          error: `${choice.choiceLabel} is disabled (${enableResult.reason ?? "blocked"}).`,
-        };
+      const providerChoice = await prepareSetupProviderAuthChoice(params, choice);
+      if (providerChoice.error !== undefined) {
+        return { error: providerChoice.error };
       }
-      const sourceEnableResult = enablePlugin(params.sourceCfg, choice.pluginId);
-      if (!sourceEnableResult.enabled) {
-        return {
-          error: `${choice.choiceLabel} is disabled (${sourceEnableResult.reason ?? "blocked"}).`,
-        };
-      }
-      const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
-        config: enableResult.config,
-        workspaceDir: params.pluginWorkspaceDir,
-        mode: "setup",
-        includeUntrustedWorkspacePlugins: false,
-        onlyPluginIds: [choice.pluginId],
-      });
-      const provider = providers.find(
-        (candidate) =>
-          candidate.pluginId === choice.pluginId &&
-          normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
-      );
-      const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
+      const { enableResult, sourceEnableResult, provider, method } = providerChoice;
       const resolved = provider && method ? { provider, method } : null;
       if (
         !resolved ||
@@ -475,12 +549,17 @@ export async function buildTestPlan(params: {
             if (!guidedSetup) {
               return { error: "That provider setup is not available on this Gateway." };
             }
-            const candidate = await guidedSetup.detect({
-              config: preparedConfig,
-              env: process.env,
-              workspaceDir: params.pluginWorkspaceDir,
-              ...(params.signal ? { signal: params.signal } : {}),
-            });
+            const selectedModelRef = result.defaultModel
+              ? normalizeAgentModelRefForConfig(result.defaultModel)
+              : "";
+            const candidate = selectedModelRef
+              ? { modelRef: selectedModelRef }
+              : await guidedSetup.detect({
+                  config: preparedConfig,
+                  env: process.env,
+                  workspaceDir: params.pluginWorkspaceDir,
+                  ...(params.signal ? { signal: params.signal } : {}),
+                });
             if (!candidate) {
               return {
                 error: `${resolved.provider.label} setup completed, but no compatible model was found. Add a compatible model and try again.`,
@@ -554,7 +633,7 @@ export async function buildTestPlan(params: {
       const modelRef = result.defaultModel
         ? normalizeAgentModelRefForConfig(result.defaultModel)
         : "";
-      if (!modelRef || result.profiles.length === 0) {
+      if (!modelRef) {
         return {
           error: `${resolved.provider.label} does not expose a starter model for app-guided setup.`,
         };
@@ -569,38 +648,22 @@ export async function buildTestPlan(params: {
         (profile) =>
           normalizeProviderId(profile.credential.provider) === normalizeProviderId(ref.provider),
       );
-      if (!matchingProfile) {
+      if (result.profiles.length > 0 && !matchingProfile) {
         return {
           error: `${resolved.provider.label} did not return credentials for its starter model.`,
         };
       }
-      const preparedAuth = prepareManualAuthForActivation({
-        baseConfig: enableResult.config,
+      return buildPreparedProviderTestPlan({
+        cfg: enableResult.config,
+        sourceCfg: sourceEnableResult.config,
         preparedConfig,
         profiles: result.profiles,
-        selectedProfileId: matchingProfile.profileId,
+        selectedProfileId: matchingProfile?.profileId,
         modelRef,
-        providerId: ref.provider,
-        ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-      });
-      return {
-        runner: "embedded",
-        ...ref,
-        modelRef,
+        pluginId: resolved.provider.pluginId,
         agentDir: params.agentDir,
-        config: preparedAuth.config,
-        agentId: "openclaw",
-        routeAgentId: resolveDefaultAgentId(preparedAuth.config),
-        authProfileId: preparedAuth.selectedProfileId,
-        persistModelRef: modelRef,
-        manualAuth: {
-          profiles: preparedAuth.profiles,
-          runtimeConfigBase: enableResult.config,
-          sourceConfigBase: sourceEnableResult.config,
-          configPatch: createMergePatch(enableResult.config, preparedAuth.config),
-          ...(resolved.provider.pluginId ? { pluginId: resolved.provider.pluginId } : {}),
-        },
-      };
+        routeAgentId,
+      });
     }
     default:
       return { error: `Unknown inference choice "${kind}".` };

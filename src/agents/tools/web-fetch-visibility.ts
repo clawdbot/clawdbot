@@ -118,24 +118,23 @@ function isStyleHidden(style: string): boolean {
   return false;
 }
 
-function readAttribute(attrs: string, name: string): string | undefined {
-  const escapedName = name.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
-  const unquotedAttributeValue = "[^\\s\"'=<>`]+";
-  const match = attrs.match(
-    new RegExp(
-      `(?:^|\\s)${escapedName}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|(${unquotedAttributeValue})))?`,
-      "i",
-    ),
+// The fixed visibility attributes share one grammar; each reader compiles it once per process.
+function createAttributeReader(attribute: "aria-hidden" | "class" | "hidden" | "style" | "type") {
+  const pattern = new RegExp(
+    `(?:^|\\s)${attribute}(?:\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\`]+)))?`,
+    "i",
   );
-  if (!match) {
-    return undefined;
-  }
-  return match[1] ?? match[2] ?? match[3] ?? "";
+  return (attrs: string): string | undefined => {
+    const match = attrs.match(pattern);
+    return match ? (match[1] ?? match[2] ?? match[3] ?? "") : undefined;
+  };
 }
 
-function hasAttribute(attrs: string, name: string): boolean {
-  return readAttribute(attrs, name) !== undefined;
-}
+const readType = createAttributeReader("type");
+const readAriaHidden = createAttributeReader("aria-hidden");
+const readHidden = createAttributeReader("hidden");
+const readClass = createAttributeReader("class");
+const readStyle = createAttributeReader("style");
 
 function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
   const tagName = normalizeLowercaseStringOrEmpty(tagNameRaw);
@@ -144,27 +143,24 @@ function shouldRemoveElement(tagNameRaw: string, attrs: string): boolean {
     return true;
   }
 
-  if (
-    tagName === "input" &&
-    normalizeOptionalLowercaseString(readAttribute(attrs, "type")) === "hidden"
-  ) {
+  if (tagName === "input" && normalizeOptionalLowercaseString(readType(attrs)) === "hidden") {
     return true;
   }
 
-  if (normalizeOptionalLowercaseString(readAttribute(attrs, "aria-hidden")) === "true") {
+  if (normalizeOptionalLowercaseString(readAriaHidden(attrs)) === "true") {
     return true;
   }
 
-  if (hasAttribute(attrs, "hidden")) {
+  if (readHidden(attrs) !== undefined) {
     return true;
   }
 
-  const className = readAttribute(attrs, "class") ?? "";
+  const className = readClass(attrs) ?? "";
   if (hasHiddenClass(className)) {
     return true;
   }
 
-  const style = readAttribute(attrs, "style") ?? "";
+  const style = readStyle(attrs) ?? "";
   if (style && isStyleHidden(style)) {
     return true;
   }
@@ -326,12 +322,4 @@ function removeMarkedElements(html: string): string {
 
 export async function sanitizeHtml(html: string): Promise<string> {
   return removeMarkedElements(html);
-}
-
-// Zero-width and invisible Unicode characters used in prompt injection attacks
-const INVISIBLE_UNICODE_RE =
-  /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u206A-\u206F\uFEFF\u{E0000}-\u{E007F}]/gu;
-
-export function stripInvisibleUnicode(text: string): string {
-  return text.replace(INVISIBLE_UNICODE_RE, "");
 }

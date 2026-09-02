@@ -1,6 +1,7 @@
+import type { TSchema } from "typebox";
 // LLM Core type module defines shared TypeScript contracts.
-export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
+export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
 /** Provider API families with first-class request/stream adapters in OpenClaw. */
 export type KnownApi =
@@ -127,11 +128,6 @@ export interface StreamOptions {
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
    */
   timeoutMs?: number;
-  /**
-   * Maximum retry attempts for providers/SDKs that support client-side retries.
-   * For example, OpenAI and Anthropic SDK clients default to 2.
-   */
-  maxRetries?: number;
   /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
    * If the server's requested delay exceeds this value, the request fails immediately
@@ -308,6 +304,24 @@ export interface Usage {
   };
 }
 
+/** Per-million-token rates for separately billed token buckets. */
+export type ModelCostRates = Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">;
+
+/** One whole-request tier on the cache-inclusive prompt-token axis. */
+export type PricingTier = ModelCostRates & {
+  /** Half-open prompt-token interval `[start, end)`. */
+  range: [number, number];
+};
+
+export type RawPricingTier = ModelCostRates & {
+  /** `[start]` is an open-ended upper tier. */
+  range: [number, number] | [number];
+};
+
+/** Normalized pricing used by token accounting and usage summaries. */
+export type ModelCostConfig = ModelCostRates & { tieredPricing?: PricingTier[] };
+export type RawModelCostConfig = ModelCostRates & { tieredPricing?: RawPricingTier[] };
+
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
@@ -332,9 +346,29 @@ export interface UserMessage {
 }
 
 /** Assistant turn, including provider identity and final stop state. */
+export type AssistantDeliveryTtsFacts = {
+  tagged: true;
+  text?: string;
+  directives?: Array<{
+    provider?: string;
+    values: Record<string, string>;
+  }>;
+};
+
 export interface AssistantMessage {
   role: "assistant";
   content: (TextContent | ThinkingContent | ToolCall)[];
+  openclawDelivery?: {
+    audioAsVoice?: true;
+    /** Exact media directives consumed by the managed-media transcript rewrite owner. */
+    mediaUrls?: string[];
+    replyToCurrent?: true;
+    replyToId?: string;
+    /** Provider text phase is unresolved until the assistant turn reaches terminal state. */
+    textPhaseRequiresTerminal?: true;
+    /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
+    tts?: AssistantDeliveryTtsFacts;
+  };
   api: Api;
   provider: Provider;
   model: string;
@@ -391,8 +425,6 @@ export interface AssistantImages {
   errorMessage?: string;
   timestamp: number; // Unix timestamp in milliseconds
 }
-
-import type { TSchema } from "typebox";
 
 /** Provider tool declaration with a TypeBox/JSON-schema parameter object. */
 export interface Tool<TParameters extends TSchema = TSchema> {
@@ -464,6 +496,8 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */
@@ -515,6 +549,8 @@ export interface OpenAIResponsesCompat {
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
+  supportsInstructions?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -650,13 +686,8 @@ export interface Model<TApi extends Api = Api> {
    */
   thinkingLevelMap?: ThinkingLevelMap;
   input: ("text" | "image")[];
-  cost: {
-    input: number; // $/million tokens
-    output: number; // $/million tokens
-    cacheRead: number; // $/million tokens
-    cacheWrite: number; // $/million tokens
-  };
-  contextWindow: number;
+  cost: RawModelCostConfig;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while allowing a

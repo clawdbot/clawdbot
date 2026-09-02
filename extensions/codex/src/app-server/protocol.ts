@@ -10,6 +10,7 @@ import type {
   CodexAppsReadParams,
   CodexAppsReadResponse,
   CodexConfigBatchWriteParams,
+  CodexConfigReadParams,
   CodexConfigReadResponse,
   CodexConfigRequirementsReadResponse,
   CodexConfigValueWriteParams,
@@ -129,6 +130,11 @@ export type CodexUserInput =
   | {
       type: "localImage";
       path: string;
+    }
+  | {
+      type: "skill";
+      name: string;
+      path: string;
     };
 
 export type CodexDynamicToolFunctionSpec = JsonObject & {
@@ -165,6 +171,8 @@ export type CodexTurnEnvironmentParams = JsonObject & {
 export type CodexThreadStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
+  projectId?: string | null;
+  runtimeWorkspaceRoots?: string[] | null;
   model?: string;
   modelProvider?: string | null;
   config?: JsonObject;
@@ -182,6 +190,8 @@ export type CodexThreadStartParams = JsonObject & {
 
 export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
+  cwd?: string | null;
+  runtimeWorkspaceRoots?: string[] | null;
   model?: string;
   modelProvider?: string | null;
   personality?: CodexPersonality | null;
@@ -368,6 +378,7 @@ export type CodexTurnStartParams = JsonObject & {
   input: CodexUserInput[];
   additionalContext?: Record<string, { kind: "untrusted" | "application"; value: string }>;
   cwd?: string;
+  runtimeWorkspaceRoots?: string[] | null;
   model?: string;
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
@@ -415,8 +426,10 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string;
+  forkedFromId?: string | null;
   sessionId?: string;
   path?: string | null;
+  projectId: string | null;
   historyMode?: "legacy" | "paginated";
   extra?: JsonObject | null;
   name?: string | null;
@@ -424,6 +437,7 @@ export type CodexThread = {
   createdAt?: number | null;
   updatedAt?: number | null;
   status?: CodexThreadStatus | null;
+  canAcceptDirectInput?: boolean | null;
   modelProvider?: string | null;
   cwd?: string | null;
   source?: CodexSessionSource | null;
@@ -490,15 +504,27 @@ export type CodexThreadItem = {
   durationMs?: number | null;
   aggregatedOutput: string | null;
   text: string;
+  delivery?: "async" | null;
   contentItems?: CodexDynamicToolCallOutputContentItem[] | null;
   changes: Array<{ path: string; kind: string }>;
   [key: string]: unknown;
 };
 
-export type CodexServerNotification = {
-  method: string;
-  params?: JsonValue;
+type CodexStrictReviewRequiredNotification = {
+  method: "autoApprovalReview/strictReviewRequired";
+  params: JsonObject & {
+    threadId: string;
+    turnId: string;
+    startedAtMs: number;
+  };
 };
+
+export type CodexServerNotification =
+  | CodexStrictReviewRequiredNotification
+  | {
+      method: string;
+      params?: JsonValue;
+    };
 
 export type CodexDynamicToolCallParams = {
   namespace?: string | null;
@@ -539,7 +565,7 @@ export type CodexDynamicToolCallOutputContentItem =
 export type CodexErrorNotification = {
   error: {
     message?: string;
-    codexErrorInfo?: string | JsonObject | null;
+    codexErrorInfo?: "misalignmentPolicyViolation" | (string & {}) | JsonObject | null;
     additionalDetails?: string | null;
     [key: string]: unknown;
   };
@@ -562,6 +588,7 @@ export type CodexModel = {
   inputModalities: string[];
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: string | null;
+  multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
 
 export type CodexReasoningEffortOption = {
@@ -627,11 +654,14 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "thread/backgroundTerminals/list": { threadId: string; limit?: number };
+  "thread/backgroundTerminals/terminate": { threadId: string; processId: string };
   "app/installed": CodexAppsInstalledParams;
   "app/list": CodexAppsListParams;
   "app/read": CodexAppsReadParams;
   "command/exec": CodexCommandExecParams;
   "config/batchWrite": CodexConfigBatchWriteParams;
+  "config/read": CodexConfigReadParams;
   "config/value/write": CodexConfigValueWriteParams;
   "environment/add": { environmentId: string; execServerUrl: string };
   "plugin/installed": CodexPluginInstalledParams;
@@ -658,6 +688,8 @@ type CodexAppServerRequestParamsOverride = {
 };
 
 type CodexAppServerRequestResultMap = {
+  "thread/backgroundTerminals/list": { data: { processId: string }[] };
+  "thread/backgroundTerminals/terminate": { terminated: boolean };
   initialize: CodexInitializeResponse;
   "account/rateLimits/read": JsonValue;
   "account/read": CodexGetAccountResponse;

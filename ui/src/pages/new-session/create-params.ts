@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -8,6 +9,19 @@ const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
  * an incognito session is never persisted, so "incognito draft" is unrepresentable.
  */
 export type NewSessionVisibility = "normal" | "draft" | "incognito";
+export type DraftSessionCreateOverrides = Partial<
+  Pick<SessionCreateParams, "message" | "attachments" | "displayName">
+> & { visibility?: NewSessionVisibility };
+export type DraftSessionCreateSelection = Partial<
+  Pick<
+    SessionCreateParams,
+    "attachments" | "permissionMode" | "catalogId" | "category" | "displayName"
+  >
+> & {
+  message: string;
+  visibility: NewSessionVisibility;
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+};
 
 export function canStartSessionAsDraft(params: {
   allowedVisibilities?: readonly string[];
@@ -28,39 +42,59 @@ export function buildDraftSessionCreateParams(draft: {
   key?: string;
   agentId: string;
   message: string;
+  displayName?: string;
   model?: string;
+  contextWindow?: string;
   thinkingLevel?: string;
+  fastMode?: SessionCreateParams["fastMode"];
+  toolOverrides?: SessionCreateParams["toolOverrides"] | null;
+  permissionMode?: SessionCreateParams["permissionMode"];
   visibility?: NewSessionVisibility;
-  attachments?: unknown[];
+  attachments?: SessionCreateParams["attachments"];
   projectId?: string;
+  projectGitUrl?: string;
   worktree: boolean;
   baseRef?: string;
   worktreeName?: string;
   cwd?: string;
   workspace?: string;
-  execNode?: string;
   catalogId?: string;
-}): Record<string, unknown> {
+  category?: string;
+}): SessionCreateParams {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
-  const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
+  const category = normalizeOptionalString(draft.category);
   const model = normalizeOptionalString(draft.model);
+  const contextWindow = normalizeOptionalString(draft.contextWindow);
   const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const projectId = normalizeOptionalString(draft.projectId);
-  const customFolder = !projectId && cwd && cwd !== workspace ? cwd : undefined;
+  const projectGitUrl =
+    !projectId && (draft.message.trim() || draft.attachments?.length)
+      ? normalizeOptionalString(draft.projectGitUrl)
+      : undefined;
+  const customFolder = !projectId && !projectGitUrl && cwd && cwd !== workspace ? cwd : undefined;
   return {
     ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
     message: draft.message,
+    ...(normalizeOptionalString(draft.displayName)
+      ? { displayName: normalizeOptionalString(draft.displayName) }
+      : {}),
     ...(draft.visibility === "incognito" ? { incognito: true } : {}),
     ...(draft.visibility === "draft" ? { visibility: "draft" } : {}),
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
+    ...(category ? { category } : {}),
     ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),
+    ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
+    ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),
-    ...(customFolder && !execNode ? { cwd: customFolder } : {}),
+    ...(projectGitUrl ? { projectGitUrl } : {}),
+    ...(customFolder ? { cwd: customFolder } : {}),
     ...(draft.worktree
       ? {
           worktree: true,
@@ -73,6 +107,5 @@ export function buildDraftSessionCreateParams(draft: {
             : {}),
         }
       : {}),
-    ...(!projectId && execNode ? { execNode, ...(cwd ? { cwd } : {}) } : {}),
   };
 }

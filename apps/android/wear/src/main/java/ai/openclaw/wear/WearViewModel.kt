@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,6 +34,13 @@ internal data class WearUiState(
   val proxyCapabilities: Set<WearProxyCapability> = emptySet(),
   val sessions: List<WearSession> = emptyList(),
   val selectedSession: WearSession? = null,
+  val phoneActiveSessionKey: String? = null,
+  val sessionSearchQuery: String? = null,
+  val sessionSearchResults: List<WearSession> = emptyList(),
+  val sessionSearchHasMore: Boolean = false,
+  val sessionSearchNextOffset: Int? = null,
+  val modelSearchQuery: String? = null,
+  val modelSearchResults: List<WearModel> = emptyList(),
   val messages: List<WearChatMessage> = emptyList(),
   val streamText: String? = null,
   val activeRunId: String? = null,
@@ -45,6 +53,9 @@ internal data class WearUiState(
   val talkBusy: Boolean = false,
   val controlBusy: Boolean = false,
   val failure: WearConversationFailure? = null,
+  val agentPulse: WearAgentPulseSnapshot? = null,
+  val agentPulseLoading: Boolean = false,
+  val agentPulseFailure: WearConversationFailure? = null,
 )
 
 internal fun WearUiState.resetForPhoneChange(): WearUiState =
@@ -59,6 +70,13 @@ internal fun WearUiState.resetForPhoneChange(): WearUiState =
     proxyCapabilities = emptySet(),
     sessions = emptyList(),
     selectedSession = null,
+    phoneActiveSessionKey = null,
+    sessionSearchQuery = null,
+    sessionSearchResults = emptyList(),
+    sessionSearchHasMore = false,
+    sessionSearchNextOffset = null,
+    modelSearchQuery = null,
+    modelSearchResults = emptyList(),
     messages = emptyList(),
     streamText = null,
     activeRunId = null,
@@ -71,6 +89,9 @@ internal fun WearUiState.resetForPhoneChange(): WearUiState =
     talkBusy = false,
     controlBusy = false,
     failure = null,
+    agentPulse = null,
+    agentPulseLoading = false,
+    agentPulseFailure = null,
   )
 
 internal fun WearUiState.switchAgentContext(agentId: String): WearUiState =
@@ -78,16 +99,32 @@ internal fun WearUiState.switchAgentContext(agentId: String): WearUiState =
     activeAgentId = agentId,
     sessions = emptyList(),
     selectedSession = null,
+    phoneActiveSessionKey = null,
+    sessionSearchQuery = null,
+    sessionSearchResults = emptyList(),
+    sessionSearchHasMore = false,
+    sessionSearchNextOffset = null,
+    modelSearchQuery = null,
+    modelSearchResults = emptyList(),
     messages = emptyList(),
     streamText = null,
     activeRunId = null,
     selectedModelRef = null,
     models = emptyList(),
+    agentPulse = null,
+    agentPulseLoading = false,
+    agentPulseFailure = null,
   )
 
 internal fun WearUiState.switchSessionContext(session: WearSession): WearUiState =
   copy(
     selectedSession = session,
+    sessionSearchQuery = null,
+    sessionSearchResults = emptyList(),
+    sessionSearchHasMore = false,
+    sessionSearchNextOffset = null,
+    modelSearchQuery = null,
+    modelSearchResults = emptyList(),
     messages = emptyList(),
     streamText = null,
     activeRunId = null,
@@ -97,6 +134,9 @@ internal fun WearUiState.switchSessionContext(session: WearSession): WearUiState
     realtimeMouthLevel = 0f,
     talkBusy = false,
     failure = null,
+    agentPulse = null,
+    agentPulseLoading = false,
+    agentPulseFailure = null,
   )
 
 internal fun WearUiState.switchModelContext(modelRef: String): WearUiState {
@@ -111,6 +151,10 @@ internal fun WearUiState.switchModelContext(modelRef: String): WearUiState {
     sessions = sessions.map { session -> if (session.key == updatedSession.key) updatedSession else session },
   )
 }
+
+internal fun WearUiState.containsModelRef(modelRef: String): Boolean =
+  models.any { model -> model.ref == modelRef } ||
+    modelSearchResults.any { model -> model.ref == modelRef }
 
 internal fun shouldAcceptWearTalkSnapshot(
   snapshot: WearRealtimeTalkSnapshot,
@@ -152,7 +196,7 @@ internal fun reduceWearTerminalChatEvent(
     )
   }
   return when (event.state) {
-    "final" ->
+    "final" -> {
       WearTerminalChatTransition(
         state =
           current.copy(
@@ -163,12 +207,18 @@ internal fun reduceWearTerminalChatEvent(
         reloadHistory = true,
         observedMessage = event.message,
       )
-    "aborted", "error" ->
+    }
+
+    "aborted", "error" -> {
       WearTerminalChatTransition(
         state = current.copy(streamText = null, activeRunId = null),
         reloadHistory = true,
       )
-    else -> WearTerminalChatTransition(state = current, reloadHistory = false)
+    }
+
+    else -> {
+      WearTerminalChatTransition(state = current, reloadHistory = false)
+    }
   }
 }
 
@@ -186,7 +236,11 @@ internal class WearViewModel(
   private val sendAttemptTracker = WearSendAttemptTracker()
   private val controlBusyOwner = WearControlBusyOwner()
   private var loadJob: Job? = null
+  private var sessionSearchJob: Job? = null
   private var phoneRouteGeneration = 0L
+  private var agentPulsePollJob: Job? = null
+  private var agentPulseVisible = false
+  private var agentPulseRequestGeneration = 0L
 
   // Session switches clear the prior bounded catalog; only the matching phone/session may refill it.
   private var modelLoadJob: Job? = null
@@ -242,6 +296,26 @@ internal class WearViewModel(
     loadSessions()
   }
 
+  fun setAgentPulseVisible(visible: Boolean) {
+    if (agentPulseVisible == visible) {
+      if (visible && agentPulsePollJob?.isActive != true) {
+        restartAgentPulsePolling(forceLoading = true)
+      }
+      return
+    }
+    agentPulseVisible = visible
+    if (visible) {
+      restartAgentPulsePolling(forceLoading = true)
+    } else {
+      invalidateAgentPulse(clearSnapshot = true)
+    }
+  }
+
+  fun refreshAgentPulse() {
+    if (!agentPulseVisible) return
+    restartAgentPulsePolling(forceLoading = true)
+  }
+
   fun openSession(session: WearSession) {
     val current = mutableState.value
     if (
@@ -256,9 +330,51 @@ internal class WearViewModel(
     }
     endRealtimeTalkForNavigation()
     cancelModelLoad()
+    invalidateAgentPulse(clearSnapshot = true)
     mutableState.update { it.switchSessionContext(session) }
     loadModels(session)
     loadHistory(session)
+    restartAgentPulsePolling(forceLoading = true)
+  }
+
+  fun searchSessions(query: String) {
+    if (WearProxyCapability.SessionSearchPagination !in mutableState.value.proxyCapabilities) return
+    val normalized = query.trim()
+    if (normalized.isEmpty()) return
+    loadSessionSearch(normalized, offset = 0, append = false)
+  }
+
+  fun loadMoreSessionSearch() {
+    val current = mutableState.value
+    if (WearProxyCapability.SessionSearchPagination !in current.proxyCapabilities) return
+    val query = current.sessionSearchQuery ?: return
+    val offset = current.sessionSearchNextOffset ?: return
+    if (!current.sessionSearchHasMore) return
+    loadSessionSearch(query, offset = offset, append = true)
+  }
+
+  fun clearSessionSearch() {
+    sessionSearchJob?.cancel()
+    mutableState.update {
+      it.copy(
+        sessionSearchQuery = null,
+        sessionSearchResults = emptyList(),
+        sessionSearchHasMore = false,
+        sessionSearchNextOffset = null,
+      )
+    }
+  }
+
+  fun searchModels(query: String) {
+    if (WearProxyCapability.ModelCatalogSearch !in mutableState.value.proxyCapabilities) return
+    val normalized = query.trim()
+    if (normalized.isEmpty()) return
+    mutableState.value.selectedSession?.let { session -> loadModels(session, normalized) }
+  }
+
+  fun clearModelSearch() {
+    cancelModelLoad()
+    mutableState.update { it.copy(modelSearchQuery = null, modelSearchResults = emptyList()) }
   }
 
   fun closeSession() {
@@ -453,7 +569,7 @@ internal class WearViewModel(
       current.realtimeCapturing ||
       current.realtimePlaying ||
       current.selectedModelRef == modelRef ||
-      current.models.none { model -> model.ref == modelRef } ||
+      !current.containsModelRef(modelRef) ||
       WearProxyCapability.ModelControls !in current.proxyCapabilities
     ) {
       return
@@ -548,6 +664,8 @@ internal class WearViewModel(
   }
 
   private fun loadSessions(expectedNodeId: String? = null) {
+    sessionSearchJob?.cancel()
+    invalidateAgentPulse(clearSnapshot = true)
     cancelLoad()
     cancelModelLoad()
     loadJob =
@@ -669,6 +787,13 @@ internal class WearViewModel(
               proxyCapabilities = status.capabilities,
               sessions = projectedSessions,
               selectedSession = selectedSession,
+              phoneActiveSessionKey = activeSessionKey,
+              sessionSearchQuery = null,
+              sessionSearchResults = emptyList(),
+              sessionSearchHasMore = false,
+              sessionSearchNextOffset = null,
+              modelSearchQuery = null,
+              modelSearchResults = emptyList(),
               messages = if (selectionChanged || !status.connected) emptyList() else it.messages,
               streamText = if (selectionChanged || !status.connected) null else it.streamText,
               activeRunId = if (selectionChanged || !status.connected) null else it.activeRunId,
@@ -677,6 +802,8 @@ internal class WearViewModel(
           pendingEvents.forEach(::handleEvent)
           if (status.connected && selectedSession != null) {
             loadHistory(selectedSession)
+          } else {
+            restartAgentPulsePolling(forceLoading = true)
           }
         } catch (err: CancellationException) {
           throw err
@@ -771,6 +898,7 @@ internal class WearViewModel(
             )
           }
           pendingEvents.forEach(::handleEvent)
+          restartAgentPulsePolling(forceLoading = true)
           if (catalogScopeChanged) loadModels(loadedSession)
         } catch (err: CancellationException) {
           throw err
@@ -786,16 +914,69 @@ internal class WearViewModel(
           }
           if (currentLoad && mutableState.value.selectedSession?.key == session.key) {
             recordFailure(err, loading = false)
+            restartAgentPulsePolling(forceLoading = true)
           }
         }
       }
   }
 
-  private fun loadModels(session: WearSession) {
+  private fun loadSessionSearch(
+    query: String,
+    offset: Int,
+    append: Boolean,
+  ) {
+    val current = mutableState.value
+    if (WearProxyCapability.SessionSearchPagination !in current.proxyCapabilities) return
+    val phoneNodeId = current.phoneNodeId ?: return
+    if (!current.connected) return
+    val routeGeneration = phoneRouteGeneration
+    sessionSearchJob?.cancel()
+    sessionSearchJob =
+      viewModelScope.launch {
+        try {
+          val result =
+            repository.sessions(
+              expectedNodeId = phoneNodeId,
+              capabilities = current.proxyCapabilities,
+              limit = 50,
+              offset = offset,
+              search = query,
+            )
+          if (routeGeneration != phoneRouteGeneration || mutableState.value.phoneNodeId != result.phoneNodeId) {
+            return@launch
+          }
+          mutableState.update { state ->
+            val results =
+              if (append && state.sessionSearchQuery == query) {
+                (state.sessionSearchResults + result.sessions).distinctBy(WearSession::key)
+              } else {
+                result.sessions
+              }
+            state.copy(
+              sessionSearchQuery = query,
+              sessionSearchResults = results,
+              sessionSearchHasMore = result.hasMore,
+              sessionSearchNextOffset = result.nextOffset,
+              failure = null,
+            )
+          }
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          recordFailureForControlRoute(err, phoneNodeId, routeGeneration, loading = false)
+        }
+      }
+  }
+
+  private fun loadModels(
+    session: WearSession,
+    query: String? = null,
+  ) {
     val current = mutableState.value
     val capabilities = current.proxyCapabilities
     if (
       WearProxyCapability.ModelControls !in capabilities ||
+      (query != null && WearProxyCapability.ModelCatalogSearch !in capabilities) ||
       !wearSessionRequestIsCurrent(session, current.selectedSession, session.phoneNodeId)
     ) {
       return
@@ -810,6 +991,7 @@ internal class WearViewModel(
               expectedNodeId = session.phoneNodeId,
               capabilities = capabilities,
               selectedModelRef = session.modelRef,
+              query = query,
             )
           val selectedSession = mutableState.value.selectedSession
           if (!wearSessionRequestIsCurrent(session, selectedSession, modelList.phoneNodeId)) return@launch
@@ -828,7 +1010,11 @@ internal class WearViewModel(
             if (!wearSessionRequestIsCurrent(session, state.selectedSession, modelList.phoneNodeId)) {
               state
             } else {
-              state.copy(models = modelList.models)
+              if (query == null) {
+                state.copy(models = modelList.models, modelSearchQuery = null, modelSearchResults = emptyList())
+              } else {
+                state.copy(modelSearchQuery = query, modelSearchResults = modelList.models)
+              }
             }
           }
         } catch (err: CancellationException) {
@@ -852,16 +1038,27 @@ internal class WearViewModel(
         beginSequenceResync(event, sourceChanged = false)
         return
       }
+
       WearSequenceDecision.AwaitingSnapshot -> {
         resyncEventBuffer.append(event)
         return
       }
-      WearSequenceDecision.Accepted -> Unit
+
+      WearSequenceDecision.Accepted -> {}
     }
     when (event.event) {
-      WearEventType.Connection -> handleConnectionEvent(event.payload as? JsonObject)
-      WearEventType.Chat -> handleChatEvent(event)
-      WearEventType.Resync -> refresh()
+      WearEventType.Connection -> {
+        handleConnectionEvent(event.payload as? JsonObject)
+      }
+
+      WearEventType.Chat -> {
+        handleChatEvent(event)
+      }
+
+      WearEventType.Resync -> {
+        refresh()
+      }
+
       WearEventType.Talk -> {
         val payload = event.payload ?: return
         runCatching { WearRealtimeTalkCodec.decode(payload) }
@@ -890,6 +1087,7 @@ internal class WearViewModel(
     sourceChanged: Boolean,
   ) {
     // A source switch or sequence gap invalidates the old phone's live state.
+    invalidateAgentPulse(clearSnapshot = true)
     // Buffer this boundary event until the selected phone supplies a watermark.
     eventSequenceTracker.requireSnapshot()
     resyncEventBuffer.start(event)
@@ -932,6 +1130,7 @@ internal class WearViewModel(
   }
 
   private fun resetForPhoneRouteChange() {
+    invalidateAgentPulse(clearSnapshot = true)
     phoneRouteGeneration += 1
     controlBusyOwner.reset()
     mutableState.update(WearUiState::resetForPhoneChange)
@@ -952,6 +1151,7 @@ internal class WearViewModel(
     cancelLoad()
     val connected = payload.boolean("connected") ?: false
     if (!connected) {
+      invalidateAgentPulse(clearSnapshot = true)
       talkStartJob?.cancel()
       talkStartJob = null
       talkAttemptId = null
@@ -999,6 +1199,7 @@ internal class WearViewModel(
           )
         }
       }
+
       "final", "aborted", "error" -> {
         val transition = reduceWearTerminalChatEvent(mutableState.value, event)
         if (transition.reloadHistory) cancelLoad()
@@ -1007,12 +1208,14 @@ internal class WearViewModel(
           loadHistory(selected, observedMessage = transition.observedMessage)
         }
       }
-      else ->
+
+      else -> {
         event.message?.let { message ->
           cancelLoad()
           mutableState.update { it.copy(messages = mergeEventMessage(it.messages, message)) }
           loadHistory(selected, observedMessage = message)
         }
+      }
     }
   }
 
@@ -1026,6 +1229,181 @@ internal class WearViewModel(
     modelLoadJob?.cancel()
     modelLoadJob = null
     eventSequenceTracker.invalidateResponseRequests()
+  }
+
+  private fun restartAgentPulsePolling(forceLoading: Boolean = false) {
+    invalidateAgentPulse(clearSnapshot = false)
+    val initialState = mutableState.value
+    if (!shouldPollAgentPulse(initialState, agentPulseVisible)) {
+      mutableState.update {
+        it.copy(
+          agentPulse = null,
+          agentPulseLoading = false,
+          agentPulseFailure = null,
+        )
+      }
+      return
+    }
+    val phoneNodeId = initialState.phoneNodeId ?: return
+    val activeAgentId = initialState.activeAgentId
+    val selectedSessionKey = initialState.selectedSession?.key
+    val routeGeneration = phoneRouteGeneration
+    val requestGeneration = agentPulseRequestGeneration
+    agentPulsePollJob =
+      viewModelScope.launch {
+        var showForcedLoading = forceLoading
+        try {
+          while (
+            isCurrentAgentPulseRoute(
+              phoneNodeId = phoneNodeId,
+              activeAgentId = activeAgentId,
+              selectedSessionKey = selectedSessionKey,
+              routeGeneration = routeGeneration,
+              requestGeneration = requestGeneration,
+            )
+          ) {
+            mutableState.update { state ->
+              if (
+                isCurrentAgentPulseRoute(
+                  phoneNodeId,
+                  activeAgentId,
+                  selectedSessionKey,
+                  routeGeneration,
+                  requestGeneration,
+                  state,
+                )
+              ) {
+                state.copy(
+                  agentPulseLoading = showForcedLoading || state.agentPulse == null,
+                  agentPulseFailure = null,
+                )
+              } else {
+                state
+              }
+            }
+            try {
+              val responseRequest = eventSequenceTracker.beginReadOnlyResponseRequest()
+              val pulse =
+                repository.agentPulse(
+                  expectedNodeId = phoneNodeId,
+                  capabilities = initialState.proxyCapabilities,
+                  selectedSessionKey = selectedSessionKey,
+                )
+              if (
+                pulse.phoneNodeId != phoneNodeId ||
+                !isCurrentAgentPulseRoute(
+                  phoneNodeId,
+                  activeAgentId,
+                  selectedSessionKey,
+                  routeGeneration,
+                  requestGeneration,
+                )
+              ) {
+                return@launch
+              }
+              if (
+                !eventSequenceTracker.isReadOnlyResponseCurrent(
+                  responseRequest,
+                  pulse.eventStreamId,
+                  pulse.eventSequence,
+                )
+              ) {
+                // Rebuild from a canonical snapshot instead of exposing an old Phone cursor.
+                loadSessions(pulse.phoneNodeId)
+                return@launch
+              }
+              mutableState.update { state ->
+                if (
+                  isCurrentAgentPulseRoute(
+                    phoneNodeId,
+                    activeAgentId,
+                    selectedSessionKey,
+                    routeGeneration,
+                    requestGeneration,
+                    state,
+                  )
+                ) {
+                  state.copy(
+                    agentPulse = pulse,
+                    agentPulseLoading = false,
+                    agentPulseFailure = null,
+                  )
+                } else {
+                  state
+                }
+              }
+            } catch (err: CancellationException) {
+              throw err
+            } catch (err: Throwable) {
+              if (
+                err is WearProxyException &&
+                err.code == "phone_changed" &&
+                requestGeneration == agentPulseRequestGeneration
+              ) {
+                reloadForPreferredPhone(nodeId = null)
+                return@launch
+              }
+              mutableState.update { state ->
+                if (
+                  isCurrentAgentPulseRoute(
+                    phoneNodeId,
+                    activeAgentId,
+                    selectedSessionKey,
+                    routeGeneration,
+                    requestGeneration,
+                    state,
+                  )
+                ) {
+                  state.copy(
+                    agentPulse = if (err.isConnectivityFailure()) null else state.agentPulse,
+                    agentPulseLoading = false,
+                    agentPulseFailure = err.toWearConversationFailure(),
+                  )
+                } else {
+                  state
+                }
+              }
+            }
+            showForcedLoading = false
+            delay(AGENT_PULSE_POLL_INTERVAL_MS)
+          }
+        } finally {
+          if (agentPulsePollJob === coroutineContext[Job]) agentPulsePollJob = null
+        }
+      }
+  }
+
+  private fun isCurrentAgentPulseRoute(
+    phoneNodeId: String,
+    activeAgentId: String?,
+    selectedSessionKey: String?,
+    routeGeneration: Long,
+    requestGeneration: Long,
+    state: WearUiState = mutableState.value,
+  ): Boolean =
+    wearAgentPulseRouteIsCurrent(
+      requestedPhoneNodeId = phoneNodeId,
+      requestedAgentId = activeAgentId,
+      requestedSessionKey = selectedSessionKey,
+      requestedRouteGeneration = routeGeneration,
+      currentRouteGeneration = phoneRouteGeneration,
+      requestedGeneration = requestGeneration,
+      currentGeneration = agentPulseRequestGeneration,
+      pulseVisible = agentPulseVisible,
+      state = state,
+    )
+
+  private fun invalidateAgentPulse(clearSnapshot: Boolean) {
+    agentPulseRequestGeneration += 1
+    agentPulsePollJob?.cancel()
+    agentPulsePollJob = null
+    mutableState.update {
+      it.copy(
+        agentPulse = if (clearSnapshot) null else it.agentPulse,
+        agentPulseLoading = false,
+        agentPulseFailure = null,
+      )
+    }
   }
 
   private fun reloadHistoryIfSelected(
@@ -1090,6 +1468,7 @@ internal class WearViewModel(
   ) {
     val disconnected = error.isConnectivityFailure()
     if (disconnected) {
+      invalidateAgentPulse(clearSnapshot = true)
       talkStartJob?.cancel()
       talkStartJob = null
       talkAttemptId = null
@@ -1132,10 +1511,43 @@ internal class WearViewModel(
 
   override fun onCleared() {
     modelLoadJob?.cancel()
+    agentPulseVisible = false
+    agentPulseRequestGeneration += 1
+    agentPulsePollJob?.cancel()
+    agentPulsePollJob = null
     talkStartJob?.cancel()
     realtimeTalkClient.shutdown()
   }
 }
+
+private const val AGENT_PULSE_POLL_INTERVAL_MS = 15_000L
+
+internal fun shouldPollAgentPulse(
+  state: WearUiState,
+  pulseVisible: Boolean,
+): Boolean =
+  pulseVisible &&
+    state.connected &&
+    !state.phoneNodeId.isNullOrBlank() &&
+    WearProxyCapability.AgentPulse in state.proxyCapabilities
+
+internal fun wearAgentPulseRouteIsCurrent(
+  requestedPhoneNodeId: String,
+  requestedAgentId: String?,
+  requestedSessionKey: String?,
+  requestedRouteGeneration: Long,
+  currentRouteGeneration: Long,
+  requestedGeneration: Long,
+  currentGeneration: Long,
+  pulseVisible: Boolean,
+  state: WearUiState,
+): Boolean =
+  requestedRouteGeneration == currentRouteGeneration &&
+    requestedGeneration == currentGeneration &&
+    shouldPollAgentPulse(state, pulseVisible) &&
+    state.phoneNodeId == requestedPhoneNodeId &&
+    state.activeAgentId == requestedAgentId &&
+    state.selectedSession?.key == requestedSessionKey
 
 internal fun coherentWearActiveSessionKey(
   statusAgentId: String?,
@@ -1256,12 +1668,19 @@ internal fun mergeEventMessage(
   val matchIndex =
     messages.indexOfFirst { existing ->
       when {
-        message.id != null -> existing.id == message.id
-        message.timestamp != null ->
+        message.id != null -> {
+          existing.id == message.id
+        }
+
+        message.timestamp != null -> {
           existing.id == null &&
             existing.timestamp == message.timestamp &&
             existing.role == message.role
-        else -> false
+        }
+
+        else -> {
+          false
+        }
       }
     }
   val merged =
@@ -1402,15 +1821,22 @@ internal fun Throwable.toWearConversationFailure(): WearConversationFailure =
 internal fun wearConversationFailureForConnection(payload: JsonObject?): WearConversationFailure? {
   if (payload.boolean("connected") == true) return null
   return when (WearConnectionFailure.fromWireValue(payload.string("failure"))) {
-    WearConnectionFailure.Incompatible -> WearConversationFailure.INCOMPATIBLE
-    WearConnectionFailure.GatewayOffline -> WearConversationFailure.GATEWAY_OFFLINE
-    null ->
+    WearConnectionFailure.Incompatible -> {
+      WearConversationFailure.INCOMPATIBLE
+    }
+
+    WearConnectionFailure.GatewayOffline -> {
+      WearConversationFailure.GATEWAY_OFFLINE
+    }
+
+    null -> {
       if (payload.string("status")?.contains("update", ignoreCase = true) == true) {
         // Older protocol-v1 phones only sent status text for incompatibility.
         WearConversationFailure.INCOMPATIBLE
       } else {
         WearConversationFailure.GATEWAY_OFFLINE
       }
+    }
   }
 }
 

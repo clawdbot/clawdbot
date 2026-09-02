@@ -17,8 +17,9 @@ import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
 } from "../plugins/status.js";
-import { listTasksForFlowId } from "../tasks/runtime-internal.js";
-import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
+import { loadTaskFlowRegistryStateFromSqliteReadOnly } from "../tasks/task-flow-registry.store.sqlite.js";
+import { loadTaskRegistryStateFromSqliteReadOnly } from "../tasks/task-registry.store.sqlite.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 
 type NoteWorkspaceStatusOptions = {
   pluginVersionDrift?: PluginVersionDriftReport;
@@ -33,13 +34,28 @@ type TaskFlowRecoveryFinding = {
 };
 
 function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
-  return listTaskFlowRecords().flatMap((flow) => {
-    const tasks = listTasksForFlowId(flow.flowId);
+  const flows = [...loadTaskFlowRegistryStateFromSqliteReadOnly().flows.values()].toSorted(
+    (left, right) => right.createdAt - left.createdAt,
+  );
+  const tasksByFlowId = new Map<string, TaskRecord[]>();
+  for (const task of loadTaskRegistryStateFromSqliteReadOnly().tasks.values()) {
+    const flowId = task.parentFlowId?.trim();
+    if (flowId) {
+      const linkedTasks = tasksByFlowId.get(flowId);
+      if (linkedTasks) {
+        linkedTasks.push(task);
+      } else {
+        tasksByFlowId.set(flowId, [task]);
+      }
+    }
+  }
+  return flows.flatMap((flow) => {
+    const linkedTasks = tasksByFlowId.get(flow.flowId) ?? [];
     const findings: TaskFlowRecoveryFinding[] = [];
     if (
       flow.syncMode === "managed" &&
       flow.status === "running" &&
-      tasks.length === 0 &&
+      linkedTasks.length === 0 &&
       flow.waitJson === undefined
     ) {
       findings.push({
@@ -51,7 +67,7 @@ function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
       flow.endedAt == null &&
       flow.status === "blocked" &&
       flow.blockedTaskId &&
-      !tasks.some((task) => task.taskId === flow.blockedTaskId)
+      !linkedTasks.some((task) => task.taskId === flow.blockedTaskId)
     ) {
       findings.push({
         flowId: flow.flowId,
@@ -87,15 +103,22 @@ function pluginVersionDriftToHealthFindings(
     return [];
   }
   return drift.drifts.map((entry) => {
-    const updateCommand = formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry));
+    const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
+    const targetResolution = entry.targetResolution;
+    const targetError =
+      targetResolution?.status === "unresolved"
+        ? targetResolution.error
+        : "npm registry target was not resolved";
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
       severity: "warning",
-      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but the Gateway is ${drift.gatewayVersion}.`,
+      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but the Gateway is ${drift.gatewayVersion}.${updateCommand ? "" : ` Repair target resolution failed: ${targetError}.`}`,
       path: `plugins.entries.${entry.pluginId}`,
       target: entry.pluginId,
       requirement: "plugin-version-drift",
-      fixHint: `${updateCommand} && ${formatCliCommand("openclaw gateway restart")}`,
+      fixHint: updateCommand
+        ? `${formatCliCommand(updateCommand)} && ${formatCliCommand("openclaw gateway restart")}`
+        : `No install command generated; retry openclaw doctor after checking registry availability (${targetError}).`,
     };
   });
 }
@@ -190,9 +213,15 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
     return;
   }
   const singleDrift = drift.drifts.length === 1 ? drift.drifts[0] : undefined;
-  const updateCommands = drift.drifts.map((entry) =>
-    formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
-  );
+  const repairs = drift.drifts.map((entry) => ({
+    entry,
+    command: resolvePluginVersionDriftUpdateCommand(entry),
+  }));
+  const updateCommands = repairs
+    .map(({ command }) => command)
+    .filter((command): command is string => Boolean(command))
+    .map((command) => formatCliCommand(command));
+  const unresolvedRepairs = repairs.filter(({ command }) => !command);
   const lines = [
     `${drift.drifts.length} active official plugin${
       drift.drifts.length === 1 ? "" : "s"
@@ -201,15 +230,27 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
       const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
       return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${drift.gatewayVersion}`;
     }),
-    singleDrift
+    ...unresolvedRepairs.map(({ entry }) => {
+      const targetResolution = entry.targetResolution;
+      const detail =
+        targetResolution?.status === "unresolved"
+          ? targetResolution.error
+          : "npm registry target was not resolved";
+      return `Repair target resolution failed for ${entry.pluginId}: ${detail}. No install command generated.`;
+    }),
+    singleDrift && updateCommands.length === 1
       ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
-      : [
-          "Fix each drifted plugin:",
-          ...updateCommands.map((command) => `- ${command}`),
-          `Then run ${formatCliCommand("openclaw gateway restart")}.`,
-        ].join("\n"),
+      : updateCommands.length > 0
+        ? [
+            "Fix each drifted plugin:",
+            ...updateCommands.map((command) => `- ${command}`),
+            ...(unresolvedRepairs.length === 0
+              ? [`Then run ${formatCliCommand("openclaw gateway restart")}.`]
+              : []),
+          ].join("\n")
+        : null,
   ];
-  note(lines.join("\n"), "Plugin version drift");
+  note(lines.filter((line): line is string => Boolean(line)).join("\n"), "Plugin version drift");
 }
 
 /** Emits plugin and TaskFlow recovery problem notes for doctor. */

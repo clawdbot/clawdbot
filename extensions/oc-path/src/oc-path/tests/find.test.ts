@@ -117,6 +117,31 @@ describe("findOcPaths — JSONC kind", () => {
       }
     }
   });
+
+  it.each([
+    {
+      name: "quotes positional object keys",
+      raw: '{"items":{"zeta.key":10,"alpha":20}}',
+      pattern: "oc://config/items/$first",
+      expectedPath: 'oc://config/items/"zeta.key"',
+      expectedValue: "10",
+    },
+    {
+      name: "emits positional array indexes",
+      raw: '{"items":[10,20,30]}',
+      pattern: "oc://config/items/$last",
+      expectedPath: "oc://config/items/2",
+      expectedValue: "30",
+    },
+  ])("$name", ({ raw, pattern, expectedPath, expectedValue }) => {
+    const ast = parseJsonc(raw).ast;
+    const out = findOcPaths(ast, parseOcPath(pattern));
+
+    expect(out).toHaveLength(1);
+    const result = requireFirstResult(out);
+    expect(formatOcPath(result.path)).toBe(expectedPath);
+    expect(result.match.kind === "leaf" && result.match.valueText).toBe(expectedValue);
+  });
 });
 
 describe("findOcPaths — slash-deep JSONC paths", () => {

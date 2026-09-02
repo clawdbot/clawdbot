@@ -137,7 +137,7 @@ extension CronSettings {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
                 if let err = self.store.lastError {
-                    Text("Error: \(err)")
+                    Text(String(format: String(localized: "Error: %@"), err))
                         .font(.footnote)
                         .foregroundStyle(.red)
                 } else if let msg = self.store.statusMessage {
@@ -150,7 +150,7 @@ extension CronSettings {
                     LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(self.store.jobs) { job in
                             Button {
-                                self.selectJob(job.id)
+                                self.store.selectJob(job.id)
                             } label: {
                                 self.jobRow(job)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,11 +182,6 @@ extension CronSettings {
             self.detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-    }
-
-    private func selectJob(_ id: String) {
-        self.store.selectedJobId = id
-        Task { await self.store.refreshRuns(jobId: id) }
     }
 
     @ViewBuilder

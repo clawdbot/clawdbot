@@ -105,7 +105,11 @@ export function getToolResultText(msg: AgentMessage): string {
 }
 
 function estimateMessageChars(msg: AgentMessage): number {
-  if (!msg || typeof msg !== "object") {
+  if (
+    !msg ||
+    typeof msg !== "object" ||
+    ("excludeFromContext" in msg && msg.excludeFromContext === true)
+  ) {
     return 0;
   }
 
@@ -158,27 +162,26 @@ function estimateMessageChars(msg: AgentMessage): number {
     return estimateToolResultContentChars(content);
   }
 
-  const record = msg as unknown as Record<string, unknown>;
+  const role: unknown = Reflect.get(msg, "role");
 
-  if (record.role === "bashExecution") {
-    if (record.excludeFromContext === true) {
-      return 0;
-    }
-    return bashExecutionToText(msg as unknown as Parameters<typeof bashExecutionToText>[0]).length;
+  if (role === "bashExecution") {
+    return bashExecutionToText(msg as Parameters<typeof bashExecutionToText>[0]).length;
   }
 
-  if (record.role === "branchSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (role === "branchSummary") {
+    const rawSummary = Reflect.get(msg, "summary");
+    const summary = typeof rawSummary === "string" ? rawSummary : "";
     return (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length;
   }
 
-  if (record.role === "compactionSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (role === "compactionSummary") {
+    const rawSummary = Reflect.get(msg, "summary");
+    const summary = typeof rawSummary === "string" ? rawSummary : "";
     return (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
   }
 
-  if (record.role === "custom") {
-    const content = record.content;
+  if (role === "custom") {
+    const content = Reflect.get(msg, "content");
     if (typeof content === "string") {
       return content.length;
     }

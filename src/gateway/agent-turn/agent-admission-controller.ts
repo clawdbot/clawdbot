@@ -33,6 +33,7 @@ export function createAgentAdmissionController(params: {
   agentDedupeKeys: string[];
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
+  admissionOwner?: symbol;
   context: AgentTurnContext;
   io: AgentTurnIo;
   dedupeLifecycle: AgentDedupeLifecycle;
@@ -148,11 +149,13 @@ export function createAgentAdmissionController(params: {
     let latestEntry = loadSessionEntry(resolvedSessionKey, {
       agentId: admissionAgent,
       clone: false,
+      projection: "list",
     }).entry;
     if (!latestEntry && requestedSessionKey && requestedSessionKey !== resolvedSessionKey) {
       latestEntry = loadSessionEntry(requestedSessionKey, {
         agentId: admissionAgent,
         clone: false,
+        projection: "list",
       }).entry;
     }
     assertExpectedExistingSession({
@@ -177,6 +180,10 @@ export function createAgentAdmissionController(params: {
   };
 
   const interrupt = () => {
+    // Draining an already-stopped admission must preserve its original cancellation reason.
+    if (admittedRunAbort?.controller.signal.aborted) {
+      return;
+    }
     if (admittedRunAbort?.entry) {
       admittedRunAbort.entry.abortStopReason = AGENT_RUN_RESTART_ABORT_STOP_REASON;
     }
@@ -218,6 +225,7 @@ export function createAgentAdmissionController(params: {
       (await beginSessionWorkAdmission({
         scope,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
+        ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => assertAllowed(false),
         revalidateAllowed: assertAllowed,
         onInterrupt: interrupt,

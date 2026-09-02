@@ -1,5 +1,9 @@
-import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "@openclaw/ai/transports";
-import { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
+import {
+  canonicalizeMaxTokensParam,
+  resolveMaxTokensParam,
+  detectOpenAICompletionsCompat,
+  resolveOpenAICompletionsCompat,
+} from "@openclaw/ai/transports";
 import {
   type NativeWebSearchToolPolicyParams,
   isNativeWebSearchAllowedByToolPolicy,
@@ -35,12 +39,16 @@ import {
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveModelExtraParamSources } from "../model-extra-params.js";
-import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import {
+  getModelProviderRequestRouteFacts,
+  resolveProviderRequestPolicyConfig,
+} from "../provider-request-config.js";
 import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { SettingsManager } from "../sessions/index.js";
 import { log } from "./logger.js";
 import { parseCacheRetention, resolveCacheRetention } from "./prompt-cache-retention.js";
+import type { ProviderThinkLevel } from "./utils.js";
 
 function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
   if (!streamFn) {
@@ -48,7 +56,6 @@ function requireBaseStreamFn(streamFn: StreamFn | undefined): StreamFn {
   }
   return streamFn;
 }
-import type { ProviderThinkLevel } from "./utils.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -75,7 +82,6 @@ function supportsGptParallelToolCallsPayload(api: unknown): boolean {
 }
 
 const testing = {
-  supportsGptParallelToolCallsPayload,
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
   ): void {
@@ -206,7 +212,6 @@ function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unkn
   if (!model) {
     return null;
   }
-  const record = model as unknown as Record<string, unknown>;
   return {
     api: model.api,
     provider: model.provider,
@@ -216,10 +221,10 @@ function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unkn
     reasoning: model.reasoning,
     input: model.input,
     cost: model.cost,
-    compat: record.compat ?? null,
+    compat: Reflect.get(model, "compat") ?? null,
     contextWindow: model.contextWindow,
     contextTokens: model.contextTokens ?? null,
-    headers: record.headers ?? null,
+    headers: Reflect.get(model, "headers") ?? null,
     maxTokens: model.maxTokens,
     maxTokensSource: model.maxTokensSource ?? null,
     params: model.params ?? null,
@@ -557,20 +562,15 @@ function createStreamFnWithExtraParams(
     streamParams.stop = resolvedStop;
   }
 
-  const readSupportsPromptCacheKey = (m: unknown): boolean => {
-    const compat = (m as { compat?: unknown })?.compat;
-    if (!compat || typeof compat !== "object") {
-      return false;
-    }
-    return (compat as Record<string, unknown>).supportsPromptCacheKey === true;
-  };
+  const readCacheCompat = (m?: ProviderRuntimeModel) =>
+    m?.api === "openai-completions" ? resolveOpenAICompletionsCompat(m) : m?.compat;
 
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
     provider,
     typeof model?.api === "string" ? model.api : undefined,
     typeof model?.id === "string" ? model.id : undefined,
-    readSupportsPromptCacheKey(model),
+    readCacheCompat(model),
   );
   if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
     const debugParams = initialCacheRetention
@@ -586,7 +586,7 @@ function createStreamFnWithExtraParams(
       provider,
       typeof callModel.api === "string" ? callModel.api : undefined,
       typeof callModel.id === "string" ? callModel.id : undefined,
-      readSupportsPromptCacheKey(callModel),
+      readCacheCompat(callModel),
     );
     if (Object.keys(streamParams).length === 0 && !cacheRetention) {
       return underlying(callModel, context, options);
@@ -704,14 +704,16 @@ function shouldStripOpenAICompletionsStore(model: ProviderRuntimeModel): boolean
     model.compat && typeof model.compat === "object"
       ? (model.compat as Record<string, unknown>)
       : undefined;
-  const capabilities = resolveProviderRequestPolicyConfig({
-    provider: typeof model.provider === "string" ? model.provider : undefined,
-    api: model.api,
-    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-    compat,
-    capability: "llm",
-    transport: "stream",
-  }).capabilities;
+  const capabilities =
+    getModelProviderRequestRouteFacts(model)?.capabilities ??
+    resolveProviderRequestPolicyConfig({
+      provider: typeof model.provider === "string" ? model.provider : undefined,
+      api: model.api,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      compat,
+      capability: "llm",
+      transport: "stream",
+    }).capabilities;
   return !capabilities.usesKnownNativeOpenAIRoute;
 }
 

@@ -26,6 +26,14 @@ describe("OpenClawSchema cloudWorkers config", () => {
                 title?: string;
                 description?: string;
               };
+              projectProfiles?: {
+                title?: string;
+                description?: string;
+                additionalProperties?: {
+                  title?: string;
+                  description?: string;
+                };
+              };
               profiles?: {
                 title?: string;
                 description?: string;
@@ -41,15 +49,19 @@ describe("OpenClawSchema cloudWorkers config", () => {
       }
     ).properties?.cloudWorkers;
     const desktop = properties?.properties?.desktop;
+    const projectProfiles = properties?.properties?.projectProfiles;
     const profiles = properties?.properties?.profiles;
     const profile = profiles?.additionalProperties;
 
     for (const [path, schema] of [
       ["cloudWorkers.desktop", desktop],
+      ["cloudWorkers.projectProfiles", projectProfiles],
+      ["cloudWorkers.projectProfiles.*", projectProfiles?.additionalProperties],
       ["cloudWorkers.profiles", profiles],
       ["cloudWorkers.profiles.*", profile],
       ["cloudWorkers.profiles.*.provider", profile?.properties?.provider],
       ["cloudWorkers.profiles.*.install", profile?.properties?.install],
+      ["cloudWorkers.profiles.*.suspendAfter", profile?.properties?.suspendAfter],
       ["cloudWorkers.profiles.*.settings", profile?.properties?.settings],
     ] as const) {
       expect(schema?.title, path).toBe(CLOUD_WORKER_FIELD_LABELS[path]);
@@ -67,6 +79,31 @@ describe("OpenClawSchema cloudWorkers config", () => {
   it("accepts the desktop Labs gate only as a boolean", () => {
     expect(parseCloudWorkers({ desktop: true })).toStrictEqual({ desktop: true });
     expect(OpenClawSchema.safeParse({ cloudWorkers: { desktop: "true" } }).success).toBe(false);
+  });
+
+  it("accepts normalized per-project default profiles", () => {
+    expect(
+      parseCloudWorkers({
+        projectProfiles: {
+          "github.com/acme/app": "development",
+        },
+      }),
+    ).toStrictEqual({
+      projectProfiles: {
+        "github.com/acme/app": "development",
+      },
+    });
+  });
+
+  it.each([
+    { "github.com/acme/app": "" },
+    { "github.com/acme/app": " " },
+    { "github.com/acme/app": 42 },
+    { "GitHub.com/acme/app": "development" },
+    { "github.com/acme/app.git": "development" },
+    { "github.com/acme": "development" },
+  ])("rejects invalid per-project profile mappings %#", (projectProfiles) => {
+    expect(OpenClawSchema.safeParse({ cloudWorkers: { projectProfiles } }).success).toBe(false);
   });
 
   it("accepts provider-owned settings", () => {
@@ -158,6 +195,27 @@ describe("OpenClawSchema cloudWorkers config", () => {
       },
     });
   });
+
+  it.each(["1m", "60s", "45m", "90m", "2h", "1h30m"])(
+    "accepts an idle suspend duration of at least one minute: %s",
+    (suspendAfter) => {
+      expect(
+        parseCloudWorkers({ profiles: { development: { provider: "qa-lab", suspendAfter } } }),
+      ).toStrictEqual({
+        profiles: { development: { provider: "qa-lab", install: "bundle", suspendAfter } },
+      });
+    },
+  );
+
+  it.each(["", "0m", "59s", "0.5m", "-1m", "60000", "forever", 60_000, null])(
+    "rejects an invalid or sub-minute idle suspend duration: %s",
+    (suspendAfter) => {
+      const result = OpenClawSchema.safeParse({
+        cloudWorkers: { profiles: { development: { provider: "qa-lab", suspendAfter } } },
+      });
+      expect(result.success).toBe(false);
+    },
+  );
 
   it.each([
     { profiles: { development: { provider: "" } } },

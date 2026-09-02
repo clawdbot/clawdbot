@@ -125,7 +125,13 @@ export class TwitchClientManager {
       return pending;
     }
 
-    const connection = this.createConnectedClient(key, account, cfg, accountId);
+    const connection: Promise<ChatClient> = this.createConnectedClient(
+      key,
+      account,
+      () => this.connectionPromises.get(key) === connection,
+      cfg,
+      accountId,
+    );
     this.connectionPromises.set(key, connection);
     try {
       return await connection;
@@ -139,6 +145,7 @@ export class TwitchClientManager {
   private async createConnectedClient(
     key: string,
     account: TwitchAccountConfig,
+    ownsConnection: () => boolean,
     cfg?: OpenClawConfig,
     accountId?: string,
   ): Promise<ChatClient> {
@@ -163,6 +170,9 @@ export class TwitchClientManager {
     const normalizedToken = normalizeToken(tokenResolution.token);
 
     const authProvider = await this.createAuthProvider(account, normalizedToken);
+    if (!ownsConnection()) {
+      throw new Error(`Twitch connection cancelled for ${account.username}`);
+    }
 
     const client = new ChatClient({
       authProvider,
@@ -373,19 +383,21 @@ export class TwitchClientManager {
     const key = this.getAccountKey(account);
     const client = this.clients.get(key);
     const pendingClient = this.pendingClients.get(key);
+    const pendingConnection = this.connectionPromises.delete(key);
 
     if (pendingClient) {
       pendingClient.quit();
       this.pendingClients.delete(key);
-      this.connectionPromises.delete(key);
-      this.clearMessageHandler(key);
     }
 
     if (client) {
       client.quit();
       this.clients.delete(key);
-      this.clearMessageHandler(key);
       this.logger.info(`Disconnected ${key}`);
+    }
+
+    if (pendingConnection || pendingClient || client) {
+      this.clearMessageHandler(key);
     }
   }
 
@@ -412,7 +424,7 @@ export class TwitchClientManager {
     message: string,
     cfg?: OpenClawConfig,
     accountId?: string,
-  ): Promise<{ ok: boolean; error?: string; messageId?: string }> {
+  ): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
     try {
       const client = await this.getClient(account, cfg, accountId);
 
@@ -426,11 +438,9 @@ export class TwitchClientManager {
 
       return { ok: true, messageId };
     } catch (error) {
-      this.logger.error(`Failed to send message: ${formatErrorMessage(error)}`);
-      return {
-        ok: false,
-        error: formatErrorMessage(error),
-      };
+      const errorMessage = formatErrorMessage(error);
+      this.logger.error(`Failed to send message: ${errorMessage}`);
+      return { ok: false, error: errorMessage };
     }
   }
 
@@ -439,15 +449,5 @@ export class TwitchClientManager {
    */
   public getAccountKey(account: TwitchAccountConfig): string {
     return `${account.username}:${account.channel}`;
-  }
-
-  /**
-   * Clear all clients and handlers (for testing)
-   */
-  clearForTest(): void {
-    this.clients.clear();
-    this.pendingClients.clear();
-    this.connectionPromises.clear();
-    this.messageHandlers.clear();
   }
 }

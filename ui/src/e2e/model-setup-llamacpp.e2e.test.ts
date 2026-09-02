@@ -1,7 +1,7 @@
 // Control UI tests cover llama.cpp setup against a mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,7 +11,13 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+let artifactDir: string | undefined;
+beforeEach(() => {
+  artifactDir = artifactRoot
+    ? createControlUiE2eArtifactDir("model-setup-llamacpp", artifactRoot)
+    : undefined;
+});
 const prepareOptions = [
   {
     id: "ollama",
@@ -24,7 +30,7 @@ const prepareOptions = [
     id: "llama-cpp",
     brandId: "llama-cpp",
     label: "llama.cpp",
-    hint: "Run one private GGUF model directly inside this Gateway",
+    hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
     actionLabel: "Set up model",
   },
   {
@@ -61,7 +67,7 @@ suite.define(() => {
             "chat.metadata",
             "chat.startup",
             "openclaw.setup.detect",
-            "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
             "openclaw.setup.prepare.start",
             "wizard.next",
           ],
@@ -72,11 +78,10 @@ suite.define(() => {
               done: false,
               status: "running",
             },
-            "openclaw.setup.activate": {
-              ok: true,
-              modelRef,
-              latencyMs: 731,
-              lines: ["Model ready"],
+            "openclaw.setup.activate.start": {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
             },
             "wizard.next": {
               sequence: [
@@ -87,8 +92,18 @@ suite.define(() => {
                     id: "llama-cpp-consent",
                     type: "confirm",
                     message:
-                      "OpenClaw will download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) and run it directly inside this Gateway. Continue?",
+                      "OpenClaw will install a verified llama.cpp server and download Gemma 4 E4B IT Q4_K_M (about 5.0 GB) plus the local embedding model (about 0.3 GB). Continue?",
                     initialValue: false,
+                  },
+                },
+                {
+                  done: false,
+                  status: "running",
+                  step: {
+                    id: "llama-server-verified",
+                    type: "progress",
+                    message: "Verified llama-server b10357",
+                    executor: "gateway",
                   },
                 },
                 {
@@ -105,13 +120,14 @@ suite.define(() => {
                   done: false,
                   status: "running",
                   step: {
-                    id: "llama-cpp-download-100",
+                    id: "llama-cpp-embedding-ready",
                     type: "progress",
-                    message: "Gemma 4 E4B model downloaded",
+                    message: "EmbeddingGemma model verified",
                     executor: "gateway",
                   },
                 },
                 { done: true, status: "done" },
+                { done: true, status: "done", modelActivation: { modelRef } },
               ],
             },
           },
@@ -129,7 +145,6 @@ suite.define(() => {
         await expect.poll(() => llamaCppRow.textContent()).not.toContain("RAM");
 
         if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
           await page.screenshot({
             animations: "disabled",
             fullPage: true,
@@ -141,7 +156,7 @@ suite.define(() => {
         const start = await gateway.waitForRequest("openclaw.setup.prepare.start");
         expect(start.params).toMatchObject({ authChoice: "llama-cpp" });
         await page.getByRole("heading", { name: "Set up a local model" }).waitFor();
-        await page.getByText("OpenClaw will download Gemma 4 E4B IT Q4_K_M").waitFor();
+        await page.getByText("OpenClaw will install a verified llama.cpp server").waitFor();
 
         if (artifactDir) {
           await page.screenshot({
@@ -172,14 +187,16 @@ suite.define(() => {
           .toContain(modelRef);
         await expect
           .poll(() => page.locator(".model-setup-success").textContent())
-          .toContain("Verified in 731 ms");
+          .not.toContain("Verified in");
         await expect
           .poll(() => page.locator('.model-setup-success [data-provider-icon="llamacpp"]').count())
           .toBe(1);
 
-        const activate = await gateway.waitForRequest("openclaw.setup.activate");
+        const activate = await gateway.waitForRequest("openclaw.setup.activate.start");
         expect(activate.params).toEqual({
+          sessionId: expect.any(String),
           kind: "provider-auto:llama-cpp",
+          agentId: "main",
           modelRef,
         });
 

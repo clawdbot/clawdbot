@@ -114,6 +114,7 @@ export const dispatchChannelInboundTurnMock = vi.fn<DispatchChannelInboundTurnFn
     const providerInfo = {
       ...info,
       onPlatformSendDispatch: async () => undefined,
+      assertPlatformSendAuthorized: () => undefined,
     };
     const result =
       "deliverWithProviderMessageSending" in plan.delivery
@@ -280,6 +281,7 @@ type TelegramLoginFlow = NonNullable<TelegramNativeCommandDeps["runModelsAuthLog
 
 export function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
+  dispatchReplyFromConfig?: NativeCommandTestParams["opts"]["dispatchReplyFromConfig"];
   runtimeCfg?: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
@@ -292,6 +294,7 @@ export function registerAndResolveStatusHandler(params: {
 } {
   const {
     cfg,
+    dispatchReplyFromConfig,
     runtimeCfg,
     allowFrom,
     groupAllowFrom,
@@ -302,6 +305,7 @@ export function registerAndResolveStatusHandler(params: {
   return registerAndResolveCommandHandlerBase({
     commandName: "status",
     cfg,
+    dispatchReplyFromConfig,
     runtimeCfg,
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
@@ -314,6 +318,7 @@ export function registerAndResolveStatusHandler(params: {
 function registerAndResolveCommandHandlerBase(params: {
   commandName: string;
   cfg: OpenClawConfig;
+  dispatchReplyFromConfig?: NativeCommandTestParams["opts"]["dispatchReplyFromConfig"];
   runtimeCfg?: OpenClawConfig;
   allowFrom: string[];
   groupAllowFrom: string[];
@@ -329,6 +334,7 @@ function registerAndResolveCommandHandlerBase(params: {
   const {
     commandName,
     cfg,
+    dispatchReplyFromConfig,
     runtimeCfg,
     allowFrom,
     groupAllowFrom,
@@ -378,6 +384,7 @@ function registerAndResolveCommandHandlerBase(params: {
           }),
         } as unknown as NativeCommandTestParams["bot"],
         cfg,
+        opts: { token: "token", dispatchReplyFromConfig },
         allowFrom,
         groupAllowFrom,
         telegramCfg,

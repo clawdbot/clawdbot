@@ -12,6 +12,7 @@ function createAccount(params: {
     enabled: true,
     token: "t",
     incomingUrl: "https://nas.example.com/incoming",
+    webhookUrl: "https://gateway.example.com/webapi/entry.cgi",
     nasHost: "https://nas.example.com",
     webhookPath: "/webapi/entry.cgi",
     webhookPathSource: "explicit",

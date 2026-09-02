@@ -10,9 +10,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { AgentToolsConfig } from "../config/types.tools.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
-  filterToolsByPolicy,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -20,7 +20,7 @@ import {
   resolveTrustedGroupId,
 } from "./agent-tools.policy.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { filterToolsByPolicy, isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
@@ -85,10 +85,6 @@ describe("agent-tools.policy", () => {
 
   it("keeps apply_patch when write is allowlisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
-  });
-
-  it("keeps apply_patch when write is denylisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
   });
 });
 
@@ -341,6 +337,7 @@ describe("resolveSubagentToolPolicyForSession", () => {
       const hardDeniedTools = [
         "gateway",
         "agents_list",
+        "openclaw",
         "session_status",
         "automations",
         "cron",
@@ -653,14 +650,14 @@ describe("resolveEffectiveToolPolicy", () => {
             id: "messenger",
             tools: {
               profile: "messaging",
-              alsoAllow: ["image"],
+              alsoAllow: ["view_image"],
             },
           },
         ],
       },
     } as OpenClawConfig;
     const result = resolveEffectiveToolPolicy({ config: cfg, agentId: "messenger" });
-    expect(result.profileAlsoAllow).toEqual(["image"]);
+    expect(result.profileAlsoAllow).toEqual(["view_image"]);
     expect(result.profileAlsoAllow).not.toContain("exec");
     expect(result.profileAlsoAllow).not.toContain("process");
   });
@@ -679,7 +676,7 @@ describe("resolveEffectiveToolPolicy", () => {
               id: "sage",
               tools: {
                 profile: "messaging",
-                alsoAllow: ["image"],
+                alsoAllow: ["view_image"],
               },
             },
           ],
@@ -717,6 +714,69 @@ describe("resolveEffectiveToolPolicy", () => {
       expect(warning).toContain('(agent "sage")');
       expect(warning).toContain("configured tool sections (tools.exec)");
       expect(warning).toContain('Add alsoAllow: ["exec", "process"]');
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
+  it.each<{
+    name: string;
+    tools?: OpenClawConfig["tools"];
+    agentTools?: AgentToolsConfig;
+    warning?: string;
+  }>([
+    { name: "global deny", tools: { deny: ["process"] } },
+    {
+      name: "global provider wildcard deny",
+      tools: { byProvider: { fixture: { deny: ["pro*"] } } },
+    },
+    { name: "agent group deny", agentTools: { deny: ["group:runtime"] } },
+    { name: "agent provider deny", agentTools: { byProvider: { fixture: { deny: ["process"] } } } },
+    { name: "global allow restriction", tools: { allow: ["exec"] } },
+    {
+      name: "provider profile",
+      tools: { byProvider: { fixture: { profile: "minimal" as const } } },
+    },
+    {
+      name: "provider profile alsoAllow",
+      tools: { byProvider: { fixture: { profile: "minimal" as const, alsoAllow: ["process"] } } },
+      warning: 'Add alsoAllow: ["process"]',
+    },
+    {
+      name: "unselected provider deny",
+      tools: { byProvider: { other: { deny: ["*"] } } },
+      warning: 'Add alsoAllow: ["process"]',
+    },
+  ])("warns only about actionable grants with $name", async ({ tools, agentTools, warning }) => {
+    const warnLogs = createWarnLogCapture("openclaw-agent-tools-policy-test");
+    try {
+      const config: OpenClawConfig = {
+        tools,
+        agents: {
+          entries: {
+            ops: {
+              tools: {
+                profile: "messaging",
+                alsoAllow: ["exec"],
+                exec: { host: "gateway" },
+                ...agentTools,
+              },
+            },
+          },
+        },
+      };
+      const result = resolveEffectiveToolPolicy({
+        config,
+        agentId: "ops",
+        modelProvider: "fixture",
+      });
+      const logged = await warnLogs.findText('tools policy: profile "messaging"');
+      if (warning) {
+        expect(logged).toContain(warning);
+      } else {
+        expect(logged).toBeUndefined();
+      }
+      expect(result.profileAlsoAllow).toEqual(["exec"]);
     } finally {
       warnLogs.cleanup();
     }

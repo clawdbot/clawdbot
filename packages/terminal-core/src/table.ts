@@ -1,8 +1,7 @@
-// Terminal Core module implements table behavior.
-
 import { splitAnsiSegments } from "./ansi-sequences.js";
 import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
-import { displayString } from "./display-string.js";
+import { createDisplayStringFormatter } from "./display-string.js";
+import { sanitizeTerminalText } from "./safe-text.js";
 
 type Align = "left" | "right" | "center";
 
@@ -54,8 +53,9 @@ function padCell(text: string, width: number, align: Align): string {
   // A single grapheme wider than the cell (e.g. a width-2 CJK/emoji glyph in a
   // width-1 column) survives wrapLine intact, so clamp here to keep every cell
   // exactly `width` columns and preserve the border-alignment invariant.
-  const content = visibleWidth(text) > width ? truncateToVisibleWidth(text, width) : text;
-  const w = visibleWidth(content);
+  const textWidth = visibleWidth(text);
+  const content = textWidth > width ? truncateToVisibleWidth(text, width) : text;
+  const w = content === text ? textWidth : visibleWidth(content);
   if (w >= width) {
     return content;
   }
@@ -77,130 +77,44 @@ const C1_OSC = "\u009d";
 const C1_ST = "\u009c";
 const BEL = "\u0007";
 
-type AnsiToken = { kind: "ansi"; value: string; width: number } | { kind: "char"; value: string };
-type SgrCategory =
-  | "background"
-  | "blink"
-  | "conceal"
-  | "font"
-  | "foreground"
-  | "frame"
-  | "ideogram"
-  | "intensity"
-  | "inverse"
-  | "italic"
-  | "overline"
-  | "proportional"
-  | "script"
-  | "strike"
-  | "underline"
-  | "underlineColor";
+type AnsiToken = { kind: "ansi" | "char"; value: string; width: number };
 
-const SGR_CATEGORY_ORDER: readonly SgrCategory[] = [
-  "font",
-  "intensity",
-  "italic",
-  "underline",
-  "underlineColor",
-  "blink",
-  "inverse",
-  "conceal",
-  "strike",
-  "proportional",
-  "frame",
-  "overline",
-  "ideogram",
-  "script",
-  "foreground",
-  "background",
-];
+// Keep this order when closing and reopening styles at cell wrap boundaries.
+const SGR_CATEGORIES = [
+  { category: "font", reset: 10, codes: [11, 12, 13, 14, 15, 16, 17, 18, 19] },
+  { category: "intensity", reset: 22, codes: [1, 2] },
+  { category: "italic", reset: 23, codes: [3, 20] },
+  { category: "underline", reset: 24, codes: [4, 21] },
+  { category: "underlineColor", reset: 59, codes: [] },
+  { category: "blink", reset: 25, codes: [5, 6] },
+  { category: "inverse", reset: 27, codes: [7] },
+  { category: "conceal", reset: 28, codes: [8] },
+  { category: "strike", reset: 29, codes: [9] },
+  { category: "proportional", reset: 50, codes: [26] },
+  { category: "frame", reset: 54, codes: [51, 52] },
+  { category: "overline", reset: 55, codes: [53] },
+  { category: "ideogram", reset: 65, codes: [60, 61, 62, 63, 64] },
+  { category: "script", reset: 75, codes: [73, 74] },
+  {
+    category: "foreground",
+    reset: 39,
+    codes: [30, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93, 94, 95, 96, 97],
+  },
+  {
+    category: "background",
+    reset: 49,
+    codes: [40, 41, 42, 43, 44, 45, 46, 47, 100, 101, 102, 103, 104, 105, 106, 107],
+  },
+] as const;
 
-const SGR_RESET_CATEGORIES = new Map<number, SgrCategory>([
-  [10, "font"],
-  [22, "intensity"],
-  [23, "italic"],
-  [24, "underline"],
-  [25, "blink"],
-  [27, "inverse"],
-  [28, "conceal"],
-  [29, "strike"],
-  [39, "foreground"],
-  [49, "background"],
-  [50, "proportional"],
-  [54, "frame"],
-  [55, "overline"],
-  [59, "underlineColor"],
-  [65, "ideogram"],
-  [75, "script"],
-]);
+type SgrCategory = (typeof SGR_CATEGORIES)[number]["category"];
 
-const SGR_CATEGORY_RESETS = new Map<SgrCategory, number>([
-  ["font", 10],
-  ["intensity", 22],
-  ["italic", 23],
-  ["underline", 24],
-  ["blink", 25],
-  ["inverse", 27],
-  ["conceal", 28],
-  ["strike", 29],
-  ["foreground", 39],
-  ["background", 49],
-  ["proportional", 50],
-  ["frame", 54],
-  ["overline", 55],
-  ["underlineColor", 59],
-  ["ideogram", 65],
-  ["script", 75],
-]);
-
-function simpleSgrCategory(param: number): SgrCategory | undefined {
-  if (param === 1 || param === 2) {
-    return "intensity";
-  }
-  if (param >= 11 && param <= 19) {
-    return "font";
-  }
-  if (param === 3 || param === 20) {
-    return "italic";
-  }
-  if (param === 4 || param === 21) {
-    return "underline";
-  }
-  if (param === 5 || param === 6) {
-    return "blink";
-  }
-  if (param === 7) {
-    return "inverse";
-  }
-  if (param === 8) {
-    return "conceal";
-  }
-  if (param === 9) {
-    return "strike";
-  }
-  if (param === 26) {
-    return "proportional";
-  }
-  if ((param >= 30 && param <= 37) || (param >= 90 && param <= 97)) {
-    return "foreground";
-  }
-  if ((param >= 40 && param <= 47) || (param >= 100 && param <= 107)) {
-    return "background";
-  }
-  if (param === 51 || param === 52) {
-    return "frame";
-  }
-  if (param === 53) {
-    return "overline";
-  }
-  if (param >= 60 && param <= 64) {
-    return "ideogram";
-  }
-  if (param === 73 || param === 74) {
-    return "script";
-  }
-  return undefined;
-}
+const SGR_RESET_CATEGORIES = new Map<number, SgrCategory>(
+  SGR_CATEGORIES.map(({ category, reset }) => [reset, category]),
+);
+const SGR_SIMPLE_CATEGORIES = new Map<number, SgrCategory>(
+  SGR_CATEGORIES.flatMap(({ category, codes }) => codes.map((code) => [code, category] as const)),
+);
 
 function extendedSgrCategory(param: number): SgrCategory | undefined {
   if (param === 38) {
@@ -251,7 +165,7 @@ function applySgrSequence(active: Map<SgrCategory, string>, value: string): void
     const field = fields[index] ?? "";
     if (field.includes(":")) {
       const param = Number(field.slice(0, field.indexOf(":")));
-      const category = extendedSgrCategory(param) ?? simpleSgrCategory(param);
+      const category = extendedSgrCategory(param) ?? SGR_SIMPLE_CATEGORIES.get(param);
       if (category) {
         active.set(category, sgrSequence(sequence.introducer, field));
       }
@@ -286,7 +200,7 @@ function applySgrSequence(active: Map<SgrCategory, string>, value: string): void
       continue;
     }
 
-    const category = simpleSgrCategory(param);
+    const category = SGR_SIMPLE_CATEGORIES.get(param);
     if (category) {
       active.set(category, sgrSequence(sequence.introducer, String(param)));
     }
@@ -302,13 +216,10 @@ function activeSgrAfter(tokens: readonly AnsiToken[]): ActiveSgr[] {
       applySgrSequence(active, token.value);
     }
   }
-  return SGR_CATEGORY_ORDER.flatMap((category) => {
+  return SGR_CATEGORIES.flatMap(({ category, reset }) => {
     const open = active.get(category);
     const parsed = open ? parseSgrSequence(open) : undefined;
-    const reset = SGR_CATEGORY_RESETS.get(category);
-    return open && parsed && reset !== undefined
-      ? [{ close: sgrSequence(parsed.introducer, String(reset)), open }]
-      : [];
+    return open && parsed ? [{ close: sgrSequence(parsed.introducer, String(reset)), open }] : [];
   });
 }
 
@@ -365,22 +276,39 @@ function wrapLine(text: string, width: number): string[] {
   if (width <= 0) {
     return [text];
   }
+  // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
+  // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
+  if (text.length <= width && /^[!-~](?:[ -~]*[!-~])?$/u.test(text)) {
+    return [text];
+  }
 
   // ANSI-aware wrapping: never split inside ANSI SGR/OSC-8 sequences.
   // Table cells are padded and bordered per physical line, so wrapped lines
   // must not leak styling into padding while the next continuation keeps it.
   const tokens: AnsiToken[] = [];
   for (const segment of splitAnsiSegments(text)) {
+    let value = segment.value;
     if (segment.kind === "ansi") {
-      tokens.push({
-        kind: "ansi",
-        value: segment.value,
-        width: visibleWidth(segment.controls.join("")),
-      });
+      if (segment.controls.includes("\t")) {
+        // Reset with the CSI introducer before printable controls can enter pending escape parsing.
+        tokens.push({
+          kind: "ansi",
+          value: value.slice(0, value[0] === ESC ? 2 : 1) + "\x18",
+          width: 0,
+        });
+        const controls = new Set(segment.controls);
+        for (const control of segment.controls) {
+          tokens.push({ kind: control === "\t" ? "char" : "ansi", value: control, width: 0 });
+        }
+        value = Array.from(value)
+          .filter((character) => !controls.has(character))
+          .join("");
+      }
+      tokens.push({ kind: "ansi", value, width: 0 });
       continue;
     }
-    for (const grapheme of splitGraphemes(segment.value)) {
-      tokens.push({ kind: "char", value: grapheme });
+    for (const grapheme of splitGraphemes(value)) {
+      tokens.push({ kind: "char", value: grapheme, width: 0 });
     }
   }
 
@@ -390,8 +318,7 @@ function wrapLine(text: string, width: number): string[] {
 
   const lines: string[] = [];
   const isBreakChar = (ch: string) =>
-    ch === " " || ch === "\t" || ch === "/" || ch === "-" || ch === "_" || ch === ".";
-  const isSpaceChar = (ch: string) => ch === " " || ch === "\t";
+    ch === " " || ch === "/" || ch === "-" || ch === "_" || ch === ".";
   let skipNextLf = false;
 
   const buf: AnsiToken[] = [];
@@ -400,32 +327,12 @@ function wrapLine(text: string, width: number): string[] {
 
   const bufToString = (slice?: AnsiToken[]) => (slice ?? buf).map((t) => t.value).join("");
 
-  const bufVisibleWidth = (slice: AnsiToken[]) =>
-    slice.reduce(
-      (acc, token) => acc + (token.kind === "char" ? visibleWidth(token.value) : token.width),
-      0,
-    );
-
   const pushLine = (value: string) => {
     const cleaned = value.replace(/\s+$/, "");
     if (visibleWidth(cleaned) === 0) {
       return;
     }
     lines.push(cleaned);
-  };
-
-  const trimLeadingSpaces = (tokensLocal: AnsiToken[]) => {
-    while (true) {
-      const firstCharIndexLocal = tokensLocal.findIndex((token) => token.kind === "char");
-      if (firstCharIndexLocal < 0) {
-        return;
-      }
-      const firstChar = tokensLocal[firstCharIndexLocal];
-      if (!firstChar || !isSpaceChar(firstChar.value)) {
-        return;
-      }
-      tokensLocal.splice(firstCharIndexLocal, 1);
-    }
   };
 
   const flushAt = (breakAt: number | null) => {
@@ -453,9 +360,10 @@ function wrapLine(text: string, width: number): string[] {
       return;
     }
 
+    // breakAt follows the latest break character, or is buf.length.
+    // The retained suffix therefore has no leading space tokens to trim.
     const rest = buf.slice(breakAt);
     pushLine(`${bufToString(left)}${closeOsc8}${closeSgr}`);
-    trimLeadingSpaces(rest);
     if (openOsc8) {
       rest.unshift({ kind: "ansi", value: openOsc8, width: 0 });
     }
@@ -471,51 +379,41 @@ function wrapLine(text: string, width: number): string[] {
 
     buf.length = 0;
     buf.push(...rest);
-    bufVisible = bufVisibleWidth(buf);
+    bufVisible = buf.reduce((acc, token) => acc + token.width, 0);
     lastBreakIndex = null;
   };
 
-  const makeRoomFor = (tokenWidth: number) => {
-    if (bufVisible + tokenWidth <= width || bufVisible === 0) {
-      return;
-    }
-    flushAt(lastBreakIndex);
-    if (bufVisible + tokenWidth > width && bufVisible > 0) {
-      flushAt(null);
-    }
-  };
-
   for (const token of tokens) {
-    if (token.kind === "ansi") {
-      makeRoomFor(token.width);
-      buf.push(token);
-      bufVisible += token.width;
-      continue;
-    }
-
-    const ch = token.value;
-    if (skipNextLf) {
-      skipNextLf = false;
-      if (ch === "\n") {
+    if (token.kind === "char") {
+      // Emit the one-cell space used by layout instead of following terminal tab stops.
+      token.value = token.value.replaceAll("\t", " ");
+      const ch = token.value;
+      if (skipNextLf && ch === "\n") {
+        skipNextLf = false;
         continue;
       }
-    }
-    if (ch === "\n" || ch === "\r") {
-      flushAt(buf.length);
-      if (ch === "\r") {
-        skipNextLf = true;
+      // CRLF is one grapheme; separated CR/LF may retain intervening ANSI controls.
+      skipNextLf = ch === "\r";
+      if (ch === "\n" || ch === "\r" || ch === "\r\n") {
+        flushAt(buf.length);
+        continue;
       }
-      continue;
+      // Soft-wrap remainders reuse the width measured when each token entered the buffer.
+      token.width = visibleWidth(ch);
     }
-    const charWidth = visibleWidth(ch);
-    makeRoomFor(charWidth);
-    if (bufVisible === 0 && isSpaceChar(ch)) {
+    if (bufVisible + token.width > width && bufVisible > 0) {
+      flushAt(lastBreakIndex);
+      if (bufVisible + token.width > width && bufVisible > 0) {
+        flushAt(null);
+      }
+    }
+    if (token.kind === "char" && bufVisible === 0 && token.value === " ") {
       continue;
     }
 
     buf.push(token);
-    bufVisible += charWidth;
-    if (isBreakChar(ch)) {
+    bufVisible += token.width;
+    if (token.kind === "char" && isBreakChar(token.value)) {
       lastBreakIndex = buf.length;
     }
   }
@@ -538,7 +436,24 @@ export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): numbe
   return Math.max(minWidth, process.stdout.columns ?? fallbackWidth);
 }
 
+/** Render untrusted single-line values without changing renderTable's trusted ANSI contract. */
+export function renderTerminalSafeTable(opts: RenderTableOptions): string {
+  return renderTable({
+    ...opts,
+    columns: opts.columns.map((column) => ({
+      ...column,
+      header: sanitizeTerminalText(column.header),
+    })),
+    rows: opts.rows.map((row) =>
+      Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key, sanitizeTerminalText(value)]),
+      ),
+    ),
+  });
+}
+
 export function renderTable(opts: RenderTableOptions): string {
+  const displayString = createDisplayStringFormatter();
   const rows = opts.rows.map((row) => {
     const next: Record<string, string> = {};
     for (const [key, value] of Object.entries(row)) {
@@ -559,7 +474,7 @@ export function renderTable(opts: RenderTableOptions): string {
 
   const metrics = columns.map((c) => {
     const headerW = visibleWidth(c.header);
-    const cellW = Math.max(0, ...rows.map((r) => visibleWidth(r[c.key] ?? "")));
+    const cellW = rows.reduce((max, row) => Math.max(max, visibleWidth(row[c.key] ?? "")), 0);
     return { headerW, cellW };
   });
 
@@ -584,45 +499,37 @@ export function renderTable(opts: RenderTableOptions): string {
   if (maxWidth && total > maxWidth) {
     let over = total - maxWidth;
 
-    const flexOrder = columns
-      .map((_c, i) => ({ i, w: widths[i] ?? 0 }))
-      .filter(({ i }) => Boolean(columns[i]?.flex))
-      .toSorted((a, b) => b.w - a.w)
-      .map((x) => x.i);
+    const flexColumns = columns.flatMap((column, i) => (column.flex ? [i] : []));
+    const nonFlexColumns = columns.flatMap((column, i) => (column.flex ? [] : [i]));
 
-    const nonFlexOrder = columns
-      .map((_c, i) => ({ i, w: widths[i] ?? 0 }))
-      .filter(({ i }) => !columns[i]?.flex)
-      .toSorted((a, b) => b.w - a.w)
-      .map((x) => x.i);
-
-    const shrink = (order: number[], minWidths: number[]) => {
+    const shrink = (indices: number[], minWidths: number[]) => {
       while (over > 0) {
-        let progressed = false;
-        for (const i of order) {
+        let widest: number | undefined;
+        for (const i of indices) {
           if ((widths[i] ?? 0) <= (minWidths[i] ?? 0)) {
             continue;
           }
-          widths[i] = (widths[i] ?? 0) - 1;
-          over -= 1;
-          progressed = true;
-          if (over <= 0) {
-            break;
+          // Water-fill from the widest eligible column. Strict comparison makes
+          // equal-width ties deterministic: the leftmost column shrinks first.
+          if (widest === undefined || (widths[i] ?? 0) > (widths[widest] ?? 0)) {
+            widest = i;
           }
         }
-        if (!progressed) {
+        if (widest === undefined) {
           break;
         }
+        widths[widest] = (widths[widest] ?? 0) - 1;
+        over -= 1;
       }
     };
 
     // Prefer shrinking flex columns; only shrink non-flex if necessary.
     // If required to fit, allow flex columns to shrink below user minWidth
     // down to their absolute minimum (header + padding).
-    shrink(flexOrder, preferredMinWidths);
-    shrink(flexOrder, absoluteMinWidths);
-    shrink(nonFlexOrder, preferredMinWidths);
-    shrink(nonFlexOrder, absoluteMinWidths);
+    shrink(flexColumns, preferredMinWidths);
+    shrink(flexColumns, absoluteMinWidths);
+    shrink(nonFlexColumns, preferredMinWidths);
+    shrink(nonFlexColumns, absoluteMinWidths);
   }
 
   // If we have room and any flex columns, expand them to fill the available width.
@@ -632,10 +539,7 @@ export function renderTable(opts: RenderTableOptions): string {
     const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCountLocal;
     let extra = maxWidth - currentTotal;
     if (extra > 0) {
-      const flexCols = columns
-        .map((c, i) => ({ c, i }))
-        .filter(({ c }) => Boolean(c.flex))
-        .map(({ i }) => i);
+      let flexCols = columns.flatMap((column, i) => (column.flex ? [i] : []));
       if (flexCols.length > 0) {
         const caps = columns.map((c) =>
           typeof c.maxWidth === "number" && c.maxWidth > 0
@@ -643,20 +547,30 @@ export function renderTable(opts: RenderTableOptions): string {
             : Number.POSITIVE_INFINITY,
         );
         while (extra > 0) {
-          let progressed = false;
+          flexCols = flexCols.filter(
+            (i) => (widths[i] ?? 0) < (caps[i] ?? Number.POSITIVE_INFINITY),
+          );
+          if (flexCols.length === 0) {
+            break;
+          }
+          // Fractional additions can round at a cap, so retain their one-cell steps.
+          // Complete integer rounds stop at the first cap; partial rounds keep column order.
+          const rounds = flexCols.reduce(
+            (amount, i) =>
+              Number.isSafeInteger(widths[i])
+                ? Math.min(amount, (caps[i] ?? Number.POSITIVE_INFINITY) - (widths[i] ?? 0))
+                : 1,
+            Number.isSafeInteger(maxWidth) && Number.isSafeInteger(extra)
+              ? Math.max(1, Math.floor(extra / flexCols.length))
+              : 1,
+          );
           for (const i of flexCols) {
-            if ((widths[i] ?? 0) >= (caps[i] ?? Number.POSITIVE_INFINITY)) {
-              continue;
-            }
-            widths[i] = (widths[i] ?? 0) + 1;
-            extra -= 1;
-            progressed = true;
+            const amount = Math.min(rounds, Math.ceil(extra));
+            widths[i] = (widths[i] ?? 0) + amount;
+            extra -= amount;
             if (extra <= 0) {
               break;
             }
-          }
-          if (!progressed) {
-            break;
           }
         }
       }

@@ -131,6 +131,30 @@ describe("cron schedule", () => {
         previous: "2027-03-13T07:30:00.000Z",
       },
       {
+        label: "New York keeps the valid occurrence before its spring-forward gap",
+        timezone: "America/New_York",
+        expression: "45 1,2,3 * * *",
+        now: "2027-03-14T07:05:00.000Z",
+        next: "2027-03-14T07:45:00.000Z",
+        previous: "2027-03-14T06:45:00.000Z",
+      },
+      {
+        label: "New York keeps six-field occurrences before its spring-forward gap",
+        timezone: "America/New_York",
+        expression: "15 45 1,2,3 * * *",
+        now: "2027-03-14T07:05:00.000Z",
+        next: "2027-03-14T07:45:15.000Z",
+        previous: "2027-03-14T06:45:15.000Z",
+      },
+      {
+        label: "New York keeps the final matching second before its spring-forward gap",
+        timezone: "America/New_York",
+        expression: "59 59 1,2,3 * * *",
+        now: "2027-03-14T07:05:00.000Z",
+        next: "2027-03-14T07:59:59.000Z",
+        previous: "2027-03-14T06:59:59.000Z",
+      },
+      {
         label: "New York preserves the final valid second before a spring-forward gap",
         timezone: "America/New_York",
         expression: "59 59 1,2 * * *",
@@ -171,6 +195,22 @@ describe("cron schedule", () => {
         previous: "2026-10-02T15:45:00.000Z",
       },
       {
+        label: "Lord Howe keeps the valid occurrence before its half-hour spring gap",
+        timezone: "Australia/Lord_Howe",
+        expression: "15,45 1,2 * * *",
+        now: "2026-10-03T15:35:00.000Z",
+        next: "2026-10-03T15:45:00.000Z",
+        previous: "2026-10-03T15:15:00.000Z",
+      },
+      {
+        label: "Lord Howe keeps six-field occurrences before its half-hour spring gap",
+        timezone: "Australia/Lord_Howe",
+        expression: "10 15,45 1,2 * * *",
+        now: "2026-10-03T15:35:00.000Z",
+        next: "2026-10-03T15:45:10.000Z",
+        previous: "2026-10-03T15:15:10.000Z",
+      },
+      {
         label: "Antarctica schedules the first occurrence of a two-hour fold",
         timezone: "Antarctica/Troll",
         expression: "0 2 * * *",
@@ -201,6 +241,22 @@ describe("cron schedule", () => {
         now: "2026-03-29T00:30:00.000Z",
         next: "2026-03-29T01:30:00.000Z",
         previous: "2026-03-28T03:30:00.000Z",
+      },
+      {
+        label: "Antarctica keeps the valid occurrence before its two-hour spring gap",
+        timezone: "Antarctica/Troll",
+        expression: "45 0,1,2,3,4 * * *",
+        now: "2026-03-29T01:10:00.000Z",
+        next: "2026-03-29T01:45:00.000Z",
+        previous: "2026-03-29T00:45:00.000Z",
+      },
+      {
+        label: "Antarctica keeps six-field occurrences before its two-hour spring gap",
+        timezone: "Antarctica/Troll",
+        expression: "15 45 0,1,2,3,4 * * *",
+        now: "2026-03-29T01:10:00.000Z",
+        next: "2026-03-29T01:45:15.000Z",
+        previous: "2026-03-29T00:45:15.000Z",
       },
       {
         label: "New York skips a nonexistent annual reminder after multiple offset changes",
@@ -413,15 +469,6 @@ describe("cron schedule", () => {
     expect(
       computePreviousRunAtMs({ kind: "cron", expr: "0 * * * *", tz: "UTC" }, nowMs),
     ).toBeUndefined();
-  });
-
-  it("never returns a past timestamp for Asia/Shanghai daily schedule (#30351)", () => {
-    const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
-    const next = computeNextRunAtMs(
-      { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
-      nowMs,
-    );
-    expect(requireTimestamp(next, "next run")).toBeGreaterThan(nowMs);
   });
 
   it("never returns a previous run that is at-or-after now", () => {

@@ -5,11 +5,17 @@ import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
+import { generateUUID } from "../../lib/uuid.ts";
+import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
 // module is not worth its startup-bundle cost for one string.
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
+const WIDGET_BOARD_HOST_MESSAGE_TYPE = "openclaw:widget-board-host";
+const WIDGET_SCROLL_MESSAGE_TYPE = "openclaw:widget-scroll";
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
 const TICKET_REFRESH_LEAD_MS = 15_000;
 const TICKET_REFRESH_MIN_DELAY_MS = 1_000;
@@ -18,10 +24,6 @@ const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
 
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
 // Without mcp.apps.sandboxOrigin the sandbox URL is the gateway origin with the
@@ -55,6 +57,7 @@ type BoardWidgetFrameLifecycleHost = {
   refreshFrame: () => FrameRefresh | undefined;
   requestUpdate: () => void;
   reportContentHeight: (name: string, height: number) => void;
+  scrollBy: (deltaY: number) => void;
   resolveFrameUrl: () => BoardWidgetFrameUrl | undefined;
   root: () => ParentNode;
   widget: () => BoardWidget | undefined;
@@ -137,6 +140,7 @@ export class BoardWidgetFrameLifecycle {
   private frameFailureKey = "";
   private frameRefreshAttempts = 0;
   private frameProbeGeneration = 0;
+  private boardHostNonce = "";
   private lastFrameUrl = "";
   private messageListening = false;
   private visibilityListening = false;
@@ -158,6 +162,7 @@ export class BoardWidgetFrameLifecycle {
       document.addEventListener("visibilitychange", this.handleVisibilityChange);
       this.visibilityListening = true;
     }
+    installWidgetThemeObserver();
   }
 
   disconnect(): void {
@@ -234,6 +239,8 @@ export class BoardWidgetFrameLifecycle {
     this.lastFrameUrl = src;
     const sandboxSrc = this.resolveSandboxFrameUrl(widget);
     if (sandboxSrc) {
+      // Never grant popups: host.open handles user-clicked links so ungranted
+      // widgets cannot escape network containment through navigation.
       return html`
         <iframe
           class="board-widget__frame"
@@ -249,6 +256,7 @@ export class BoardWidgetFrameLifecycle {
               this.refreshFailedFrame(widget);
             }
           }}
+          @load=${(event: Event) => this.notifyBoardHost(event)}
         ></iframe>
       `;
     }
@@ -266,7 +274,10 @@ export class BoardWidgetFrameLifecycle {
         title=${widget.title || widget.name}
         src=${src}
         @error=${() => this.refreshFailedFrame(widget)}
-        @load=${(event: Event) => this.verifyAuthorization(event, widget)}
+        @load=${(event: Event) => {
+          this.notifyBoardHost(event);
+          this.verifyAuthorization(event, widget);
+        }}
       ></iframe>
     `;
   }
@@ -310,7 +321,7 @@ export class BoardWidgetFrameLifecycle {
     }
     this.frameRefreshAttempts += 1;
     void refreshFrame(widget.name).catch((error: unknown) => {
-      this.setError(error instanceof Error ? error.message : String(error));
+      this.setError(formatUiError(error));
     });
     if (this.frameRefreshAttempts >= MAX_FRAME_REFRESH_ATTEMPTS) {
       this.setError(resolveBoardFrameFailureMessage(widget, this.sandboxOrigin));
@@ -353,6 +364,22 @@ export class BoardWidgetFrameLifecycle {
       });
   }
 
+  private notifyBoardHost(event: Event): void {
+    const frame = event.currentTarget;
+    if (frame instanceof HTMLIFrameElement) {
+      this.postBoardHostState(frame);
+    }
+  }
+
+  private postBoardHostState(frame: HTMLIFrameElement): void {
+    this.boardHostNonce = generateUUID();
+    postWidgetTheme(frame, this.sandboxOrigin || "*");
+    frame.contentWindow?.postMessage(
+      { type: WIDGET_BOARD_HOST_MESSAGE_TYPE, nonce: this.boardHostNonce },
+      this.sandboxOrigin || "*",
+    );
+  }
+
   private resolveSandboxFrameUrl(widget: BoardWidget): string | undefined {
     const gatewayUrl = this.host.context()?.gateway.connection.gatewayUrl;
     if (
@@ -391,6 +418,7 @@ export class BoardWidgetFrameLifecycle {
         this.host.context()?.gateway.connection.gatewayUrl ?? "",
         window.location.origin,
       ),
+      controlUiBaseUrl: `${window.location.origin}${this.host.context()?.basePath ?? ""}`,
       client: this.host.context()?.gateway.snapshot.client ?? undefined,
       resolveFrameUrl,
       confirmPrompt: (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
@@ -406,7 +434,7 @@ export class BoardWidgetFrameLifecycle {
         this.setError("");
       },
       onError: (error) => {
-        this.setError(error instanceof Error ? error.message : String(error));
+        this.setError(formatUiError(error));
       },
     };
   }
@@ -457,7 +485,12 @@ export class BoardWidgetFrameLifecycle {
       }
       return;
     }
-    const data = event.data as { type?: unknown; height?: unknown } | null;
+    const data = event.data as {
+      type?: unknown;
+      height?: unknown;
+      deltaY?: unknown;
+      nonce?: unknown;
+    } | null;
     if (
       frame &&
       widget &&
@@ -468,6 +501,18 @@ export class BoardWidgetFrameLifecycle {
       data.height > 0
     ) {
       this.host.reportContentHeight(widget.name, data.height);
+    }
+    if (
+      frame &&
+      widget &&
+      event.source === frame.contentWindow &&
+      data?.type === WIDGET_SCROLL_MESSAGE_TYPE &&
+      data.nonce === this.boardHostNonce &&
+      typeof data.deltaY === "number" &&
+      Number.isFinite(data.deltaY) &&
+      data.deltaY !== 0
+    ) {
+      this.host.scrollBy(data.deltaY);
     }
     if (
       !frame ||
@@ -488,5 +533,11 @@ export class BoardWidgetFrameLifecycle {
       this.sandboxHost.update(options);
     }
     this.sandboxHost.handleMessage(event);
+    if (event.data?.type === "openclaw:widget-bridge-ready") {
+      // The sandbox proxy replaces its inner iframe after the outer frame's
+      // load event. Reissue per-document host state only after that replacement
+      // announces readiness so scroll authority reaches the live document.
+      this.postBoardHostState(frame);
+    }
   };
 }

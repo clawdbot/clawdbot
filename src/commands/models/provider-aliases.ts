@@ -120,14 +120,6 @@ export function createModelCatalogProviderAliasCanonicalizer(params: ProviderAli
   };
 }
 
-/** Canonicalizes a provider id through manifest model-catalog aliases. */
-export function canonicalizeModelCatalogProviderAlias(
-  provider: string,
-  params: ProviderAliasSource,
-): string {
-  return createModelCatalogProviderAliasCanonicalizer(params).provider(provider);
-}
-
 /** Canonicalizes the provider field on a model reference. */
 export function canonicalizeModelCatalogProviderRef<TRef extends { provider: string }>(
   ref: TRef,

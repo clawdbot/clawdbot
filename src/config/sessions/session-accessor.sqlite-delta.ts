@@ -9,7 +9,6 @@ import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptReadScope,
-  TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
@@ -36,6 +35,8 @@ type RawTranscriptCursor = {
   version: typeof RAW_TRANSCRIPT_CURSOR_VERSION;
 };
 
+type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+
 type ResolvedTranscriptReadScope = ReturnType<typeof resolveSqliteTranscriptReadScope>;
 
 function normalizeRawDeltaLimit(
@@ -53,6 +54,16 @@ function normalizeRawDeltaLimit(
 
 function encodeRawTranscriptCursor(cursor: RawTranscriptCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+/** Mint the raw-delta cursor for a generation-consistent transcript snapshot. */
+export function createTranscriptRawDeltaCursor(params: {
+  agentId: string;
+  generation: string;
+  lastSeq: number;
+  sessionId: string;
+}): string {
+  return encodeRawTranscriptCursor({ ...params, version: RAW_TRANSCRIPT_CURSOR_VERSION });
 }
 
 function parseRawTranscriptCursor(value: string): RawTranscriptCursor | undefined {
@@ -202,7 +213,7 @@ function readRawDeltaInTransaction(
       .select([
         "seq",
         /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-        sql<number>`LENGTH(CAST(event_json AS BLOB)) + 1`.as("serialized_bytes"),
+        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
       ])
       .where("session_id", "=", scope.sessionId)
       .where("seq", ">", cursor.lastSeq)
@@ -238,13 +249,13 @@ function readRawDeltaInTransaction(
             .where("seq", "<=", lastSeq)
             .orderBy("seq", "asc"),
         ).rows.map((row) => ({
-          event: JSON.parse(row.event_json) as TranscriptEvent,
+          event: JSON.parse(row.event_json),
           seq: coerceSqliteNumber(row.seq),
         }));
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   const requiredBytes =
     selectedCount === 0 && metadata[0] ? metadata[0].serializedBytes : undefined;
-  return {
+  const page: SessionTranscriptRawDeltaPage = {
     kind: "page",
     cursor: nextCursor,
     events: rows,
@@ -252,4 +263,5 @@ function readRawDeltaInTransaction(
     ...(requiredBytes !== undefined ? { requiredBytes } : {}),
     serializedBytes,
   };
+  return page;
 }

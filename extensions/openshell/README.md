@@ -2,7 +2,13 @@
 
 Official NVIDIA OpenShell sandbox backend for OpenClaw.
 
-This plugin lets OpenClaw use OpenShell-managed sandboxes with mirrored local workspaces and SSH command execution.
+This plugin lets OpenClaw use OpenShell-managed local or remote sandboxes with
+SSH command execution. Choose `mirror` mode for a synchronized local workspace
+or `remote` mode for a remote-canonical workspace.
+
+Mirror operations sharing a workspace run sequentially so concurrent agent
+turns cannot overwrite one another. Outbound attachments resolve against the
+configured remote workspace, which defaults to `/sandbox`.
 
 Configuring an OpenShell workspace requires OpenShell `v0.0.88` or newer. The
 plugin supports OpenShell control-plane workspaces through
@@ -21,6 +27,23 @@ openclaw plugins install @openclaw/openshell-sandbox
 Restart the Gateway after installing or updating the plugin.
 
 ## Configure
+
+Install and configure the OpenShell CLI before enabling the backend. As the same
+operating system user that runs the OpenClaw Gateway, verify:
+
+```bash
+openshell --version
+openshell gateway list
+openshell sandbox list
+```
+
+Set `agents.defaults.sandbox.backend` to `"openshell"`, enable
+`plugins.entries.openshell`, and restart the OpenClaw Gateway. OpenShell
+settings belong under `plugins.entries.openshell.config`.
+
+The optional `policy` setting must be the path to a readable OpenShell policy
+YAML file on the Gateway host; it is not a policy name or ID. Use an absolute
+path to avoid resolving it relative to an agent workspace.
 
 Use the OpenShell docs for credentials, workspace mirroring, runtime selection, and troubleshooting:
 
