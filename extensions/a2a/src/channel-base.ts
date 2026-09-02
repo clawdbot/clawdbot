@@ -74,7 +74,12 @@ export function createA2aChannelPluginBase(): A2aChannelPluginBase {
                 enabled: true,
                 ...(advertisedUrl ? { advertisedUrl } : {}),
                 ...(peerName && peerToken
-                  ? { peers: { ...current.peers, [peerName]: { token: peerToken } } }
+                  ? {
+                      peers: {
+                        ...current.peers,
+                        [peerName]: { token: peerToken, allowCommands: false },
+                      },
+                    }
                   : {}),
               },
             },

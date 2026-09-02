@@ -41,9 +41,20 @@ const a2aChannelMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
+const a2aApprovalCapability: NonNullable<ChannelPlugin["approvalCapability"]> = {
+  authorizeActorAction: ({ approvalKind }) =>
+    approvalKind === "system-agent"
+      ? { authorized: true }
+      : {
+          authorized: false,
+          reason: `A2A peers cannot approve ${approvalKind} requests`,
+        },
+};
+
 export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = createChatChannelPlugin({
   base: {
     ...createA2aChannelPluginBase(),
+    approvalCapability: a2aApprovalCapability,
     messaging: {
       normalizeTarget: normalizeA2aChannelTarget,
       inferTargetChatType: () => "direct",

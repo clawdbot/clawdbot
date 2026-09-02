@@ -21,6 +21,7 @@ Add the bundled plugin to your OpenClaw configuration and define a separate bear
       peers: {
         hermes: {
           token: "${A2A_HERMES_TOKEN}",
+          allowCommands: false,
         },
       },
     },
@@ -141,17 +142,18 @@ Address outbound messages to `a2a:hermes`. The plugin sends `SendMessage` direct
 
 ## Configuration reference
 
-| Key                          | Type     | Default  | Description                                                                    |
-| ---------------------------- | -------- | -------- | ------------------------------------------------------------------------------ |
-| `enabled`                    | boolean  | -        | Enables or disables the A2A channel.                                           |
-| `advertisedUrl`              | string   | request  | Public gateway origin used in the Agent Card.                                  |
-| `replyTimeoutMs`             | number   | `120000` | Maximum blocking reply wait; allowed range is `5000` to `600000` milliseconds. |
-| `rateLimitPerMinute`         | number   | `30`     | Sliding-window request limit per peer; `0` disables the limit.                 |
-| `exposeAgents`               | string[] | all      | Agent IDs advertised as Agent Card skills.                                     |
-| `peers`                      | object   | `{}`     | Trusted peers keyed by lowercase names up to 64 characters.                    |
-| `peers.<name>.token`         | string   | required | Bearer token required when this peer sends requests to OpenClaw.               |
-| `peers.<name>.url`           | string   | -        | Peer JSON-RPC endpoint for outbound messages.                                  |
-| `peers.<name>.outboundToken` | string   | -        | Bearer token OpenClaw sends to the configured peer URL.                        |
+| Key                          | Type     | Default  | Description                                                                             |
+| ---------------------------- | -------- | -------- | --------------------------------------------------------------------------------------- |
+| `enabled`                    | boolean  | -        | Enables or disables the A2A channel.                                                    |
+| `advertisedUrl`              | string   | request  | Public gateway origin used in the Agent Card.                                           |
+| `replyTimeoutMs`             | number   | `120000` | Maximum blocking reply wait; allowed range is `5000` to `600000` milliseconds.          |
+| `rateLimitPerMinute`         | number   | `30`     | Sliding-window request limit per peer; `0` disables the limit.                          |
+| `exposeAgents`               | string[] | all      | Agent IDs advertised as Agent Card skills.                                              |
+| `peers`                      | object   | `{}`     | Trusted peers keyed by lowercase names up to 64 characters.                             |
+| `peers.<name>.token`         | string   | required | Bearer token required when this peer sends requests to OpenClaw.                        |
+| `peers.<name>.allowCommands` | boolean  | `true`   | Whether this peer can issue OpenClaw control commands; new setup entries write `false`. |
+| `peers.<name>.url`           | string   | -        | Peer JSON-RPC endpoint for outbound messages.                                           |
+| `peers.<name>.outboundToken` | string   | -        | Bearer token OpenClaw sends to the configured peer URL.                                 |
 
 Peer names must begin with a lowercase letter or number and can also contain periods, underscores, and hyphens.
 
@@ -166,6 +168,8 @@ joins the operator's main session and one peer cannot read another peer's conver
 Agent Card discovery is intentionally public: anyone who can reach the gateway can read the instance description and exposed agent IDs. Use `exposeAgents` to limit disclosure, and expose the gateway through HTTPS when it is reachable over an untrusted network.
 
 Every JSON-RPC request requires a configured peer bearer token; there is no unauthenticated mode. Each authenticated peer is also the sender identity used for normal OpenClaw channel ingress policy. Use different high-entropy tokens for each peer, keep tokens out of source control, and rotate tokens by updating the gateway environment and restarting.
+
+For compatibility with the original trusted-peer contract, existing peer entries that omit `allowCommands` can issue OpenClaw control commands. Set `allowCommands: false` to reject control commands from a specific peer before agent dispatch; the setup flow writes this restricted value for new peers. This setting does not make ordinary tasks unprivileged: a task can still use any tools available to its routed agent. A2A peers cannot resolve exec or plugin approvals, even when control commands are allowed.
 
 Requests are limited to 1 MiB, JSON-RPC batches to 30 entries, and serialized JSON-RPC responses to 1 MiB. Extracted message text is capped at 64 KiB and includes an explicit truncation marker when shortened. The default sliding-window limit is 30 requests per minute for each peer; schema-invalid requests count toward that limit. Set `rateLimitPerMinute` to `0` only on a separately protected network. Rate-limited requests return a JSON-RPC error while keeping HTTP status 200.
 

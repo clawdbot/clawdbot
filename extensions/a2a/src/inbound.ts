@@ -33,6 +33,11 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       // The peer id embeds the A2A contextId, giving one session per peer+context.
       dmScope: "per-account-channel-peer",
     });
+    const hasControlCommand = params.channelRuntime.text.hasControlCommand(
+      params.text,
+      params.config,
+    );
+    const allowCommands = params.account.config.peers?.[params.peerName]?.allowCommands !== false;
     const ingress = await resolveStableChannelMessageIngress({
       channelId: "a2a",
       accountId: params.account.accountId,
@@ -48,7 +53,21 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       },
       dmPolicy: "allowlist",
       allowFrom: Object.keys(params.account.config.peers ?? {}),
+      command: {
+        allowTextCommands: true,
+        hasControlCommand,
+        // Omission preserves the shipped trusted-peer contract; operators can
+        // narrow command authority per peer without changing task admission.
+        commandOwnerAllowFrom: allowCommands ? [params.peerName] : [],
+      },
     });
+    if (ingress.commandAccess.shouldBlockControlCommand) {
+      params.store.reject(
+        params.taskId,
+        "A2A peer is not allowed to use OpenClaw control commands",
+      );
+      return;
+    }
     if (ingress.ingress.admission !== "dispatch") {
       params.store.reject(params.taskId, "A2A peer was blocked by channel ingress policy");
       return;
@@ -90,7 +109,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
         commandBody: params.text,
       },
       channelIngress: ingress,
-      access: { commands: { authorized: true } },
+      access: { commands: { authorized: ingress.commandAccess.authorized } },
     });
 
     const dispatch = await params.channelRuntime.inbound.dispatch({

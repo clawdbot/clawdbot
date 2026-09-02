@@ -10,6 +10,7 @@ const a2aHttpUrlSchema = z
 const a2aPeerConfigSchema = z
   .object({
     token: z.string().min(1),
+    allowCommands: z.boolean().optional(),
     url: a2aHttpUrlSchema.optional(),
     outboundToken: z.string().min(1).optional(),
   })
@@ -37,6 +38,11 @@ export const a2aPluginConfigSchema = buildChannelConfigSchema(a2aChannelConfigSc
     rateLimitPerMinute: { label: "Requests Per Peer Per Minute", advanced: true },
     exposeAgents: { label: "Exposed Agent IDs" },
     "peers.*.token": { label: "Inbound Bearer Token", sensitive: true },
+    "peers.*.allowCommands": {
+      label: "Allow Control Commands",
+      help: "Allow this peer to issue OpenClaw control commands. This does not grant approval authority.",
+      advanced: true,
+    },
     "peers.*.outboundToken": { label: "Outbound Bearer Token", sensitive: true },
   },
 });

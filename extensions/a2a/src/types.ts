@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export type A2aPeerConfig = {
   token: string;
+  allowCommands?: boolean;
   url?: string;
   outboundToken?: string;
 };

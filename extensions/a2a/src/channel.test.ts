@@ -42,6 +42,7 @@ describe("A2A channel configuration", () => {
         peers: {
           "hermes.bot-1": {
             token: "test-inbound-token",
+            allowCommands: false,
             url: "https://peer.example.test/a2a/v1",
             outboundToken: "test-outbound-token",
           },
@@ -51,6 +52,7 @@ describe("A2A channel configuration", () => {
       "complete channel config",
     );
     expect(a2aPluginConfigSchema.uiHints?.["peers.*.token"]?.sensitive).toBe(true);
+    expect(a2aPluginConfigSchema.uiHints?.["peers.*.allowCommands"]?.advanced).toBe(true);
     expect(a2aPluginConfigSchema.uiHints?.["peers.*.outboundToken"]?.sensitive).toBe(true);
   });
 
@@ -60,6 +62,10 @@ describe("A2A channel configuration", () => {
     ["empty peer token", { peers: { hermes: { token: "" } } }],
     ["missing peer token", { peers: { hermes: { url: "https://peer.example.test" } } }],
     ["empty outbound token", { peers: { hermes: { token: "test", outboundToken: "" } } }],
+    [
+      "non-boolean command capability",
+      { peers: { hermes: { token: "test", allowCommands: "yes" } } },
+    ],
     ["non-HTTP advertised URL", { advertisedUrl: "ftp://gateway.example.test" }],
     ["non-HTTP peer URL", { peers: { hermes: { token: "test", url: "file:///tmp/peer" } } }],
     ["reply timeout below minimum", { replyTimeoutMs: 4_999 }],
@@ -69,6 +75,35 @@ describe("A2A channel configuration", () => {
     ["unknown channel field", { target: "https://untrusted.example.test" }],
   ])("rejects %s in every validation surface", (label, value) => {
     assertConfigAcceptance(value, false, label);
+  });
+
+  it.each(["exec", "plugin"] as const)("denies peer %s approval actions", (approvalKind) => {
+    const authorizeActorAction = a2aChannelPlugin.approvalCapability?.authorizeActorAction;
+    expect(authorizeActorAction).toBeDefined();
+    expect(
+      authorizeActorAction?.({
+        cfg: { channels: { a2a: { peers: { hermes: { token: "test", allowCommands: true } } } } },
+        accountId: "default",
+        senderId: "hermes",
+        action: "approve",
+        approvalKind,
+      }),
+    ).toEqual({
+      authorized: false,
+      reason: `A2A peers cannot approve ${approvalKind} requests`,
+    });
+  });
+
+  it("does not broaden the hardening to system-agent approvals", () => {
+    expect(
+      a2aChannelPlugin.approvalCapability?.authorizeActorAction?.({
+        cfg: {},
+        accountId: "default",
+        senderId: "hermes",
+        action: "approve",
+        approvalKind: "system-agent",
+      }),
+    ).toEqual({ authorized: true });
   });
 
   it("exposes only the configured default account and peer-derived sender allowlist", () => {
@@ -97,6 +132,19 @@ describe("A2A channel configuration", () => {
     expect(a2aChannelPlugin.config.resolveAccount({ channels: { a2a: {} } }).configured).toBe(
       false,
     );
+  });
+
+  it("creates new setup peers with control commands disabled", () => {
+    const cfg = a2aChannelPlugin.setupContract!.applyAccountConfig({
+      cfg: {},
+      accountId: "default",
+      input: { peerName: "hermes", peerToken: "test-token" },
+    }) as A2aCoreConfig;
+
+    expect(cfg.channels?.a2a?.peers?.hermes).toEqual({
+      token: "test-token",
+      allowCommands: false,
+    });
   });
 });
 

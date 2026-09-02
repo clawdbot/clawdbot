@@ -140,6 +140,43 @@ describe("A2A channel inbound dispatch", () => {
     fixture.store.stop();
   });
 
+  it("preserves command access for peers unless the operator disables it", async () => {
+    const fixture = createA2aInboundFixture();
+    fixture.params.text = "/status";
+    vi.mocked(fixture.runtime.channel.text.hasControlCommand).mockReturnValue(true);
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
+      admission: { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.route.sessionKey,
+      dispatchResult: createA2aDispatchResult(false),
+    }));
+
+    await dispatchA2aInbound(fixture.params);
+
+    expect(fixture.runtime.channel.inbound.dispatch).toHaveBeenCalledOnce();
+    expect(fixture.runtime.channel.inbound.buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({ access: { commands: { authorized: true } } }),
+    );
+    fixture.store.stop();
+  });
+
+  it("rejects control commands when they are disabled for the authenticated peer", async () => {
+    const fixture = createA2aInboundFixture();
+    Object.assign(fixture.params.account.config.peers?.hermes ?? {}, { allowCommands: false });
+    fixture.params.text = "/status";
+    vi.mocked(fixture.runtime.channel.text.hasControlCommand).mockReturnValue(true);
+
+    await dispatchA2aInbound(fixture.params);
+
+    expect(fixture.store.get(fixture.task.id)?.status).toMatchObject({
+      state: "TASK_STATE_REJECTED",
+      message: { parts: [{ text: "A2A peer is not allowed to use OpenClaw control commands" }] },
+    });
+    expect(fixture.runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+    fixture.store.stop();
+  });
+
   it("rejects turns that the runtime declines instead of leaving tasks working forever", async () => {
     const fixture = createA2aInboundFixture();
     vi.mocked(fixture.runtime.channel.inbound.dispatch).mockResolvedValue({
