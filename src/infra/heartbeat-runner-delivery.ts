@@ -27,11 +27,11 @@ import { handleHeartbeatFailureNotice } from "./heartbeat-failure-notice.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
 import { heartbeatLog, resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
 import type {
+  CompletedHeartbeatAgentRun,
   HeartbeatRunOptions,
   PreparedHeartbeatRun,
   ReadyHeartbeatWake,
 } from "./heartbeat-runner-execution.js";
-import type { CompletedHeartbeatAgentRun } from "./heartbeat-runner-invoke.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
 import {

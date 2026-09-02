@@ -184,12 +184,6 @@ export type CronServiceDeps = {
     /** Optional heartbeat config override (e.g. target: "last" for cron-triggered heartbeats). */
     heartbeat?: HeartbeatWakeRequest["heartbeat"];
   }) => Promise<HeartbeatRunResult>;
-  /**
-   * Optional resolver for the effective heartbeat wall-clock timeout in
-   * milliseconds. Used by cron jobs that hand off to the heartbeat runner to
-   * derive their outer watchdog instead of using the generic 600s default.
-   */
-  resolveHeartbeatTimeoutMs?: (agentId?: string) => number | undefined;
   runSkillCollectionReview?: (params: {
     agentId: string;
     abortSignal?: AbortSignal;

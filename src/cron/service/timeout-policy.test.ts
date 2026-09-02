@@ -61,30 +61,4 @@ describe("timeout-policy", () => {
     );
     expect(timeout).toBe(MAX_TIMER_TIMEOUT_MS);
   });
-
-  it("uses default timeout for heartbeat payload without resolved heartbeat context", () => {
-    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "heartbeat" }));
-    expect(timeout).toBe(DEFAULT_JOB_TIMEOUT_MS);
-  });
-
-  it("derives heartbeat payload timeout from resolved heartbeat context", () => {
-    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "heartbeat" }), {
-      resolvedHeartbeatTimeoutMs: 1_800_000,
-    });
-    expect(timeout).toBe(1_800_000);
-  });
-
-  it("disables timeout for heartbeat payload when resolved heartbeat is unlimited", () => {
-    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "heartbeat" }), {
-      resolvedHeartbeatTimeoutMs: 0,
-    });
-    expect(timeout).toBeUndefined();
-  });
-
-  it("derives systemEvent main-job timeout from resolved heartbeat context", () => {
-    const timeout = resolveCronJobTimeoutMs(makeJob({ kind: "systemEvent", text: "hello" }), {
-      resolvedHeartbeatTimeoutMs: 900_000,
-    });
-    expect(timeout).toBe(900_000);
-  });
 });

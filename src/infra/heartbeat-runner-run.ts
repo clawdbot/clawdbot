@@ -9,7 +9,6 @@ import {
   isHeartbeatTypingEnabled,
   heartbeatLog,
   resolveHeartbeatChannelPlugin,
-  resolveHeartbeatTimeoutOverrideSeconds,
   resolveHeartbeatTypingIntervalSeconds,
 } from "./heartbeat-runner-config.js";
 import {
@@ -17,19 +16,13 @@ import {
   finalizeHeartbeatOutcome,
 } from "./heartbeat-runner-delivery.js";
 import {
+  invokeHeartbeatAgentRun,
   prepareHeartbeatRunStage,
   resolveHeartbeatWakeStage,
   type HeartbeatRunOptions,
-  type PreparedHeartbeatRun,
 } from "./heartbeat-runner-execution.js";
-import { invokeHeartbeatAgentRun } from "./heartbeat-runner-invoke.js";
-import {
-  createHeartbeatSetupAbortController,
-  resolveHeartbeatSetupTimeoutMs,
-} from "./heartbeat-runner-setup-watchdog.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import {
-  getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_PREEMPTED,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatRunResult,
@@ -39,74 +32,20 @@ import { buildOutboundSessionContext } from "./outbound/session-context.js";
 
 const log = heartbeatLog;
 
-async function raceWithSetupAbort<T>(
-  signal: AbortSignal | undefined,
-  promise: Promise<T>,
-): Promise<T> {
-  if (!signal) {
-    return promise;
-  }
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      const rejectWithAbortReason = () => {
-        const reason = signal.reason;
-        reject(reason instanceof Error ? reason : new Error(String(reason)));
-      };
-      if (signal.aborted) {
-        rejectWithAbortReason();
-        return;
-      }
-      signal.addEventListener("abort", rejectWithAbortReason, { once: true });
-    }),
-  ]);
-}
-
 export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
   const wake = await resolveHeartbeatWakeStage(opts);
   if (wake.kind === "skipped") {
     return { status: "skipped", reason: wake.reason };
   }
-  const heartbeatTimeoutSeconds = resolveHeartbeatTimeoutOverrideSeconds(wake.cfg, wake.heartbeat);
-  const setupTimeoutMs = resolveHeartbeatSetupTimeoutMs(
-    heartbeatTimeoutSeconds,
-    opts.setupTimeoutMs,
-  );
-  const setupWatchdog = createHeartbeatSetupAbortController({
-    timeoutMs: setupTimeoutMs,
-    heartbeatWakeAbortSignal: getHeartbeatWakeAbortSignal(),
-    onTimeout: () =>
-      new Error(
-        `heartbeat setup timeout: no model selected within ${Math.floor(setupTimeoutMs / 1000)}s`,
-      ),
-  });
-  let prepared: PreparedHeartbeatRun;
-  try {
-    const stageResult = await raceWithSetupAbort(
-      setupWatchdog.signal,
-      prepareHeartbeatRunStage(wake, setupWatchdog.signal),
-    );
-    if (stageResult.kind === "skipped") {
-      setupWatchdog.disarm();
-      return { status: "skipped", reason: stageResult.reason };
-    }
-    prepared = stageResult;
-  } catch (err) {
-    setupWatchdog.disarm();
-    const reason = formatErrorMessage(err);
-    emitHeartbeatEvent({
-      status: "failed",
-      reason,
-      durationMs: Date.now() - wake.startedAt,
-    });
-    return { status: "failed", reason };
+  const prepared = await prepareHeartbeatRunStage(wake);
+  if (prepared.kind === "skipped") {
+    return { status: "skipped", reason: prepared.reason };
   }
   const { cfg, agentId, startedAt } = wake;
   const { delivery, visibility, replyPrefix, runSessionKey } = prepared;
   const { outboundPolicySessionKey, hasRelayableExecCompletion } = prepared;
 
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
-    setupWatchdog.disarm();
     emitHeartbeatEvent({
       status: "skipped",
       reason: "alerts-disabled",
@@ -203,7 +142,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
 
   try {
     await heartbeatTyping?.onReplyStart();
-    const agentRun = await invokeHeartbeatAgentRun(opts, wake, prepared, setupWatchdog);
+    const agentRun = await invokeHeartbeatAgentRun(opts, wake, prepared);
     if (agentRun.kind !== "completed") {
       const reason =
         agentRun.kind === "busy"
