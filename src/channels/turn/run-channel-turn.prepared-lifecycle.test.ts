@@ -61,21 +61,29 @@ describe("prepared channel turn lifecycle", () => {
       raw: { id: "msg-1", text: "hello" },
       adapter: {
         ingest: () => ({ id: "msg-1", rawText: "hello" }),
-        // @ts-expect-error Shipped plugins compiled before lifecycle ownership return this shape.
-        resolveTurn: () => ({
-          channel: "test",
-          routeSessionKey: "agent:main:test:peer",
-          storePath,
-          ctxPayload: createCtx(),
-          recordInboundSession: createRecordInboundSession(events),
-          runDispatch: async () => {
-            events.push("custom-dispatch");
-            return {
-              queuedFinal: true,
-              counts: { tool: 0, block: 0, final: 1 },
-            };
-          },
-        }),
+        resolveTurn: () => {
+          const turn = {
+            channel: "test",
+            routeSessionKey: "agent:main:test:peer",
+            storePath,
+            ctxPayload: createCtx(),
+            recordInboundSession: createRecordInboundSession(events),
+            runDispatch: async () => {
+              events.push("custom-dispatch");
+              return {
+                queuedFinal: true,
+                counts: { tool: 0, block: 0, final: 1 },
+              };
+            },
+            runDispatchLifecycle: {
+              turnAdoptionLifecycle: undefined,
+              onDispatchSkipped: vi.fn(),
+            },
+          };
+          // Model a plugin compiled before the required inbound lifecycle field existed.
+          Object.defineProperty(turn, "runDispatchLifecycle", { value: undefined });
+          return turn;
+        },
       },
     });
 
