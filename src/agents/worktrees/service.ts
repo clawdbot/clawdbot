@@ -154,7 +154,7 @@ type RemoveWorktreeParams = WorktreeMutationGuard & {
   claimToken?: string;
   runEndCleanup?: ManagedWorktreeRunEndCleanup;
 };
-const MAX_WORKTREES = 30;
+const MAX_WORKTREES = 100;
 
 /** A bounded default; manual and actively used worktrees remain protected. */
 export function resolveWorktreeCleanupLimits(): WorktreeCleanupLimits {
