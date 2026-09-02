@@ -1,9 +1,11 @@
 // Doctor-only import for the retired exec approvals JSON store.
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err } from "@openclaw/normalization-core/result";
+import { z } from "zod";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   parsePersistedExecApprovals,
@@ -40,7 +42,17 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & { raw: string | null };
 
+// Only the observed policy-free stub may omit its version. Unknown fields or
+// nonempty policy are not proof that a legacy file is safe to retire.
+const emptyLegacyExecApprovalsSchema = z.strictObject({
+  version: z.literal(1).optional(),
+  defaults: z.strictObject({}),
+  agents: z.strictObject({}),
+  socket: z.strictObject({ path: z.string().optional(), token: z.string().optional() }).optional(),
+});
+
 type MigrationDecision =
+  | "empty-legacy-retired"
   | "canonical-preserved"
   | "invalid-canonical-repaired"
   | "legacy-imported"
@@ -114,6 +126,7 @@ function decideAndRecordMigration(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
+  archivePath?: string;
 }): { message: string; removeSource: boolean; sourceKey: string } {
   const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
@@ -144,7 +157,10 @@ function decideAndRecordMigration(params: {
       }
       let decision: MigrationDecision;
       let removeSource = false;
-      if (!legacyFile || params.snapshot.raw === null) {
+      if (params.archivePath) {
+        decision = "empty-legacy-retired";
+        removeSource = true;
+      } else if (!legacyFile || params.snapshot.raw === null) {
         decision = "malformed-legacy-preserved";
       } else if (receiptImportedSameSource && canonicalFile) {
         decision = "receipt-authoritative";
@@ -197,11 +213,17 @@ function decideAndRecordMigration(params: {
         target: TARGET_TABLE,
         decision,
         sourceSha256: params.snapshot.sha256,
-        sourceValid: legacyFile !== null,
+        sourceValid: legacyFile !== null || decision === "empty-legacy-retired",
+        ...(params.archivePath ? { archivePath: params.archivePath } : {}),
         importedRecordCount:
           decision === "legacy-imported" || decision === "invalid-canonical-repaired" ? 1 : 0,
         preservedSqliteRecordCount:
-          decision === "canonical-preserved" || decision === "receipt-authoritative" ? 1 : 0,
+          canonical &&
+          decision !== "legacy-imported" &&
+          decision !== "invalid-canonical-repaired" &&
+          decision !== "malformed-legacy-preserved"
+            ? 1
+            : 0,
         removesSource: removeSource,
       });
       recordLegacyMigrationReceipt(db, {
@@ -211,7 +233,7 @@ function decideAndRecordMigration(params: {
         targetTable: TARGET_TABLE,
         sourceSha256: params.snapshot.sha256,
         sourceSizeBytes: params.snapshot.size,
-        sourceRecordCount: legacyFile ? 1 : 0,
+        sourceRecordCount: legacyFile && decision !== "empty-legacy-retired" ? 1 : 0,
         runId,
         now,
         reportJson,
@@ -219,7 +241,7 @@ function decideAndRecordMigration(params: {
       });
       const message =
         decisionMessage(decision, removeSource) +
-        (legacy.ok
+        (legacy.ok || params.archivePath
           ? ""
           : ` First problem: ${legacy.error}. Repair exec-approvals.json locally, then rerun \`openclaw doctor --fix\` with the same OPENCLAW_STATE_DIR.`);
       return { message, removeSource, sourceKey };
@@ -231,6 +253,8 @@ function decideAndRecordMigration(params: {
 
 function decisionMessage(decision: MigrationDecision, removeSource: boolean): string {
   switch (decision) {
+    case "empty-legacy-retired":
+      return "Archived empty legacy exec approvals without changing SQLite policy.";
     case "legacy-imported":
       return "Imported legacy exec approvals into shared SQLite state.";
     case "invalid-canonical-repaired":
@@ -309,11 +333,35 @@ async function migrateWithExclusiveStateOwnership(params: {
   }
 
   let result: ReturnType<typeof decideAndRecordMigration>;
+  let archivePath: string | undefined;
   try {
+    if (
+      snapshot.raw !== null &&
+      emptyLegacyExecApprovalsSchema.safeParse(safeParseJsonRecord(snapshot.raw)).success
+    ) {
+      const archiveSuffix = `.migrated.${snapshot.sha256}.${randomUUID()}`;
+      archivePath = `${sourcePath}${archiveSuffix}`;
+      // Keep exact bytes before retirement; a fresh no-clobber backup lets retries
+      // recover even when an earlier archive write was interrupted.
+      await params.stateRoot.create(
+        `${source.sourceRelativePath}${archiveSuffix}`,
+        snapshot.buffer,
+        { mode: 0o600 },
+      );
+      const archived = await readLegacySourceSnapshot(
+        params.stateRoot,
+        params.stateDir,
+        archivePath,
+      );
+      if (archived.sha256 !== snapshot.sha256) {
+        throw new Error("legacy exec approvals archive differs from the claimed source");
+      }
+    }
     result = decideAndRecordMigration({
       env: params.env,
       sourcePath,
       snapshot,
+      archivePath,
     });
   } catch (error) {
     const restoreError = await source.restore();
@@ -363,7 +411,10 @@ async function migrateWithExclusiveStateOwnership(params: {
   return {
     changes: [result.message],
     warnings,
-    notices: ["Removed retired exec approvals JSON after recording its migration decision."],
+    notices: [
+      ...(archivePath ? [`Archived empty legacy exec approvals at ${archivePath}.`] : []),
+      "Removed retired exec approvals JSON after recording its migration decision.",
+    ],
   };
 }
 

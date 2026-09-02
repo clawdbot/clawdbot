@@ -157,6 +157,68 @@ describe("legacy exec approvals migration", () => {
     expect(runReceipt(env)).toMatchObject({ status: "completed" });
   });
 
+  it.each(
+    [
+      { name: "unversioned stub", stub: { defaults: {}, agents: {} } },
+      {
+        name: "obsolete socket stub",
+        stub: {
+          defaults: {},
+          agents: {},
+          socket: { path: "/tmp/obsolete.sock", token: "fixture" },
+        },
+      },
+      { name: "versioned stub", stub: { version: 1, defaults: {}, agents: {} } },
+    ].flatMap((entry) =>
+      [false, true].flatMap((claimed) =>
+        ["missing", "valid", "invalid"].map((canonical) => ({ ...entry, claimed, canonical })),
+      ),
+    ),
+  )(
+    "retires $name (claimed=$claimed, canonical=$canonical)",
+    async ({ stub, claimed, canonical }) => {
+      const { env, stateDir, sourcePath } = useStateDir();
+      const policy = { version: 1 as const, defaults: { security: "deny" as const }, agents: {} };
+      if (canonical !== "missing") {
+        writeExecApprovalsConfigRow({
+          db: database(env),
+          file: policy,
+          raw: canonical === "invalid" ? "{invalid" : undefined,
+        });
+      }
+      const originalRow = readExecApprovalsConfigRow(database(env));
+      await writeLegacy(claimed ? `${sourcePath}.doctor-importing` : sourcePath, stub);
+      const original = await fsp.readFile(claimed ? `${sourcePath}.doctor-importing` : sourcePath);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+
+      const result = await migrate({ env, stateDir });
+
+      expect(result.warnings).toEqual([]);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+      expect(fs.existsSync(`${sourcePath}.doctor-importing`)).toBe(false);
+      expect(readExecApprovalsConfigRow(database(env))).toEqual(originalRow);
+      expect(() => loadExecApprovals()).not.toThrow();
+      const archives = (await fsp.readdir(stateDir)).filter((name) =>
+        name.startsWith("exec-approvals.json.migrated."),
+      );
+      expect(archives).toHaveLength(1);
+      expect(await fsp.readFile(`${stateDir}/${archives[0]}`)).toEqual(original);
+      expect(receipt(env)).toMatchObject({ removed_source: 1, status: "completed" });
+      await expect(migrate({ env, stateDir })).resolves.toEqual({ changes: [], warnings: [] });
+    },
+  );
+
+  it("leaves a missing legacy file and canonical state untouched", async () => {
+    const { env, stateDir } = useStateDir();
+    expect(detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }).hasLegacy).toBe(
+      false,
+    );
+    await expect(migrate({ env, stateDir })).resolves.toEqual({ changes: [], warnings: [] });
+    expect(readExecApprovalsConfigRow(database(env))).toBeUndefined();
+    expect(receipt(env)).toBeUndefined();
+  });
+
   it("is idempotent after successful source removal", async () => {
     const { env, stateDir, sourcePath } = useStateDir();
     await writeLegacy(sourcePath, { version: 1, agents: {} });
@@ -251,6 +313,18 @@ describe("legacy exec approvals migration", () => {
       raw: legacyWithInvalidEntry({ pattern: "  " }),
       problem: "agents entry #2.allowlist[1].pattern: expected a non-empty string",
     },
+    ...[
+      { defaults: { security: "deny" }, agents: {} },
+      { defaults: {}, agents: { main: { allowlist: ["/usr/bin/true"] } } },
+      { defaults: {}, agents: {}, unknownPolicy: true },
+      { defaults: null, agents: {} },
+      { defaults: {}, agents: {}, socket: { token: 42 } },
+      { version: 2, defaults: {}, agents: {} },
+    ].map((value, index) => ({
+      name: `non-stub legacy shape #${index + 1}`,
+      raw: JSON.stringify(value),
+      problem: "version: expected a supported value",
+    })),
     {
       name: "JSON syntax",
       raw: "{malformed-private-marker",
@@ -398,12 +472,18 @@ describe("legacy exec approvals migration", () => {
     expect(receipt(env)).toBeUndefined();
   });
 
-  it("retains the null-metadata source claim after cleanup failure and converges on retry", async () => {
+  it.each([
+    {
+      name: "null-metadata import",
+      value: {
+        version: 1,
+        agents: { main: { allowlist: [{ pattern: "/usr/bin/rg", lastUsedAt: null }] } },
+      },
+    },
+    { name: "empty stub retirement", value: { defaults: {}, agents: {} } },
+  ])("retains $name claim after cleanup failure and converges on retry", async ({ value }) => {
     const { env, stateDir, sourcePath } = useStateDir();
-    await writeLegacy(sourcePath, {
-      version: 1,
-      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg", lastUsedAt: null }] } },
-    });
+    await writeLegacy(sourcePath, value);
     const first = await migrate({
       env,
       stateDir,
