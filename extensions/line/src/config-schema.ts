@@ -71,7 +71,7 @@ export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema
     },
     textChunkLimit: {
       label: "LINE Text Chunk Limit",
-      help: "Maximum characters per outbound LINE message before OpenClaw splits a long reply (default and maximum: 5000, the limit LINE itself enforces). A smaller value makes shorter bubbles but sends more messages, and every message past a reply's first five counts against the monthly quota.",
+      help: "Maximum characters per outbound LINE message before OpenClaw splits a long reply (default and maximum: 5000, the limit LINE itself enforces). A smaller value makes shorter bubbles but sends more messages, and messages beyond the five a reply token covers are pushes that count against the monthly quota.",
     },
   },
 });
