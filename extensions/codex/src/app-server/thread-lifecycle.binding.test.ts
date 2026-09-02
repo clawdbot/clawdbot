@@ -2983,36 +2983,53 @@ describe("Codex app-server thread lifecycle bindings", () => {
   });
 
   it.each([
-    { name: "legacy managed file", layer: { name: { type: "legacyManagedConfigTomlFromFile" } } },
-    { name: "legacy managed MDM", layer: { name: { type: "legacyManagedConfigTomlFromMdm" } } },
-    { name: "unknown future", layer: { name: { type: "futureManaged" } } },
-    { name: "malformed", layer: { name: {} } },
-  ])("fails closed on $name config layers before OpenClaw thread/start", async ({ layer }) => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["openclaw"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, layers: [layer] };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    {
+      expectedError:
+        'migrate /etc/codex/managed_config.toml to /etc/codex/requirements.toml before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in requirements.toml.',
+      name: "legacy managed file",
+      layer: { name: { type: "legacyManagedConfigTomlFromFile" } },
+    },
+    {
+      expectedError:
+        'replace the legacy managed-config MDM payload with Codex requirements policy before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in requirements.toml.',
+      name: "legacy managed MDM",
+      layer: { name: { type: "legacyManagedConfigTomlFromMdm" } },
+    },
+    {
+      expectedError: /config layer/u,
+      name: "unknown future",
+      layer: { name: { type: "futureManaged" } },
+    },
+    { expectedError: /config layers/u, name: "malformed", layer: { name: {} } },
+  ])(
+    "fails closed on $name config layers before OpenClaw thread/start",
+    async ({ expectedError, layer }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.toolsAllow = ["openclaw"];
+      const request = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [layer] };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
 
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: [createNamedDynamicTool("openclaw")],
-        appServer: createThreadLifecycleAppServerOptions(),
-        nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
-        hostSystemAgentActive: true,
-      }),
-    ).rejects.toThrow(/config layer|config layers/u);
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
-  });
+      await expect(
+        startOrResumeThread({
+          client: { request } as never,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [createNamedDynamicTool("openclaw")],
+          appServer: createThreadLifecycleAppServerOptions(),
+          nativeCodeModeEnabled: false,
+          userMcpServersEnabled: false,
+          hostSystemAgentActive: true,
+        }),
+      ).rejects.toThrow(expectedError);
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
+    },
+  );
 
   it.each(["hooks", "managed_hooks"] as const)(
     "fails closed on non-empty %s requirements before OpenClaw thread/start",
