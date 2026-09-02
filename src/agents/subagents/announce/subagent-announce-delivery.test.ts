@@ -1929,14 +1929,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("does not directly deliver failed subagent placeholder output", async () => {
+  it("delivers a generic notice for failed subagent placeholder output", async () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
+    const childSessionKey = "agent:worker:subagent:failed-no-output";
 
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
+      sourceSessionKey: childSessionKey,
       internalEvents: taskCompletionEvents({
+        childSessionKey,
         childSessionId: "child-session-id",
         status: "error",
         statusLabel: "failed: all models failed",
@@ -1944,14 +1947,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       }),
     });
 
-    expectRecordFields(result, {
-      delivered: false,
-      path: "direct",
-      reason: "source_output_empty",
-      error: "child produced no output (nothing to announce)",
-      disposition: "permanent_failure",
-    });
-    expect(sendMessage).not.toHaveBeenCalled();
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(mockCallArg(sendMessage, 0, 0).content).toBe(
+      "A delegated task failed before it could report a result. Please retry the task.",
+    );
   });
 
   it.each(["error", "timeout", "unknown"] as const)(
@@ -2852,15 +2852,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const callGateway = createPayloadGatewayMock();
     const sendMessage = createSendMessageMock();
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const childSessionKey = "agent:worker:subagent:empty-success";
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
       sendMessage,
       isActive: true,
       queueEmbeddedAgentMessageWithOutcome,
+      sourceSessionKey: childSessionKey,
       internalEvents: taskCompletionEvents({
+        childSessionKey,
         childSessionId: "child-session-id",
-        status: "error",
-        statusLabel: "failed: all models failed",
+        status: "ok",
+        statusLabel: "completed successfully",
         result: "(no output)",
       }),
     });
@@ -4024,11 +4027,30 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it.each([
-    { status: "ok", statusLabel: "completed successfully" },
-    { status: "error", statusLabel: "failed" },
+    {
+      status: "ok",
+      statusLabel: "completed successfully",
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "source_output_empty",
+        error: "child produced no output (nothing to announce)",
+        disposition: "permanent_failure",
+      },
+    },
+    {
+      status: "error",
+      statusLabel: "failed",
+      expected: {
+        delivered: false,
+        path: "direct",
+        reason: "message_tool_delivery_missing",
+        error: "completion agent did not use the message tool for message-tool-only delivery",
+      },
+    },
   ] as const)(
     "fails $status no-output channel subagent completions when parent silently skips required message tool",
-    async ({ status, statusLabel }) => {
+    async ({ status, statusLabel, expected }) => {
       const callGateway = createPayloadGatewayMock({ text: "NO_REPLY" });
       const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
       const childSessionKey = "agent:worker:subagent:no-output";
@@ -4049,13 +4071,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         }),
       });
 
-      expectRecordFields(result, {
-        delivered: false,
-        path: "direct",
-        reason: "source_output_empty",
-        error: "child produced no output (nothing to announce)",
-        disposition: "permanent_failure",
-      });
+      expectRecordFields(result, expected);
       expectGatewayAgentParams(callGateway, {
         deliver: false,
         channel: "slack",
