@@ -5,7 +5,7 @@ import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
 import {
   formatDateMs,
   formatRelativeTimestamp,
-  formatDurationHuman,
+  formatDurationExact,
   formatMs,
   formatUnknownText,
 } from "../lib/format.ts";
@@ -56,7 +56,7 @@ export function formatCronSchedule(job: CronJob) {
     return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
   }
   if (s.kind === "every") {
-    return `Every ${formatDurationHuman(s.everyMs)}`;
+    return `Every ${formatDurationExact(s.everyMs)}`;
   }
   if (s.kind === "on-exit") {
     // on-exit jobs carry a watched command (+ optional cwd), not a cron expr;
