@@ -759,6 +759,7 @@ class ChatController internal constructor(
   private val outboxBranchReconcileRequested = AtomicBoolean(false)
   private val outboxBranchReconcileRetryScheduled = AtomicBoolean(false)
   private val outboxRecoveryMutex = Mutex()
+  private val outboxPublicationMutex = Mutex()
   private var outboxRecoveryComplete = false
   private val _outboxPresentationRestored = MutableStateFlow(commandOutbox == null)
   val outboxPresentationRestored: StateFlow<Boolean> = _outboxPresentationRestored.asStateFlow()
@@ -5408,24 +5409,21 @@ class ChatController internal constructor(
 
   private suspend fun publishOutbox() {
     val outbox = commandOutbox ?: return
-    val outboxScope = currentCacheScope()
-    if (outboxScope == null) {
-      _outboxItems.value = emptyList()
-      _outboxPresentationRestored.value = false
-      return
-    }
-    val items =
-      runCatching { outbox.load(outboxScope.gatewayId) }
-        .getOrElse {
-          _outboxPresentationRestored.value = false
-          return
+    try {
+      // Keep each snapshot and its publication ordered so an older read cannot restore retired rows.
+      outboxPublicationMutex.withLock {
+        val outboxScope = currentCacheScope()
+        val items =
+          if (outboxScope == null) emptyList() else runCatching { outbox.load(outboxScope.gatewayId) }.getOrNull()
+        synchronized(gatewayScopeApplyLock) {
+          if (outboxScope == currentCacheScope()) {
+            if (items != null) _outboxItems.value = items
+            _outboxPresentationRestored.value = outboxScope != null && items != null
+          }
         }
-    // Publish under the scope lock so rows loaded for an old gateway cannot land after a switch.
-    synchronized(gatewayScopeApplyLock) {
-      if (outboxScope == currentCacheScope()) {
-        _outboxItems.value = items
-        _outboxPresentationRestored.value = true
       }
+    } catch (_: CancellationException) {
+      // A cancelled UI caller can still owe its claimed send to the controller-owned dispatcher.
     }
   }
 

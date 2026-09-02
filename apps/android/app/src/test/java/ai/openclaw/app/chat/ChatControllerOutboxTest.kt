@@ -80,6 +80,11 @@ class ChatControllerOutboxTest {
     }
 
     override suspend fun load(gatewayId: String): List<ChatOutboxItem> {
+      val snapshot =
+        rows.values
+          .filter { gatewayIds[it.id] == gatewayId }
+          .sortedWith(compareBy({ it.createdAtMs }, { it.id }))
+      // A completed database snapshot can resume after another caller changes the rows.
       loadGate?.let { gate ->
         if (gate.remainingLoads == 0) {
           loadGate = null
@@ -89,9 +94,7 @@ class ChatControllerOutboxTest {
           gate.remainingLoads -= 1
         }
       }
-      return rows.values
-        .filter { gatewayIds[it.id] == gatewayId }
-        .sortedWith(compareBy({ it.createdAtMs }, { it.id }))
+      return snapshot
     }
 
     override suspend fun wasAdmitted(id: String): Boolean = id in rows || id in admittedIds
@@ -1362,10 +1365,22 @@ class ChatControllerOutboxTest {
       val queuedRow = chat.outboxItems.value.single()
       val id = queuedRow.id
 
-      chat.deleteOutboxCommand(id)
+      val loadEntered = CompletableDeferred<Unit>()
+      val releaseLoad = CompletableDeferred<Unit>()
+      outbox.loadGate = LoadGate(remainingLoads = 0, entered = loadEntered, release = releaseLoad)
+      chat.onDisconnected("Offline")
+      runCurrent()
+      loadEntered.await()
+      try {
+        chat.deleteOutboxCommand(id)
+        runCurrent()
+        assertTrue(outbox.rows.isEmpty())
+      } finally {
+        releaseLoad.complete(Unit)
+      }
       advanceUntilIdle()
 
-      assertTrue(chat.outboxItems.value.isEmpty())
+      assertTrue("Deleted input reappeared after the older load: ${chat.outboxItems.value}", chat.outboxItems.value.isEmpty())
       assertTrue(outbox.rows.isEmpty())
     }
 
@@ -2669,32 +2684,61 @@ class ChatControllerOutboxTest {
     }
 
   @Test
-  fun callerCancellationAfterTheClaimDoesNotStrandTheDirectSend() =
-    outboxTest {
-      val chat = controller()
-      gateway.online = true
-      chat.load("main")
-      advanceUntilIdle()
+  fun callerCancellationAfterTheClaimDoesNotStrandTheDirectSend() {
+    for (cancelWhilePublishing in listOf(false, true)) {
+      outboxTest {
+        if (cancelWhilePublishing) {
+          seed("unrelated-failed", "discard me", System.currentTimeMillis(), status = ChatOutboxStatus.Failed)
+        }
+        val chat = controller()
+        gateway.online = true
+        chat.load("main")
+        advanceUntilIdle()
 
-      // The UI scope dies (screen leaves composition) while the dispatch is suspended on the
-      // gateway response; the controller-owned dispatch must still settle the claimed row.
-      val gate = CompletableDeferred<Unit>()
-      gateway.sendGate = gate
-      val callerJob = SupervisorJob()
-      val caller = CoroutineScope(coroutineContext + callerJob)
-      caller.launch {
-        chat.sendMessageAwaitAcceptance(message = "survives caller death", thinkingLevel = "off", attachments = emptyList())
+        val releaseClaim = CompletableDeferred<Unit>()
+        if (cancelWhilePublishing) outbox.claimGate = releaseClaim
+        val publicationEntered = CompletableDeferred<Unit>()
+        val releasePublication = CompletableDeferred<Unit>()
+        val releaseResponse = CompletableDeferred<Unit>()
+        gateway.sendGate = releaseResponse
+        val message = if (cancelWhilePublishing) "survives publication wait" else "survives response wait"
+        val callerJob = SupervisorJob()
+        val caller = CoroutineScope(coroutineContext + callerJob)
+        caller.launch {
+          chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = "off", attachments = emptyList())
+        }
+        try {
+          runCurrent()
+          if (cancelWhilePublishing) {
+            assertEquals(ChatOutboxStatus.Queued, outbox.statusFor(message))
+            outbox.loadGate = LoadGate(remainingLoads = 0, entered = publicationEntered, release = releasePublication)
+            chat.deleteOutboxCommand("unrelated-failed")
+            runCurrent()
+            publicationEntered.await()
+            releaseClaim.complete(Unit)
+            runCurrent()
+          }
+          assertEquals(ChatOutboxStatus.Sending, outbox.statusFor(message))
+          callerJob.cancel()
+          runCurrent()
+
+          // Cancellation after the claim must hand off even while another publisher holds
+          // the lock; releasing that publisher first could let its flush mask a lost dispatch.
+          assertEquals(listOf(message), gateway.sentMessages)
+        } finally {
+          callerJob.cancel()
+          releaseClaim.complete(Unit)
+          releasePublication.complete(Unit)
+          releaseResponse.complete(Unit)
+        }
+        advanceUntilIdle()
+
+        // The controller-owned dispatch settles despite losing its UI caller.
+        assertEquals(listOf(message), gateway.sentMessages)
+        assertTrue(outbox.rows.isEmpty())
       }
-      runCurrent()
-      assertEquals(ChatOutboxStatus.Sending, outbox.singleStatus())
-      callerJob.cancel()
-      gate.complete(Unit)
-      advanceUntilIdle()
-
-      // Delivered exactly once and retired by canonical history proof; nothing stranded.
-      assertEquals(listOf("survives caller death"), gateway.sentMessages)
-      assertTrue(outbox.rows.isEmpty())
     }
+  }
 
   @Test
   fun directSendClaimFailureHandsDeliveryToTheFlushLane() =
