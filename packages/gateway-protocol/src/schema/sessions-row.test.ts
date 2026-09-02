@@ -48,6 +48,14 @@ describe("SessionRowSchema", () => {
           identity: { type: "profile", id: `profile-${index}` },
         })),
       }),
+    ).toBe(true);
+    expect(
+      Value.Check(SessionRowSchema, {
+        ...roundTripped,
+        participants: Array.from({ length: 33 }, (_, index) => ({
+          identity: { type: "profile", id: `profile-${index}` },
+        })),
+      }),
     ).toBe(false);
     expect(roundTripped).toMatchObject({
       activeLeafEntryId: "leaf-rendered",

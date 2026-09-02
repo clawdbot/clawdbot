@@ -30,7 +30,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  sessionCreatorProfileId,
+} from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -442,7 +445,9 @@ export function buildGatewaySessionRow(params: {
       Boolean(sessionCreatorProfileId(entry?.createdActor)),
     ),
     owner,
-    participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,
+    participants: participants.size
+      ? [...participants.values()].slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
     participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,

@@ -2,6 +2,9 @@ import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
+/** Shared storage and wire bound for one session's retained participant identities. */
+export const SESSION_PARTICIPANT_LIMIT = 32;
+
 /** Product identity, independent of display metadata and authorization. */
 export const SessionParticipantIdentitySchema = Type.Union([
   closedObject({ type: Type.Literal("profile"), id: NonEmptyString }),
