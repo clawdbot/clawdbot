@@ -262,6 +262,14 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it("still strips URI-shaped closing tokens", () => {
+    expect(sanitizeForPlainText("</mailto:support@example.com>")).toBe("");
+    expect(sanitizeForPlainText("</https://example.com/a.pdf>")).toBe("");
+    expect(sanitizeForPlainText("<mailto:foo@example.com></mailto:foo@example.com>")).toBe(
+      "mailto:foo@example.com",
+    );
+  });
+
   it("preserves angle-addr email addresses", () => {
     expect(sanitizeForPlainText("Contact us at Support <support@example.com> or reply here")).toBe(
       "Contact us at Support <support@example.com> or reply here",
