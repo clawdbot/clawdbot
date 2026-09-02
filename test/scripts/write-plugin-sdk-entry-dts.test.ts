@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   pluginSdkEntrypoints,
-  productionPluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   createFixture,
@@ -98,8 +98,8 @@ describe("write-plugin-sdk-entry-dts", () => {
 
   it("publishes fresh canonical partitions with stable bytes and public nominal identity", () => {
     const { root, write, writeDeclarations, production, qa } = createFixture();
-    expect(production).toEqual(
-      expect.arrayContaining(productionPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`)),
+    expect(production.toSorted()).toEqual(
+      publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`).toSorted(),
     );
     expect(qa).toEqual(
       expect.arrayContaining(pluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`)),
@@ -150,7 +150,8 @@ describe("write-plugin-sdk-entry-dts", () => {
     expect(
       (privateQa.stdout + privateQa.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
     ).toHaveLength(2);
-    expectOutputs(root, qa, Object.keys(treeHashes(path.join(root, "dist"))));
+    const priorOutputs = treeHashes(path.join(root, "dist"));
+    expectOutputs(root, qa, Object.keys(priorOutputs));
     expectStagingClean(root);
 
     writeDeclarations("after");
@@ -162,6 +163,13 @@ describe("write-plugin-sdk-entry-dts", () => {
       (changed.stdout + changed.stderr).match(/\[tsdown-build\] invocation \d\/2 finished/gu),
     ).toHaveLength(2);
     const first = treeHashes(path.join(root, "dist"));
+    const cachedDistFiles = new Set(
+      declarationCacheRecords(root).flatMap((record) =>
+        Object.keys(record.outputs)
+          .filter((file) => file.startsWith("dist/"))
+          .map((file) => file.slice("dist/".length)),
+      ),
+    );
     expectOutputs(root, qa, Object.keys(first));
     expectStagingClean(root);
     expect(first).not.toEqual(before);
@@ -188,9 +196,12 @@ describe("write-plugin-sdk-entry-dts", () => {
     for (const [relative, content] of Object.entries(preserved)) {
       writeRelocated(relative, content);
     }
-    // SDK publication owns flat entries; historical shared chunks belong to other groups.
-    for (const file of Object.keys(before).filter((entry) => !entry.startsWith("plugin-sdk/"))) {
-      expect(first[file]).toBe(before[file]);
+    // The QA build can add shared chunks after the production snapshot. Seed
+    // only unowned history; current cache outputs must come from the restore.
+    for (const file of Object.keys(priorOutputs).filter(
+      (entry) => !entry.startsWith("plugin-sdk/") && !cachedDistFiles.has(entry),
+    )) {
+      expect(first[file]).toBe(priorOutputs[file]);
       writeRelocated(`dist/${file}`, fs.readFileSync(path.join(root, "dist", file), "utf8"));
     }
     writeRelocated("dist/plugin-sdk/obsolete.d.ts", "obsolete restored declaration");

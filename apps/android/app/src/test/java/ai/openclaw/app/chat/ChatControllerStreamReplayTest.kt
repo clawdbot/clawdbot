@@ -538,7 +538,7 @@ class ChatControllerStreamReplayTest {
       assertFalse(controller.historyLoading.value)
       assertEquals(listOf("assistant" to "main transcript"), transcript(controller))
 
-      controller.load("main")
+      controller.loadCurrent("main")
 
       assertEquals(historyCallsAfterLiveLoad, gateway.callCount("chat.history"))
       assertFalse(controller.historyLoading.value)
@@ -563,7 +563,7 @@ class ChatControllerStreamReplayTest {
       advanceUntilIdle()
       val historyCallsAfterLiveLoad = gateway.callCount("chat.history")
 
-      controller.load("main")
+      controller.loadCurrent("main")
       assertEquals(historyCallsAfterLiveLoad, gateway.callCount("chat.history"))
 
       gateway.respondWith(
@@ -600,7 +600,7 @@ class ChatControllerStreamReplayTest {
       assertFalse(controller.healthOk.value)
       assertFalse(controller.historyLoading.value)
 
-      controller.load("main")
+      controller.loadCurrent("main")
 
       assertTrue(controller.historyLoading.value)
     }

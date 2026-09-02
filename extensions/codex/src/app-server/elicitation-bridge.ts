@@ -15,6 +15,7 @@ import {
   createCodexElicitationResponse,
   type CodexElicitationResponse,
 } from "./elicitation-response.js";
+import type { CodexActiveMcpToolCall } from "./event-projector-native-tool-lifecycle.js";
 import {
   approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
@@ -94,6 +95,7 @@ export async function routeCodexAppServerElicitationRequest(params: {
   computerUseMcpServerName?: string;
   autoApproveMcpTools?: boolean;
   projectedMcpServers?: NonNullable<CodexBundleMcpThreadConfig["configPatch"]>["mcp_servers"];
+  getActiveMcpToolCall?: (serverName: string) => CodexActiveMcpToolCall | undefined;
   signal?: AbortSignal;
 }): Promise<CodexApprovalElicitationResult> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -152,6 +154,12 @@ export async function routeCodexAppServerElicitationRequest(params: {
   if (!approvalPrompt) {
     return handled(createCodexElicitationResponse("decline"));
   }
+  let persistence:
+    | Pick<
+        Parameters<typeof requestPluginApproval>[0],
+        "mcpTool" | "toolCallId" | "isMcpToolApprovalActive"
+      >
+    | undefined;
   if (!computerUsePrompt) {
     // App elicitation delegation changes Codex's policy; custom MCP servers still
     // follow the original operator posture unless their server config overrides it.
@@ -168,6 +176,36 @@ export async function routeCodexAppServerElicitationRequest(params: {
       params.paramsForRun.hostCapabilities.assertActive();
       return handled(buildElicitationResponse(approvalPrompt, "approved-once"));
     }
+    // Explicit prompt is per-call consent, even if stale persistence hints arrive.
+    if (mode === "prompt") {
+      approvalPrompt.allowedDecisions = ["allow-once", "deny"];
+    } else if (
+      serverName &&
+      serverName !== CODEX_APPS_SERVER_NAME &&
+      Object.hasOwn(params.paramsForRun.config?.mcp?.servers ?? {}, serverName) &&
+      requestTurnId === params.turnId &&
+      readPersistHints(approvalPrompt.meta, "explicit").includes("always")
+    ) {
+      const resolveItem = () => {
+        const item = params.getActiveMcpToolCall?.(serverName);
+        return item?.server === serverName && matchesMcpApprovalDisplay(item, approvalPrompt.meta)
+          ? item
+          : undefined;
+      };
+      const item = resolveItem();
+      if (item) {
+        persistence = {
+          mcpTool: { server: serverName, tool: item.tool },
+          toolCallId: item.id,
+          // Recheck at the gateway's mint boundary: another call may start or
+          // this item may finish while the operator's approval card is pending.
+          isMcpToolApprovalActive: () => {
+            const current = resolveItem();
+            return current?.id === item.id && current.tool === item.tool;
+          },
+        };
+      }
+    }
   }
 
   const outcome = await requestPluginApprovalOutcome({
@@ -175,9 +213,34 @@ export async function routeCodexAppServerElicitationRequest(params: {
     title: approvalPrompt.title,
     description: approvalPrompt.description,
     allowedDecisions: approvalPrompt.allowedDecisions,
+    ...persistence,
     signal: params.signal,
   });
   return handled(buildElicitationResponse(approvalPrompt, outcome));
+}
+
+function matchesMcpApprovalDisplay(item: CodexActiveMcpToolCall, meta: JsonObject): boolean {
+  if (!Object.hasOwn(meta, MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY)) {
+    return true;
+  }
+  const display = meta[MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY];
+  if (!Array.isArray(display)) {
+    return false;
+  }
+  const args = item.arguments;
+  return display.every((param) => {
+    if (!isJsonObject(param) || typeof param.name !== "string" || !isJsonObject(args)) {
+      return false;
+    }
+    if (!Object.hasOwn(args, param.name)) {
+      return false;
+    }
+    const value = args[param.name];
+    return (
+      typeof param.value !== "string" ||
+      param.value === (typeof value === "string" ? value : JSON.stringify(value))
+    );
+  });
 }
 
 function handled(response: CodexElicitationResponse): CodexApprovalElicitationResult {
@@ -713,6 +776,9 @@ async function requestPluginApprovalOutcome(params: {
   title: string;
   description: string;
   allowedDecisions?: ExecApprovalDecision[];
+  mcpTool?: { server: string; tool: string };
+  toolCallId?: string;
+  isMcpToolApprovalActive?: () => boolean;
   signal?: AbortSignal;
 }): Promise<ElicitationApprovalOutcome> {
   try {
@@ -724,6 +790,9 @@ async function requestPluginApprovalOutcome(params: {
       severity: "warning",
       toolName: "codex_mcp_tool_approval",
       allowedDecisions: params.allowedDecisions,
+      mcpTool: params.mcpTool,
+      toolCallId: params.toolCallId,
+      isMcpToolApprovalActive: params.isMcpToolApprovalActive,
     });
 
     const approvalId = requestResult?.id;

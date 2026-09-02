@@ -1049,6 +1049,18 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
+/* Sweep a 200%-wide text-clipped gradient with matching end stops one full
+   period per cycle so the loop wraps seamlessly. Consumers set the gradient,
+   duration, and easing. */
+@keyframes text-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
 /* Skeleton loading primitives */
 .skeleton {
   position: relative;
@@ -1067,6 +1079,9 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     transparent 75%
   );
   content: "";
+  /* Rest offscreen: with reduced motion the animation collapses to one instant
+     iteration, and without this the highlight band would settle over the block. */
+  transform: translateX(-100%);
   animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
   will-change: transform;
 }

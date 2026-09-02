@@ -183,6 +183,7 @@ describe("native app i18n inventory", () => {
         fun Fixture() {
           Text("Kotlin first " + "argument")
           Text(text = "Named " + "argument")
+          Text(if (enabled) "Kotlin enabled " + "now" else "Kotlin disabled " + "now")
           Icon(contentDescription = if (enabled) "Open \${row.title}" else row.title)
         }
 
@@ -214,6 +215,8 @@ describe("native app i18n inventory", () => {
         "Switch ready",
         "Switch waiting",
         "Kotlin first argument",
+        "Kotlin enabled now",
+        "Kotlin disabled now",
         "Open ${row.title}",
         "When ready",
         "When waiting",
@@ -232,6 +235,8 @@ describe("native app i18n inventory", () => {
           "Switch ",
           "Swift first ",
           "Kotlin first ",
+          "Kotlin enabled ",
+          "Kotlin disabled ",
           "When ",
           "Return ",
         ].includes(source),
@@ -404,7 +409,6 @@ describe("native app i18n inventory", () => {
       ]),
     );
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
@@ -779,6 +783,33 @@ describe("native app i18n inventory", () => {
       cleanupTempDirs(tempDirs);
     }
   });
+  it("rejects invalid native placeholders inside the translation batch", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entry = testEntry("native.apple.progress", "apple", "Processed %lld of %@");
+    let translatorReturned = false;
+
+    try {
+      await expect(
+        syncNativeLocale("sv", [entry], {
+          glossary: [],
+          translationsDir,
+          translate: async (_pending, locale, _glossary, validateTranslation) => {
+            const translated = "Bearbetade %@";
+            validateTranslation?.(entry.source, translated, entry.id, locale);
+            translatorReturned = true;
+            return new Map([[entry.id, translated]]);
+          },
+        }),
+      ).rejects.toThrow(
+        `native translation changed placeholders or line breaks for sv:${entry.id}`,
+      );
+      expect(translatorReturned).toBe(false);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("rejects native printf placeholder drift", async () => {
     const tempDirs: string[] = [];
     const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
@@ -882,14 +913,14 @@ describe("native app i18n inventory", () => {
         }),
       },
       {
-        expected: "translation changed structural tokens or line breaks",
+        expected: `native translation changed placeholders or line breaks for sv:${greeting.id}`,
         mutate: (artifact) => ({
           ...artifact,
           translations: { ...artifact.translations, [greeting.id]: "Hej\nNästa" },
         }),
       },
       {
-        expected: "translation changed structural tokens or line breaks",
+        expected: `native translation changed placeholders or line breaks for sv:${greeting.id}`,
         mutate: (artifact) => ({
           ...artifact,
           translations: { ...artifact.translations, [greeting.id]: "Hej ${name} Nästa" },

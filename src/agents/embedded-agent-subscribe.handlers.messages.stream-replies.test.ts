@@ -60,7 +60,6 @@ describe("pending assistant reply directives", () => {
 
     recordPendingAssistantReplyDirectives(state, {
       text: "",
-      mediaUrls: ["/tmp/reply.ogg"],
       replyToCurrent: true,
       replyToTag: true,
       audioAsVoice: true,
@@ -73,7 +72,6 @@ describe("pending assistant reply directives", () => {
       }),
     ).toEqual({
       text: "Done.",
-      mediaUrls: ["/tmp/reply.ogg"],
       audioAsVoice: true,
       replyToId: undefined,
       replyToTag: true,
@@ -85,7 +83,7 @@ describe("pending assistant reply directives", () => {
   it("does not consume pending directive metadata on reasoning replies", () => {
     const state = {
       pendingAssistantReplyDirectives: {
-        mediaUrls: ["/tmp/reply.png"],
+        replyToId: "parent-message",
       },
     };
 
@@ -98,6 +96,6 @@ describe("pending assistant reply directives", () => {
       text: "Thinking...",
       isReasoning: true,
     });
-    expect(state.pendingAssistantReplyDirectives?.mediaUrls).toEqual(["/tmp/reply.png"]);
+    expect(state.pendingAssistantReplyDirectives?.replyToId).toBe("parent-message");
   });
 });

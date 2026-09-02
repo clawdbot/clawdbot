@@ -89,7 +89,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
-  /** Reply-optional silent classification tolerates committed side effects; retries never can. */
+  /** Silent classification can tolerate completed effects, never unfinished work or replay. */
   tolerateSideEffects?: boolean;
 }): boolean {
   return Boolean(
@@ -101,6 +101,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    hasAsyncActivity(params.attempt.toolMetas) ||
     (params.tolerateSideEffects !== true && params.attempt.replayMetadata.hadPotentialSideEffects),
   );
 }
@@ -115,8 +116,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  // Optional runs owe no reply. An explicit silent reply also closes a
-  // successful side-effecting tool turn; replaying it could repeat the effect.
+  // NO_REPLY is an authored outcome, not missing output: a successful reaction
+  // can be the entire reply. Agents: classify it before the side-effect retry
+  // guard, or it becomes a false missing-summary warning (or a repeated tool).
+  // Actual failures, aborts and pending work still pass through the guards below.
   const terminalReplyOptional = params.terminalReplyExpectation === "optional";
   const assistant = resolveCurrentAttemptAssistant(params.attempt);
   const explicitSilentReply =

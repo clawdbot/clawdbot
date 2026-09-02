@@ -70,6 +70,8 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
+  /** Both output subscriptions observe bytes separately from decoded text. */
+  supportsRawOutput: boolean;
   onStdout: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   onStderr: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;

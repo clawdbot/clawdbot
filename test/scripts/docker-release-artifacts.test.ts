@@ -174,6 +174,7 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
       },
     ],
   };
+  const attemptRun = structuredClone(run);
   const readApi = (endpoint: string) => {
     if (endpoint.includes("/artifacts?")) {
       return { artifacts: artifacts.filter((artifact) => endpoint.includes(artifact.name)) };
@@ -196,6 +197,9 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
         ],
         total_count: 2,
       };
+    }
+    if (endpoint.endsWith(`/actions/runs/${runId}/attempts/${runAttempt}`)) {
+      return attemptRun;
     }
     if (endpoint.endsWith(`/actions/runs/${runId}`)) {
       return run;
@@ -227,7 +231,27 @@ async function createPreparedRelease(includeBrowser = true, version = "2026.8.1-
     checkRunId: "7",
     readApi,
   });
-  return { root, manifest, run, job, artifacts, readApi };
+  return { root, manifest, run, attemptRun, job, artifacts, readApi };
+}
+
+async function createPublicationRetry(conclusion = "failure") {
+  const fixture = await createPreparedRelease(false);
+  const workflow = ".github/workflows/openclaw-release-publish.yml";
+  fixture.manifest.producer.workflowRef = `${repository}/${workflow}@refs/heads/main`;
+  fixture.run.path = fixture.attemptRun.path = workflow;
+  fixture.attemptRun.status = "completed";
+  fixture.attemptRun.conclusion = conclusion;
+  fixture.run.run_attempt += 1;
+  fixture.run.referenced_workflows = [];
+  return {
+    ...fixture,
+    publisher: {
+      publisherSha: toolingSha,
+      publisherRunId: runId,
+      publisherRunAttempt: String(fixture.run.run_attempt),
+      readApi: fixture.readApi,
+    },
+  };
 }
 
 describe("prepared Docker publication", () => {
@@ -253,10 +277,73 @@ describe("prepared Docker publication", () => {
     ).toBe(manifest);
   });
 
+  it.each(["failure", "cancelled", "timed_out"])(
+    "reuses its successful preparation when retrying a %s publication attempt",
+    async (conclusion) => {
+      const fixture = await createPublicationRetry(conclusion);
+      expect(verifyDockerReleaseProducer(fixture.manifest, fixture.publisher)).toBe(
+        fixture.manifest,
+      );
+    },
+  );
+
+  it.each([
+    "unrelated publisher",
+    "stale publisher attempt",
+    "different publisher source",
+    "failed current parent",
+    "changed historical source",
+    "wrong historical attempt",
+    "changed historical workflow",
+    "missing historical preparation",
+    "failed seal",
+    "replaced artifact",
+  ])("rejects a publication retry with %s", async (failure) => {
+    const fixture = await createPublicationRetry();
+    if (failure === "unrelated publisher") {
+      fixture.publisher.publisherRunId = "200";
+    }
+    if (failure === "stale publisher attempt") {
+      fixture.publisher.publisherRunAttempt = runAttempt;
+    }
+    if (failure === "different publisher source") {
+      fixture.publisher.publisherSha = sourceSha;
+    }
+    if (failure === "failed current parent") {
+      fixture.run.status = "completed";
+      fixture.run.conclusion = "failure";
+    }
+    if (failure === "changed historical source") {
+      fixture.attemptRun.head_sha = sourceSha;
+    }
+    if (failure === "wrong historical attempt") {
+      fixture.attemptRun.run_attempt += 1;
+    }
+    if (failure === "changed historical workflow") {
+      fixture.attemptRun.path = ".github/workflows/ci.yml";
+    }
+    if (failure === "missing historical preparation") {
+      fixture.attemptRun.referenced_workflows = [];
+    }
+    if (failure === "failed seal") {
+      fixture.job.conclusion = "failure";
+    }
+    if (failure === "replaced artifact") {
+      fixture.artifacts[0]!.id += 100;
+    }
+    expect(() => verifyDockerReleaseProducer(fixture.manifest, fixture.publisher)).toThrow();
+  });
+
+  it("retains successful historical preparation for an unrelated publisher", async () => {
+    const fixture = await createPublicationRetry("success");
+    fixture.publisher.publisherRunId = "200";
+    expect(verifyDockerReleaseProducer(fixture.manifest, fixture.publisher)).toBe(fixture.manifest);
+  });
+
   it.each([
     "unfinished job",
     "failed parent",
-    "new attempt",
+    "unfinished historical attempt",
     "different tooling",
     "replaced artifact",
     "wrong workflow",
@@ -269,7 +356,7 @@ describe("prepared Docker publication", () => {
       fixture.run.status = "completed";
       fixture.run.conclusion = "failure";
     }
-    if (failure === "new attempt") {
+    if (failure === "unfinished historical attempt") {
       fixture.run.run_attempt += 1;
     }
     if (failure === "different tooling") {

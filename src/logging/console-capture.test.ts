@@ -1,4 +1,5 @@
 // Console capture tests cover intercepting and restoring console output.
+import { Console } from "node:console";
 import fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
@@ -174,36 +175,49 @@ describe("enableConsoleCapture", () => {
     });
   });
 
-  it("keeps console trace output structured at trace level", () => {
-    setLoggerOverride({ level: "info", consoleLevel: "trace", consoleStyle: "json" });
-    const error = vi.fn();
-    console.error = error;
-    enableConsoleCapture();
+  it.each([
+    { consoleStyle: "compact", forced: false },
+    { consoleStyle: "compact", forced: true },
+    { consoleStyle: "pretty", forced: false },
+    { consoleStyle: "pretty", forced: true },
+    { consoleStyle: "json", forced: false },
+    { consoleStyle: "json", forced: true },
+  ] as const)(
+    "captures $consoleStyle traces once with their stack (forced: $forced)",
+    async ({ consoleStyle, forced }) => {
+      const logPath = tempLogPath();
+      setLoggerOverride({ level: "trace", file: logPath, consoleLevel: "trace", consoleStyle });
+      const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      vi.stubGlobal("console", new Console({ stdout: process.stdout, stderr: process.stderr }));
+      try {
+        if (forced) {
+          routeLogsToStderr();
+        }
+        enableConsoleCapture();
+        console.trace("trace diagnostic\nsecond line");
+        await testApi.flushFileLogQueueForTests();
+      } finally {
+        vi.unstubAllGlobals();
+      }
 
-    console.trace("trace diagnostic\nsecond line");
-
-    expect(error).toHaveBeenCalledTimes(1);
-    const event = JSON.parse(firstMockArgAsString(error)) as Record<string, unknown>;
-    expect(event).toMatchObject({ level: "trace" });
-    expect(event).toMatchObject({ message: "trace diagnostic\nsecond line" });
-    expect(event.stack).toMatch(/^Trace: trace diagnostic\nsecond line\n/u);
-    expect(String(event.stack)).not.toContain("forwardedConsoleCall");
-  });
-
-  it("keeps forced-stderr console trace output structured", () => {
-    setLoggerOverride({ level: "info", consoleLevel: "trace", consoleStyle: "json" });
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    routeLogsToStderr();
-    enableConsoleCapture();
-
-    console.trace("trace diagnostic");
-
-    expect(stderrWrite).toHaveBeenCalledTimes(1);
-    const event = JSON.parse(firstMockArgAsString(stderrWrite)) as Record<string, unknown>;
-    expect(event).toMatchObject({ level: "trace" });
-    expect(event).toMatchObject({ message: "trace diagnostic" });
-    expect(event.stack).toMatch(/^Trace: trace diagnostic\n/u);
-  });
+      const records = fs
+        .readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(records).toEqual([
+        expect.objectContaining({ _meta: expect.objectContaining({ logLevelName: "TRACE" }) }),
+      ]);
+      expect(stderrWrite).toHaveBeenCalledTimes(1);
+      const written = firstMockArgAsString(stderrWrite);
+      const event = consoleStyle === "json" ? JSON.parse(written) : { stack: written };
+      if (consoleStyle === "json") {
+        expect(event).toMatchObject({ level: "trace", message: "trace diagnostic\nsecond line" });
+      }
+      expect(event.stack).toMatch(/^Trace: trace diagnostic\nsecond line\n/u);
+      expect(String(event.stack)).not.toContain("forwardedConsoleCall");
+    },
+  );
 
   it("redacts credentials from structured console trace messages and stacks", () => {
     setLoggerOverride({ level: "info", consoleLevel: "trace", consoleStyle: "json" });

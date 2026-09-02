@@ -44,7 +44,6 @@ import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
 import ai.openclaw.app.ui.chat.toOutgoingAttachment
 import ai.openclaw.app.voice.AndroidAudioInputSession
 import ai.openclaw.app.voice.AudioInputDeviceOption
-import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
@@ -622,7 +621,6 @@ class MainViewModel private constructor(
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val accessibilityControlEnabled: StateFlow<Boolean> = prefs.accessibilityControlEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
-  val preferredCameraFacing: StateFlow<String> = prefs.preferredCameraFacing
   val preferredAudioInputDevice: StateFlow<String?> = prefs.preferredAudioInputDevice
   val voiceWakeEnabled: StateFlow<Boolean> = prefs.voiceWakeEnabled
   val voiceWakeWords: StateFlow<List<String>> = prefs.voiceWakeWords
@@ -642,23 +640,12 @@ class MainViewModel private constructor(
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
   val micCooldown: StateFlow<Boolean> = runtimeState(initial = false) { it.micCooldown }
-  val micStatusText: StateFlow<String> = runtimeState(initial = "Mic off") { it.micStatusText }
-  val micLiveTranscript: StateFlow<String?> = runtimeState(initial = null) { it.micLiveTranscript }
   val micIsListening: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsListening }
-  val micQueuedMessages: StateFlow<List<String>> = runtimeState(initial = emptyList()) { it.micQueuedMessages }
-  val micConversation: StateFlow<List<VoiceConversationEntry>> = runtimeState(initial = emptyList()) { it.micConversation }
-  val micInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.micInputLevel }
-  val micIsSending: StateFlow<Boolean> = runtimeState(initial = false) { it.micIsSending }
   val talkModeEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeEnabled }
   val talkModeListening: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeListening }
   val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
-  val talkInputLevel: StateFlow<Float> = runtimeState(initial = 0f) { it.talkInputLevel }
-  val talkOutputLevel: StateFlow<Float?> = runtimeState(initial = null) { it.talkOutputLevel }
-  val talkSpeechActive: StateFlow<Boolean> = runtimeState(initial = false) { it.talkSpeechActive }
   val talkAwaitingAgent: StateFlow<Boolean> = runtimeState(initial = false) { it.talkAwaitingAgent }
   val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
-  val talkModeConversation: StateFlow<List<VoiceConversationEntry>> =
-    runtimeState(initial = emptyList()) { it.talkModeConversation }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
   internal val chatPermissionSettingsAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.chatPermissionSettingsAvailable }
@@ -845,70 +832,66 @@ class MainViewModel private constructor(
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
     resumeNodeServiceForConnection()
-    val operation = gatewayConfigOperationSeq.incrementAndGet()
     // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
     // the whole sequence off the Compose thread so retries cannot trigger ANRs.
-    viewModelScope.launch(Dispatchers.Default) {
-      gatewayConfigOperationMutex.withLock {
-        if (operation != gatewayConfigOperationSeq.get()) return@withLock
-        val config = plan.config
-        val endpoint =
-          GatewayEndpoint.manual(
-            host = config.host,
-            port = config.port,
-            tlsEnabled = config.tls,
-            contextPath = config.contextPath,
-          )
-        val targetAlreadyPaired =
-          prefs.gatewayRegistry.entries.value
-            .any { it.stableId == endpoint.stableId }
-        val blankCredentials = config.token.isEmpty() && config.bootstrapToken.isEmpty() && config.password.isEmpty()
-        val preservesPairedTarget =
-          targetAlreadyPaired && blankCredentials && plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_ENDPOINT
-        val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE && !preservesPairedTarget
-        if (replacesSavedAuth && !resetGatewaySetupAuth(endpoint.stableId)) return@launch
-        if (operation != gatewayConfigOperationSeq.get()) return@launch
-        prefs.setManualEnabled(true)
-        prefs.setManualHost(config.host)
-        prefs.setManualPort(config.port)
-        prefs.setManualTls(config.tls)
+    launchGatewayConfigOperation { isCurrent ->
+      val config = plan.config
+      val endpoint =
+        GatewayEndpoint.manual(
+          host = config.host,
+          port = config.port,
+          tlsEnabled = config.tls,
+          contextPath = config.contextPath,
+        )
+      val targetAlreadyPaired =
+        prefs.gatewayRegistry.entries.value
+          .any { it.stableId == endpoint.stableId }
+      val blankCredentials = config.token.isEmpty() && config.bootstrapToken.isEmpty() && config.password.isEmpty()
+      val preservesPairedTarget =
+        targetAlreadyPaired && blankCredentials && plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_ENDPOINT
+      val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE && !preservesPairedTarget
+      if (replacesSavedAuth && !resetGatewaySetupAuth(endpoint.stableId)) return@launchGatewayConfigOperation
+      if (!isCurrent()) return@launchGatewayConfigOperation
+      prefs.setManualEnabled(true)
+      prefs.setManualHost(config.host)
+      prefs.setManualPort(config.port)
+      prefs.setManualTls(config.tls)
 
-        // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
-        // including password-only setups that Compose deliberately cannot read back.
-        if (replacesSavedAuth) {
-          prefs.saveGatewayCredentials(
-            stableId = endpoint.stableId,
-            token = config.token,
-            bootstrapToken = config.bootstrapToken,
-            password = config.password,
-          )
-        }
+      // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
+      // including password-only setups that Compose deliberately cannot read back.
+      if (replacesSavedAuth) {
+        prefs.saveGatewayCredentials(
+          stableId = endpoint.stableId,
+          token = config.token,
+          bootstrapToken = config.bootstrapToken,
+          password = config.password,
+        )
+      }
 
-        prefs.gatewayRegistry.upsert(
-          GatewayRegistryEntry(
-            stableId = endpoint.stableId,
-            kind = GatewayRegistryEntryKind.MANUAL,
-            name = endpoint.name,
-            host = config.host,
-            port = config.port,
-            tls = config.tls,
-            contextPath = config.contextPath,
+      prefs.gatewayRegistry.upsert(
+        GatewayRegistryEntry(
+          stableId = endpoint.stableId,
+          kind = GatewayRegistryEntryKind.MANUAL,
+          name = endpoint.name,
+          host = config.host,
+          port = config.port,
+          tls = config.tls,
+          contextPath = config.contextPath,
+        ),
+      )
+
+      val runtime = ensureRuntime()
+      if (replacesSavedAuth) {
+        runtime.connectSwitchingGateway(
+          endpoint,
+          NodeRuntime.GatewayConnectAuth(
+            token = config.token.ifEmpty { null },
+            bootstrapToken = config.bootstrapToken.ifEmpty { null },
+            password = config.password.ifEmpty { null },
           ),
         )
-
-        val runtime = ensureRuntime()
-        if (replacesSavedAuth) {
-          runtime.connectSwitchingGateway(
-            endpoint,
-            NodeRuntime.GatewayConnectAuth(
-              token = config.token.ifEmpty { null },
-              bootstrapToken = config.bootstrapToken.ifEmpty { null },
-              password = config.password.ifEmpty { null },
-            ),
-          )
-        } else {
-          runtime.connectSwitchingGateway(endpoint)
-        }
+      } else {
+        runtime.connectSwitchingGateway(endpoint)
       }
     }
   }
@@ -927,19 +910,15 @@ class MainViewModel private constructor(
   /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
   fun pairNewGateway() {
     NodeForegroundService.stop(nodeApp)
-    val operation = gatewayConfigOperationSeq.incrementAndGet()
-    viewModelScope.launch(Dispatchers.Default) {
-      gatewayConfigOperationMutex.withLock {
-        if (operation != gatewayConfigOperationSeq.get()) return@withLock
-        nodeApp.peekRuntime()?.also { runtime ->
-          attachComposerRuntime(runtime)
-          runtime.prepareForGatewaySetup()
-        }
-        // Pairing another gateway no longer forgets existing gateways; per-gateway
-        // credentials and proxy headers are removed only by forgetGateway.
-        prefs.setOnboardingCompleted(false)
-        _startOnboardingAtGatewaySetup.value = true
+    launchGatewayConfigOperation {
+      nodeApp.peekRuntime()?.also { runtime ->
+        attachComposerRuntime(runtime)
+        runtime.prepareForGatewaySetup()
       }
+      // Pairing another gateway no longer forgets existing gateways; per-gateway
+      // credentials and proxy headers are removed only by forgetGateway.
+      prefs.setOnboardingCompleted(false)
+      _startOnboardingAtGatewaySetup.value = true
     }
   }
 
@@ -1223,14 +1202,6 @@ class MainViewModel private constructor(
     }
   }
 
-  fun setMicEnabled(enabled: Boolean) {
-    ensureRuntime().setMicEnabled(enabled)
-  }
-
-  fun cancelMicCapture() {
-    ensureRuntime().cancelMicCapture()
-  }
-
   fun setTalkModeEnabled(enabled: Boolean) {
     ensureRuntime().setTalkModeEnabled(enabled)
   }
@@ -1266,17 +1237,8 @@ class MainViewModel private constructor(
     ensureRuntime().setSpeakerEnabled(enabled)
   }
 
-  fun setPreferredCameraFacing(facing: String) {
-    ensureRuntime().setPreferredCameraFacing(facing)
-  }
-
   fun setPreferredAudioInputDevice(key: String?) {
     ensureRuntime().setPreferredAudioInputDevice(key)
-  }
-
-  suspend fun hasFrontAndBackCameras(): Boolean {
-    val facings = ensureRuntime().camera.listDevices().mapTo(mutableSetOf()) { it.position }
-    return "front" in facings && "back" in facings
   }
 
   internal fun observeAudioInputDevices(onChanged: (List<AudioInputDeviceOption>) -> Unit): AutoCloseable = AndroidAudioInputSession.observeAvailableDevices(getApplication(), onChanged)
@@ -1385,14 +1347,7 @@ class MainViewModel private constructor(
 
   fun switchToGateway(stableId: String) {
     resumeNodeServiceForConnection()
-    val operation = gatewayConfigOperationSeq.incrementAndGet()
-    viewModelScope.launch(Dispatchers.Default) {
-      gatewayConfigOperationMutex.withLock {
-        if (operation == gatewayConfigOperationSeq.get()) {
-          ensureRuntime().switchToGateway(stableId)
-        }
-      }
-    }
+    launchGatewayConfigOperation { ensureRuntime().switchToGateway(stableId) }
   }
 
   fun setGatewayConnectionEnabled(
@@ -1403,24 +1358,22 @@ class MainViewModel private constructor(
   }
 
   fun forgetGateway(stableId: String) {
-    val operation = gatewayConfigOperationSeq.incrementAndGet()
-    viewModelScope.launch(Dispatchers.Default) {
-      gatewayConfigOperationMutex.withLock {
-        if (operation == gatewayConfigOperationSeq.get()) {
-          ensureRuntime().forgetGateway(stableId)
-        }
-      }
-    }
+    launchGatewayConfigOperation { ensureRuntime().forgetGateway(stableId) }
   }
 
   fun disconnect() {
     NodeForegroundService.stop(nodeApp)
+    launchGatewayConfigOperation { runtimeRef.value?.disconnect() }
+  }
+
+  private fun launchGatewayConfigOperation(action: suspend (isCurrent: () -> Boolean) -> Unit) {
+    // Superseding intent retires queued work. Auth reset may suspend, so its caller
+    // also rechecks this same operation before publishing replacement credentials.
     val operation = gatewayConfigOperationSeq.incrementAndGet()
+    val isCurrent = { operation == gatewayConfigOperationSeq.get() }
     viewModelScope.launch(Dispatchers.Default) {
       gatewayConfigOperationMutex.withLock {
-        if (operation == gatewayConfigOperationSeq.get()) {
-          runtimeRef.value?.disconnect()
-        }
+        if (isCurrent()) action(isCurrent)
       }
     }
   }
@@ -1632,11 +1585,8 @@ class MainViewModel private constructor(
     ensureRuntime().refreshHealthLogs()
   }
 
-  fun loadChat(
-    sessionKey: String,
-    ownerAgentId: String? = null,
-  ) {
-    ensureRuntime().loadChat(sessionKey, ownerAgentId)
+  fun loadCurrentChat() {
+    ensureRuntime().loadCurrentChat()
   }
 
   fun refreshChat() {

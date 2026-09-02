@@ -16,6 +16,8 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+Closed Terminal, Browser, Desktop, and Home/Ask OpenClaw panels initialize when you open them rather than during initial navigation. Panels saved as open still restore after a reload.
+
 While you watch a running session, the Gateway shows the model's latest safe preamble immediately as the session headline. When a utility model is available, it can replace that headline with a richer compact status digest after enough activity accumulates. Chat carries the result in a **session rail**: its compact pill shows the live digest, while the expanded rail shows the assessment, plan progress, pull requests, elapsed time, and a read-only Side chat thread. The rail can expand once when a run becomes stuck or needs input, and done or failed runs keep a frozen “finished” time based on the final digest. On wide chat panes the expanded rail docks as a 400 px right column; on narrower and mobile layouts it remains an overlay.
 
 Side chat answers questions about the selected session and its project without entering or interrupting the main agent run. On the first question, the Gateway lazily loads a bounded visible snapshot of the selected session before starting the utility model. If history is temporarily unavailable, the question stays visible with **Retry** instead of being treated as an empty session. Side chat uses read-only access to the target session's history/search and agent workspace. Its bounded thread is held in Gateway memory, is restored when you switch sessions in the Control UI, and is cleared by the rail's trash button, a session reset, Gateway restart, or idle expiry. It never enters `chat.history`, and private reference context is not stored as operator dialogue. Type `/btw <question>` or `/side <question>` in the main Control UI composer to open the rail and ask there; other clients keep their existing BTW behavior.
@@ -158,6 +160,8 @@ Set an agent's display name, emoji, and avatar under **Agent settings → Overvi
 ## Runtime config endpoint
 
 The Control UI fetches its runtime settings from `/control-ui-config.json`, resolved relative to the gateway's Control UI base path (for example `/__openclaw__/control-ui-config.json` under base path `/__openclaw__/`). That endpoint is gated by gateway HTTP auth: unauthenticated browsers cannot fetch it, and a successful fetch requires a valid gateway token/password or trusted-proxy identity. Tailscale header auth applies to the Control UI WebSocket, not this HTTP endpoint.
+
+Local agent avatars use [authenticated avatar URLs](#avatar-route-auth) in this response rather than inline image bytes, keeping bootstrap JSON small. Configured data URLs, remote URLs, emoji, and RPC avatar representations are unchanged.
 
 ## Gateway host status
 
@@ -325,6 +329,8 @@ New session **+** controls are links: click to open the draft in the current bro
 
 The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses a Gateway project or folder and an execution destination. Connections with `operator.write` can choose **Gateway · local**, **Auto** (least-busy device), or any paired device returned by `environments.list`; administrators additionally see configured cloud profiles and **Connect a machine…**. A cloud profile is selectable when its advertised execution modes include the selected runtime, so one Crabbox **Cloud · profile** row supports both OpenClaw and Codex. Automatic selection chooses the eligible host with the most available worker slots, breaking ties by device ID; runtimes that do not consume worker slots use device ID order. Device eligibility remains authoritative to the environment catalog and the selected runtime: OpenClaw `worker-turn` requires an available current session host with valid worker capacity and at least one free slot; Codex `remote-exec` requires its currently invocable, explicitly authorized exec-server command and consumes no worker slot. Offline known hosts, connected non-hosts, incompatible or saturated hosts, hosts missing required capabilities, outdated hosts, and unavailable hosts remain visible with a reason and next step.
 
+On a normal foreground send, the submitted text and attachments appear immediately with a **Starting** indicator while the Gateway creates or adopts the session. This is a pending submission, not a Gateway acknowledgment. If creation is rejected, your prompt and attachments remain available to correct and retry. Once creation succeeds, the UI opens the session's chat.
+
 The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing either a device or cloud profile forces a managed worktree from the selected Gateway source. **Start in terminal** is available only for local placement.
 
 The project picker refreshes after sign-in and reconnects. Gateway reconnects and Git verification retries preserve your edited base branch and worktree name. Choosing another folder or project clears those repository-specific details.
@@ -365,6 +371,11 @@ Sidebar visibility belongs to the current tab and is not remembered across tabs,
 
 Pending approvals also contribute an attention chip above the sidebar footer;
 select it to open the owning Approvals page.
+
+When an approval appears inline in a different session, **Approval requested by session**
+uses the requesting session's loaded title, not the open conversation's title. If that
+metadata is unavailable, the normal session-name fallback remains until it loads.
+This label does not change which request the approval buttons resolve.
 
 ## What it can do (today)
 
@@ -954,6 +965,7 @@ When gateway auth is configured, the Control UI avatar endpoint requires the sam
 - `GET /avatar/<agentId>` returns the avatar image only to authenticated callers. `GET /avatar/<agentId>?meta=1` returns the avatar metadata under the same rule.
 - Unauthenticated requests to either route are rejected (matching the sibling assistant-media route), so the avatar route cannot leak agent identity on hosts that are otherwise protected.
 - The Control UI forwards the gateway token as a bearer header when fetching avatars, and uses authenticated blob URLs so the image still renders in dashboards.
+- Bootstrap avatar URLs include an opaque `v` revision. Refreshed metadata uses a new URL after local-file replacement so the browser does not reuse the previous image. The revision is a cache key, not an access token.
 
 If you disable gateway auth (not recommended on shared hosts), the avatar route also becomes unauthenticated, in line with the rest of the gateway.
 

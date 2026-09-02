@@ -37,6 +37,7 @@ export type ArtifactDownloadResolver = (params: {
 
 export type ImageRenderOptions = {
   canonicalMessageKey?: string;
+  localSubmission?: boolean;
   connectionEpoch?: number;
   localMediaPreviewRoots?: readonly string[];
   resourceBasePath?: string;
@@ -462,6 +463,7 @@ export function extractImages(message: unknown): ImageBlock[] {
         continue;
       }
       const b = block as Record<string, unknown>;
+      const blockImages: ImageBlock[] = [];
 
       if (b.type === "image") {
         // Handle source object format from optimistic user sends.
@@ -479,7 +481,7 @@ export function extractImages(message: unknown): ImageBlock[] {
         };
         inlineIndex += 1;
         if (source?.type === "base64" && typeof source.data === "string") {
-          appendImageBlock(images, {
+          appendImageBlock(blockImages, {
             url: buildBase64ImageUrl({
               data: source.data,
               mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
@@ -488,7 +490,7 @@ export function extractImages(message: unknown): ImageBlock[] {
           });
         } else if (typeof b.data === "string") {
           // Direct tool-result image block from imageResult() / read tool.
-          appendImageBlock(images, {
+          appendImageBlock(blockImages, {
             url: buildBase64ImageUrl({
               data: b.data,
               mediaType: typeof b.mimeType === "string" ? b.mimeType : undefined,
@@ -499,7 +501,7 @@ export function extractImages(message: unknown): ImageBlock[] {
           typeof b.url === "string" &&
           !crossOriginStructuredSvgAttachment(b.url, b.mimeType ?? source?.media_type, b)
         ) {
-          appendImageBlock(images, { url: b.url, ...imageMeta });
+          appendImageBlock(blockImages, { url: b.url, ...imageMeta });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
@@ -508,7 +510,7 @@ export function extractImages(message: unknown): ImageBlock[] {
           typeof imageUrl?.url === "string" &&
           !crossOriginStructuredSvgAttachment(imageUrl.url, undefined)
         ) {
-          appendImageBlock(images, { url: imageUrl.url });
+          appendImageBlock(blockImages, { url: imageUrl.url });
         }
       } else if (b.type === "input_image") {
         const imageUrl = b.image_url;
@@ -516,11 +518,11 @@ export function extractImages(message: unknown): ImageBlock[] {
           typeof imageUrl === "string" &&
           !crossOriginStructuredSvgAttachment(imageUrl, undefined)
         ) {
-          appendImageBlock(images, { url: imageUrl });
+          appendImageBlock(blockImages, { url: imageUrl });
         } else if (imageUrl && typeof imageUrl === "object") {
           const url = (imageUrl as Record<string, unknown>).url;
           if (typeof url === "string" && !crossOriginStructuredSvgAttachment(url, undefined)) {
-            appendImageBlock(images, { url });
+            appendImageBlock(blockImages, { url });
           }
         }
         const source = b.source as Record<string, unknown> | undefined;
@@ -528,9 +530,9 @@ export function extractImages(message: unknown): ImageBlock[] {
           typeof source?.url === "string" &&
           !crossOriginStructuredSvgAttachment(source.url, source.media_type)
         ) {
-          appendImageBlock(images, { url: source.url });
+          appendImageBlock(blockImages, { url: source.url });
         } else if (typeof source?.data === "string") {
-          appendImageBlock(images, {
+          appendImageBlock(blockImages, {
             url: buildBase64ImageUrl({
               data: source.data,
               mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
@@ -543,12 +545,14 @@ export function extractImages(message: unknown): ImageBlock[] {
         }
         const imageUrl = b.image_url;
         if (typeof imageUrl === "string") {
-          appendImageBlock(images, {
+          appendImageBlock(blockImages, {
             url: imageUrl,
             alt: typeof b.alt === "string" ? b.alt : undefined,
           });
         }
       }
+      // Separate blocks are separate attachments, including identical uploads.
+      images.push(...blockImages);
     }
   }
 

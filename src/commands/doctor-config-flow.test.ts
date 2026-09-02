@@ -1673,7 +1673,8 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([["agents", "entries"]]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toBeUndefined();
     expect(result.cfg.agents?.entries).toEqual({
       main: { workspace: "/tmp/migrated-main" },
     });
@@ -1760,6 +1761,7 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(false);
+    expect(result.persistCanonicalAgentRoster).toBeUndefined();
     expect(result.explicitSetPaths).toBeUndefined();
   });
 
@@ -1780,10 +1782,8 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([
-      ["agents", "entries"],
-      ["agents", "ownership"],
-    ]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toEqual([["agents", "ownership"]]);
     expect(result.cfg.agents?.entries).toEqual({
       ops: { workspace: "/srv/ops" },
       research: { model: "openai/research" },
@@ -1808,10 +1808,8 @@ describe("doctor config flow", () => {
     });
 
     expect(result.shouldWriteConfig).toBe(true);
-    expect(result.explicitSetPaths).toEqual([
-      ["agents", "entries"],
-      ["agents", "ownership"],
-    ]);
+    expect(result.persistCanonicalAgentRoster).toBe(true);
+    expect(result.explicitSetPaths).toEqual([["agents", "ownership"]]);
     expect(result.cfg.agents).toEqual({
       defaults: { workspace: "/srv/legacy-shared" },
       ownership: "explicit",
@@ -1909,7 +1907,9 @@ describe("doctor config flow", () => {
     });
 
     expect(secondRun.shouldWriteConfig).toBe(false);
+    expect(secondRun.persistCanonicalAgentRoster).toBeUndefined();
     expect(singleAgent.shouldWriteConfig).toBe(false);
+    expect(singleAgent.persistCanonicalAgentRoster).toBeUndefined();
   });
 
   it("preserves malformed keyed entries for schema validation during repair", async () => {

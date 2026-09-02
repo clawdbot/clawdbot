@@ -202,27 +202,6 @@ class ChatScreenTest {
   }
 
   @Test
-  fun initialChatLoadUsesMainWhenNoSessionIsSelected() {
-    assertEquals(
-      "agent:ops:device",
-      resolveInitialChatLoadSessionKey(
-        sessionKey = "main",
-        mainSessionKey = "agent:ops:device",
-      ),
-    )
-  }
-
-  @Test
-  fun initialChatLoadPreservesSelectedSession() {
-    assertNull(
-      resolveInitialChatLoadSessionKey(
-        sessionKey = "session:history",
-        mainSessionKey = "agent:ops:device",
-      ),
-    )
-  }
-
-  @Test
   fun healthyEmptyChatShowsStarterStateInsteadOfLoadingPlaceholder() {
     assertFalse(
       showChatLoadingPlaceholder(

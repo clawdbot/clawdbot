@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -29,6 +30,22 @@ import {
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
+const compilerModuleUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsdown")).href;
+
+function interceptCompilerBuild(directory: string, source: string): string {
+  // Sync require hooks still use the CJS filesystem loader; a resolve-only data URL is not loadable.
+  const wrapper = writeFixture(
+    directory,
+    "tsdown-wrapper.mjs",
+    `import {build as compile} from ${JSON.stringify(compilerModuleUrl)};\n${source}`,
+  );
+  return `import {registerHooks} from 'node:module';
+registerHooks({resolve(specifier,context,nextResolve) {
+  return specifier==='tsdown'
+    ? {url:${JSON.stringify(pathToFileURL(wrapper).href)},format:'module',shortCircuit:true}
+    : nextResolve(specifier,context);
+}});`;
+}
 const compilerModule = "scripts/lib/vitest-worker-run.mts";
 const compilerEntry = "scripts/lib/vitest-worker-compiler.mts";
 const artifactsModule = "scripts/lib/vitest-worker-artifacts.mts";
@@ -132,9 +149,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       expect(fs.existsSync(directory)).toBe(false);
     }));
 
-  it("rejects output altered after the real compiler returns before publishing a manifest", ({
-    workerArtifacts,
-  }) =>
+  it("rejects compiler output altered before publishing a manifest", ({ workerArtifacts }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node } = workerArtifacts.createFixtureCommands();
       const directory = workerArtifacts.fixtureDirectory();
@@ -142,25 +157,24 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const preload = writeFixture(
         directory,
         "compiler-fault.mjs",
-        `
+        interceptCompilerBuild(
+          directory,
+          `
         import fs from 'node:fs';
         import path from 'node:path';
-        import Module from 'node:module';
-        const load=Module._load;
-        Module._load=function(id,...args) {
-          const mod=load.call(this,id,...args);
-          if(id!=='tsdown') return mod;
-          return {...mod,async build(options) {
-            const result=await mod.build(options);
-            fs.appendFileSync(path.join(options.outDir,'infra/runtime-process-entrypoints.js'),'altered after compiler');
-            fs.writeFileSync(${JSON.stringify(altered)},'real compiler returned');
-            return result;
-          }};
-        };
-      `,
+        export async function build(options) {
+          const result = await compile(options);
+          fs.appendFileSync(path.join(options.outDir,'infra/runtime-process-entrypoints.js'),'altered after compile');
+          fs.writeFileSync(${JSON.stringify(altered)},'compiler returned');
+          return result;
+        }
+        `,
+        ),
       );
       const owner = createVitestWorkerRun();
       try {
+        // Inject only into the actual native compiler entry, never the parent's
+        // module cache or a production build flag. node() joins this direct child.
         const result = await node([
           "--import",
           pathToFileURL(preload).href,
@@ -169,7 +183,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         ]);
         expect(result.code).not.toBe(0);
         expect(result.stderr).toContain("Compiled subprocess artifact changed");
-        expect(fs.readFileSync(altered, "utf8")).toBe("real compiler returned");
+        expect(fs.readFileSync(altered, "utf8")).toBe("compiler returned");
         expect(fs.existsSync(path.join(owner.descriptor.directory, "manifest.json"))).toBe(false);
       } finally {
         await owner.dispose();
@@ -188,14 +202,16 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         const preload = writeFixture(
           directory,
           "compiler-lifetime.mjs",
-          `
+          interceptCompilerBuild(
+            directory,
+            `
       import fs from 'node:fs';
       import path from 'node:path';
       import {spawn} from 'node:child_process';
-      import Module, {syncBuiltinESMExports} from 'node:module';
+      import {syncBuiltinESMExports} from 'node:module';
       const directory=${JSON.stringify(directory)}, mode=${JSON.stringify(mode)};
       const record=(name,value)=>fs.writeFileSync(path.join(directory,name),value);
-      const load=Module._load, write=fs.writeFileSync;
+      const write=fs.writeFileSync;
       const gate=()=>new Promise(resolve=>{
         const poll=setInterval(()=>{
           if(fs.existsSync(path.join(directory,'release'))) {clearInterval(poll);resolve();}
@@ -205,11 +221,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           clearInterval(poll);process.exit(0);
         });
       });
-      Module._load=function(id,...args) {
-        const mod=load.call(this,id,...args);
-        if(id!=='tsdown') return mod;
-        return {...mod,async build(options) {
-          const result=await mod.build(options);
+      export async function build(options) {
+        const result=await compile(options);
         if(mode==='cancel while compiling') {
           record('compiling',String(process.pid));
           await gate();
@@ -231,9 +244,8 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           await new Promise((resolve,reject)=>{leaf.once('message',resolve);leaf.once('error',reject);});
           leaf.unref();
         }
-          return result;
-        }};
-      };
+        return result;
+      }
       fs.writeFileSync=(filename,...args)=>{
         const result=write(filename,...args);
         if(path.basename(String(filename))==='manifest.json' && mode==='close before ready') {
@@ -243,6 +255,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       };
       syncBuiltinESMExports();
     `,
+          ),
         );
         const driver = writeFixture(
           directory,
@@ -1188,6 +1201,35 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
       const initialDirectory = initial.descriptor.directory;
       try {
         const manifest = await prepareWorkers(initial);
+        expect(fs.existsSync(path.join(initialDirectory, "dist/native"))).toBe(false);
+        expect(Object.keys(manifest.outputs).some((name) => name.endsWith(".node"))).toBe(false);
+        // Observe the installed config before/after a real compiled parent import.
+        // A bundled second fs-safe instance would leave this observer at "auto".
+        const policy = await node(
+          [
+            "--input-type=module",
+            "--eval",
+            `import assert from 'node:assert/strict';
+             import {pathToFileURL} from 'node:url';
+             import {getFsSafeNativeConfig} from '@openclaw/fs-safe/config';
+             assert.equal(getFsSafeNativeConfig().mode,'auto');
+             await import(pathToFileURL(process.argv[1]));
+             assert.equal(getFsSafeNativeConfig().mode,'off');`,
+            path.join(initialDirectory, "dist/infra/sqlite-readonly-location.js"),
+          ],
+          fixture,
+          {
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            WINDIR: process.env.WINDIR,
+            HOME: fixture,
+            USERPROFILE: fixture,
+            TMPDIR: fixture,
+            TMP: fixture,
+            TEMP: fixture,
+          },
+        );
+        expect(policy.code, policy.stderr + policy.stdout).toBe(0);
         for (const filename of Object.keys(manifest.inputs)) {
           const target = path.join(fixture, path.relative(root, filename));
           fs.mkdirSync(path.dirname(target), { recursive: true });

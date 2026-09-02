@@ -1,22 +1,7 @@
 import fs from "node:fs";
+import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { makeTempDir } from "./temp-dir.js";
-
-function hasUnjoinedWork(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if ("processTreeState" in value && value.processTreeState !== "terminated") {
-    return true;
-  }
-  if (value instanceof AggregateError && value.errors.some(hasUnjoinedWork)) {
-    return true;
-  }
-  return (
-    ("cause" in value && hasUnjoinedWork(value.cause)) ||
-    ("error" in value && hasUnjoinedWork(value.error))
-  );
-}
 
 /** Own whole fixture bodies; an explicit root scopes deliberate retention without changing env. */
 export function createFixtureLifetime(ownerRoot?: string) {

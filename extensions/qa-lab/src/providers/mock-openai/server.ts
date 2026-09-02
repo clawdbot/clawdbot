@@ -1,6 +1,8 @@
 // QA Lab mock Responses dispatcher, HTTP transport, and debug endpoints.
+import { once } from "node:events";
 import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { format as formatUrl } from "node:url";
 import {
   closeQaHttpServer,
   dispatchQaHttpRequest,
@@ -77,6 +79,9 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE,
+  QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE,
   QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
   QA_SUBAGENT_SELF_YIELD_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
@@ -115,7 +120,6 @@ import {
   transcriptionTextForAudioRequest,
   writeSse,
   isRemoteCompactionV2Request,
-  buildRemoteCompactionV2Events,
   countApproxTokens,
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
@@ -142,6 +146,7 @@ import {
   resolveHeartbeatPromptReply,
 } from "./mock-openai-directives.js";
 import {
+  buildRemoteCompactionV2Events,
   buildReleaseAuditJson,
   buildReleaseHandoffMarkdown,
   extractPlannedToolName,
@@ -1312,13 +1317,15 @@ async function buildResponsesPayload(
         content: "empty terminal QA side effect completed\n",
       });
     }
-    return buildAssistantEvents(
-      [
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
-        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      ].join("\n"),
-    );
+    return QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE.test(allInputText)
+      ? buildAssistantEvents("")
+      : buildAssistantEvents(
+          [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+        );
   }
   if (terminalWorkerCase === "fallback") {
     return buildAssistantEvents(
@@ -1335,8 +1342,13 @@ async function buildResponsesPayload(
   }
   if (terminalCompletionCase) {
     if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      const task =
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+          ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
+          : `Subagent terminal reply QA worker: ${terminalCompletionCase}.`;
       return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: `Subagent terminal reply QA worker: ${terminalCompletionCase}.`,
+        task,
         label: `qa-terminal-${terminalCompletionCase}`,
         thread: false,
         mode: "run",
@@ -1345,6 +1357,12 @@ async function buildResponsesPayload(
     if (hasCompletedToolOutput) {
       // End the requester turn before the delayed worker settles. The terminal
       // result must therefore use the runtime's direct channel fallback.
+      if (
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+      ) {
+        return buildAssistantEvents(QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER);
+      }
       return buildAssistantEvents("NO_REPLY");
     }
   }
@@ -2759,8 +2777,14 @@ export async function startQaMockOpenAiServer(params?: {
         : {}),
     };
   };
-  const dispatchResponses = (request: Omit<QaMockProviderDispatchRequest, "route">) =>
-    dispatchProvider({ ...request, route: "responses" });
+  const dispatchResponses = async (request: Omit<QaMockProviderDispatchRequest, "route">) => {
+    const dispatched = await dispatchProvider({ ...request, route: "responses" });
+    const created = dispatched.events[0];
+    if (created?.type === "response.created") {
+      created.response.model = typeof request.body.model === "string" ? request.body.model : "";
+    }
+    return dispatched;
+  };
   const server = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -2911,7 +2935,7 @@ export async function startQaMockOpenAiServer(params?: {
         if (dispatched.responsePauseMs !== undefined) {
           await sleep(dispatched.responsePauseMs);
         }
-        if (body.stream === false) {
+        if (body.stream !== true) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
             writeJson(res, 500, { error: "mock completion failed" });
@@ -2944,10 +2968,7 @@ export async function startQaMockOpenAiServer(params?: {
     dispatch: dispatchResponses,
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params?.port ?? 0, host, () => resolve());
-  });
+  await once(server.listen(params?.port ?? 0, host), "listening");
 
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -2955,7 +2976,7 @@ export async function startQaMockOpenAiServer(params?: {
   }
 
   return {
-    baseUrl: `http://${host}:${address.port}`,
+    baseUrl: formatUrl({ protocol: "http", hostname: host, port: address.port }),
     async stop() {
       await responsesWebSocket.close();
       await closeQaHttpServer(server);

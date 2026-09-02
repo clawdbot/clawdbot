@@ -21,6 +21,7 @@ import { unwrapCoreResult } from "./agent-session-utils.js";
 import { formatNoModelSelectedMessage } from "./auth-guidance.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
+import { generateSessionEntryId } from "./session-manager-id.js";
 import { getLatestCompactionEntry } from "./session-manager.js";
 import { recordSessionModelUsage } from "./session-model-usage.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -105,13 +106,15 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     await this.abort();
     const abortController = new AbortController();
     this.compactionAbortController = abortController;
-    this.emit({ type: "compaction_start", reason: "manual" });
+    const itemId = generateSessionEntryId();
+    this.emit({ type: "compaction_start", reason: "manual", itemId });
 
     try {
       const settings = this.settingsManager.getCompactionSettings();
       let outcome: CompactionWorkOutcome;
       try {
         outcome = await this.runCompactionWork({
+          itemId,
           customInstructions,
           mode: "manual",
           summaryOutputPolicy,
@@ -126,6 +129,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         this.emit({
           type: "compaction_end",
           reason: "manual",
+          itemId,
           outcome: aborted
             ? { status: "aborted" }
             : { status: "failed", reason: `Compaction failed: ${message}` },
@@ -133,17 +137,18 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         throw error;
       }
       if (outcome.status === "skipped") {
-        this.emit({ type: "compaction_end", reason: "manual", outcome });
+        this.emit({ type: "compaction_end", reason: "manual", itemId, outcome });
         throw new Error(outcome.reason);
       }
       if (outcome.status === "aborted") {
-        this.emit({ type: "compaction_end", reason: "manual", outcome });
+        this.emit({ type: "compaction_end", reason: "manual", itemId, outcome });
         throw new Error("Compaction cancelled");
       }
 
       this.emit({
         type: "compaction_end",
         reason: "manual",
+        itemId,
         outcome: {
           status: "completed",
           tokensBefore: outcome.result.tokensBefore,
@@ -176,6 +181,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   }
 
   private async runCompactionWork(options: {
+    itemId: string;
     settings: ReturnType<SettingsManager["getCompactionSettings"]>;
     signal: AbortSignal;
     customInstructions?: string;
@@ -316,6 +322,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       compactionResult.tokensBefore,
       compactionResult.details,
       fromExtension,
+      { itemId: options.itemId },
     );
     const sessionContext = this.sessionManager.buildSessionContext();
     // Compaction replaces the request prefix, invalidating retained usage and thinking signatures.
@@ -451,12 +458,14 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   ): Promise<boolean> {
     const settings = this.settingsManager.getCompactionSettings();
 
-    this.emit({ type: "compaction_start", reason });
+    const itemId = generateSessionEntryId();
+    this.emit({ type: "compaction_start", reason, itemId });
     const abortController = new AbortController();
     this.autoCompactionAbortController = abortController;
 
     try {
       const outcome = await this.runCompactionWork({
+        itemId,
         mode: "auto",
         ...(willRetry ? { requestState: "unresolved" as const } : {}),
         summaryOutputPolicy: "retry-invalid-once",
@@ -464,16 +473,17 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
         signal: abortController.signal,
       });
       if (outcome.status === "skipped") {
-        this.emit({ type: "compaction_end", reason, outcome });
+        this.emit({ type: "compaction_end", reason, itemId, outcome });
         return false;
       }
       if (outcome.status === "aborted") {
-        this.emit({ type: "compaction_end", reason, outcome });
+        this.emit({ type: "compaction_end", reason, itemId, outcome });
         return false;
       }
       this.emit({
         type: "compaction_end",
         reason,
+        itemId,
         outcome: {
           status: "completed",
           tokensBefore: outcome.result.tokensBefore,
@@ -499,13 +509,14 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       return this.agent.hasQueuedMessages();
     } catch (error) {
       if (abortController.signal.aborted) {
-        this.emit({ type: "compaction_end", reason, outcome: { status: "aborted" } });
+        this.emit({ type: "compaction_end", reason, itemId, outcome: { status: "aborted" } });
         return false;
       }
       const errorMessage = compactionErrorMessage(error, "compaction failed");
       this.emit({
         type: "compaction_end",
         reason,
+        itemId,
         outcome: {
           status: "failed",
           reason:

@@ -158,6 +158,20 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
     plugins: [controlUiLocaleModulesPlugin()],
+    optimizeDeps: {
+      include: [
+        "@openclaw/uirouter",
+        "dompurify",
+        "highlight.js/lib/core",
+        "highlight.js/lib/languages/{bash,cpp,css,diff,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
+        "lit/async-directive.js",
+        "lit/directive.js",
+        "lit/directives/unsafe-html.js",
+        "markdown-it",
+        "markdown-it-task-lists",
+        "remend",
+      ],
+    },
     resolve: {
       alias: workspaceSourceAliases,
     },

@@ -1559,6 +1559,9 @@ describe("memory cli", () => {
       await runMemoryCli(["status", "--fix"]);
 
       expectLogged(log, "Repair: rewrote store");
+      expect(getMemorySearchManager).toHaveBeenCalledWith(
+        expect.objectContaining({ purpose: "cli" }),
+      );
       const audit = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
       const repaired = audit as {
         entries: Record<string, { conceptTags?: string[] }>;
@@ -2065,6 +2068,7 @@ describe("memory cli", () => {
       cfg: {},
       agentId: "main",
       purpose: "cli",
+      inspectSources: true,
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -2081,6 +2085,7 @@ describe("memory cli", () => {
       cfg: {},
       agentId: "main",
       purpose: "cli",
+      inspectSources: true,
       acquireLocalService,
     });
   });

@@ -48,13 +48,22 @@ if (command === "descendant") {
     : command === "update" ? (args.includes("--help") ? "help" : "repair") : command;
   write(current);
   if (current === phase) {
-    process.on("SIGTERM", () => {});
+    process.on("SIGTERM", () => {
+      if (mode === "running") for (const [fd, label] of [[1, "stdout"], [2, "stderr"]]) {
+        try { fs.writeSync(fd, "\nshutdown " + label + " diagnostic apiKey=synthetic-drain-secret\n"); }
+        catch { /* The fault matrix can close either parent-side pipe. */ }
+      }
+    });
     setTimeout(() => process.exit(20), 30_000);
     const child = spawn(process.execPath, [process.argv[1], record, phase, mode, "descendant"],
       { stdio: ["ignore", mode === "closed-pipes" ? "ignore" : "inherit", mode === "closed-pipes" ? "ignore" : "inherit", "ipc"] });
     await once(child, "message");
     write("ready", { descendant: child.pid, tempRoot: process.env.OPENCLAW_QA_TEMP_ROOT,
       ...(mode === "failure" ? { submittedKey: input.trim() } : {}) });
+    if (mode === "running") {
+      fs.writeSync(2, "plugin registry still pending apiKey=synthetic-stderr-secret\n::error::stderr diagnostic\nstderr ready\n");
+      fs.writeSync(1, "diagnostic ".repeat(400) + "\nplugin scan still pending Authorization: Bearer synthetic-stdout-secret\n##[error]stdout diagnostic\nstdout ready\n");
+    }
     if (mode !== "running") {
       if (mode === "failure") fs.writeSync(2, "Authorization: Bearer " + input.trim() + "\ncontext retained\n" + "diagnostic ".repeat(400));
       process.stdout.write("fixture-output");
@@ -277,8 +286,8 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     },
   );
 
-  it.each(["timeout", "stdout", "stderr", "process"] as const)(
-    "settles a real CLI tree after %s failure without retaining raw error graphs",
+  it.each(["timeout", "cancel", "stdout", "stderr", "stdin", "process"] as const)(
+    "retains bounded redacted diagnostics after %s failure and settles the real CLI tree",
     async (failure) => {
       const f = await fixture("probe", "running");
       const lifetime = new QaGatewayChildLifecycle();
@@ -290,38 +299,88 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
         runQaGatewayCliCommand({
           ...f.command,
           lifetime,
-          args: ["probe"],
+          args: ["probe", "unlabeled-argv-secret"],
           cwd: f.root,
-          env: { HOME: f.root },
+          env: { HOME: f.root, QA_SYNTHETIC_SECRET: "unlabeled-env-secret" },
+          stdin: failure === "stdin" ? "unlabeled-stdin-secret" : undefined,
         }),
       );
       cleanups.push(async () => {
         await lifetime.stop();
       });
-      await f.ready();
       const child = registration.mock.calls[0]![0];
+      const observed = { stdout: "", stderr: "" };
+      for (const stream of ["stdout", "stderr"] as const) {
+        child[stream]!.on("data", (chunk) => (observed[stream] += String(chunk)));
+      }
+      await f.ready();
+      await vi.waitFor(() => {
+        expect(observed.stdout).toContain("stdout ready");
+        expect(observed.stderr).toContain("stderr ready");
+      });
+      let stopping: Promise<unknown> | undefined;
       if (failure === "timeout") {
         await vi.advanceTimersByTimeAsync(120_000);
+      } else if (failure === "cancel") {
+        stopping = f.track(lifetime.stop());
       } else {
-        const error = new AggregateError(
-          [new Error("unlabeled-nested-secret")],
-          "apiKey=synthetic-stream-secret",
-          { cause: new Error("unlabeled-cause-secret") },
+        const error = Object.assign(
+          new AggregateError(
+            [new Error("unlabeled-nested-secret")],
+            "apiKey=synthetic-stream-secret",
+            { cause: new Error("unlabeled-cause-secret") },
+          ),
+          { spawnargs: ["unlabeled-spawnargs-secret"], env: { key: "unlabeled-error-env-secret" } },
         );
         if (failure === "process") {
           child.emit("error", error);
+        } else if (failure === "stdin") {
+          child.stdin!.emit("error", error);
         } else {
-          child[failure]!.destroy(error);
+          await bounded(
+            new Promise<void>((resolve) => {
+              child[failure]!.once("error", () => resolve());
+              child[failure]!.destroy(error);
+            }),
+          );
         }
       }
+      (failure === "process" ? child.stderr! : child).emit("error", new Error("later failure"));
       const error = await bounded(command);
       expect(error).toBeInstanceOf(Error);
-      expect(String(error)).toContain(
-        failure === "timeout" ? "exceeded 120000ms" : `${failure} failed`,
+      if (!(error instanceof Error)) {
+        throw new Error("expected CLI failure");
+      }
+      expect(error.message).toContain(
+        failure === "timeout"
+          ? "exceeded 120000ms"
+          : failure === "cancel"
+            ? "CLI cancelled"
+            : `${failure} failed`,
       );
+      expect(error.message).not.toContain("later failure");
+      expect(error.message).toContain("plugin registry still pending apiKey=<redacted>");
+      expect(error.message).toContain("plugin scan still pending Authorization: Bearer <redacted>");
+      expect(error.message.indexOf("plugin registry")).toBeLessThan(
+        error.message.indexOf("plugin scan"),
+      );
+      for (const stream of ["stdout", "stderr"] as const) {
+        if (failure !== stream) {
+          expect(error.message).toContain(`shutdown ${stream} diagnostic apiKey=<redacted>`);
+        }
+      }
+      expect(error.message.length).toBeLessThanOrEqual(2_048);
+      expect(error.message).toContain(": :error::stderr diagnostic");
+      expect(error.message).toContain("# #[error]stdout diagnostic");
+      expect(error.message).not.toMatch(/(^|[\r\n])[^\S\r\n]*::/u);
+      expect(error).not.toHaveProperty("cause");
+      expect(error).not.toHaveProperty("errors");
       const diagnostic = inspect(error, { depth: null });
-      expect(diagnostic).not.toMatch(/synthetic-stream-secret|unlabeled-(nested|cause)-secret/u);
+      expect(diagnostic).not.toMatch(/synthetic-[\w-]+-secret|unlabeled-[\w-]+-secret/u);
       f.assertStopped();
+      if (stopping) {
+        expect(await bounded(stopping)).toEqual({ process: "confirmed-stopped", errors: [] });
+      }
       await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
     },
   );

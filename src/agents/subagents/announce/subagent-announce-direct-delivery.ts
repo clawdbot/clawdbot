@@ -179,6 +179,11 @@ export async function sendSubagentAnnounceDirectly(params: {
       isSubagentCompletion &&
       (trustedCompletionEvent?.result.trim() === "(no output)" ||
         hasFailedSubagentNoOutputCompletion(params.internalEvents));
+    const hasSuccessfulTrustedSubagentNoOutputCompletion =
+      hasRequiredSubagentNoOutputCompletion && trustedCompletionEvent?.status === "ok";
+    const textCompletionDirectDeliveryKind = hasFailedTrustedSubagentCompletion
+      ? "failed_notice"
+      : "completed_result";
     const agentMediatedCompletion =
       params.expectsCompletionMessage && isAgentMediatedCompletionSourceTool(sourceToolId);
     const completionRouteRequiresMessageToolDelivery =
@@ -497,11 +502,11 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleNonSilentGatewayPayload &&
       !hasMessagingToolDelivery
     ) {
-      const textDelivery = await tryTextCompletionDirectDelivery();
+      const textDelivery = await tryTextCompletionDirectDelivery(textCompletionDirectDeliveryKind);
       if (textDelivery) {
         return textDelivery;
       }
-      if (hasRequiredSubagentNoOutputCompletion && !hasCompletionSideEffect) {
+      if (hasSuccessfulTrustedSubagentNoOutputCompletion && !hasCompletionSideEffect) {
         return {
           delivered: false,
           path: "direct",
@@ -511,7 +516,7 @@ export async function sendSubagentAnnounceDirectly(params: {
       }
     }
     if (
-      hasRequiredSubagentNoOutputCompletion &&
+      hasSuccessfulTrustedSubagentNoOutputCompletion &&
       !hasVisibleRequiredCompletionReply &&
       hasCompletionSideEffect
     ) {
@@ -531,7 +536,7 @@ export async function sendSubagentAnnounceDirectly(params: {
         subagentDirectMessageCompletionRequiresMessageTool ||
         hasRequiredSubagentNoOutputCompletion)
     ) {
-      if (hasRequiredSubagentNoOutputCompletion) {
+      if (hasSuccessfulTrustedSubagentNoOutputCompletion) {
         return {
           delivered: false,
           path: "direct",
@@ -540,7 +545,9 @@ export async function sendSubagentAnnounceDirectly(params: {
         };
       }
       if (subagentDirectMessageCompletionRequiresMessageTool) {
-        const textDelivery = await tryTextCompletionDirectDelivery();
+        const textDelivery = await tryTextCompletionDirectDelivery(
+          textCompletionDirectDeliveryKind,
+        );
         if (textDelivery) {
           return textDelivery;
         }

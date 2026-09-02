@@ -87,7 +87,7 @@ export function handleMessageEnd(
       rawText: coerceChatContentText(extractEmbeddedAssistantText(assistantMessage)),
       rawThinking: extractAssistantThinking(assistantMessage),
     }));
-    emitAssistantCommentaryStreamData(ctx, assistantMessage);
+    emitAssistantCommentaryStreamData(ctx, assistantMessage, true);
     // Commentary-tagged tool turns can still carry durable reasoning under /reasoning on.
     const suppressedTrimmedReasoning = ctx.state.includeReasoning
       ? extractAssistantThinking(assistantMessage).trim()
@@ -142,7 +142,7 @@ export function handleMessageEnd(
   ctx.resetPartialReplyDirectives();
   const parsedText = parseReplyDirectives(trimmedText);
   // Final media is emitted after the buffered text drains, never on its first chunk.
-  recordPendingAssistantReplyDirectives(ctx.state, { ...parsedText, mediaUrls: undefined });
+  recordPendingAssistantReplyDirectives(ctx.state, parsedText);
   const cleanedText = parsedText.text;
   const { mediaUrls } = resolveSendableOutboundReplyParts(parsedText);
   const managedMediaUrls = resolveManagedStreamMediaUrls(ctx.state, mediaUrls);

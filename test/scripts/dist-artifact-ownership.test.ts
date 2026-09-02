@@ -1,10 +1,14 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  resolveDistArtifactLockPath,
+  withDistArtifactOwnership,
+} from "../../scripts/lib/dist-artifact-ownership.mts";
 import {
   TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -292,6 +296,51 @@ async function runWithProcesses(
 // Native TypeScript emits the declarations. Only
 // process completion is gated; ordering never depends on sleeps or host speed.
 describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
+  it("releases ownership after a native execFileSync ENOENT error", async () => {
+    const root = createCheckout();
+    const error = await withDistArtifactOwnership(root, async () =>
+      execFileSync(path.join(root, "absent-command"), [], { stdio: "pipe" }),
+    ).catch((cause: unknown) => cause);
+    expect(error).toHaveProperty("code", "ENOENT");
+    expect(error).toHaveProperty("error", error);
+    expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "owner.json"))).toBe(false);
+    expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "unjoined"))).toBe(false);
+  });
+
+  it.for(["cause", "error", "cyclic aggregate"])(
+    "retains ownership for unjoined work nested in %s",
+    async (kind, { signal }) => {
+      // Retention deliberately keeps lock handles open; a joined child owns
+      // their disposal rather than leaking them into the shared Vitest worker.
+      await withProcesses(async ({ start }) => {
+        const root = createCheckout();
+        const probe = write(
+          root,
+          "retained-error.mts",
+          `
+          import assert from 'node:assert/strict';
+          import { withDistArtifactOwnership } from ${JSON.stringify(path.join(sourceRoot, "scripts/lib/dist-artifact-ownership.mts"))};
+          const kind = ${JSON.stringify(kind)};
+          const uncertainty = { processTreeState: 'indeterminate' };
+          const aggregate = new AggregateError([], 'sibling cleanup');
+          aggregate.errors.push(aggregate, new Error('command failed', { cause: uncertainty }));
+          const error = kind === 'cyclic aggregate' ? aggregate
+            : new Error('command failed', { cause: kind === 'cause' ? uncertainty : { error: uncertainty } });
+          const outcome = await withDistArtifactOwnership(process.cwd(), async () => {
+            throw error;
+          }).catch(cause => cause);
+          assert.equal(outcome, error);
+        `,
+        );
+        const result = await start(root, probe).done;
+        const directory = resolveDistArtifactLockPath(root);
+        expect(fs.existsSync(path.join(directory, "owner.json"))).toBe(true);
+        expect(fs.existsSync(path.join(directory, "unjoined"))).toBe(true);
+        expect(result.code, result.output).toBe(0);
+      }, signal);
+    },
+  );
+
   it.for([
     { script: "prepare-extension-package-boundary-artifacts.mts", failStagingCleanup: false },
     { script: "write-plugin-sdk-entry-dts.ts", failStagingCleanup: false },

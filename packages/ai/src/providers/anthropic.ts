@@ -671,11 +671,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
               output.stopReason = mapAnthropicStopReason(event.delta.stop_reason);
             }
           }
-          // Only update usage fields if present (not null).
-          // Preserves input_tokens from message_start when proxies omit it in message_delta.
-          if (event.usage) {
-            applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
-          }
+          applyAnthropicMessageDeltaUsage(output.usage, event.usage, messageStartPromptUsage);
           calculateCost(costModel, output.usage);
         }
       }

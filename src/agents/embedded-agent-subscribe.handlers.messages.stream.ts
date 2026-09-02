@@ -212,6 +212,7 @@ export function scopeAssistantMessageToStreamBlock(
 export function emitAssistantCommentaryStreamData(
   ctx: EmbeddedAgentSubscribeContext,
   message: AssistantMessage,
+  finalMessage = false,
 ) {
   const isResponsesCommentary = isResponsesApiAssistantMessage(message);
   const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
@@ -220,7 +221,7 @@ export function emitAssistantCommentaryStreamData(
     ? scopeAssistantMessageToStreamBlock(message, index, itemId)
     : message;
   const text = extractAssistantCommentaryText(commentaryMessage);
-  if (text && (!isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
+  if (text && (finalMessage || !isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
     // Generic commentary must carry the identity the phase tagger generated so
     // the Control UI can key the live row to the persisted fallback row; without
     // it every generic segment is unkeyed and survives as a duplicate.
@@ -234,6 +235,7 @@ export function emitAssistantCommentaryStreamData(
         phase: "commentary",
         itemId: commentaryItemId,
       }),
+      { finalMessage },
     );
   }
 }
@@ -356,7 +358,7 @@ export function resolveStreamingReply(params: {
   previousText: string;
   previousCleaned: string;
   visibleDelta: string;
-  textIsAppend: boolean;
+  appendDelta: string | null;
   parsedStreamDirectives: ReplyDirectiveParseResult | null;
 }): { text: string; delta: string; replace: boolean; hasText: boolean } {
   if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
@@ -373,34 +375,18 @@ export function resolveStreamingReply(params: {
     !params.parsedStreamDirectives.isSilent &&
     !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
     !/(?:^|\n)\s*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
-    params.parsedStreamDirectives.text === params.visibleDelta
+    params.parsedStreamDirectives.text === params.visibleDelta &&
+    params.appendDelta !== null &&
+    params.previousText === params.previousCleaned
   ) {
-    if (params.textIsAppend && params.previousText === params.previousCleaned) {
-      // Reuse the normalized prefix and small delta. Trimming the cumulative
-      // snapshot can flatten it; slicing can retain it in queued updates.
-      delta = params.previousCleaned ? params.visibleDelta.trimEnd() : params.visibleDelta.trim();
-      text = delta === params.visibleDelta ? params.next : `${params.previousCleaned}${delta}`;
-      isAppend = true;
-    } else if (params.textIsAppend && params.previousCleaned === params.previousText.trim()) {
-      text = params.next.trim();
-      isAppend = true;
-    } else {
-      const candidate = `${params.previousCleaned}${params.parsedStreamDirectives.text}`.trim();
-      const normalizedNext = params.next.trim();
-      if (candidate === normalizedNext) {
-        text = normalizedNext;
-        // Appending cannot alter the prior prefix unless trimming removed its whitespace.
-        isAppend =
-          candidate.length >= params.previousCleaned.length &&
-          params.previousCleaned.trimStart().length === params.previousCleaned.length;
-      }
-    }
+    // Visibility and trim owners already prepared this exact append.
+    text = params.next;
+    delta = params.appendDelta;
+    isAppend = true;
   }
 
   text ??= parseReplyDirectives(
-    params.evtType === "text_end"
-      ? params.next.trim()
-      : splitTrailingDirective(params.next.trim()).text,
+    params.evtType === "text_end" ? params.next : splitTrailingDirective(params.next).text,
   ).text;
   const replace = Boolean(
     !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
