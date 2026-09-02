@@ -921,7 +921,7 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
-    gateway: { port: 18789, bind: "127.0.0.1" },
+    gateway: { port: 18789, bind: "127.0.0.1", publicOrigin: "https://gateway.example" },
     agents: { defaults: { thinkingDefault: "medium" } },
     commands: { native: "auto", nativeSkills: "auto" },
     models: { mode: "merge" },
@@ -1041,6 +1041,9 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
         properties: {
           port: { type: "integer", title: "Port", minimum: 1, maximum: 65535 },
           bind: { type: "string", title: "Bind address" },
+          // Zod's .url() emits `format`; keep one such leaf in the fixture so the
+          // form stays provably editable for plugin URL/email settings.
+          publicOrigin: { type: "string", title: "Public origin", format: "uri" },
         },
       },
       agents: {
