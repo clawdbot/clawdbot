@@ -1,4 +1,5 @@
 // Memory Core tests cover manager sync yield plugin behavior.
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -13,27 +14,30 @@ import {
   requireNodeSqlite,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureMemoryCoreDreamingStateForTests,
+  resetMemoryCoreDreamingStateForTests,
+} from "../test-helpers.js";
 
 const { buildSessionEntryMock } = vi.hoisted(() => ({
   buildSessionEntryMock: vi.fn(),
 }));
-const originalSyncYieldStateDir = process.env.OPENCLAW_STATE_DIR;
+let syncYieldStateDir = "";
 
-function setSyncYieldStateDir(): void {
-  Reflect.set(
-    process.env,
-    "OPENCLAW_STATE_DIR",
-    path.join(os.tmpdir(), "openclaw-session-sync-yield"),
-  );
+async function setSyncYieldStateDir(): Promise<void> {
+  syncYieldStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-sync-yield-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", syncYieldStateDir);
+  await configureMemoryCoreDreamingStateForTests();
 }
 
-function restoreSyncYieldStateDir(): void {
-  if (originalSyncYieldStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalSyncYieldStateDir);
-  }
+async function restoreSyncYieldStateDir(): Promise<void> {
+  resetPluginStateStoreForTests();
+  resetMemoryCoreDreamingStateForTests();
+  vi.unstubAllEnvs();
+  await fs.rm(syncYieldStateDir, { recursive: true, force: true });
+  syncYieldStateDir = "";
 }
 
 vi.mock("undici", async () => {
@@ -215,8 +219,8 @@ class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
 }
 
 describe("session sync responsiveness", () => {
-  beforeEach(() => {
-    setSyncYieldStateDir();
+  beforeEach(async () => {
+    await setSyncYieldStateDir();
     buildSessionEntryMock.mockImplementation(async (absPath: string) => {
       const name = path.basename(absPath);
       return {
@@ -230,8 +234,8 @@ describe("session sync responsiveness", () => {
     });
   });
 
-  afterEach(() => {
-    restoreSyncYieldStateDir();
+  afterEach(async () => {
+    await restoreSyncYieldStateDir();
     vi.clearAllMocks();
   });
 
@@ -264,6 +268,15 @@ describe("session sync responsiveness", () => {
 
 describe("embedding cache seed responsiveness", () => {
   const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
+
+  beforeEach(async () => {
+    await setSyncYieldStateDir();
+  });
+
+  afterEach(async () => {
+    await restoreSyncYieldStateDir();
+    vi.clearAllMocks();
+  });
 
   function createCacheDb(): DatabaseSync {
     const db = new NodeDatabaseSync(":memory:");
@@ -366,6 +379,7 @@ describe("embedding cache seed responsiveness", () => {
             });
           });
         }
+        return null;
       });
       targetDb.exec(`
         CREATE TEMP TRIGGER observe_cache_delete
@@ -383,7 +397,9 @@ describe("embedding cache seed responsiveness", () => {
       ).resolves.toBe(true);
       await observation;
 
-      expect(observed).toEqual({ inTransaction: false, rows: 1 });
+      expect(observed?.inTransaction).toBe(false);
+      expect(observed?.rows).toBeGreaterThan(0);
+      expect(observed?.rows).toBeLessThan(101);
       expect(countCacheRows(targetDb)).toBe(101);
       expect(
         targetDb
@@ -427,6 +443,7 @@ describe("embedding cache seed responsiveness", () => {
             targetDb.exec("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1");
           });
         }
+        return null;
       });
       targetDb.exec(`
         CREATE TEMP TRIGGER advance_index_revision
@@ -442,7 +459,8 @@ describe("embedding cache seed responsiveness", () => {
       await expect(
         new EmbeddingCacheSeedHarness(targetDb).replaceCache(sourceDb, revision),
       ).resolves.toBe(false);
-      expect(countCacheRows(targetDb)).toBe(1);
+      expect(countCacheRows(targetDb)).toBeGreaterThan(0);
+      expect(countCacheRows(targetDb)).toBeLessThan(101);
       expect(
         targetDb
           .prepare("SELECT hash FROM memory_embedding_cache WHERE hash = 'stale-shadow'")

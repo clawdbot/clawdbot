@@ -12,7 +12,6 @@ import {
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
-  MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   type MemorySessionSyncTarget,
   type MemoryEntryProvenance,
@@ -20,8 +19,6 @@ import {
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
-import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import {
   resolveEmbeddingProviderIndexIdentity,
@@ -34,8 +31,8 @@ import {
   isMemoryDatabaseReadOnly,
   openMemoryDatabaseAtPath,
   openMemoryDatabaseReadOnlyAtPath,
-  readMemoryDatabaseRevision,
 } from "./manager-db.js";
+import { copyMemoryEmbeddingCache } from "./manager-embedding-cache-copy.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
@@ -103,21 +100,6 @@ export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 const META_KEY = MEMORY_INDEX_META_KEY;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
-const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
-// Production embeddings measured ~28 KB/row; 1,000-row synchronous commits
-// blocked the event loop for seconds. Keep each commit small between yields.
-const EMBEDDING_CACHE_SEED_BATCH_SIZE = 100;
-
-type EmbeddingCacheRow = {
-  rowid: number;
-  provider: string;
-  model: string;
-  provider_key: string;
-  hash: string;
-  embedding: string;
-  dims: number | null;
-  updated_at: number;
-};
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
@@ -655,111 +637,13 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     sourceDb: DatabaseSync,
     expectedRevision?: number,
   ): Promise<boolean> {
-    if (!this.cache.enabled) {
-      return true;
-    }
-    const selectBatch = sourceDb.prepare(
-      `SELECT rowid, provider, model, provider_key, hash, embedding, dims, updated_at
-       FROM ${EMBEDDING_CACHE_TABLE}
-       WHERE rowid > ?
-       ORDER BY rowid
-       LIMIT ?`,
-    );
-    const insert = this.db.prepare(
-      `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
-         embedding=excluded.embedding,
-         dims=excluded.dims,
-         updated_at=excluded.updated_at`,
-    );
-    const runBatch = async (write: () => void): Promise<boolean> => {
-      const transact = () =>
-        runSqliteImmediateTransactionSync(
-          this.db,
-          () => {
-            if (
-              expectedRevision !== undefined &&
-              readMemoryDatabaseRevision(this.db) !== expectedRevision
-            ) {
-              return false;
-            }
-            write();
-            return true;
-          },
-          {
-            operationLabel:
-              expectedRevision === undefined
-                ? "memory.embedding-cache.seed"
-                : "memory.embedding-cache.publish",
-          },
-        );
-      return expectedRevision === undefined
-        ? transact()
-        : await withMemoryWorkspaceLock(this.workspaceDir, async () => transact());
-    };
-    const yieldToEventLoop = async () =>
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-    if (expectedRevision !== undefined) {
-      const deleteBatch = this.db.prepare(
-        `DELETE FROM ${EMBEDDING_CACHE_TABLE}
-         WHERE rowid IN (
-           SELECT rowid FROM ${EMBEDDING_CACHE_TABLE} ORDER BY rowid LIMIT ?
-         )`,
-      );
-      while (true) {
-        let deleted = 0;
-        if (
-          !(await runBatch(() => {
-            deleted = Number(deleteBatch.run(EMBEDDING_CACHE_SEED_BATCH_SIZE).changes);
-          }))
-        ) {
-          return false;
-        }
-        if (deleted === 0) {
-          break;
-        }
-        await yieldToEventLoop();
-      }
-    }
-
-    let lastRowid = 0;
-    while (true) {
-      // Materialize each source page so neither a read cursor nor a write
-      // transaction remains open when control returns to the event loop.
-      const batch = selectBatch.all(
-        lastRowid,
-        EMBEDDING_CACHE_SEED_BATCH_SIZE,
-      ) as EmbeddingCacheRow[];
-      if (batch.length === 0) {
-        return true;
-      }
-      if (
-        !(await runBatch(() => {
-          for (const row of batch) {
-            insert.run(
-              row.provider,
-              row.model,
-              row.provider_key,
-              row.hash,
-              row.embedding,
-              row.dims,
-              row.updated_at,
-            );
-          }
-        }))
-      ) {
-        return false;
-      }
-      lastRowid = batch[batch.length - 1]?.rowid ?? lastRowid;
-      if (batch.length < EMBEDDING_CACHE_SEED_BATCH_SIZE) {
-        return true;
-      }
-      await yieldToEventLoop();
-    }
+    return await copyMemoryEmbeddingCache({
+      sourceDb,
+      targetDb: this.db,
+      cacheEnabled: this.cache.enabled,
+      workspaceDir: this.workspaceDir,
+      expectedRevision,
+    });
   }
 
   protected async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {

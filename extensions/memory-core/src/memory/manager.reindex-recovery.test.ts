@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { registerEmbeddingProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -10,11 +11,12 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
+import { applyShortTermPromotions, type PromotionCandidate } from "../short-term-promotion.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { resetMemoryDatabase } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import type { MemoryIndexManager } from "./manager.js";
+import { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 
 type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
@@ -122,8 +124,118 @@ describe("memory manager reindex recovery", () => {
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const entries = await fs.readdir(path.dirname(databasePath)).catch(() => []);
     const prefix = `${path.basename(databasePath)}.memory-reindex-`;
-    return entries.filter((entry) => entry.startsWith(prefix)).sort();
+    return entries.filter((entry) => entry.startsWith(prefix)).toSorted();
   }
+
+  it("rebuilds automatic maintenance after a concurrent promotion changes memory sources", async () => {
+    const sourcePath = path.join(memoryDir, "alpha.md");
+    await fs.writeFile(sourcePath, "Searchable alpha memory.\n");
+    const memoryManager = await openManager(createCfg({ provider: "none", sources: ["memory"] }));
+    await memoryManager.sync({ reason: "test", force: true });
+    const harness = memoryManager as unknown as ReindexHarness & {
+      closeNativeMemoryWatchPairs: () => void;
+      awaitManagerIdle: () => Promise<void>;
+    };
+    harness.closeNativeMemoryWatchPairs();
+
+    const snippet = "Promoted sapphire routing preference.";
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), `${snippet}\n`);
+    const candidate: PromotionCandidate = {
+      key: "promotion-reindex-race",
+      path: "memory/2026-01-13.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory",
+      snippet,
+      recallCount: 3,
+      signalCount: 3,
+      avgScore: 0.95,
+      maxScore: 0.95,
+      uniqueQueries: 3,
+      firstRecalledAt: "2026-01-12T00:00:00.000Z",
+      lastRecalledAt: "2026-01-13T00:00:00.000Z",
+      ageDays: 0,
+      score: 0.95,
+      recallDays: ["2026-01-12", "2026-01-13"],
+      conceptTags: [],
+      components: {
+        frequency: 1,
+        relevance: 1,
+        diversity: 1,
+        recency: 1,
+        consolidation: 1,
+        conceptual: 0,
+      },
+    };
+    harness.dirty = true;
+    harness.memoryFullRetryDirty = true;
+
+    const shadowReady = createDeferred<void>();
+    const releasePublish = createDeferred<void>();
+    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
+    let syncCalls = 0;
+    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
+      const acquired = await originalGet(params);
+      if (params.purpose !== "maintenance" || !acquired) {
+        return acquired;
+      }
+      const fields = acquired as unknown as {
+        syncMemoryFiles: (params: unknown) => Promise<unknown>;
+      };
+      const syncMemoryFiles = fields.syncMemoryFiles.bind(acquired);
+      vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (syncParams) => {
+        const result = await syncMemoryFiles(syncParams);
+        syncCalls += 1;
+        if (syncCalls === 1) {
+          shadowReady.resolve();
+          await releasePublish.promise;
+        }
+        return result;
+      });
+      return acquired;
+    });
+
+    try {
+      const search = memoryManager.search("searchable alpha", { maxResults: 5, minScore: 0 });
+      await shadowReady.promise;
+      const refreshedSource = "Searchable alpha memory refreshed after the shadow build.";
+      await fs.writeFile(sourcePath, `${refreshedSource}\n`);
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: [candidate],
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(applied).toMatchObject({ applied: 1, appended: 1 });
+      releasePublish.resolve();
+
+      await expect(search).resolves.toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "memory/alpha.md" })]),
+      );
+      await harness.awaitManagerIdle();
+      expect(syncCalls).toBe(2);
+      expect(memoryManager.status()).toMatchObject({ dirty: false, lastSyncError: undefined });
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8");
+      expect(memoryText.match(/openclaw-memory-promotion:promotion-reindex-race/gu)).toHaveLength(
+        1,
+      );
+      expect(
+        harness.db
+          .prepare("SELECT text FROM memory_index_chunks WHERE path = 'MEMORY.md' AND text LIKE ?")
+          .all(`%${snippet}%`),
+      ).toHaveLength(1);
+      expect(
+        harness.db
+          .prepare("SELECT text FROM memory_index_chunks WHERE path = 'memory/alpha.md'")
+          .get(),
+      ).toMatchObject({ text: refreshedSource });
+    } finally {
+      releasePublish.resolve();
+      await harness.awaitManagerIdle();
+      getSpy.mockRestore();
+    }
+  });
 
   it("restores retry state after a shadow full reindex fails late", async () => {
     const memoryManager = await openManager(
@@ -283,12 +395,13 @@ describe("memory manager reindex recovery", () => {
             }),
         ),
       );
+      let timeout: ReturnType<typeof setTimeout> | undefined;
       const outcome = await Promise.race([
         searches.then((results) => ({ kind: "results" as const, results })),
         new Promise<{ kind: "timeout" }>((resolve) => {
-          setTimeout(() => resolve({ kind: "timeout" }), 1_000);
+          timeout = setTimeout(() => resolve({ kind: "timeout" }), 1_000);
         }),
-      ]);
+      ]).finally(() => clearTimeout(timeout));
 
       expect(outcome.kind).toBe("results");
       if (outcome.kind === "results") {
@@ -679,14 +792,14 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const emptySyncPlan = { indexItems: [], finalize: () => undefined };
     const memorySyncCalls: Array<{ needsFullReindex: boolean }> = [];
+    const syncMemoryFiles = harness.syncMemoryFiles.bind(memoryManager);
 
     harness.dirty = true;
     harness.memoryFullRetryDirty = true;
     harness.syncMemoryFiles = async (params: { needsFullReindex: boolean }) => {
       memorySyncCalls.push(params);
-      return emptySyncPlan;
+      return await syncMemoryFiles(params);
     };
 
     await harness.sync({ reason: "test" });

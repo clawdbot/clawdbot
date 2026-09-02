@@ -8,6 +8,8 @@ import type {
   MemoryPublishWorkerResult,
 } from "./manager-publish.worker.js";
 
+const MEMORY_PUBLISH_WORKER_TIMEOUT_MS = 5 * 60_000;
+
 function isResult(value: unknown): value is MemoryPublishWorkerResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -43,7 +45,6 @@ export async function publishMemoryDatabaseInWorker(
   const workerUrl = resolveRuntimeWorkerUrl(memoryPublishWorkerEntrypoint);
   const worker = new Worker(workerUrl, {
     workerData: input,
-    env: {},
     execArgv: resolveSourceWorkerExecArgv(workerUrl),
     stdout: true,
     stderr: true,
@@ -52,19 +53,29 @@ export async function publishMemoryDatabaseInWorker(
   worker.stderr.resume();
   return await new Promise<number>((resolve, reject) => {
     let settled = false;
-    const finish = (action: () => void) => {
+    const settle = (action: () => void) => {
       if (settled) {
         return;
       }
       settled = true;
-      worker.removeAllListeners();
-      action();
+      clearTimeout(timeout);
+      // Wait for the worker to release every runtime/native handle before the
+      // caller drops its workspace lease or removes the shadow database.
+      // Retain the error listener until then: termination can race startup errors.
+      const complete = () => {
+        worker.removeAllListeners();
+        action();
+      };
+      void worker.terminate().then(
+        () => complete(),
+        () => complete(),
+      );
     };
+    const timeout = setTimeout(() => {
+      settle(() => reject(new Error("memory publish worker timed out")));
+    }, MEMORY_PUBLISH_WORKER_TIMEOUT_MS);
     worker.once("message", (message: unknown) => {
-      finish(() => {
-        // The worker closes SQLite before posting its one result. Terminating here
-        // prevents loader/runtime handles from retaining an otherwise finished worker.
-        void worker.terminate();
+      settle(() => {
         if (!isResult(message)) {
           reject(new Error("memory publish worker returned an invalid result"));
         } else if (message.status === "ok") {
@@ -76,12 +87,14 @@ export async function publishMemoryDatabaseInWorker(
         }
       });
     });
-    worker.once("error", (error) => finish(() => reject(error)));
+    worker.once("error", (error) =>
+      settle(() => reject(error instanceof Error ? error : new Error(String(error)))),
+    );
     worker.once("exit", (code) => {
       if (code !== 0) {
-        finish(() => reject(new Error(`memory publish worker exited with code ${code}`)));
+        settle(() => reject(new Error(`memory publish worker exited with code ${code}`)));
       } else {
-        finish(() => reject(new Error("memory publish worker exited without a result")));
+        settle(() => reject(new Error("memory publish worker exited without a result")));
       }
     });
   });

@@ -7,7 +7,7 @@ import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -19,6 +19,7 @@ import {
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
   MemoryIndexRevisionConflictError,
+  removeMemoryDatabaseFiles,
   resetMemoryDatabase,
 } from "./manager-db.js";
 import { publishMemoryDatabaseInWorker } from "./manager-publish-subprocess.js";
@@ -49,6 +50,7 @@ describe("memory manager database publication", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -409,7 +411,7 @@ describe("memory manager database publication", () => {
     }
   });
 
-  it("rejects a stale shadow publish after a concurrent live memory update", async () => {
+  it("maps a worker revision conflict and preserves the concurrent live update", async () => {
     const targetPath = path.join(fixtureRoot, "target.sqlite");
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
     const targetDb = new DatabaseSync(targetPath);
@@ -438,11 +440,12 @@ describe("memory manager database publication", () => {
       concurrentDb.close();
       concurrentDb = undefined;
 
-      const publication = publishMemoryDatabaseTables({
-        targetDb,
+      const publication = publishMemoryDatabaseInWorker({
+        databasePath: targetPath,
         sourcePath,
         metaKey: "memory_index_meta",
         expectedRevision,
+        vectorIndexComplete: false,
       });
       await expect(publication).rejects.toBeInstanceOf(MemoryIndexRevisionConflictError);
       await expect(publication).rejects.toThrow(/changed while full reindex was building/);
@@ -552,7 +555,10 @@ describe("memory manager database publication", () => {
       });
       const walPath = `${targetPath}-wal`;
       let writerEntered = false;
-      for (let attempt = 0; attempt < 500 && !settled; attempt += 1) {
+      for (let attempt = 0; attempt < 500; attempt += 1) {
+        if (settled) {
+          break;
+        }
         const walSize = await fs.stat(walPath).then(
           (stat) => stat.size,
           () => 0,
@@ -561,7 +567,9 @@ describe("memory manager database publication", () => {
           writerEntered = true;
           break;
         }
-        await new Promise<void>((resolve) => setTimeout(resolve, 2));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 2);
+        });
       }
 
       expect(writerEntered).toBe(true);
@@ -576,6 +584,10 @@ describe("memory manager database publication", () => {
       expect(targetDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
         count: 10000,
       });
+      await removeMemoryDatabaseFiles(sourcePath);
+      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+        await expectPathMissing(`${sourcePath}${suffix}`);
+      }
     } finally {
       try {
         closeMemoryDatabase(sourceDb);
@@ -613,5 +625,93 @@ describe("memory manager database publication", () => {
       }
     }
     await expect(fs.readFile(unrelated, "utf8")).resolves.toBe("retained");
+  });
+
+  it("discovers and removes a shadow from sidecars after its base was already removed", async () => {
+    const databasePath = path.join(fixtureRoot, "agent.sqlite");
+    const shadow = `${databasePath}.memory-reindex-11111111-2222-3333-4444-555555555555`;
+    await fs.writeFile(`${shadow}-wal`, "orphan");
+    await fs.writeFile(`${shadow}-shm`, "orphan");
+
+    const lock = await waitForMemoryReindexLock(databasePath);
+    try {
+      await cleanupMemoryReindexTempFiles(databasePath);
+    } finally {
+      lock.release();
+    }
+
+    await expectPathMissing(`${shadow}-wal`);
+    await expectPathMissing(`${shadow}-shm`);
+  });
+
+  it("retries transient sidecar deletion and removes the complete database family", async () => {
+    const databasePath = path.join(fixtureRoot, "shadow.sqlite");
+    const paths = ["", "-wal", "-shm", "-journal"].map((suffix) => `${databasePath}${suffix}`);
+    await Promise.all(paths.map(async (filePath) => await fs.writeFile(filePath, "orphan")));
+    const remove = fs.rm.bind(fs);
+    let walAttempts = 0;
+    vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+      if (String(filePath).endsWith("-wal") && walAttempts++ === 0) {
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      }
+      return await remove(filePath, options);
+    });
+
+    await removeMemoryDatabaseFiles(databasePath);
+
+    expect(walAttempts).toBe(2);
+    for (const filePath of paths) {
+      await expectPathMissing(filePath);
+    }
+  });
+
+  it("attempts every sidecar deletion before reporting a permanent failure", async () => {
+    const databasePath = path.join(fixtureRoot, "shadow.sqlite");
+    const paths = ["", "-wal", "-shm", "-journal"].map((suffix) => `${databasePath}${suffix}`);
+    await Promise.all(paths.map(async (filePath) => await fs.writeFile(filePath, "orphan")));
+    const remove = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+      if (String(filePath).endsWith("-wal")) {
+        throw Object.assign(new Error("permanent deletion failure"), { code: "EIO" });
+      }
+      return await remove(filePath, options);
+    });
+
+    await expect(removeMemoryDatabaseFiles(databasePath)).rejects.toBeInstanceOf(AggregateError);
+    await expect(fs.readFile(`${databasePath}-wal`, "utf8")).resolves.toBe("orphan");
+    for (const filePath of paths.filter((entry) => !entry.endsWith("-wal"))) {
+      await expectPathMissing(filePath);
+    }
+  });
+
+  it("continues cleaning later shadow families after a permanent failure", async () => {
+    const databasePath = path.join(fixtureRoot, "agent.sqlite");
+    const firstShadow = `${databasePath}.memory-reindex-11111111-2222-3333-4444-555555555555`;
+    const secondShadow = `${databasePath}.memory-reindex-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`;
+    const suffixes = ["", "-wal", "-shm", "-journal"];
+    await Promise.all(
+      [firstShadow, secondShadow].flatMap((shadow) =>
+        suffixes.map(async (suffix) => await fs.writeFile(`${shadow}${suffix}`, "orphan")),
+      ),
+    );
+    const remove = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
+      if (String(filePath) === `${firstShadow}-wal`) {
+        throw Object.assign(new Error("permanent deletion failure"), { code: "EIO" });
+      }
+      return await remove(filePath, options);
+    });
+
+    await expect(cleanupMemoryReindexTempFiles(databasePath)).rejects.toBeInstanceOf(
+      AggregateError,
+    );
+
+    await expect(fs.readFile(`${firstShadow}-wal`, "utf8")).resolves.toBe("orphan");
+    for (const suffix of suffixes.filter((suffix) => suffix !== "-wal")) {
+      await expectPathMissing(`${firstShadow}${suffix}`);
+    }
+    for (const suffix of suffixes) {
+      await expectPathMissing(`${secondShadow}${suffix}`);
+    }
   });
 });

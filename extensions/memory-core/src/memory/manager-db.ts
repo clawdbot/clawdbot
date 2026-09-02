@@ -345,8 +345,16 @@ async function removeMemoryDatabaseFile(filePath: string): Promise<void> {
 
 /** Remove one closed shadow memory database and its journal-mode sidecars. */
 export async function removeMemoryDatabaseFiles(dbPath: string): Promise<void> {
+  const errors: unknown[] = [];
   for (const suffix of MEMORY_DATABASE_FILE_SUFFIXES) {
-    await removeMemoryDatabaseFile(`${dbPath}${suffix}`);
+    try {
+      await removeMemoryDatabaseFile(`${dbPath}${suffix}`);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, `Failed to remove memory database files for ${dbPath}`);
   }
 }
 
@@ -367,8 +375,16 @@ export async function cleanupMemoryReindexTempFiles(dbPath: string): Promise<voi
     }
   }
 
-  for (const shadowBaseName of shadowBaseNames) {
-    await removeMemoryDatabaseFiles(path.join(dir, shadowBaseName));
+  const errors: unknown[] = [];
+  for (const shadowBaseName of [...shadowBaseNames].toSorted()) {
+    try {
+      await removeMemoryDatabaseFiles(path.join(dir, shadowBaseName));
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, `Failed to clean memory reindex shadows for ${dbPath}`);
   }
 }
 

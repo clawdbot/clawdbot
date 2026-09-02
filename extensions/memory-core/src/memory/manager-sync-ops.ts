@@ -22,6 +22,7 @@ import {
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import {
   closeMemoryDatabase,
+  MemoryIndexRevisionConflictError,
   openMemoryDatabaseAtPath,
   readMemoryDatabaseRevision,
   removeMemoryDatabaseFiles,
@@ -41,6 +42,7 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { inspectMemorySourceState } from "./manager-source-state.js";
 import { MemoryManagerSourceSyncOps } from "./manager-source-sync-ops.js";
 import { MEMORY_INDEX_META_KEY, type MemorySyncProgressState } from "./manager-sync-base.js";
 import {
@@ -517,7 +519,8 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const originalDb = this.db;
     let tempDb: DatabaseSync | undefined;
     let tempDbClosed = false;
-    let operationError: unknown;
+    let operationError: Error | undefined;
+    let cleanupError: Error | undefined;
     const originalRetryState = this.snapshotReindexRetryState();
     const shouldRetryMemoryOnFailure = this.sources.has("memory");
     const shouldRetrySessionsOnFailure = this.shouldSyncSessions(
@@ -615,18 +618,34 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
       closeMemoryDatabase(tempDb);
       tempDbClosed = true;
-      const publishedRevision = await withMemoryWorkspaceLock(
-        this.workspaceDir,
-        async () =>
-          await publishMemoryDatabaseInWorker({
-            databasePath: dbPath,
-            sourcePath: tempDbPath,
-            metaKey: MEMORY_INDEX_META_KEY,
-            expectedRevision: originalRevision,
-            vectorExtensionPath: shadow.vector.extensionPath,
-            vectorIndexComplete: rebuilt.vectorIndexComplete,
-          }),
-      );
+      const publishedRevision = await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+        if (shouldRetryMemoryOnFailure) {
+          const sourceDb = openMemoryDatabaseAtPath(tempDbPath, false);
+          try {
+            const sourceInspection = await inspectMemorySourceState({
+              db: sourceDb,
+              workspaceDir: this.workspaceDir,
+              settings: this.settings,
+              concurrency: this.getIndexConcurrency(),
+            });
+            if (sourceInspection.dirty) {
+              throw new MemoryIndexRevisionConflictError(
+                "Memory sources changed while full reindex was building; retry the full reindex.",
+              );
+            }
+          } finally {
+            closeMemoryDatabase(sourceDb);
+          }
+        }
+        return await publishMemoryDatabaseInWorker({
+          databasePath: dbPath,
+          sourcePath: tempDbPath,
+          metaKey: MEMORY_INDEX_META_KEY,
+          expectedRevision: originalRevision,
+          vectorExtensionPath: shadow.vector.extensionPath,
+          vectorIndexComplete: rebuilt.vectorIndexComplete,
+        });
+      });
 
       this.database.lastMetaSerialized = null;
       this.resetVectorState();
@@ -650,12 +669,16 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           if (cacheSourceDb) {
             try {
               closeMemoryDatabase(cacheSourceDb);
-            } catch {}
+            } catch (err) {
+              // Canonical publication committed, but the shadow cannot be safely
+              // deleted until every derivative-cache reader releases its handle.
+              cleanupError = err instanceof Error ? err : new Error(String(err));
+            }
           }
         }
       }
     } catch (err) {
-      operationError = err;
+      operationError = err instanceof Error ? err : new Error(String(err));
       if (tempDb && !tempDbClosed) {
         try {
           closeMemoryDatabase(tempDb);
@@ -667,32 +690,37 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         memory: shouldRetryMemoryOnFailure,
         sessions: shouldRetrySessionsOnFailure,
       });
-      throw err;
-    } finally {
-      let cleanupError: unknown;
-      if (tempDb && !tempDbClosed) {
-        try {
-          closeMemoryDatabase(tempDb);
-        } catch (err) {
-          cleanupError = err;
-        }
-      }
+    }
+
+    if (tempDb && !tempDbClosed) {
       try {
-        await removeMemoryDatabaseFiles(tempDbPath);
+        closeMemoryDatabase(tempDb);
       } catch (err) {
+        const closeError = err instanceof Error ? err : new Error(String(err));
         cleanupError = cleanupError
-          ? new AggregateError([cleanupError, err], "memory reindex shadow cleanup failed")
-          : err;
+          ? new AggregateError([cleanupError, closeError], "memory reindex shadow close failed")
+          : closeError;
       }
-      if (cleanupError) {
-        if (operationError) {
-          throw new AggregateError(
-            [operationError, cleanupError],
-            "memory reindex and shadow cleanup failed",
-          );
-        }
-        throw cleanupError;
-      }
+    }
+    try {
+      await removeMemoryDatabaseFiles(tempDbPath);
+    } catch (err) {
+      const removeError = err instanceof Error ? err : new Error(String(err));
+      cleanupError = cleanupError
+        ? new AggregateError([cleanupError, removeError], "memory reindex shadow cleanup failed")
+        : removeError;
+    }
+    if (cleanupError && operationError) {
+      throw new AggregateError(
+        [operationError, cleanupError],
+        "memory reindex and shadow cleanup failed",
+      );
+    }
+    if (cleanupError) {
+      throw cleanupError;
+    }
+    if (operationError) {
+      throw operationError;
     }
   }
 }

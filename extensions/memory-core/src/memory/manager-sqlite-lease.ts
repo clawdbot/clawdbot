@@ -1,14 +1,11 @@
 // Memory Core owns crash-safe SQLite coordination leases shared across processes.
 import type { DatabaseSync } from "node:sqlite";
 import { extractErrorCode, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type MemorySqliteLeaseHandle = {
   release: () => void;
 };
-
-const MEMORY_SQLITE_LEASE_RETRY_DELAY_MS = 25;
 
 function isSqliteBusyError(err: unknown): boolean {
   const code = extractErrorCode(err);
@@ -78,47 +75,4 @@ export function tryAcquireMemorySqliteLease(
     throw err;
   }
   return createMemorySqliteLeaseHandle(database, true);
-}
-
-/** Acquire writer admission without dropping PENDING intent after the first reader collision. */
-export async function acquireMemorySqliteWriterLease(
-  location: string,
-  signal?: AbortSignal,
-): Promise<MemorySqliteLeaseHandle> {
-  while (true) {
-    signal?.throwIfAborted();
-    const database = openMemoryLeaseDatabase(location);
-    try {
-      database.exec("PRAGMA locking_mode = EXCLUSIVE");
-      database.exec("BEGIN IMMEDIATE");
-      // Rewriting the unchanged header field creates a schema-free write transaction.
-      // A blocked commit retains SQLite's PENDING lock so later readers cannot overtake it.
-      database.exec("PRAGMA user_version = 0");
-    } catch (err) {
-      database.close();
-      if (!isSqliteBusyError(err)) {
-        throw err;
-      }
-      await sleepWithAbort(MEMORY_SQLITE_LEASE_RETRY_DELAY_MS, signal);
-      continue;
-    }
-
-    while (true) {
-      try {
-        database.exec("COMMIT");
-        return createMemorySqliteLeaseHandle(database, false);
-      } catch (err) {
-        if (!isSqliteBusyError(err)) {
-          createMemorySqliteLeaseHandle(database, true).release();
-          throw err;
-        }
-        try {
-          await sleepWithAbort(MEMORY_SQLITE_LEASE_RETRY_DELAY_MS, signal);
-        } catch (sleepError) {
-          createMemorySqliteLeaseHandle(database, true).release();
-          throw sleepError;
-        }
-      }
-    }
-  }
 }

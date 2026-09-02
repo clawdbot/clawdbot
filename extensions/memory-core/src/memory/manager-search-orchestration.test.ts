@@ -107,6 +107,10 @@ describe("memory index", () => {
       expect(manager.status().chunks).toBe(publishedChunks);
       const lexical = await manager.search("zebra", { lexicalOnly: true, minScore: 0 });
       expect(lexical.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+      await fs.writeFile(
+        path.join(fixture.paths.memory, "2026-01-12.md"),
+        "# Log\nBeta rebuilt generation.",
+      );
       const result = await syncMemoryFiles(params);
       shadowReady.resolve();
       await releaseReindex.promise;
@@ -125,7 +129,7 @@ describe("memory index", () => {
     let search: ReturnType<typeof manager.search> | undefined;
     let reindex: ReturnType<typeof manager.sync> | undefined;
     try {
-      search = manager.search("semantic needle without lexical overlap");
+      search = manager.search("beta semantic needle without lexical overlap");
       await queryStarted.promise;
       reindex = manager.sync({ reason: "test", force: true });
       await shadowReady.promise;
@@ -138,7 +142,12 @@ describe("memory index", () => {
 
       releaseChild.resolve();
       const results = await search;
-      expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+      expect(
+        results.some(
+          (entry) =>
+            entry.path === "memory/2026-01-12.md" && entry.snippet.includes("rebuilt generation"),
+        ),
+      ).toBe(true);
       expect(queryCalls).toBe(2);
       expect(childCalls).toBe(2);
     } finally {

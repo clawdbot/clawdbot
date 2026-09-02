@@ -1,4 +1,5 @@
 // Worker-thread boundary for synchronous shadow-index publication.
+/* oxlint-disable unicorn/require-post-message-target-origin -- Worker MessagePort has no target origin. */
 import { parentPort, workerData } from "node:worker_threads";
 import {
   closeMemoryDatabase,
@@ -70,11 +71,15 @@ if (!publishPort) {
   throw new Error("memory publish worker requires a parent port");
 }
 void run(workerData).then(
-  (result) => publishPort.postMessage(result),
-  (error: unknown) =>
-    publishPort.postMessage({
+  (result) => {
+    publishPort.postMessage(result);
+  },
+  (error: unknown) => {
+    const failure = {
       status: "failed",
       code: "failed",
       error: error instanceof Error ? error.message : String(error),
-    } satisfies MemoryPublishWorkerResult),
+    } satisfies MemoryPublishWorkerResult;
+    publishPort.postMessage(failure);
+  },
 );

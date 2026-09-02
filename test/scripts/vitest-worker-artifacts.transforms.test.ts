@@ -75,6 +75,12 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
                 "dist/extensions/memory-core/memory-search-knn.child.js",
               ),
             );
+            expect(fileURLToPath(observed.publish)).toBe(
+              path.join(
+                generationDirectory,
+                "dist/extensions/memory-core/memory-publish.worker.js",
+              ),
+            );
             // Each completed repository invocation must dispose before the next starts.
             expect(fs.existsSync(generationDirectory)).toBe(false);
           } else {
@@ -85,6 +91,9 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             expect(observed.args.slice(0, 2)).toEqual(["--import", "tsx"]);
             expect(fileURLToPath(observed.knn)).toBe(
               path.join(root, "extensions/memory-core/src/memory/manager-search-knn.child.ts"),
+            );
+            expect(fileURLToPath(observed.publish)).toBe(
+              path.join(root, "extensions/memory-core/src/memory/manager-publish.worker.ts"),
             );
           }
           console.log(

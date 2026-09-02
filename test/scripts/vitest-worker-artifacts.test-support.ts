@@ -230,6 +230,7 @@ export function workerProbe(
     import { it, expect, vi, inject } from 'vitest';
     import {value} from '#fixture-value';
     import { runtimeProcessEntrypoints } from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
+    import { memoryPublishWorkerEntrypoint } from ${JSON.stringify(path.join(root, "extensions/memory-core/src/memory/manager-publish-entrypoint.ts"))};
     import { vectorKnnProcessEntrypoint } from ${JSON.stringify(path.join(root, "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts"))};
     import { runtimeProcessBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/runtime-process-build-entries.mts"))};
     import { vitestWorkerBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-build-entries.mts"))};
@@ -254,7 +255,8 @@ export function workerProbe(
       const launcherArgv = inject('launcherArgv');
       expect(path.isAbsolute(launcherArgv[1])).toBe(true);
       expect(path.basename(launcherArgv[1])).toBe('vitest.mjs');
-      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(Object.keys(runtimeProcessEntrypoints).length + 2);
+      const publishEntryKey = memoryPublishWorkerEntrypoint.distWorkerPath.slice(0, -3);
+      expect(runtimeProcessBuildEntries[publishEntryKey]).toBe(${JSON.stringify(path.join(root, "extensions/memory-core/src/memory/manager-publish.worker.ts"))});
       for (const source of Object.values(runtimeProcessBuildEntries)) {
         expect(source).not.toContain('/dist/');
         expect(source).toMatch(/\\.ts$/);
@@ -294,7 +296,7 @@ export function workerProbe(
           }
           expect(args.includes('tsx')).toBe(sourceMode);
           expect(args[sourceMode ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
-          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
+          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href, publish:resolveRuntimeWorkerUrl(memoryPublishWorkerEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {
