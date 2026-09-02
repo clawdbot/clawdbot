@@ -115,26 +115,25 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  // "optional" is the run consumer's declaration that no user-facing reply is
-  // owed (e.g. cron without a delivery route). Silence after side-effecting
-  // tools is intentional there; retry is replay-unsafe, so erroring would mark
-  // successful tool-only runs as failures.
+  // Optional runs owe no reply. An explicit silent reply also closes a
+  // successful side-effecting tool turn; replaying it could repeat the effect.
   const terminalReplyOptional = params.terminalReplyExpectation === "optional";
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
+  const explicitSilentReply =
+    params.payloadCount === 0 &&
+    assistant?.stopReason !== "error" &&
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts);
+  const tolerateSideEffects = terminalReplyOptional || explicitSilentReply;
   if (
     !params.allowEmptyAssistantReplyAsSilent ||
-    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: terminalReplyOptional })
+    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects })
   ) {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
-  const assistant = resolveCurrentAttemptAssistant(params.attempt);
-  if (
-    params.payloadCount === 0 &&
-    assistant?.stopReason !== "error" &&
-    hasOnlySilentAssistantReply(params.attempt.assistantTexts)
-  ) {
+  if (explicitSilentReply) {
     return true;
   }
   // A visible turn owes a reply unless the model explicitly chose NO_REPLY.
