@@ -239,6 +239,25 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.settings-section__actions .model-providers__refresh-button {
+  width: 20px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: var(--control-ui-text-xs);
+}
+
+.model-providers__refresh-button svg {
+  width: 1em;
+  height: 1em;
+}
+
+@media (min-width: 641px) {
+  .settings-section__header:has(.model-providers__refresh-button) {
+    align-items: center;
+  }
+}
+
 .model-providers__defaults .model-picker {
   width: min(420px, 100%);
 }
