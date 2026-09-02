@@ -417,19 +417,19 @@ describe("followup queue drain restart after idle window", () => {
     resetGatewayWorkAdmission();
     const key = `test-restart-signal-rollback-${Date.now()}`;
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
-    const firstFailed = createDeferred();
+    const firstFailed =
+      createDeferred<NonNullable<ReturnType<typeof beginGatewayRestartSignalAdmission>>>();
     const delivered = createDeferred();
     let attempts = 0;
-    let signal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
 
     const runFollowup = async () => {
       attempts += 1;
       if (attempts === 1) {
-        signal = beginGatewayRestartSignalAdmission();
+        const signal = beginGatewayRestartSignalAdmission();
         if (!signal) {
           throw new Error("expected restart-signal fence");
         }
-        firstFailed.resolve();
+        firstFailed.resolve(signal);
         throw new GatewayDrainingError();
       }
       delivered.resolve();
@@ -438,13 +438,13 @@ describe("followup queue drain restart after idle window", () => {
     try {
       enqueueFollowupRun(key, createRun({ prompt: "queued during pending restart" }), settings);
       scheduleFollowupDrain(key, runFollowup);
-      await firstFailed.promise;
+      const signal = await firstFailed.promise;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
       expect(attempts).toBe(1);
       expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
-      expect(signal?.rollback()).toBe(true);
+      expect(signal.rollback()).toBe(true);
       await vi.waitFor(() => {
         expect(attempts).toBe(2);
       });
