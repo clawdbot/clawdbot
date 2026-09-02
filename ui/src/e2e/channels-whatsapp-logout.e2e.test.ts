@@ -94,7 +94,10 @@ suite.define(() => {
         });
 
         expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
-        await page.locator("button.channels-item", { hasText: "WhatsApp" }).click();
+        await page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
+          .first()
+          .click();
         const detail = page.locator(".channels-detail");
         await detail.getByRole("switch", { name: "Enabled" }).waitFor();
         if (captureUiProofEnabled) {
@@ -166,7 +169,10 @@ suite.define(() => {
         });
 
         expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
-        await page.locator("button.channels-item", { hasText: "WhatsApp" }).click();
+        await page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
+          .first()
+          .click();
         const detail = page.locator(".channels-detail");
         const relink = detail.getByRole("button", { name: "Relink" });
         await relink.waitFor();
@@ -246,7 +252,9 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/channels`);
         expect(response?.status()).toBe(200);
-        const channel = page.locator("button.channels-item", { hasText: "WhatsApp" });
+        const channel = page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
+          .first();
         await channel.click();
         const detail = page.locator(".channels-detail");
         await detail.waitFor();
@@ -356,7 +364,10 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/channels`);
-      await page.locator("button.channels-item", { hasText: "WhatsApp" }).click();
+      await page
+        .locator("button.channels-item, button.channels-item__detail", { hasText: "WhatsApp" })
+        .first()
+        .click();
       const detail = page.locator(".channels-detail");
       await detail.waitFor();
       await detail.getByRole("button", { name: "Logout" }).click();
@@ -456,7 +467,10 @@ suite.define(() => {
         telegram: ["@alpha_bot", "@work_bot", "2"],
       };
       for (const [channelId, label] of channelEntries) {
-        await page.locator("button.channels-item", { hasText: label }).click();
+        await page
+          .locator("button.channels-item, button.channels-item__detail", { hasText: label })
+          .first()
+          .click();
         const detail = page.locator(".channels-detail");
         await expect
           .poll(() => detail.locator("h2.settings-section__heading").textContent())
