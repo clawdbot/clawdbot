@@ -81,7 +81,10 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import {
+  appendTranscriptEventsInTransaction,
+  ensureTranscriptHeader,
+} from "./session-accessor.sqlite-transcript-store.js";
 import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -379,6 +382,7 @@ export async function applySessionEntryLifecycleMutation(params: {
         expectedEntry,
         routeContext,
         resetBoundary,
+        resetBoundaryCwd,
       } of projected.upsertedEntries) {
         const sameKeyRemoval = validatedRemovals.find(
           (removal) => removal.sessionKey === sessionKey,
@@ -402,17 +406,20 @@ export async function applySessionEntryLifecycleMutation(params: {
           throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
         }
         if (resetBoundary && expectedEntry?.sessionId) {
+          const boundaryScope = { ...resolved, sessionId: expectedEntry.sessionId, sessionKey };
+          // Same empty-window hazard as the single-target reset path: the
+          // boundary must not become seq 0, or the window stays permanently
+          // headerless and is rejected as a legacy transcript on every load.
+          ensureTranscriptHeader(transactionDb, boundaryScope, resetBoundaryCwd);
           const event = buildSessionResetBoundaryEvent({
             events: loadTranscriptEventsFromDatabase(transactionDb, expectedEntry.sessionId, {
               projection: "reset-boundary",
             }),
             ...resetBoundary,
           });
-          const appended = appendTranscriptEventsInTransaction(
-            transactionDb,
-            { ...resolved, sessionId: expectedEntry.sessionId, sessionKey },
-            [event],
-          );
+          const appended = appendTranscriptEventsInTransaction(transactionDb, boundaryScope, [
+            event,
+          ]);
           if (appended !== 1) {
             throw new Error(`Failed to append reset boundary for ${sessionKey}`);
           }

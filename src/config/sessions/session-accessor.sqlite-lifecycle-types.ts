@@ -44,6 +44,8 @@ export type ProjectedLifecycleMutation = {
     expectedEntry: SessionEntry | undefined;
     routeContext?: ConversationRouteContext | null;
     resetBoundary?: SessionResetBoundaryRequest;
+    /** Session workspace for a header created at reset time. */
+    resetBoundaryCwd?: string;
     sessionKey: string;
   }>;
 };

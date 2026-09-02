@@ -420,6 +420,9 @@ export async function projectSessionEntryLifecycleMutation(
       entry: cloned,
       ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
       ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
+      ...(upsert.resetBoundary && upsert.resetBoundaryCwd
+        ? { resetBoundaryCwd: upsert.resetBoundaryCwd }
+        : {}),
     });
   }
   if (projectedRemovals.length === 0) {

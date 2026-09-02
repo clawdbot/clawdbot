@@ -74,6 +74,8 @@ export async function persistSessionResetLifecycle(params: {
   agentId?: string;
   cleanupPreviousTranscript?: boolean;
   nextEntry: SessionEntry;
+  /** Session workspace recorded in a header created for an empty window at reset time. */
+  resetBoundaryCwd?: string;
   nextSessionFile: string;
   previousEntry: SessionEntry;
   previousSessionId?: string;
@@ -89,6 +91,7 @@ export async function persistSessionResetLifecycle(params: {
         sessionKey: params.sessionKey,
         entry: params.nextEntry,
         resetBoundary: { context: "preserve-tail", reason: "reset" },
+        ...(params.resetBoundaryCwd ? { resetBoundaryCwd: params.resetBoundaryCwd } : {}),
       },
     ],
     skipMaintenance: true,
@@ -188,6 +191,8 @@ export async function commitReplySessionInitialization(params: {
   /** Authoritative contextual route facts observed by the admitted inbound turn. */
   routeContext?: ConversationRouteContext | null;
   resetBoundary?: SessionResetBoundaryRequest;
+  /** Session workspace recorded in a header created for an empty window at reset time. */
+  resetBoundaryCwd?: string;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
@@ -228,6 +233,7 @@ export async function commitReplySessionInitialization(params: {
       sessionKey: resolved.normalizedKey,
       ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
       ...(params.resetBoundary ? { resetBoundary: params.resetBoundary } : {}),
+      ...(params.resetBoundaryCwd ? { resetBoundaryCwd: params.resetBoundaryCwd } : {}),
       buildEntry: async ({ currentEntry: commitEntry }) => {
         const commitRevision = createReplySessionInitializationRevision(commitEntry);
         if (commitRevision !== params.expectedRevision) {

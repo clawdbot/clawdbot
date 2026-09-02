@@ -61,6 +61,12 @@ export type ResetSessionEntryLifecycleParams = {
   }) => Promise<SessionEntry> | SessionEntry;
   /** Atomically append this boundary with the reset entry mutation. */
   resetBoundary?: SessionResetBoundaryRequest;
+  /**
+   * Session workspace recorded in a header created for an empty window at reset
+   * time. Optional: absent, the header falls back to the process cwd, which is
+   * the pre-existing behavior for windows that never carried a workspace.
+   */
+  resetBoundaryCwd?: string;
   /** Explicit store target for SQLite session ownership. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
@@ -147,6 +153,8 @@ export type SessionEntryLifecycleUpsert = {
   /** Authoritative route observation for this write; omitted writes preserve valid evidence. */
   routeContext?: ConversationRouteContext | null;
   resetBoundary?: SessionResetBoundaryRequest;
+  /** Session workspace for a header created at reset time; see ResetSessionEntryLifecycleParams. */
+  resetBoundaryCwd?: string;
 } & (
   | {
       entry: SessionEntry;
