@@ -556,6 +556,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     Missing multi-agent DM routing ownership is reported as a finding. It does
     not stop the remaining channel security checks or pending state migrations.
     Configure the reported account binding before expecting that route to work.
+    Telegram account discovery preserves the legacy default-agent account choice
+    during upgrade previews without requiring an ambient agent.
 
   </Accordion>
   <Accordion title="10. systemd linger (Linux)">
