@@ -11,6 +11,19 @@ import { defaultRuntime } from "../../runtime.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
+/** Unwind update ownership before diagnostics or an interactive agent can run. */
+export class UpdateCommandFailure extends Error {
+  constructor(
+    readonly result: UpdateRunResult,
+    readonly exitCode = 1,
+    readonly detail?: string,
+    options?: ErrorOptions,
+  ) {
+    super(detail ?? result.reason ?? "Update failed", options);
+    this.name = "UpdateCommandFailure";
+  }
+}
+
 export async function reportPreMutationUpdateFailure(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -39,7 +52,11 @@ export async function reportPreMutationUpdateFailure(params: {
     defaultRuntime.error(params.message);
   }
   printResult(result, params.opts);
-  defaultRuntime.exit(resolveManagedServiceUpdateFailureExitCode(result));
+  throw new UpdateCommandFailure(
+    result,
+    resolveManagedServiceUpdateFailureExitCode(result),
+    params.message,
+  );
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

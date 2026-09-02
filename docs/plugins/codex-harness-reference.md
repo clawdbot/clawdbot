@@ -865,10 +865,11 @@ Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to
 inspect the actual public picker for your account.
 
-The app-server catalog can report `ultra`; OpenClaw reasoning controls for the
-Codex runtime currently expose levels through `max`. Hidden models can also
-appear in the app-server catalog for internal or specialized flows without being
-normal model-picker choices.
+OpenClaw reasoning controls preserve supported native levels, including `ultra`.
+Codex owns Ultra's proactive delegation and model-specific inference effort;
+Platform API effort metadata does not downgrade the selected runtime mode.
+Hidden models can also appear in the app-server catalog for internal or
+specialized flows without being normal model-picker choices.
 </Note>
 
 Tune discovery under `plugins.entries.codex.config.discovery`:

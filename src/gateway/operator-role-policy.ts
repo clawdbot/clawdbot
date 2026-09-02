@@ -71,6 +71,22 @@ export function resolveOperatorRolePolicyForProfile(
   profileId: string | undefined,
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
+  if (!cfg.gateway?.roles) {
+    return undefined;
+  }
+  return resolveOperatorRolePolicyForAssignment(
+    profileId,
+    profileId ? readOperatorRoleAssignment(profileId) : null,
+    cfg,
+  );
+}
+
+/** Transaction owners supply the authoritative row without consulting the assignment cache. */
+export function resolveOperatorRolePolicyForAssignment(
+  profileId: string | undefined,
+  assignedRole: string | null,
+  cfg: OpenClawConfig,
+): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
   if (!roles) {
     return undefined;
@@ -78,7 +94,6 @@ export function resolveOperatorRolePolicyForProfile(
   if (!profileId) {
     return deniedOperatorRole;
   }
-  const assignedRole = readOperatorRoleAssignment(profileId);
   if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
     return roles.definitions[assignedRole];
   }

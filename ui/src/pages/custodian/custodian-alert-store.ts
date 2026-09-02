@@ -1,15 +1,23 @@
-import type { CustodianAlert } from "../../components/custodian-alert-contract.ts";
+import type {
+  CustodianAlert,
+  CustodianTurnAdmission,
+} from "../../components/custodian-alert-contract.ts";
 
 type AlertListener = () => void;
 
 class CustodianAlertStore {
-  alert: CustodianAlert | null = null;
+  private presentedAlert: CustodianAlert | null = null;
+  private admission: CustodianTurnAdmission | undefined;
+
+  get alert(): CustodianAlert | null {
+    return this.admission?.isCurrent() === false ? null : this.presentedAlert;
+  }
 
   // Ask-once is scoped to the current presentation, not to the alert id forever.
   // A failed automation keeps one incident id across recover-then-fail-again, so
   // a permanent id set would silently swallow the explanation every later time
-  // the same job breaks. Presenting is user-initiated, so re-arming here cannot
-  // spam turns, and both observing surfaces still share the one flag.
+  // the same job breaks. Automatic presentations have their own admission
+  // owner, and both observing surfaces still share this one flag.
   private askedPresented = false;
   private readonly listeners = new Set<AlertListener>();
 
@@ -18,24 +26,33 @@ class CustodianAlertStore {
     return () => this.listeners.delete(listener);
   }
 
-  present(alert: CustodianAlert): void {
-    this.alert = alert;
+  present(alert: CustodianAlert, admission?: CustodianTurnAdmission): void {
+    this.presentedAlert = alert;
+    this.admission = admission;
     this.askedPresented = false;
     this.emit();
   }
 
   dismiss(): void {
-    this.alert = null;
+    this.presentedAlert = null;
+    this.admission = undefined;
     this.emit();
   }
 
-  askIfReady(send: (question: string) => void): void {
+  askIfReady(
+    send: (question: string, admission?: CustodianTurnAdmission, display?: string) => void,
+  ): void {
     const alert = this.alert;
     if (!alert || this.askedPresented) {
       return;
     }
     this.askedPresented = true;
-    send(alert.question);
+    if (this.admission) {
+      // Automatic diagnostics keep their detailed facts in the scoped card.
+      send(alert.question, this.admission, alert.title);
+    } else {
+      send(alert.question);
+    }
   }
 
   private emit(): void {

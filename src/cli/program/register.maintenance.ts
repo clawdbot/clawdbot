@@ -219,9 +219,18 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--json", "Output sanitized handoff paths, finding counts, and commands as JSON", false)
     .option("--no-export", "Skip the sanitized diagnostics archive")
     .option("--run", "Run one embedded agent turn after verifying model inference", false)
+    .option(
+      "--non-interactive",
+      "Prepare diagnostics without prompting or starting an agent",
+      false,
+    )
+    .option("--update-result <path>", "Include update-failure diagnostics from this JSON artifact")
     .action(async (opts) => {
       if (opts.json === true && opts.run === true) {
         return exitDoctorError("triage --json cannot be combined with --run.", true);
+      }
+      if (opts.nonInteractive === true && opts.run === true) {
+        return exitDoctorError("triage --non-interactive cannot be combined with --run.", false);
       }
       return await runCommandWithRuntime(
         defaultRuntime,
@@ -231,6 +240,8 @@ export function registerMaintenanceCommands(program: Command) {
             json: opts.json === true,
             noExport: opts.export === false,
             run: opts.run === true,
+            ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
+            ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
           });
         },
         opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,

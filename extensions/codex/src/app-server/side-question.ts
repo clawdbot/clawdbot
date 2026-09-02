@@ -108,7 +108,10 @@ import {
 import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabilities.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
-import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
+import {
+  readCodexSupportedReasoningEfforts,
+  resolveCodexAppServerReasoningEffort,
+} from "./reasoning-effort.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -136,7 +139,6 @@ import {
   resolveCodexAppServerRequestModelSelection,
   resolveCodexAppServerModelProvider,
   resolveCodexBindingModelProviderFallback,
-  resolveReasoningEffort,
 } from "./thread-lifecycle.js";
 import {
   assertCodexSupervisionThreadLineage,
@@ -820,11 +822,13 @@ export async function runCodexAppServerSideQuestion(
 
     const effort = usesSupervisionConnection
       ? undefined
-      : resolveReasoningEffort(
-          params.resolvedThinkLevel ?? "off",
-          modelSelection.model,
-          readCodexSupportedReasoningEfforts(params.runtimeModel?.compat),
-        );
+      : resolveCodexAppServerReasoningEffort({
+          thinkLevel: params.resolvedThinkLevel ?? "off",
+          modelId: modelSelection.model,
+          supportedReasoningEfforts: readCodexSupportedReasoningEfforts(
+            params.runtimeModel?.compat,
+          ),
+        });
     const turnResponse = assertCodexTurnStartResponse(
       await client
         .request(
@@ -1142,6 +1146,7 @@ async function createCodexSideToolBridge(input: {
     );
     const allTools = createOpenClawCodingTools({
       agentId: input.sessionAgentId,
+      requesterThinkingLevel: input.params.resolvedThinkLevel ?? "off",
       sessionKey: sandboxSessionKey,
       runSessionKey:
         input.params.sessionKey && input.params.sessionKey !== sandboxSessionKey

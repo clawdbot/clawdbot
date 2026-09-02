@@ -279,7 +279,9 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                   >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                 >
               </span>
-              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
+              <span class="sidebar-recent-sessions__label-text hover-marquee"
+                >${catalog.label}</span
+              >
               ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
               ${hasError || (collapsed && rows.length > 0)
                 ? html`<span
@@ -470,7 +472,7 @@ function renderCatalogSessionRow(
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
   const identityKey = buildCatalogSessionKey(catalogKey);
-  const key = session.sessionKey ?? identityKey;
+  const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
   const menuOpen = params.isMenuOpen(catalogKey);
   const rowRef = catalogRowRef(identityKey, key, catalogKey, menuOpen, params);
   const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
@@ -494,9 +496,7 @@ function renderCatalogSessionRow(
     mainKey: params.mainKey,
   });
   const { href, options: navigation } = target;
-  const paneKey =
-    session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
-  const active = paneKey === params.routeSessionKey;
+  const active = key === params.routeSessionKey;
   const running = session.status === "active" || session.status === "running";
   const stateDescription = running ? t("sessionsView.activeRun") : "";
   const stateId = running ? sidebarSessionStateId(key) : undefined;

@@ -1,6 +1,5 @@
 // Resolves or installs channel plugins needed by setup/onboarding flows.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   listRawChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
@@ -12,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { resolveChannelSetupOwner } from "./owner.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
@@ -35,10 +35,6 @@ type ResolveInstallableChannelPluginResult = {
   pluginInstalled: boolean;
   supportsRequestedCapability?: boolean;
 };
-
-function resolveWorkspaceDir(cfg: OpenClawConfig, agentId?: string) {
-  return resolveAgentWorkspaceDir(cfg, agentId ?? resolveDefaultAgentId(cfg));
-}
 
 function resolveResolvedChannelId(params: {
   rawChannel?: string | null;
@@ -140,7 +136,8 @@ export async function resolveInstallableChannelPlugin(params: {
     };
   }
 
-  const workspaceDir = resolveWorkspaceDir(nextCfg, params.agentId);
+  // Installation may replace config, but discovery must retain this operation's workspace.
+  const { workspaceDir } = resolveChannelSetupOwner(nextCfg, params.agentId);
   const catalogEntry =
     (params.rawChannel
       ? resolveCatalogChannelEntry(params.rawChannel, nextCfg, workspaceDir)
@@ -220,7 +217,7 @@ export async function resolveInstallableChannelPlugin(params: {
             channelId,
             supports,
             pluginId: installedPluginId,
-            workspaceDir: resolveWorkspaceDir(nextCfg, params.agentId),
+            workspaceDir,
           })
         : undefined;
       return {

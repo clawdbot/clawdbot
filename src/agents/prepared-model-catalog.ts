@@ -396,7 +396,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
     const entries = normalizeThinkingCatalogProviders(augmented.entries);
     return params.requiredInputRoute !== undefined && !entryResolved(entries) ? [] : entries;
   };
-  const publishedCatalog = getPreparedModelCatalogSnapshot(scopedParams);
+  const publishedCatalog = getAvailablePreparedModelCatalogSnapshot(scopedParams);
   if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
     return await augmentHarnessCatalog(publishedCatalog);
   }

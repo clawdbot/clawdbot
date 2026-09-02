@@ -32,6 +32,7 @@ import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { formatChannelAccountLabel } from "./shared.js";
 
 export type ChannelsCapabilitiesOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   target?: string;
@@ -343,6 +344,7 @@ export async function channelsCapabilitiesCommand(
           const resolved = await resolveInstallableChannelPlugin({
             cfg: configSnapshot.sourceConfig,
             runtime,
+            agentId: opts.agent,
             rawChannel,
             allowInstall: true,
           });

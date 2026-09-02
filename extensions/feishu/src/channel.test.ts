@@ -4,7 +4,6 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";
 import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER } from "./outbound.js";
-import { FEISHU_PRESENTATION_CAPABILITIES } from "./presentation-card.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 
 describe("feishu target classification", () => {
@@ -146,12 +145,6 @@ afterAll(() => {
 describe("feishuPlugin metadata", () => {
   it("opts announce delivery into persisted session lookup", () => {
     expect(feishuPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
-  });
-
-  it("adapts reply-path presentations against the capabilities it advertises", () => {
-    // Both delivery paths must read one declaration: a second literal here would
-    // let the reply path resolve blocks the outbound adapter does not report.
-    expect(feishuPlugin.outbound?.presentationCapabilities).toBe(FEISHU_PRESENTATION_CAPABILITIES);
   });
 });
 

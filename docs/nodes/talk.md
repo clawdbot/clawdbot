@@ -38,6 +38,13 @@ their current ephemeral-token and WebRTC data-channel flow.
 
 Finalized realtime user and assistant utterances are always appended live to the active agent session, so later chat and voice turns share one history. Client-owned transports report their finalized transcripts with stable entry ids; Gateway relay and Gateway-controlled WebRTC sessions append the same events server-side. Provider sessions also receive the bounded realtime profile context used by Discord voice.
 
+Generated agent-consult prompts are internal input, not spoken user turns. New
+consult records are hidden from chat and excluded from later model context, while
+the active consult still receives the full question, context, and response style.
+Raw archives and [session exports](/tools/slash-commands) remain lossless. Existing
+consult records without the exclusion flag are not rewritten and remain eligible
+for model context.
+
 OpenAI GA browser Talk keeps provider conversation order even when an assistant
 reply finishes before the user's transcription or item announcements arrive out
 of order. Text streams immediately in the call view; late predecessor metadata

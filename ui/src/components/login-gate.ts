@@ -7,12 +7,12 @@ import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import {
+  redactLoginFailureError,
   resolveAuthHintKind,
   resolvePairingHint,
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
@@ -78,21 +78,6 @@ type LoginFailureFeedbackParams = {
   hasToken: boolean;
   hasPassword: boolean;
 };
-
-// Shared with offline presentation so no disconnected surface prints credentials.
-export function redactLoginFailureError(value: string): string {
-  const redacted = value
-    .replace(
-      /([?#&])(?:access_token|auth|deviceToken|password|refresh_token|token)=([^&#\s]+)/gi,
-      "$1[redacted-credential]",
-    )
-    .replace(/\bBearer\s+([A-Za-z0-9._~+/-]+=*)/gi, "Bearer [redacted]")
-    .replace(
-      /(["']?(?:access|accessToken|deviceToken|password|refresh|refreshToken|token)["']?\s*[:=]\s*)["']?[^"',\s}]+/gi,
-      "$1[redacted]",
-    );
-  return formatUiError(redacted);
-}
 
 function buildFeedback(params: {
   kind: LoginFailureKind;

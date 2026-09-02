@@ -2,8 +2,10 @@
 // prompter) and the gateway `wizard.start {flow:"channels"}` RPC (session
 // prompter driving the Control UI / native clients).
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentOperationAgentId } from "../../agents/agent-scope-config.js";
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import {
+  resolveConfiguredAgentId,
+  tryResolveAgentOperationAgentId,
+} from "../../agents/agent-scope-config.js";
 import { getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
@@ -14,6 +16,7 @@ import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
+import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName } from "./add-mutators.js";
 
@@ -36,6 +39,7 @@ function unresolvedInitialWizardChannelTarget(channel: string): InitialWizardCha
 export async function resolveInitialWizardChannelTarget(
   raw: string | undefined,
   cfg: OpenClawConfig,
+  workspaceDir?: string,
 ): Promise<InitialWizardChannelTarget> {
   if (raw === undefined) {
     return { kind: "omitted" };
@@ -51,7 +55,7 @@ export async function resolveInitialWizardChannelTarget(
   const resolved = resolveChannelSetupEntries({
     cfg,
     installedPlugins: listActiveChannelSetupPlugins(),
-    workspaceDir: resolveAgentWorkspaceDir(cfg, resolveAgentOperationAgentId(cfg)),
+    workspaceDir: workspaceDir ?? resolveChannelSetupOwner(cfg).workspaceDir,
   });
   const matchedEntry =
     resolved.entries.find(
@@ -69,6 +73,7 @@ export async function resolveInitialWizardChannelTarget(
 
 type ChannelsAddWizardFlowParams = {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   baseHash?: string;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
@@ -102,6 +107,7 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
   await prompter.intro("Channel setup");
   let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     ...(params.initialChannel ? { initialSelection: [params.initialChannel] } : {}),
     ...(params.initialChannel ? { finishAfterInitialSelection: true } : {}),
     allowDisable: false,
@@ -212,7 +218,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
               initialValue: true,
             });
     if (bindNow) {
-      const defaultAgentId = resolveAgentOperationAgentId(nextConfig);
+      const owner = tryResolveAgentOperationAgentId(nextConfig);
+      const defaultAgentId =
+        owner === undefined ? undefined : resolveConfiguredAgentId(nextConfig, owner);
       for (const target of bindTargets) {
         const targetAgentId = await prompter.select({
           message: `Send ${target.channel}/${target.accountId} messages to agent`,

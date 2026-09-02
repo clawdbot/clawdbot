@@ -121,19 +121,21 @@ function setupCompactionRemovedFallbackAttempt() {
     return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
   });
   mockedClassifyFailoverReason.mockReturnValue("model_not_found");
+  const assistant = makeAssistantMessageFixture({
+    stopReason: "error",
+    errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
+    provider: "anthropic",
+    model: "test-model",
+    content: [],
+  });
   // The pinned profile may rotate to another same-provider credential before
   // the outer model fallback runs, so every credential attempt must fail alike.
   mockedRunEmbeddedAttempt.mockResolvedValue(
     makeAttemptResult({
       assistantTexts: [],
-      lastAssistant: makeAssistantMessageFixture({
-        stopReason: "error",
-        errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
-        provider: "anthropic",
-        model: "test-model",
-        content: [],
-      }),
+      lastAssistant: assistant,
       currentAttemptAssistant: undefined,
+      currentAttemptCompletedAssistant: assistant,
     }),
   );
 }
@@ -227,7 +229,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     await expectDeepseekFallbackError(promise);
   });
 
-  it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
+  it("uses the completed assistant when compaction removes the current attempt slice", async () => {
     const getLastFormattedAssistant = captureFormattedAssistant();
     setupCompactionRemovedFallbackAttempt();
     const promise = runCompactionRemovedFallbackAttempt(state);
