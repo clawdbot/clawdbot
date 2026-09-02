@@ -204,7 +204,6 @@ export default {
   const abort = () => killGroup(child.pid!);
   signal.addEventListener("abort", abort, { once: true });
   const deadline = setTimeout(abort, 60000);
-  let joined = false;
   let outerClosed = false;
   const taskProcesses = () => {
     let pids: string;
@@ -351,7 +350,6 @@ export default {
           }),
         );
         expect(taskProcesses()).toEqual([]);
-        joined = outerClosed;
         write(
           "cleanup.json",
           JSON.stringify(
@@ -370,9 +368,8 @@ export default {
     clearTimeout(deadline);
     signal.removeEventListener("abort", abort);
     write("output.log", output);
-    // Keep all evidence on failure, and never recursively delete unjoined inputs.
-    if (joined) {
-      fs.rmSync(file("tmp"), { recursive: true, force: true });
-    }
   }
+  // Only a successful scenario and every joined cleanup may dispose the complete
+  // fixture. Any body or cleanup failure retains its evidence and inputs.
+  fs.rmSync(root, { recursive: true, force: true });
 }

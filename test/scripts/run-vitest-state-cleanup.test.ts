@@ -787,6 +787,7 @@ posixIt.for([
       const root = fs.mkdtempSync(path.join(evidence, `${pool}-${mode}-`));
       prepareVitestFixture(root);
       await proveNestedRetention(root, pool, signal, mode);
+      expect(fs.existsSync(root), "successful joined fixture must be removed").toBe(false);
     }),
 );
 
