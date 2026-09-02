@@ -10,8 +10,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -860,8 +862,24 @@ class ChatControllerOutboxTest {
           .single()
           .id
 
+      val loadEntered = CompletableDeferred<Unit>()
+      val releaseLoad = CompletableDeferred<Unit>()
+      outbox.loadGate = LoadGate(remainingLoads = 0, entered = loadEntered, release = releaseLoad)
+      chat.onDisconnected("Offline")
+      runCurrent()
+      loadEntered.await()
+      try {
+        // Explicit invalidation also retires reads when the same endpoint/scope is still selected.
+        chat.onGatewayScopeChanging()
+        assertTrue(chat.outboxItems.value.isEmpty())
+        releaseLoad.complete(Unit)
+        advanceUntilIdle()
+        assertTrue("Retired publication repopulated a cleared Gateway", chat.outboxItems.value.isEmpty())
+      } finally {
+        releaseLoad.complete(Unit)
+      }
+
       activeScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2L)
-      chat.onGatewayScopeChanging()
       chat.onDisconnected("Offline")
       gateway.online = true
       chat.handleGatewayEvent("health", null)
@@ -1371,17 +1389,73 @@ class ChatControllerOutboxTest {
       chat.onDisconnected("Offline")
       runCurrent()
       loadEntered.await()
+      val publications = mutableListOf<List<String>>()
+      val observer =
+        launch(UnconfinedTestDispatcher()) {
+          chat.outboxItems.collect { rows -> publications += rows.map { it.id } }
+        }
       try {
         chat.deleteOutboxCommand(id)
         runCurrent()
         assertTrue(outbox.rows.isEmpty())
+        assertTrue("Delete waited for an unrelated read", chat.outboxItems.value.isEmpty())
+        publications.clear()
+        releaseLoad.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue("Deleted input was republished: $publications", publications.none { id in it })
+        assertTrue(outbox.rows.isEmpty())
       } finally {
         releaseLoad.complete(Unit)
+        observer.cancel()
       }
-      advanceUntilIdle()
+    }
 
-      assertTrue("Deleted input reappeared after the older load: ${chat.outboxItems.value}", chat.outboxItems.value.isEmpty())
-      assertTrue(outbox.rows.isEmpty())
+  @Test
+  fun failedNewestOutboxLoadKeepsRowsUntilFreshRestoration() =
+    outboxTest {
+      seed("retained-row", "keep visible during storage failure", System.currentTimeMillis())
+      val chat = controller()
+      advanceUntilIdle()
+      val retainedRows = chat.outboxItems.value
+      assertEquals(listOf("retained-row"), retainedRows.map { it.id })
+      assertTrue(chat.outboxPresentationRestored.value)
+
+      val olderEntered = CompletableDeferred<Unit>()
+      val releaseOlder = CompletableDeferred<Unit>()
+      val newerEntered = CompletableDeferred<Unit>()
+      val releaseNewer = CompletableDeferred<Unit>()
+      outbox.loadGate = LoadGate(remainingLoads = 0, entered = olderEntered, release = releaseOlder)
+      try {
+        chat.onDisconnected("Offline")
+        runCurrent()
+        assertTrue("Older snapshot was not captured", olderEntered.isCompleted)
+        olderEntered.await()
+
+        outbox.loadGate = LoadGate(remainingLoads = 0, entered = newerEntered, release = releaseNewer)
+        chat.onDisconnected("Offline")
+        runCurrent()
+        assertTrue("Newer load waited for an unrelated read", newerEntered.isCompleted)
+        newerEntered.await()
+        releaseNewer.completeExceptionally(IllegalStateException("storage unavailable"))
+        runCurrent()
+        assertEquals(retainedRows, chat.outboxItems.value)
+        assertFalse(chat.outboxPresentationRestored.value)
+
+        releaseOlder.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(retainedRows, chat.outboxItems.value)
+        assertFalse("Older success masked the latest load failure", chat.outboxPresentationRestored.value)
+
+        chat.onDisconnected("Offline")
+        advanceUntilIdle()
+        assertEquals(retainedRows, chat.outboxItems.value)
+        assertTrue(chat.outboxPresentationRestored.value)
+        assertTrue(gateway.sentMessages.isEmpty())
+      } finally {
+        releaseOlder.complete(Unit)
+        releaseNewer.complete(Unit)
+      }
     }
 
   @Test
@@ -2685,9 +2759,11 @@ class ChatControllerOutboxTest {
 
   @Test
   fun callerCancellationAfterTheClaimDoesNotStrandTheDirectSend() {
-    for (cancelWhilePublishing in listOf(false, true)) {
+    for (suspendedAt in listOf("response wait", "own publication", "unrelated publication")) {
       outboxTest {
-        if (cancelWhilePublishing) {
+        val blockOwnPublication = suspendedAt == "own publication"
+        val blockOtherPublication = suspendedAt == "unrelated publication"
+        if (blockOtherPublication) {
           seed("unrelated-failed", "discard me", System.currentTimeMillis(), status = ChatOutboxStatus.Failed)
         }
         val chat = controller()
@@ -2696,12 +2772,19 @@ class ChatControllerOutboxTest {
         advanceUntilIdle()
 
         val releaseClaim = CompletableDeferred<Unit>()
-        if (cancelWhilePublishing) outbox.claimGate = releaseClaim
+        if (blockOtherPublication) outbox.claimGate = releaseClaim
         val publicationEntered = CompletableDeferred<Unit>()
         val releasePublication = CompletableDeferred<Unit>()
+        if (blockOwnPublication) {
+          outbox.onStatusUpdated = { status ->
+            if (status == ChatOutboxStatus.Sending) {
+              outbox.loadGate = LoadGate(remainingLoads = 0, entered = publicationEntered, release = releasePublication)
+            }
+          }
+        }
         val releaseResponse = CompletableDeferred<Unit>()
         gateway.sendGate = releaseResponse
-        val message = if (cancelWhilePublishing) "survives publication wait" else "survives response wait"
+        val message = "survives $suspendedAt"
         val callerJob = SupervisorJob()
         val caller = CoroutineScope(coroutineContext + callerJob)
         caller.launch {
@@ -2709,7 +2792,7 @@ class ChatControllerOutboxTest {
         }
         try {
           runCurrent()
-          if (cancelWhilePublishing) {
+          if (blockOtherPublication) {
             assertEquals(ChatOutboxStatus.Queued, outbox.statusFor(message))
             outbox.loadGate = LoadGate(remainingLoads = 0, entered = publicationEntered, release = releasePublication)
             chat.deleteOutboxCommand("unrelated-failed")
@@ -2718,12 +2801,15 @@ class ChatControllerOutboxTest {
             releaseClaim.complete(Unit)
             runCurrent()
           }
+          if (blockOwnPublication) publicationEntered.await()
           assertEquals(ChatOutboxStatus.Sending, outbox.statusFor(message))
+          if (blockOtherPublication) {
+            assertEquals("Unrelated publication delayed a claimed send", listOf(message), gateway.sentMessages)
+          }
           callerJob.cancel()
           runCurrent()
 
-          // Cancellation after the claim must hand off even while another publisher holds
-          // the lock; releasing that publisher first could let its flush mask a lost dispatch.
+          // Keep held reads blocked so their later flush cannot hide a lost dispatch handoff.
           assertEquals(listOf(message), gateway.sentMessages)
         } finally {
           callerJob.cancel()

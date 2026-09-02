@@ -759,7 +759,7 @@ class ChatController internal constructor(
   private val outboxBranchReconcileRequested = AtomicBoolean(false)
   private val outboxBranchReconcileRetryScheduled = AtomicBoolean(false)
   private val outboxRecoveryMutex = Mutex()
-  private val outboxPublicationMutex = Mutex()
+  private var outboxPublicationRevision = 0L
   private var outboxRecoveryComplete = false
   private val _outboxPresentationRestored = MutableStateFlow(commandOutbox == null)
   val outboxPresentationRestored: StateFlow<Boolean> = _outboxPresentationRestored.asStateFlow()
@@ -949,6 +949,7 @@ class ChatController internal constructor(
       clearChatMetadata()
       lastHealthPollAtMs = null
       // Outbox rows are gateway-scoped too; the next publish repopulates them for the new scope.
+      outboxPublicationRevision += 1
       _outboxItems.value = emptyList()
       _outboxPresentationRestored.value = commandOutbox == null
       reconciledOutboxBranchScopes.clear()
@@ -5409,21 +5410,19 @@ class ChatController internal constructor(
 
   private suspend fun publishOutbox() {
     val outbox = commandOutbox ?: return
-    try {
-      // Keep each snapshot and its publication ordered so an older read cannot restore retired rows.
-      outboxPublicationMutex.withLock {
-        val outboxScope = currentCacheScope()
-        val items =
-          if (outboxScope == null) emptyList() else runCatching { outbox.load(outboxScope.gatewayId) }.getOrNull()
-        synchronized(gatewayScopeApplyLock) {
-          if (outboxScope == currentCacheScope()) {
-            if (items != null) _outboxItems.value = items
-            _outboxPresentationRestored.value = outboxScope != null && items != null
-          }
-        }
+    // Supersede older reads without making a claimed send wait on another refresh's I/O.
+    val (outboxScope, revision) =
+      synchronized(gatewayScopeApplyLock) {
+        currentCacheScope() to ++outboxPublicationRevision
       }
-    } catch (_: CancellationException) {
-      // A cancelled UI caller can still owe its claimed send to the controller-owned dispatcher.
+    // A cancelled UI caller can still owe its durable claim to the controller-owned dispatcher.
+    val items =
+      if (outboxScope == null) emptyList() else runCatching { outbox.load(outboxScope.gatewayId) }.getOrNull()
+    synchronized(gatewayScopeApplyLock) {
+      if (revision == outboxPublicationRevision && outboxScope == currentCacheScope()) {
+        if (items != null) _outboxItems.value = items
+        _outboxPresentationRestored.value = outboxScope != null && items != null
+      }
     }
   }
 
