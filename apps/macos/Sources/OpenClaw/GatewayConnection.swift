@@ -343,12 +343,11 @@ actor GatewayConnection {
                 let lastError: Error
                 do {
                     return try await self.retryRequest(
-                        client: client,
-                        method: method,
-                        params: params,
-                        timeoutMs: timeoutMs,
                         after: error,
                         shutdownGeneration: shutdownGeneration)
+                    {
+                        try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+                    }
                 } catch {
                     lastError = error
                 }
@@ -362,12 +361,11 @@ actor GatewayConnection {
                         endpoint: fallback,
                         shutdownGeneration: shutdownGeneration)
                     return try await self.retryRequest(
-                        client: fallbackClient,
-                        method: method,
-                        params: params,
-                        timeoutMs: timeoutMs,
                         after: lastError,
                         shutdownGeneration: shutdownGeneration)
+                    {
+                        try await fallbackClient.request(method: method, params: params, timeoutMs: timeoutMs)
+                    }
                 }
 
                 throw lastError
@@ -386,23 +384,16 @@ actor GatewayConnection {
                     lastError = error
                 }
 
-                for delayMs in [150, 400, 900] {
-                    try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-                    try requireCurrentShutdownGeneration(shutdownGeneration)
-                    do {
-                        let endpoint = try await currentEndpoint()
-                        let client = try await configure(
-                            endpoint: endpoint,
-                            shutdownGeneration: shutdownGeneration)
-                        return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
-                    } catch {
-                        try requireCurrentShutdownGeneration(shutdownGeneration)
-                        lastError = error
-                    }
+                return try await self.retryRequest(
+                    after: lastError,
+                    shutdownGeneration: shutdownGeneration)
+                {
+                    let endpoint = try await self.currentEndpoint()
+                    let client = try await self.configure(
+                        endpoint: endpoint,
+                        shutdownGeneration: shutdownGeneration)
+                    return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
                 }
-
-                try requireCurrentShutdownGeneration(shutdownGeneration)
-                throw lastError
             case .unconfigured:
                 throw error
             }
@@ -410,21 +401,21 @@ actor GatewayConnection {
     }
 
     private func retryRequest(
-        client: GatewayChannelActor,
-        method: String,
-        params: [String: AnyCodable]?,
-        timeoutMs: Double?,
         after initialError: Error,
-        shutdownGeneration: UInt64) async throws -> Data
+        shutdownGeneration: UInt64,
+        operation: @Sendable () async throws -> Data) async throws -> Data
     {
         var lastError = initialError
         for delayMs in [150, 400, 900] {
             try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
             try requireCurrentShutdownGeneration(shutdownGeneration)
             do {
-                return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+                return try await operation()
             } catch {
                 try requireCurrentShutdownGeneration(shutdownGeneration)
+                // Preserve the authoritative rejection before a later retry can
+                // replace update guidance with an unrelated transport failure.
+                if GatewayCompatibilityIssue(error: error) != nil { throw error }
                 lastError = error
             }
         }

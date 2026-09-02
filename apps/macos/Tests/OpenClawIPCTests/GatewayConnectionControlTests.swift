@@ -261,6 +261,44 @@ private func assertConfigLookupCannotRecreateRoute(
         try await self.assertUncancelledFailureRecovers(CancellationError())
     }
 
+    @Test(arguments: [AppState.ConnectionMode.local, .remote], [false, true]) @MainActor
+    func `recovery preserves a protocol mismatch before later transport failures`(
+        mode: AppState.ConnectionMode,
+        structured: Bool) async throws
+    {
+        let requests = WebSocketMessageRecorder()
+        let mismatch = GatewayConnectAuthError(
+            message: "protocol mismatch",
+            detailCode: structured ? GatewayConnectAuthDetailCode.protocolMismatch.rawValue : "INVALID_REQUEST",
+            canRetryWithDeviceToken: false,
+            expectedProtocol: 3)
+        try await self.withIsolatedRecoveryFixture(mode: mode) { socket, message, sendIndex in
+            guard sendIndex > 0,
+                  let id = GatewayWebSocketTestSupport.requestID(from: message),
+                  let data = Self.messageData(message),
+                  let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            if frame["method"] as? String == "status" {
+                requests.append(message)
+                switch requests.snapshot().count {
+                case 1: throw URLError(.networkConnectionLost)
+                case 2: throw mismatch
+                default: throw URLError(.cannotConnectToHost)
+                }
+            }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        } operation: { connection, _ in
+            do {
+                _ = try await connection.request(method: "status", params: nil)
+                Issue.record("expected the protocol rejection from recovery")
+            } catch {
+                #expect((error as? GatewayConnectAuthError)?.expectedProtocol == 3)
+                #expect(GatewayCompatibilityIssue(error: error) != nil)
+            }
+            #expect(requests.snapshot().count == 2)
+        }
+    }
+
     @Test(arguments: [false, true], [false, true]) @MainActor
     func `Talk phase notifications preserve their payload without activating recovery`(
         enabled: Bool,
@@ -1094,6 +1132,7 @@ private func assertConfigLookupCannotRecreateRoute(
 
     @MainActor
     private func withIsolatedRecoveryFixture<T>(
+        mode: AppState.ConnectionMode = .local,
         _ sendHook: @escaping GatewayTestWebSocketTask.SendHook,
         operation: (GatewayConnection, GatewayTestWebSocketSession) async throws -> T) async throws -> T
     {
@@ -1102,7 +1141,9 @@ private func assertConfigLookupCannotRecreateRoute(
         try FileManager.default.createDirectory(at: isolatedState, withIntermediateDirectories: true)
         let configURL = isolatedState.appendingPathComponent("openclaw.json")
         let port = Int.random(in: 30000...59999)
-        try Data(#"{"gateway":{"mode":"local","port":\#(port)}}"#.utf8).write(to: configURL)
+        try Data(
+            #"{"gateway":{"mode":"\#(mode.rawValue)","port":\#(port),"remote":{"transport":"direct","url":"ws://127.0.0.1:\#(port)"}}}"#
+                .utf8).write(to: configURL)
         defer { try? FileManager.default.removeItem(at: isolatedState) }
 
         // Profiles and their reserved ports live for the process; a temporary
@@ -1126,7 +1167,7 @@ private func assertConfigLookupCannotRecreateRoute(
                     sessionBox: WebSocketSessionBox(session: session))
                 let manager = GatewayProcessManager.shared
                 let priorMode = AppStateStore.shared.connectionMode
-                AppStateStore.shared.connectionMode = .local
+                AppStateStore.shared.connectionMode = mode
                 manager._testResetGatewayStartTask()
                 manager.setTestingStatus(.stopped)
                 manager.setTestingConnection(connection)
