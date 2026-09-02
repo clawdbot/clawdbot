@@ -891,6 +891,59 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
+    func `later archive failure restores earlier archives so retry still sees every source`() throws {
+        let fixture = DeviceIdentityMigrationFixture()
+        let firstMaterial = DeviceIdentityStore.generateMaterial()
+        let secondMaterial = DeviceIdentityStore.generateMaterial()
+        let thirdMaterial = DeviceIdentityStore.generateMaterial()
+        let first = try fixture.source("first", contents: Self.rawIdentityJSON(firstMaterial.identity))
+        let second = try fixture.source("second", contents: Self.rawIdentityJSON(secondMaterial.identity))
+        let third = try fixture.source("third", contents: Self.rawIdentityJSON(thirdMaterial.identity))
+        let selectedFingerprint = DeviceIdentityConflictError.redactedFingerprint(
+            deviceId: firstMaterial.identity.deviceId)
+        let laterArchiveDir = third.identityURL.deletingLastPathComponent()
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: laterArchiveDir.path)
+        }
+
+        do {
+            _ = try fixture.load(
+                sources: [first, second, third],
+                afterLegacyCommit: {
+                    try FileManager.default.setAttributes(
+                        [.posixPermissions: 0o555],
+                        ofItemAtPath: laterArchiveDir.path)
+                },
+                reconciliation: .select(fingerprint: selectedFingerprint))
+            Issue.record("Expected later archive failure to throw")
+        } catch let error as NSError {
+            #expect(error.localizedDescription.lowercased().contains("archive"))
+        }
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: laterArchiveDir.path)
+
+        #expect(try Self.deviceIdentityCount(fixture.databaseURL) == 0)
+        #expect(try Self.conflictArchives(for: first).isEmpty)
+        #expect(try Self.conflictArchives(for: second).isEmpty)
+        #expect(try Self.conflictArchives(for: third).isEmpty)
+        #expect(Self.legacyIdentityStillPresent(first, claimURL: fixture.claimURL(for: first)))
+        #expect(Self.legacyIdentityStillPresent(second, claimURL: fixture.claimURL(for: second)))
+        #expect(Self.legacyIdentityStillPresent(third, claimURL: fixture.claimURL(for: third)))
+
+        do {
+            _ = try fixture.load(sources: [first, second, third])
+            Issue.record("Expected remaining conflict to throw")
+        } catch let error as DeviceIdentityConflictError {
+            #expect(error.candidates.count == 3)
+        }
+        #expect(try Self.deviceIdentityCount(fixture.databaseURL) == 0)
+    }
+
+    @Test
     func `unknown reconciliation fingerprint preserves every divergent source`() throws {
         let fixture = DeviceIdentityMigrationFixture()
         let firstMaterial = DeviceIdentityStore.generateMaterial()
@@ -1312,6 +1365,14 @@ extension DeviceIdentityStoreTests {
             throw DeviceIdentityStore.storageError("Could not encode generated identity JSON")
         }
         return json
+    }
+
+    fileprivate static func legacyIdentityStillPresent(
+        _ source: DeviceIdentityPaths.LegacyIdentitySource,
+        claimURL: URL) -> Bool
+    {
+        FileManager.default.fileExists(atPath: source.identityURL.path)
+            || FileManager.default.fileExists(atPath: claimURL.path)
     }
 
     fileprivate static func conflictArchives(

@@ -538,56 +538,6 @@ enum DeviceIdentitySQLiteStore {
         }
     }
 
-    private static func deleteIdentity(_ database: OpenClawNativeStateSQLite, key: String) throws {
-        let statement = try database.prepare("DELETE FROM device_identities WHERE identity_key = ?")
-        try statement.bindText(key, at: 1)
-        guard try statement.step() == .done, database.changes == 1 else {
-            throw DeviceIdentityStore.storageError("SQLite did not delete the device identity")
-        }
-    }
-
-    private static func abortReconciliationAfterArchiveFailure(
-        database: OpenClawNativeStateSQLite,
-        destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile,
-        authoritative: DeviceIdentityMaterial,
-        leftoverClaims: [LegacyClaim],
-        archiveError: Error) throws -> Never
-    {
-        var rollbackError: String?
-        do {
-            try database.withImmediateTransaction {
-                guard let current = try self.readIdentity(
-                    database,
-                    key: profile.rawValue,
-                    stateDirectoryURL: destinationStateDirURL),
-                    current == authoritative
-                else {
-                    throw DeviceIdentityStore.storageError(
-                        "Committed SQLite identity changed before archive rollback; native claim preserved")
-                }
-                try self.deleteIdentity(database, key: profile.rawValue)
-            }
-        } catch {
-            rollbackError = error.localizedDescription
-        }
-        do {
-            try self.restoreClaimedLegacyIdentities(leftoverClaims)
-        } catch let restoreError {
-            throw DeviceIdentityStore.storageError(
-                "Could not archive conflicting device identities: \(archiveError.localizedDescription); "
-                    + (rollbackError.map { "identity rollback failed: \($0); " } ?? "")
-                    + "claim restoration failed: \(restoreError.localizedDescription)")
-        }
-        if let rollbackError {
-            throw DeviceIdentityStore.storageError(
-                "Could not archive conflicting device identities: \(archiveError.localizedDescription); "
-                    + "identity rollback failed: \(rollbackError)")
-        }
-        throw DeviceIdentityStore.storageError(
-            "Could not archive conflicting device identities; all sources preserved")
-    }
-
     private static func claimLegacyIdentity(
         _ source: DeviceIdentityPaths.LegacyIdentitySource,
         beforeClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)?) throws -> LegacyClaim?
@@ -939,6 +889,58 @@ enum DeviceIdentitySQLiteStore {
             throw DeviceIdentityStore.storageError("Device auth changed during identity migration")
         }
     }
+}
+
+extension DeviceIdentitySQLiteStore {
+    private static func deleteIdentity(_ database: OpenClawNativeStateSQLite, key: String) throws {
+        let statement = try database.prepare("DELETE FROM device_identities WHERE identity_key = ?")
+        try statement.bindText(key, at: 1)
+        guard try statement.step() == .done, database.changes == 1 else {
+            throw DeviceIdentityStore.storageError("SQLite did not delete the device identity")
+        }
+    }
+
+    private static func abortReconciliationAfterArchiveFailure(
+        database: OpenClawNativeStateSQLite,
+        destinationStateDirURL: URL,
+        profile: GatewayDeviceIdentityProfile,
+        authoritative: DeviceIdentityMaterial,
+        leftoverClaims: [LegacyClaim],
+        archiveError: Error) throws -> Never
+    {
+        var rollbackError: String?
+        do {
+            try database.withImmediateTransaction {
+                guard let current = try self.readIdentity(
+                    database,
+                    key: profile.rawValue,
+                    stateDirectoryURL: destinationStateDirURL),
+                    current == authoritative
+                else {
+                    throw DeviceIdentityStore.storageError(
+                        "Committed SQLite identity changed before archive rollback; native claim preserved")
+                }
+                try self.deleteIdentity(database, key: profile.rawValue)
+            }
+        } catch {
+            rollbackError = error.localizedDescription
+        }
+        do {
+            try self.restoreClaimedLegacyIdentities(leftoverClaims)
+        } catch let restoreError {
+            throw DeviceIdentityStore.storageError(
+                "Could not archive conflicting device identities: \(archiveError.localizedDescription); "
+                    + (rollbackError.map { "identity rollback failed: \($0); " } ?? "")
+                    + "claim restoration failed: \(restoreError.localizedDescription)")
+        }
+        if let rollbackError {
+            throw DeviceIdentityStore.storageError(
+                "Could not archive conflicting device identities: \(archiveError.localizedDescription); "
+                    + "identity rollback failed: \(rollbackError)")
+        }
+        throw DeviceIdentityStore.storageError(
+            "Could not archive conflicting device identities; all sources preserved")
+    }
 
     private static func removeClaimedLegacyIdentities(_ claims: [LegacyClaim]) throws {
         let fileManager = FileManager.default
@@ -991,13 +993,51 @@ enum DeviceIdentitySQLiteStore {
         // Archived names must not match device.json or the native/doctor claim suffixes;
         // Doctor and native import ignore anything else. Deleting here would destroy the
         // only remaining copy of the unselected key.
-        for claim in claims {
-            guard self.pathMayExist(claim.identityURL) else { continue }
-            try self.archiveClaimedLegacyIdentity(claim)
+        var completed: [(claim: LegacyClaim, archiveURL: URL)] = []
+        do {
+            for claim in claims {
+                guard self.pathMayExist(claim.identityURL) else { continue }
+                guard let archiveURL = try self.archiveClaimedLegacyIdentity(claim) else {
+                    continue
+                }
+                completed.append((claim, archiveURL))
+            }
+        } catch {
+            do {
+                try self.restoreCompletedConflictArchives(completed)
+            } catch let restoreError {
+                throw DeviceIdentityStore.storageError(
+                    "Could not archive conflicting device identities: \(error.localizedDescription); "
+                        + "completed-archive restoration failed: \(restoreError.localizedDescription)")
+            }
+            throw error
         }
     }
 
-    private static func archiveClaimedLegacyIdentity(_ claim: LegacyClaim) throws {
+    private static func restoreCompletedConflictArchives(
+        _ completed: [(claim: LegacyClaim, archiveURL: URL)]) throws
+    {
+        // A later archive can fail after an earlier rename. Put those files back on
+        // the native-claim path so rollback can restore every source.
+        var restorationErrors: [String] = []
+        for move in completed.reversed() {
+            do {
+                try self.restoreClaimedLegacyIdentity(
+                    identityURL: move.archiveURL,
+                    sourceURL: move.claim.identityURL)
+            } catch {
+                restorationErrors.append(
+                    "\(move.claim.source.identityURL.path): \(error.localizedDescription)")
+            }
+        }
+        if !restorationErrors.isEmpty {
+            throw DeviceIdentityStore.storageError(
+                "Could not restore archived device identities: "
+                    + restorationErrors.joined(separator: "; "))
+        }
+    }
+
+    private static func archiveClaimedLegacyIdentity(_ claim: LegacyClaim) throws -> URL? {
         let timestamp = String(Int64(Date().timeIntervalSince1970 * 1000))
         for disambiguator in 0..<16 {
             let suffix = disambiguator == 0 ? timestamp : "\(timestamp)-\(disambiguator)"
@@ -1010,11 +1050,11 @@ enum DeviceIdentitySQLiteStore {
                 }
             }
             if renameResult == 0 {
-                return
+                return archiveURL
             }
             let renameError = errno
             if renameError == ENOENT, !self.pathMayExist(claim.identityURL) {
-                return
+                return nil
             }
             if renameError == EEXIST {
                 continue
@@ -1042,9 +1082,7 @@ enum DeviceIdentitySQLiteStore {
                 "Could not restore legacy device identity: \(String(cString: strerror(renameError)))")
         }
     }
-}
 
-extension DeviceIdentitySQLiteStore {
     private static func secureDirectory(_ url: URL) throws {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: url, withIntermediateDirectories: true)

@@ -16,8 +16,7 @@ enum DeviceIdentityConflictRecovery {
     /// Presents the conflict and applies an explicit operator choice. Returns true after a
     /// successful import or re-pair so callers can retry the connect that was blocked.
     @discardableResult
-    static func presentIfNeeded(conflict: DeviceIdentityConflictError) -> Bool
-    {
+    static func presentIfNeeded(conflict: DeviceIdentityConflictError) -> Bool {
         guard !conflict.candidates.isEmpty else { return false }
         NSApp.activate(ignoringOtherApps: true)
         while true {
