@@ -180,7 +180,6 @@ function writeFormattedConsoleOutput(params: {
   args: unknown[];
   formatted: string;
   write: (...args: unknown[]) => void;
-  traceWrite: (...args: unknown[]) => void;
   caller?: (...args: unknown[]) => void;
 }) {
   const consoleStyle = getConsoleSettings().style;
@@ -190,9 +189,9 @@ function writeFormattedConsoleOutput(params: {
       : "";
   const timestamp =
     trimmed && !hasTimestampPrefix(trimmed) ? formatConsoleTimestamp(consoleStyle) : "";
-  const jsonMeta =
-    consoleStyle === "json" && params.level === "trace" && params.caller
-      ? { stack: stripAnsi(captureConsoleTraceStack(params.formatted, params.caller)) }
+  const stack =
+    params.level === "trace" && params.caller
+      ? captureConsoleTraceStack(params.formatted, params.caller)
       : undefined;
   try {
     const rendered =
@@ -200,17 +199,18 @@ function writeFormattedConsoleOutput(params: {
         ? formatJsonConsoleLine({
             level: params.level,
             message: stripAnsi(params.formatted),
-            meta: jsonMeta,
+            meta: stack === undefined ? undefined : { stack: stripAnsi(stack) },
           })
-        : redactSensitiveText(params.formatted);
+        : redactSensitiveText(stack ?? params.formatted);
     const line = timestamp ? `${timestamp} ${rendered}` : rendered;
     if (loggingState.forceConsoleToStderr) {
       process.stderr.write(`${line}\n`);
-    } else if (consoleStyle === "json") {
-      // Node and Bun implement console.trace() through this.error(). Use the raw error
-      // sink so the structured trace does not re-enter as an error.
-      (params.level === "trace" ? params.traceWrite : params.write).call(console, line);
-    } else if (!timestamp && params.args.length === 0) {
+    } else if (
+      consoleStyle !== "json" &&
+      !timestamp &&
+      params.args.length === 0 &&
+      stack === undefined
+    ) {
       params.write.apply(console, params.args as []);
     } else {
       params.write.call(console, line);
@@ -239,7 +239,6 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
     args: [line],
     formatted: line,
     write: rawConsole[method],
-    traceWrite: rawConsole.error,
   });
   return true;
 }
@@ -283,7 +282,6 @@ export function enableConsoleCapture(): void {
     warn: console.warn,
     error: console.error,
     debug: console.debug,
-    trace: console.trace,
   };
   loggingState.rawConsole = {
     log: original.log,
@@ -325,7 +323,6 @@ export function enableConsoleCapture(): void {
         args,
         formatted,
         write: orig,
-        traceWrite: original.error,
         caller: forwardedConsoleCall,
       });
     };
@@ -337,5 +334,7 @@ export function enableConsoleCapture(): void {
   console.warn = forward("warn", original.warn);
   console.error = forward("error", original.error);
   console.debug = forward("debug", original.debug);
-  console.trace = forward("trace", original.trace);
+  // Native trace delegates to console.error; write the prepared stack directly
+  // so capture owns exactly one TRACE file record in every console style.
+  console.trace = forward("trace", original.error);
 }
