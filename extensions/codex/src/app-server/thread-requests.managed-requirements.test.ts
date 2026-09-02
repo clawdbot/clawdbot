@@ -13,9 +13,7 @@ const managedRequirements = {
 
 describe("configured app-server managed requirements", () => {
   it("admits managed hooks for an interactive plugin-policy turn", async () => {
-    const request = vi.fn(async () => ({
-      requirements: { hooks: managedRequirements.hooks },
-    }));
+    const request = vi.fn(async () => ({ requirements: managedRequirements }));
 
     await expect(
       assertCodexManagedRequirementsDoNotOverrideToolPolicy({ request } as never, {

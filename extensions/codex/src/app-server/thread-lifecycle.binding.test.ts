@@ -2717,6 +2717,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
             hooks: {
               PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }],
             },
+            featureRequirements: { hooks: true },
           },
         };
       }

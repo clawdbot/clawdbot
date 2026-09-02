@@ -635,7 +635,7 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         (options.restrictedToolSurface &&
           CODEX_RING_ZERO_RESTRICTED_FEATURES.has(canonicalFeature)) ||
         additionalDeniedFeatures.has(canonicalFeature);
-      if (canonicalFeature === "hooks" && managedRequirementsMatch) {
+      if (canonicalFeature === "hooks" && managedHooksAllowed) {
         continue;
       }
       if (enabled && deniedByToolPolicy) {
