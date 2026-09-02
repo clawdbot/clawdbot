@@ -2,6 +2,9 @@ import type { SessionEntry } from "./types.js";
 
 export type SqliteLifecycleTargetSnapshot = Array<{ entry: SessionEntry; sessionKey: string }>;
 
+/** Raw persisted-row identity for a patch target, compared cheaply at the commit edge. */
+export type SqliteSessionCommitFingerprint = string;
+
 class SqliteSessionMutationConflictError extends Error {
   constructor(operationLabel: string) {
     super(`SQLite session state changed while preparing ${operationLabel}`);
@@ -51,6 +54,16 @@ export function assertLifecycleTargetSnapshotUnchanged(
   operationLabel: string,
 ): void {
   if (!sqliteLifecycleTargetSnapshotsEqual(expected, current)) {
+    throw new SqliteSessionMutationConflictError(operationLabel);
+  }
+}
+
+export function assertSessionCommitFingerprintUnchanged(
+  expected: SqliteSessionCommitFingerprint,
+  current: SqliteSessionCommitFingerprint,
+  operationLabel: string,
+): void {
+  if (expected !== current) {
     throw new SqliteSessionMutationConflictError(operationLabel);
   }
 }

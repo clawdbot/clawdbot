@@ -560,6 +560,11 @@ export function writeSessionEntry(
     allowStoredAliases?: boolean;
     preserveNodeSuggestions?: boolean;
     previousEntry?: SessionEntry | null;
+    /**
+     * Caller-validated exact-row entry at the commit edge; skips the canonical re-read.
+     * `null` proves the row did not exist.
+     */
+    trustedCanonicalPreviousEntry?: SessionEntry | null;
     routeContext?: ConversationRouteContext | null;
   } = {},
 ): SessionEntry {
@@ -581,9 +586,11 @@ export function writeSessionEntry(
   // Doctor validated the raw rejected row before entering the transaction and passes its
   // hydrated snapshot explicitly; re-reading it through the runtime parser must stay fail-closed.
   const canonicalPreviousEntry =
-    options.allowStoredAliases && options.previousEntry !== undefined
-      ? (options.previousEntry ?? undefined)
-      : readExactSessionEntryRow(database, sessionKey)?.entry;
+    options.trustedCanonicalPreviousEntry !== undefined
+      ? (options.trustedCanonicalPreviousEntry ?? undefined)
+      : options.allowStoredAliases && options.previousEntry !== undefined
+        ? (options.previousEntry ?? undefined)
+        : readExactSessionEntryRow(database, sessionKey)?.entry;
   if (canonicalPreviousEntry?.sandbox === "required") {
     if (
       normalizedEntry.sandbox !== "required" ||

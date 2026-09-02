@@ -29,15 +29,20 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import {
-  assertLifecycleTargetSnapshotUnchanged,
+  assertSessionCommitFingerprintUnchanged,
   type SqliteLifecycleTargetSnapshot,
+  type SqliteSessionCommitFingerprint,
 } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  readLifecycleTargetCommitFingerprint,
+  readSessionEntrySelectionCommitFingerprint,
+} from "./session-accessor.sqlite-entry-fingerprint.js";
 import {
   collectSessionEntryLookupKeys,
   parseReadableSqliteSessionEntryRow,
   readExactSessionEntryRowValidated,
-  readSessionEntryRow,
   readLifecycleTargetSnapshot,
+  readSessionEntryRow,
   readSessionEntrySelectionSnapshot,
   readSessionIdentitySnapshot,
   writeSessionEntry,
@@ -435,6 +440,12 @@ export async function patchSessionEntryCore(
   return await patchSqliteSessionEntrySnapshot({
     operationLabel: "session-entry.patch",
     options,
+    readCommitFingerprint: (database) =>
+      readSessionEntrySelectionCommitFingerprint(
+        database,
+        resolved.sessionKey,
+        options.replaceEntry === true,
+      ),
     readSnapshot: (database) =>
       readSessionEntrySelectionSnapshot(
         database,
@@ -461,6 +472,8 @@ export async function patchSessionEntryTarget(
   return await patchSqliteSessionEntrySnapshot({
     operationLabel: "session-entry-target.patch",
     options,
+    readCommitFingerprint: (database) =>
+      readLifecycleTargetCommitFingerprint(database, scope.target),
     readSnapshot: (database) => readLifecycleTargetSnapshot(database, scope.target),
     resolved,
     sessionKey: scope.target.canonicalKey,
@@ -476,6 +489,7 @@ export async function patchSessionEntryTarget(
 type SqliteSessionEntrySnapshotPatchParams = {
   operationLabel: string;
   options: SqliteSessionEntryPatchOptions;
+  readCommitFingerprint: (database: OpenClawAgentDatabase) => SqliteSessionCommitFingerprint;
   readSnapshot: (database: OpenClawAgentDatabase) => SqliteLifecycleTargetSnapshot;
   resolved: ResolvedSqliteScope;
   sessionKey: string;
@@ -495,6 +509,7 @@ async function patchSqliteSessionEntrySnapshot(
   const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const prepared = params.readSnapshot(database);
+    const preparedFingerprint = params.readCommitFingerprint(database);
     const existing = prepared[0]?.entry;
     const writeBase = existing ?? options.fallbackEntry;
     if (!writeBase) {
@@ -526,21 +541,28 @@ async function patchSqliteSessionEntrySnapshot(
     let previousIdentity = new Map<string, SessionEntry>();
     let currentIdentity = new Map<string, SessionEntry>();
     runOpenClawAgentWriteTransaction((writeDatabase) => {
-      const fresh = params.readSnapshot(writeDatabase);
-      assertLifecycleTargetSnapshotUnchanged(prepared, fresh, params.operationLabel);
+      // Cheap raw-row revalidation keeps the commit-edge conflict contract without
+      // re-decoding the hydrated snapshot.
+      assertSessionCommitFingerprintUnchanged(
+        preparedFingerprint,
+        params.readCommitFingerprint(writeDatabase),
+        params.operationLabel,
+      );
       options.assertCommitAllowed?.();
       if (!next) {
         result = cloneSessionEntry(writeBase);
         return;
       }
-      // Commit reads own these entries; update callbacks only receive detached copies.
-      previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
-      const selectedPreviousEntry = fresh[0]?.entry ?? writeBase;
+      // The fingerprint proved the prepared rows are current; reuse their entries.
+      previousIdentity = new Map(prepared.map((row) => [row.sessionKey, row.entry]));
+      const selectedPreviousEntry = prepared[0]?.entry ?? writeBase;
       const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
         previousEntry: selectedPreviousEntry,
+        trustedCanonicalPreviousEntry: prepared[0]?.entry ?? null,
       });
       wrote = true;
-      currentIdentity = readSessionIdentitySnapshot(writeDatabase, [sessionKey]);
+      // The transaction just persisted this exact row; reuse it for identity publication.
+      currentIdentity = new Map([[sessionKey, persisted]]);
       result = cloneSessionEntry(persisted);
     }, toDatabaseOptions(resolved));
     try {

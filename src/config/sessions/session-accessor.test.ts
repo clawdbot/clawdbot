@@ -1189,6 +1189,39 @@ describe("session accessor seam", () => {
     }
   });
 
+  it("decodes the SQLite session row once across a successful entry patch", async () => {
+    const sessionKey = "agent:main:patch-decode-once";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "patch-decode-once", updatedAt: 41 },
+    );
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "patch decode database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const preparedRow = database.db
+      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey) as { entry_json: string } | undefined;
+    const preparedEntryJson = expectDefined(preparedRow?.entry_json, "prepared entry json");
+
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
+        model: "patch-decode-once",
+      }));
+      // The prepared row must be decoded exactly once (preparation), then cheaply
+      // revalidated at the commit edge instead of being re-decoded three more times.
+      expect(parse.mock.calls.filter(([value]) => value === preparedEntryJson)).toHaveLength(1);
+      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+        sessionId: "patch-decode-once",
+        model: "patch-decode-once",
+      });
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
   it("resolves non-main candidate entries from custom agent store templates", async () => {
     const storeTemplate = path.join(tempDir, "{agentId}.json");
     const supportStorePath = path.join(tempDir, "support.json");
