@@ -165,6 +165,10 @@ describe("installPluginFromNpmSpec e2e", () => {
         code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
       }),
     ]);
+    expect(refused.summary.errors[0]?.message).toContain(
+      "did not install the replacement plugin payload",
+    );
+    expect(refused.summary.errors[0]?.message).not.toContain("payload is missing");
     const projectDir = pluginNpmProjectRoot(npmRoot, packageName);
     await expect(fs.access(projectDir)).rejects.toHaveProperty("code", "ENOENT");
     const accepted = await sync(true);

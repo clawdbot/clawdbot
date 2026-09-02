@@ -201,7 +201,8 @@ Registry verification and any required capability review finish before the
 repaired install record is published.
 
 When a bundled plugin moves to an external package, failed relocation reports
-that the replacement payload is missing and points to `openclaw update repair`.
+that the replacement payload was not installed and preserves the underlying error.
+Resolve that error before retrying with `openclaw update repair`.
 Doctor and update repair reinstall configured payloads with missing package files
 or a reported missing runtime entry;
 an empty directory is not a successful installation. Rollback removes empty
