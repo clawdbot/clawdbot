@@ -998,6 +998,17 @@ describe("Bedrock toolUse.input replay sanitization", () => {
     expect(await toolUseInputOf('{"path":"README.md"}')).toEqual({ path: "README.md" });
   });
 
+  it("preserves unsafe integer literals in recovered serialized arguments", async () => {
+    // JSON.parse would round a 64-bit integer literal (e.g. a snowflake ID)
+    // before replay; the canonical transport coercion keeps it as a string,
+    // matching the terminal parser contract, so the replayed toolUse.input
+    // carries the exact stored value.
+    expect(await toolUseInputOf('{"id":9223372036854775807,"safe":42}')).toEqual({
+      id: "9223372036854775807",
+      safe: 42,
+    });
+  });
+
   it("preserves a well-formed object toolCall arguments as-is", async () => {
     expect(await toolUseInputOf({ path: "README.md" })).toEqual({ path: "README.md" });
   });

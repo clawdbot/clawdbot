@@ -58,12 +58,10 @@ export function coerceTransportToolCallArguments(argumentsValue: unknown): Recor
     return argumentsRecord;
   }
   if (typeof argumentsValue === "string") {
-    try {
-      return asNonArrayRecord(JSON.parse(argumentsValue));
-    } catch {
-      // Preserve malformed strings in stored history, but send object-shaped payloads to
-      // providers that require structured tool-call arguments.
-    }
+    // Same unsafe-integer contract as parseTerminalToolCallArguments below:
+    // raw JSON.parse rounds 64-bit literals before provider replay, silently
+    // changing stored tool arguments. Malformed strings fall through to {}.
+    return asNonArrayRecord(parseJsonObjectPreservingUnsafeIntegers(argumentsValue));
   }
   return {};
 }
