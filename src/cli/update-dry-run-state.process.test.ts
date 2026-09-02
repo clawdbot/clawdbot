@@ -230,7 +230,7 @@ describe("update process state", () => {
         },
       },
       snapshot: {
-        configDigest: `sha256:${await sha256File(configPath)}`,
+        configDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
         stateDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
       },
     });
@@ -301,7 +301,7 @@ describe("update process state", () => {
       mutationAllowed: false,
       outcome: "refused",
       refusal: { code: "snapshot-identity-unavailable" },
-      snapshot: { configDigest: `sha256:${await sha256File(configPath)}` },
+      snapshot: { configDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) },
     });
     expect(await snapshotTree(root)).toEqual(before);
   });

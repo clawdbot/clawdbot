@@ -43,23 +43,34 @@ function lstatIfPresent(filePath: string): fs.Stats | null {
   }
 }
 
-export function migrateLegacyProfileWorkspace(params: {
+export function resolveLegacyProfileWorkspaceMigrationPaths(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
-}): { changes: string[]; warnings: string[] } {
+}): { source: string; target: string } | undefined {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (!profile || normalizeLowercaseStringOrEmpty(profile) === "default") {
+    return undefined;
+  }
+  return {
+    source: path.join(resolveProfileStateDir("default", env, homedir), `workspace-${profile}`),
+    target: path.join(resolveProfileStateDir(profile, env, homedir), "workspace"),
+  };
+}
+
+export function migrateLegacyProfileWorkspace(params: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+}): { changes: string[]; warnings: string[] } {
+  const paths = resolveLegacyProfileWorkspaceMigrationPaths(params);
+  if (!paths) {
     return { changes: [], warnings: [] };
   }
 
   try {
-    const legacyDir = path.join(
-      resolveProfileStateDir("default", env, homedir),
-      `workspace-${profile}`,
-    );
-    const targetDir = path.join(resolveProfileStateDir(profile, env, homedir), "workspace");
+    const legacyDir = paths.source;
+    const targetDir = paths.target;
     const legacyStat = lstatIfPresent(legacyDir);
     if (!legacyStat) {
       return { changes: [], warnings: [] };

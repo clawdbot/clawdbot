@@ -1,15 +1,6 @@
-import { createConfigIO } from "../../config/io.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { planLegacyStateMigrationsReadOnly } from "../../infra/state-migrations.doctor.js";
-import {
-  captureLegacyStateSnapshotIdentity,
-  createLegacyStateMigrationPlan,
-  createLegacyStateMigrationPlanEnv,
-  refuseLegacyStateMigrationPlan,
-} from "../../infra/state-migrations.plan.js";
+import { refuseLegacyStateMigrationPlan } from "../../infra/state-migrations.plan.js";
 import type { LegacyStateMigrationPlan } from "../../infra/state-migrations.types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUpdateRoot } from "./shared.js";
@@ -33,85 +24,13 @@ async function createUpdateMigrationPlan(params: {
   snapshot: Pick<LegacyStateMigrationPlan["snapshot"], "homeDir" | "configPath" | "stateDir">;
   env?: NodeJS.ProcessEnv;
 }): Promise<LegacyStateMigrationPlan> {
-  const identityBefore = await captureLegacyStateSnapshotIdentity(params.snapshot);
-  const snapshot = {
-    ...params.snapshot,
-    ...(identityBefore.configDigest ? { configDigest: identityBefore.configDigest } : {}),
-    ...(identityBefore.stateDigest ? { stateDigest: identityBefore.stateDigest } : {}),
-  };
-  if (identityBefore.warnings.length > 0) {
-    return createLegacyStateMigrationPlan({
-      mode: "doctor",
-      candidate: params.candidate,
-      snapshot,
-      steps: [],
-      warnings: identityBefore.warnings,
-      refusal: {
-        code: "snapshot-identity-unavailable",
-        message: identityBefore.warnings.join("\n"),
-      },
-    });
-  }
-  const env = createLegacyStateMigrationPlanEnv({ env: params.env, snapshot });
-  const warnings = [...identityBefore.warnings];
-  const logger = {
-    error: (...values: unknown[]) => warnings.push(values.map(String).join(" ")),
-    warn: (...values: unknown[]) => warnings.push(values.map(String).join(" ")),
-  };
-  let cfg: OpenClawConfig = {};
-  try {
-    const configSnapshot = await createConfigIO({
-      configPath: snapshot.configPath,
-      env,
-      homedir: () => snapshot.homeDir,
-      logger,
-      observe: false,
-      pluginValidation: "core-only",
-      shellEnvFallback: "defer",
-    }).readConfigFileSnapshot();
-    cfg = configSnapshot.sourceConfig;
-    if (!configSnapshot.exists) {
-      warnings.push(`Snapshot config does not exist: ${snapshot.configPath}`);
-    }
-    warnings.push(
-      ...formatConfigIssueLines(
-        [...configSnapshot.issues, ...configSnapshot.legacyIssues, ...configSnapshot.warnings],
-        "",
-        { normalizeRoot: true },
-      ),
-    );
-  } catch (error) {
-    warnings.push(`Could not inspect snapshot config: ${formatErrorMessage(error)}`);
-  }
-  // Identity capture brackets every planning read so the result cannot claim a
-  // different copied snapshot than the one its steps describe.
   const plan = await planLegacyStateMigrationsReadOnly({
-    cfg,
     mode: "doctor",
     candidate: params.candidate,
-    snapshot,
-    env,
-    initialWarnings: warnings,
+    snapshot: params.snapshot,
+    env: params.env,
   });
-  const [identityAfter, observedVersion] = await Promise.all([
-    captureLegacyStateSnapshotIdentity(params.snapshot),
-    readPackageVersion(params.candidate.root),
-  ]);
-  if (identityAfter.warnings.length > 0) {
-    return refuseLegacyStateMigrationPlan(plan, {
-      code: "snapshot-identity-unavailable",
-      message: identityAfter.warnings.join("\n"),
-    });
-  }
-  if (
-    identityBefore.configDigest !== identityAfter.configDigest ||
-    identityBefore.stateDigest !== identityAfter.stateDigest
-  ) {
-    return refuseLegacyStateMigrationPlan(plan, {
-      code: "snapshot-identity-changed",
-      message: "Copied config or state changed while migration planning was in progress.",
-    });
-  }
+  const observedVersion = await readPackageVersion(params.candidate.root);
   if (observedVersion !== params.candidate.version) {
     return refuseLegacyStateMigrationPlan(plan, {
       code: "candidate-identity-changed",

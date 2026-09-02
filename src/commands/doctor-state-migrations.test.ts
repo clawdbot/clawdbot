@@ -4261,6 +4261,13 @@ describe("doctor legacy state migrations", () => {
       "profile workspace",
     );
     expect(result.changes).toContain(`Profile workspace: ${paths.legacyDir} → ${paths.targetDir}`);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "profile-workspace")).toMatchObject(
+      {
+        source: [{ kind: "path", path: paths.legacyDir }],
+        target: [{ kind: "path", path: paths.targetDir }],
+        outcome: "completed",
+      },
+    );
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining(paths.targetDir));
   });
 
@@ -4276,6 +4283,12 @@ describe("doctor legacy state migrations", () => {
 
     const warning = `Profile workspace migration skipped: target already exists (${paths.targetDir}). Kept legacy workspace at ${paths.legacyDir}; merge manually.`;
     expect(result.warnings).toContain(warning);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "profile-workspace")).toMatchObject(
+      {
+        outcome: "refused",
+        refusal: { code: "step-refused", message: warning },
+      },
+    );
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(warning));
     expect(fs.readFileSync(path.join(paths.legacyDir, "legacy.txt"), "utf8")).toBe("legacy");
     expect(fs.readFileSync(path.join(paths.targetDir, "current.txt"), "utf8")).toBe("current");

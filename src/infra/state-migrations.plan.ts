@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { createConfigIO } from "../config/io.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256File } from "./crypto-digest.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION,
   type LegacyStateMigrationMode,
@@ -121,6 +125,68 @@ export async function captureLegacyStateSnapshotIdentity(params: {
   };
 }
 
+export async function readLegacyStateMigrationPlanConfig(params: {
+  configPath: string;
+  homeDir: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<{
+  config: OpenClawConfig;
+  configDigest?: string;
+  rootDigest?: string;
+  warnings: string[];
+}> {
+  const warnings: string[] = [];
+  const logger = {
+    error: (...values: unknown[]) => warnings.push(values.map(String).join(" ")),
+    warn: (...values: unknown[]) => warnings.push(values.map(String).join(" ")),
+  };
+  try {
+    const { snapshot, writeOptions } = await createConfigIO({
+      configPath: params.configPath,
+      env: params.env,
+      homedir: () => params.homeDir,
+      logger,
+      observe: false,
+      pluginValidation: "core-only",
+      shellEnvFallback: "defer",
+    }).readConfigFileSnapshotForWrite();
+    if (!snapshot.exists) {
+      warnings.push(`Snapshot config does not exist: ${params.configPath}`);
+    }
+    warnings.push(
+      ...formatConfigIssueLines(
+        [...snapshot.issues, ...snapshot.legacyIssues, ...snapshot.warnings],
+        "",
+        { normalizeRoot: true },
+      ),
+    );
+    const rootHash = snapshot.hash;
+    if (!rootHash) {
+      warnings.push(`Could not hash snapshot config: ${params.configPath}`);
+      return { config: snapshot.sourceConfig, warnings };
+    }
+    const includes = Object.entries(writeOptions.includeFileHashesForWrite ?? {})
+      .map(([includePath, includeHash]) => ({
+        path: path.resolve(includePath),
+        hash: includeHash,
+      }))
+      .toSorted((left, right) => left.path.localeCompare(right.path));
+    return {
+      config: snapshot.sourceConfig,
+      configDigest: digest({
+        root: { path: path.resolve(snapshot.path), hash: rootHash },
+        includes,
+        resolved: snapshot.sourceConfig,
+      }),
+      rootDigest: `sha256:${rootHash}`,
+      warnings,
+    };
+  } catch (error) {
+    warnings.push(`Could not inspect snapshot config: ${formatErrorMessage(error)}`);
+    return { config: {}, warnings };
+  }
+}
+
 function normalizeEndpoint(endpoint: LegacyStateMigrationEndpoint): LegacyStateMigrationEndpoint {
   return endpoint.kind === "owner" ? endpoint : { ...endpoint, path: path.resolve(endpoint.path) };
 }
@@ -134,7 +200,6 @@ export function createLegacyStateMigrationPlanEnv(params: {
     "OPENCLAW_AGENT_DIR",
     "OPENCLAW_HOME",
     "OPENCLAW_OAUTH_DIR",
-    "OPENCLAW_PROFILE",
     "PI_CODING_AGENT_DIR",
     "STATE_DIRECTORY",
   ]) {
