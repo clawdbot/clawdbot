@@ -5690,7 +5690,7 @@ describe("update-cli", () => {
 
       await withEnvAsync(env, () =>
         invokeUpdateCli({ yes: true, json: true, acceptCapabilities: true, ...options }),
-      ).catch((error) => {
+      ).catch((error: unknown) => {
         throw new Error(`${getErrorOutput()}\n${JSON.stringify(lastWriteJsonCall())}`, {
           cause: error,
         });
