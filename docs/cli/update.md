@@ -208,7 +208,9 @@ or a reported missing runtime entry;
 an empty directory is not a successful installation. Rollback removes empty
 managed npm projects after staged files are cleaned up. Doctor preserves external
 companion packages and their install records even when a source checkout also
-contains a bundled-discovery copy of the same plugin.
+contains a bundled-discovery copy of the same plugin. Repair diagnostics must identify the recorded
+package root; a broken same-ID source copy does not trigger replacement of a
+healthy managed package.
 
 With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
