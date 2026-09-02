@@ -104,6 +104,7 @@
 
 .session-hovercard__attribution-copy {
   display: flex;
+  align-items: center;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -119,6 +120,43 @@
 .session-hovercard__attribution-others {
   flex: none;
   margin-left: 0.35em;
+  color: var(--muted);
+}
+
+button.session-hovercard__attribution-others {
+  padding: 1px 3px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  line-height: inherit;
+}
+
+button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+}
+
+openclaw-tooltip.session-hovercard__participants-tooltip {
+  --openclaw-tooltip-max-width: min(240px, calc(100vw - 24px));
+  --openclaw-tooltip-padding: 4px;
+}
+
+.session-hovercard__participant-menu {
+  display: grid;
+  min-width: 150px;
+  max-height: min(280px, 60vh);
+  overflow-y: auto;
+}
+
+.session-hovercard__participant-link {
+  min-height: 28px;
+  text-decoration: none;
+}
+
+.session-hovercard__participant-unresolved {
+  padding: 6px 8px;
   color: var(--muted);
 }
 

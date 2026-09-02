@@ -18,7 +18,11 @@ import {
 import { renderSessionColorDot } from "./session-color.ts";
 import { sessionOwnerInitials, type SessionCreatedActor } from "./session-owner-chip.ts";
 import { progressCardHeadsUp, renderProgressCardMarkdown } from "./session-progress-card.ts";
+import "./tooltip.ts";
 import "./viewer-facepile.ts";
+
+// Preserve the pre-dropdown facepile footprint; further identities remain linked in the menu.
+const MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS = 4;
 
 function participantLabel(participant: SessionParticipant): string {
   return participant.label?.trim() || participant.identity.id;
@@ -210,6 +214,42 @@ function sessionAttribution(
   };
 }
 
+function renderParticipantMenu(
+  participants: readonly SessionParticipant[],
+  participantCount: number,
+  personActivity: PersonActivityRouting | undefined,
+) {
+  const unresolvedCount = Math.max(0, participantCount - participants.length);
+  return html`<div
+    slot="content"
+    class="session-hovercard__participant-menu"
+    role="list"
+    aria-label=${t("sessionHovercard.moreParticipantsLabel", {
+      count: String(participantCount),
+    })}
+  >
+    ${participants.map((participant) => {
+      const label = participantLabel(participant);
+      const activity =
+        participant.identity.type === "profile"
+          ? personActivityLink(participant.identity.id, personActivity)
+          : null;
+      return html`<div role="listitem">
+        ${renderPersonName(
+          label,
+          activity,
+          "session-menu__item session-hovercard__participant-link",
+        )}
+      </div>`;
+    })}
+    ${unresolvedCount > 0
+      ? html`<div class="session-hovercard__participant-unresolved" role="listitem">
+          ${t("sessionHovercard.moreParticipantsLabel", { count: String(unresolvedCount) })}
+        </div>`
+      : nothing}
+  </div>`;
+}
+
 function renderSessionAttribution({
   row,
   selfUserId,
@@ -285,18 +325,36 @@ function renderSessionAttribution({
   ]
     .filter(Boolean)
     .join(", ");
+  const otherLabel =
+    otherCount > 0
+      ? t(
+          otherCount === 1
+            ? "sessionHovercard.attributionOther"
+            : "sessionHovercard.attributionOthers",
+          { count: String(otherCount) },
+        )
+      : "";
   return html`<div class="session-hovercard__attribution" aria-label=${attributionLabel}>
     <span class="session-hovercard__attribution-copy">
       ${renderPersonName(primaryLabel, primaryActivity, "session-hovercard__attribution-name")}
       ${otherCount > 0
-        ? html`<span class="session-hovercard__attribution-others"
-            >${t(
-              otherCount === 1
-                ? "sessionHovercard.attributionOther"
-                : "sessionHovercard.attributionOthers",
-              { count: String(otherCount) },
-            )}</span
-          >`
+        ? remainingParticipants.length > 0
+          ? html`<openclaw-tooltip
+              class="session-hovercard__participants-tooltip"
+              .describe=${false}
+            >
+              <button
+                type="button"
+                class="session-hovercard__attribution-others"
+                aria-label=${t("sessionHovercard.moreParticipantsLabel", {
+                  count: String(otherCount),
+                })}
+              >
+                ${otherLabel}
+              </button>
+              ${renderParticipantMenu(remainingParticipants, otherCount, personActivity)}
+            </openclaw-tooltip>`
+          : html`<span class="session-hovercard__attribution-others">${otherLabel}</span>`
         : nothing}
     </span>
     <span class="session-hovercard__attribution-avatars">
@@ -305,7 +363,10 @@ function renderSessionAttribution({
         ? html`<openclaw-viewer-facepile
             .staticParticipants=${remainingParticipants}
             .totalCount=${otherCount}
-            .maxVisible=${remainingParticipants.length}
+            .maxVisible=${Math.min(
+              remainingParticipants.length,
+              MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS,
+            )}
             .personActivity=${personActivity}
           ></openclaw-viewer-facepile>`
         : nothing}

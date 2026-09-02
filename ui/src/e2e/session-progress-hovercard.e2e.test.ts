@@ -1,12 +1,10 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
-  captureUiProofEnabled,
+  captureUiProof,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -15,15 +13,7 @@ import {
 } from "./chat-flow.test-support.ts";
 
 async function captureProof(page: Page, fileName: string): Promise<void> {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(path.join(suite.artifactDir, "session-progress-hovercard"), { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(path.join(suite.artifactDir, "session-progress-hovercard"), fileName),
-  });
+  await captureUiProof(suite, page, "session-progress-hovercard", fileName);
 }
 
 async function waitForPullRequestSubscription(
@@ -272,6 +262,8 @@ suite.define(() => {
                   { identity: { type: "profile", id: "profile-self" }, label: "You" },
                   { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
                   { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+                  { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+                  { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
                 ],
                 participantCount: 6,
                 startedAt: now - 89 * 24 * 60 * 60_000,
@@ -334,17 +326,20 @@ suite.define(() => {
           .not.toBe(restingBackground);
         await captureProof(page, "sidebar-row-hovercard-pr-hover.png");
         await expect
-          .poll(async () =>
-            (await card.locator(".session-hovercard__attribution-copy").textContent())
-              ?.replace(/\s+/gu, " ")
-              .trim(),
-          )
+          .poll(async () => {
+            const labels = await card
+              .locator(
+                ".session-hovercard__attribution-name, .session-hovercard__attribution-others",
+              )
+              .allTextContents();
+            return labels.join(" ").replace(/\s+/gu, " ").trim();
+          })
           .toBe("Ada King & 4 others");
         const attribution = card.locator(".session-hovercard__attribution");
         const attributionName = attribution.locator("a.session-hovercard__attribution-name");
         expect(await attributionName.getAttribute("href")).toBe("/activity?person=profile-ada");
         const linkedAvatars = attribution.locator(".person-activity-avatar-link .viewer-avatar");
-        await expect.poll(() => linkedAvatars.count()).toBe(3);
+        await expect.poll(() => linkedAvatars.count()).toBe(5);
         const collapsedSpread = await linkedAvatars.evaluateAll((avatars) => {
           const left = avatars.map((avatar) => avatar.getBoundingClientRect().left);
           return left.at(-1)! - left[0]!;
@@ -359,6 +354,13 @@ suite.define(() => {
           })
           .toBeGreaterThan(collapsedSpread + 5);
         await captureProof(page, "sidebar-row-hovercard-attribution-expanded.png");
+        const otherParticipants = attribution.locator(".session-hovercard__attribution-others");
+        await otherParticipants.hover();
+        const participantMenu = attribution.locator(".session-hovercard__participant-menu");
+        expect(
+          await participantMenu.locator("a.session-hovercard__participant-link").allTextContents(),
+        ).toEqual(["Mira", "Riley", "Sam", "Lee"]);
+        await captureProof(page, "sidebar-row-hovercard-participants-dropdown.png");
         expect(await card.locator(".session-hovercard__attribution").textContent()).not.toContain(
           "You",
         );

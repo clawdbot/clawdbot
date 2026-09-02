@@ -48,6 +48,17 @@ function progressCard(): ProgressCard {
   };
 }
 
+function attributionSummary(container: ParentNode): string {
+  return [
+    container.querySelector(".session-hovercard__attribution-name")?.textContent,
+    container.querySelector(".session-hovercard__attribution-others")?.textContent,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
 describe("renderSessionHovercard", () => {
   it.each(["purple", undefined, "default"])(
     "reflects the session color %s without unset chrome",
@@ -519,12 +530,7 @@ describe("renderSessionHovercard", () => {
       container,
     );
 
-    expect(
-      container
-        .querySelector(".session-hovercard__attribution-copy")
-        ?.textContent?.replace(/\s+/gu, " ")
-        .trim(),
-    ).toBe("Alice Baker & 5 others");
+    expect(attributionSummary(container)).toBe("Alice Baker & 5 others");
     expect(
       container.querySelector(".session-hovercard__attribution")?.getAttribute("aria-label"),
     ).toBe("Alice Baker, 5 more participants");
@@ -564,6 +570,8 @@ describe("renderSessionHovercard", () => {
             { identity: { type: "profile", id: "self" }, label: "You" },
             { identity: { type: "profile", id: "mira" }, label: "Mira" },
             { identity: { type: "profile", id: "riley" }, label: "Riley" },
+            { identity: { type: "profile", id: "sam" }, label: "Sam" },
+            { identity: { type: "profile", id: "lee" }, label: "Lee" },
           ],
           participantCount: 5,
         }),
@@ -572,12 +580,7 @@ describe("renderSessionHovercard", () => {
       container,
     );
 
-    expect(
-      container
-        .querySelector(".session-hovercard__attribution-copy")
-        ?.textContent?.replace(/\s+/gu, " ")
-        .trim(),
-    ).toBe("Alice Baker & 4 others");
+    expect(attributionSummary(container)).toBe("Alice Baker & 4 others");
     const facepile = container.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
       "openclaw-viewer-facepile",
     );
@@ -588,12 +591,40 @@ describe("renderSessionHovercard", () => {
     expect(participantLinks.map((link) => link.getAttribute("href"))).toEqual([
       "/activity?person=mira",
       "/activity?person=riley",
+      "/activity?person=sam",
+      "/activity?person=lee",
+    ]);
+
+    const participantsTooltip = container.querySelector(
+      "openclaw-tooltip.session-hovercard__participants-tooltip",
+    );
+    expect(
+      participantsTooltip?.querySelector<HTMLButtonElement>(
+        ".session-hovercard__attribution-others",
+      )?.textContent,
+    ).toContain("4 others");
+    expect(
+      [
+        ...(participantsTooltip?.querySelectorAll<HTMLAnchorElement>(
+          ".session-hovercard__participant-link",
+        ) ?? []),
+      ].map((link) => link.getAttribute("href")),
+    ).toEqual([
+      "/activity?person=mira",
+      "/activity?person=riley",
+      "/activity?person=sam",
+      "/activity?person=lee",
     ]);
 
     participantLinks[1]?.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true }),
     );
     expect(navigate).toHaveBeenCalledWith("riley");
+
+    participantsTooltip
+      ?.querySelector<HTMLAnchorElement>('.session-hovercard__participant-link[href$="lee"]')
+      ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(navigate).toHaveBeenLastCalledWith("lee");
   });
 
   it("uses the first participant as the attribution when the creator is unknown", () => {
@@ -614,12 +645,7 @@ describe("renderSessionHovercard", () => {
       container,
     );
 
-    expect(
-      container
-        .querySelector(".session-hovercard__attribution-copy")
-        ?.textContent?.replace(/\s+/gu, " ")
-        .trim(),
-    ).toBe("Mira & 3 others");
+    expect(attributionSummary(container)).toBe("Mira & 3 others");
   });
 
   it("keeps the identity plain text when no activity route is available", () => {
