@@ -10,6 +10,7 @@ import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/ru
 import { FailoverError } from "../../agents/failover-error.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import type { TemplateContext } from "../templating.js";
@@ -37,6 +38,71 @@ function rejectUnexpectedCompactionSuccessor(): never {
 }
 
 describe("executeAgentTurn: CLI session routing", () => {
+  it.each(["revised", "revision-established"])(
+    "rejects a %s parent lifecycle before queued CLI execution",
+    async (kind) => {
+      const sessionKey = "agent:main:cli-revision";
+      const storePath = makeTestSessionStorePath();
+      const entry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        ...(kind === "revised" ? { lifecycleRevision: "original" } : {}),
+      };
+      const binding = { sessionId: "native-session", authProfileId: "anthropic:cli" };
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { ...entry, cliSessionBindings: { "claude-cli": binding } },
+      );
+      const followupRun = createFollowupRun();
+      followupRun.run.provider = "claude-cli";
+      followupRun.run.model = "claude-sonnet-4-6";
+      state.isCliProviderMock.mockReturnValue(true);
+      state.runWithModelFallbackMock.mockImplementationOnce(
+        async (params: FallbackRunnerParams) => ({
+          result: await params.run(
+            "claude-cli",
+            "claude-sonnet-4-6",
+            initialFallbackAttemptOptions(params),
+          ),
+          provider: "claude-cli",
+          model: "claude-sonnet-4-6",
+          attempts: [],
+        }),
+      );
+      state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+      const uninstall = installSessionPlacementAdmissionProvider({
+        assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+        executeLocalTurn: async (_claim, runLocal) => {
+          // Mutating the prepared object must not change the captured admission revision.
+          entry.lifecycleRevision = "replacement";
+          await replaceSessionEntry(
+            { sessionKey, storePath },
+            { ...entry, cliSessionBindings: { "claude-cli": binding } },
+          );
+          return await runLocal();
+        },
+        executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+      });
+      try {
+        const executeAgentTurn = await getExecuteAgentTurnForTest();
+        const result = await executeAgentTurn({
+          ...createMinimalRunAgentTurnParams({ followupRun }),
+          sessionKey,
+          storePath,
+          activeSessionStore: { [sessionKey]: entry },
+          getActiveSessionEntry: () => entry,
+        });
+        expect(result.kind).toBe("final");
+        expect(state.runCliAgentMock).not.toHaveBeenCalled();
+        expect(
+          loadSessionEntry({ sessionKey, storePath })?.cliSessionBindings?.["claude-cli"],
+        ).toEqual(binding);
+      } finally {
+        uninstall();
+      }
+    },
+  );
+
   it("carries the admitted session permission and placement into the CLI grant", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -532,6 +598,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     };
     const activeSessionStore = { main: sessionEntry };
 
+    await replaceSessionEntry({ sessionKey: "main", storePath }, sessionEntry);
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       commandBody: "runtime prompt",

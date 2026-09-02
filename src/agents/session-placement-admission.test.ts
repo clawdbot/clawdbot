@@ -157,7 +157,7 @@ describe("local turn placement admission", () => {
       );
       const result = followup.then(
         (value) => ({ value }),
-        (error) => ({ error }),
+        (error: unknown) => ({ error }),
       );
       try {
         activeTurn.resolve();
@@ -224,7 +224,7 @@ describe("local turn placement admission", () => {
     );
     const result = run.then(
       () => undefined,
-      (error) => error,
+      (error: unknown) => error,
     );
     if (stage === "placement") {
       await started.promise;
