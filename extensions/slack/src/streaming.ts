@@ -160,7 +160,7 @@ export async function startSlackStream(
     try {
       const result = await streamer.append({
         ...(text ? { markdown_text: text } : {}),
-        ...(chunks?.length ? { chunks } : {}),
+        ...(chunks ? { chunks } : {}),
       });
       if (result) {
         session.delivered = true;
@@ -208,7 +208,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     // non-null means Slack accepted the pending buffer/chunks and it is visible.
     const result = await session.streamer.append({
       ...(text ? { markdown_text: text } : {}),
-      ...(chunks?.length ? { chunks } : {}),
+      ...(chunks ? { chunks } : {}),
     });
     if (result) {
       session.delivered = true;

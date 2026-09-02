@@ -11,8 +11,10 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { InternalAgentTurnDispatchOptions } from "../../../gateway/agent-turn/internal-facade.types.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
+import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import { buildSessionHistorySnapshot } from "../../../gateway/session-history-state.js";
@@ -27,6 +29,7 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrations.legacy-session-store.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -95,12 +98,113 @@ type EmbeddedAgentQueueFailureReason = Extract<
 >["reason"];
 
 afterEach(() => {
+  vi.useRealTimers();
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
   setActivePluginRegistry(createTestRegistry());
   testing.setDepsForTest();
   sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery.mockClear();
   sessionDeliveryQueueMocks.releaseSessionDeliveryClaim.mockClear();
   sessionDeliveryQueueMocks.scheduleSessionDelivery.mockClear();
+});
+
+describe("queued completion handoff", () => {
+  it.each(["delivered", "source retired", "execution timeout", "delivery deadline"] as const)(
+    "keeps an accepted busy-parent completion pending until execution: %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const accepted = createDeferredCore<InternalAgentTurnDispatchOptions>();
+      const parentSettled = createDeferredCore();
+      const executionSettled = createDeferredCore();
+      const executionStarted = createDeferredCore();
+      const deliveryDeadline = new AbortController();
+      let sourceAllowed = true;
+      let executed = false;
+      const dispatchGatewayMethodInProcess: typeof runtimeDispatchGatewayMethodInProcess = async <
+        T,
+      >(
+        _method: string,
+        _params: Record<string, unknown>,
+        options?: InternalAgentTurnDispatchOptions,
+      ) => {
+        options?.onAccepted?.({ status: "accepted", runId: "completion-run" });
+        accepted.resolve(options ?? {});
+        const operation = parentSettled.promise.then(async () => {
+          options?.onExecutionStarted?.();
+          executed = true;
+          executionStarted.resolve();
+          await executionSettled.promise;
+          return { result: { payloads: [{ text: "Parent received child result" }] } } as T;
+        });
+        return await waitForGatewayDispatch(
+          "agent",
+          operation,
+          options?.timeoutMs,
+          options?.signal,
+        );
+      };
+      testing.setDepsForTest({
+        dispatchGatewayMethodInProcess,
+        getRuntimeConfig: () => ({}),
+        getRequesterSessionActivity: () => ({ sessionId: "busy-parent", isActive: true }),
+        queueEmbeddedAgentMessageWithOutcome: () => ({
+          queued: false,
+          reason: "no_active_run",
+          sessionId: "busy-parent",
+          gatewayHealth: "live",
+        }),
+      });
+      let finished = false;
+      const delivery = deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:main:subagent:parent",
+        targetRequesterSessionKey: "agent:main:subagent:parent",
+        requesterIsSubagent: true,
+        expectsCompletionMessage: true,
+        triggerMessage: "Child result ready",
+        steerMessage: "Child result ready",
+        directIdempotencyKey: "busy-parent-completion",
+        isSourceSessionEffectsAllowed: () => sourceAllowed,
+        signal: deliveryDeadline.signal,
+      }).finally(() => {
+        finished = true;
+      });
+      try {
+        await accepted.promise;
+        await vi.advanceTimersByTimeAsync(120_001);
+        expect(finished).toBe(false);
+        expect(executed).toBe(false);
+        if (outcome === "delivery deadline") {
+          deliveryDeadline.abort(new Error("completion delivery expired"));
+          expect(await delivery).toMatchObject({ delivered: false, path: "none" });
+          parentSettled.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+          expect(executed).toBe(false);
+          return;
+        }
+        sourceAllowed = outcome !== "source retired";
+        parentSettled.resolve();
+        if (outcome === "execution timeout") {
+          await executionStarted.promise;
+          await vi.advanceTimersByTimeAsync(120_001);
+          expect(await delivery).toMatchObject({
+            delivered: false,
+            error: "gateway request timeout for agent",
+          });
+          return;
+        }
+        executionSettled.resolve();
+        expect(await delivery).toMatchObject(
+          sourceAllowed
+            ? { delivered: true, path: "direct" }
+            : { delivered: false, reason: "source_owner_changed" },
+        );
+        expect(executed).toBe(sourceAllowed);
+      } finally {
+        parentSettled.resolve();
+        executionSettled.resolve();
+        await delivery;
+      }
+    },
+  );
 });
 
 const slackThreadOrigin = {
@@ -2235,9 +2339,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         targetSessionId: "requester-session-local",
         idempotencyKey: "announce-local-dispatch",
       },
-      timeoutMs: 120_000,
       resolveGatewayContext,
-      signal,
+      signal: expect.any(AbortSignal),
     });
   });
 

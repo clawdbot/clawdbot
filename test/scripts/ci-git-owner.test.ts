@@ -745,99 +745,30 @@ sys.stdout.write(git_output(os.getcwd(), "rev-parse", "HEAD", env={"CI_OWNER_PRO
   55_000,
 );
 
-const lookups: { step: string; env: Record<string, string>; output: string }[] = [
-  {
-    step: "Resolve exact diff base",
-    env: { RELEASE_GATE: "false" },
-    output: `sha=${base}\nhead_sha=${head}\n`,
-  },
-  {
-    step: "Validate historical release target",
-    env: { HISTORICAL_TARGET_TAG: "v2026.8.1", EXPECTED_SHA: head },
-    output: "eligible=true\n",
-  },
-  {
-    step: "Validate release candidate target",
-    env: { RELEASE_CANDIDATE_REF: "release/2026.8.1", EXPECTED_SHA: head },
-    output: "eligible=true\n",
-  },
-  {
-    step: "Validate target context",
-    env: { TARGET_CONTEXT_REF: "release/2026.8.1", TARGET_REF: head },
-    output: "eligible=true\n",
-  },
-  {
-    step: "Classify candidate cache trust",
-    env: {
-      CHECKOUT_REVISION: head,
-      WORKFLOW_REVISION: head,
-      RELEASE_CANDIDATE_TARGET: "false",
-      TARGET_CONTEXT_TARGET: "false",
-      TARGET_REF: "",
-    },
-    output: "trust=main\ncache_mode=restore\ncache_write_allowed=true\n",
-  },
-];
-
-linuxIt.each(
-  lookups.flatMap((lookup) =>
-    ([0, 23, "cleanup-failure"] as const).map((code) => Object.assign({}, lookup, { code })),
-  ),
-)(
-  "$step drains lookup output before consumption ($code)",
-  async ({ step, env, output, code }) => {
+linuxIt.each([0, 23, "cleanup-failure"] as const)(
+  "generic Git output drains its writers before consumption (%s)",
+  async (code) => {
+    const output = `${head}\trefs/heads/main\n`;
     const report = await runCiGitStep({
-      job: "preflight",
-      step,
-      env: { GITHUB_EVENT_NAME: "workflow_dispatch", ...env },
-      prepare: true,
+      policy:
+        policyImport +
+        'import sys\nsys.stdout.write(git_output(os.getcwd(), "ls-remote", "origin", "refs/heads/main"))\n',
       fetchResults: [],
-      lsRemoteResults: [{ code, output: `${head}\trefs/heads/main\n` }],
+      lsRemoteResults: [{ code, output }],
     });
     expect(report.code, report.output).toBe(code === "cleanup-failure" ? 125 : code);
-    expect(report.githubOutput).toBe(code === 0 ? output : "");
-    expect(report.commands.filter(({ args }) => args[0] === "ls-remote")).toHaveLength(1);
-    if (code !== 0) {
-      expect(report.commands.some(({ tool }) => tool === "gh")).toBe(false);
+    expect(report.commands.map(({ args }) => args)).toEqual([
+      ["ls-remote", "origin", "refs/heads/main"],
+    ]);
+    expect(report.readyAttempts).toEqual([1]);
+    if (code === 0) {
+      expect(report.output).toBe(output);
+    } else {
+      expect(report.output).not.toContain(output);
     }
   },
   55_000,
 );
-
-linuxIt.each([0, 23, "cleanup-failure"] as const)(
-  "historical tag fallback follows only successful empty peeled lookup (%s)",
-  async (code) => {
-    const report = await runCiGitStep({
-      job: "preflight",
-      step: "Validate historical release target",
-      env: { HISTORICAL_TARGET_TAG: "v2026.8.1", EXPECTED_SHA: head },
-      prepare: true,
-      fetchResults: [],
-      lsRemoteResults: [
-        { code, output: "" },
-        { code: 0, output: `${head}\trefs/tags/v2026.8.1\n` },
-      ],
-    });
-    expect(report.code, report.output).toBe(code === "cleanup-failure" ? 125 : code);
-    expect(
-      report.commands.filter(({ args }) => args[0] === "ls-remote").map(({ args }) => args.at(-1)),
-    ).toEqual(
-      code === 0 ? ["refs/tags/v2026.8.1^{}", "refs/tags/v2026.8.1"] : ["refs/tags/v2026.8.1^{}"],
-    );
-    expect(report.githubOutput).toBe(code === 0 ? "eligible=true\n" : "");
-  },
-  55_000,
-);
-
-it("preserves no per-operation deadline on all six CI remote lookups", () => {
-  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
-    jobs: { preflight: { steps: { run?: string }[] } };
-  };
-  const calls = workflow.jobs.preflight.steps.flatMap(({ run }) =>
-    Array.from((run ?? "").matchAll(/--git (\S+) ls-remote/gu)),
-  );
-  expect(calls.map((call) => call[1])).toEqual(Array(6).fill("0"));
-});
 
 const posixIt = it.skipIf(process.platform === "win32").concurrent;
 const auditFiles = [".pre-commit-config.yaml", ".github/zizmor.yml"];
@@ -1340,9 +1271,11 @@ posixIt.each([0, 2, 23, 125, 143, "hang", "cleanup-failure", "cancel"] as const)
       expect(report.githubOutput).toBe("");
       expect(report.githubSummary).toBe("");
       expect(report.commands.at(-1)?.args[0]).toBe("ls-remote");
-      if (typeof code === "number" || code === "hang")
+      if (typeof code === "number" || code === "hang") {
         expect(report.output).toContain(`(status ${code === "hang" ? 124 : code})`);
-      else expect(report.output).not.toContain("Unable to determine");
+      } else {
+        expect(report.output).not.toContain("Unable to determine");
+      }
     }
   },
   55_000,
@@ -1355,7 +1288,9 @@ posixIt.each(
     { match: "^rev-parse refs/remotes", occurrence: 1 },
     { match: "^rev-parse refs/remotes", occurrence: 2 },
     { match: "^diff ", occurrence: 1 },
-  ].flatMap((site) => (["cleanup-failure", "cancel"] as const).map((code) => ({ ...site, code }))),
+  ].flatMap((site) =>
+    (["cleanup-failure", "cancel"] as const).map((code) => Object.assign({}, site, { code })),
+  ),
 )(
   "maturity $code at $match/$occurrence stops before fallback/output",
   async ({ match, occurrence, code }) => {
@@ -1425,7 +1360,7 @@ posixIt.each(
     { match: "^fetch ", occurrence: 2 },
     { match: "^ls-tree ", occurrence: 5 },
   ].flatMap((site) =>
-    ([23, "cleanup-failure", "cancel"] as const).map((code) => ({ ...site, code })),
+    ([23, "cleanup-failure", "cancel"] as const).map((code) => Object.assign({}, site, { code })),
   ),
 )(
   "generated publisher verify_publication $code at $match is terminal",
@@ -1662,7 +1597,9 @@ posixIt.each([
     expect(report.fetches).toHaveLength(fetches);
     expect(report.githubOutput).toBe("");
     expect(report.githubSummary).toBe("");
-    if (diagnostic) expect(report.output).toContain(diagnostic);
+    if (diagnostic) {
+      expect(report.output).toContain(diagnostic);
+    }
   },
   55_000,
 );

@@ -807,11 +807,13 @@ jobs:
               --base "$base_sha" --head HEAD --prefer-first-parent)"
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" != "true" ]; then
-            default_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1}')"
+            encoded_ref="$(jq -rn --arg value "refs/heads/${DEFAULT_BRANCH}" '$value | @uri')"
+            default_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
             if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
               echo "Could not resolve the default branch head for the manual target." >&2
               exit 1
             fi
+            echo "default_sha=$default_sha" >> "$GITHUB_OUTPUT"
             base_sha="$(
               gh api --method GET \
                 "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}" \
@@ -844,6 +846,7 @@ jobs:
         if: inputs.historical_target_tag != ''
         env:
           EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
           HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
         run: |
           set -euo pipefail
@@ -851,12 +854,8 @@ jobs:
             echo "historical_target_tag must be a canonical OpenClaw release tag." >&2
             exit 1
           fi
-          tag_ref="refs/tags/${HISTORICAL_TARGET_TAG}"
-          remote="$(git remote get-url origin)"
-          tag_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --tags "$remote" "${tag_ref}^{}" | awk 'NR == 1 { print $1 }')"
-          if [[ -z "$tag_sha" ]]; then
-            tag_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --tags "$remote" "$tag_ref" | awk 'NR == 1 { print $1 }')"
-          fi
+          encoded_ref="$(jq -rn --arg value "refs/tags/${HISTORICAL_TARGET_TAG}" '$value | @uri')"
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
           if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
             echo "Historical release tag ${HISTORICAL_TARGET_TAG} does not resolve to ${EXPECTED_SHA}." >&2
             exit 1
@@ -868,6 +867,7 @@ jobs:
         if: inputs.release_candidate_ref != ''
         env:
           EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_CANDIDATE_REF: ${{ inputs.release_candidate_ref }}
         run: |
           set -euo pipefail
@@ -875,8 +875,8 @@ jobs:
             echo "release_candidate_ref must be a canonical OpenClaw release branch." >&2
             exit 1
           fi
-          remote="$(git remote get-url origin)"
-          branch_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --heads "$remote" "refs/heads/${RELEASE_CANDIDATE_REF}" | awk 'NR == 1 { print $1 }')"
+          encoded_ref="$(jq -rn --arg value "refs/heads/${RELEASE_CANDIDATE_REF}" '$value | @uri')"
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
           if [[ "$branch_sha" != "$EXPECTED_SHA" ]]; then
             echo "Release candidate branch ${RELEASE_CANDIDATE_REF} does not resolve to ${EXPECTED_SHA}." >&2
             exit 1
@@ -900,7 +900,8 @@ jobs:
             echo "target_context_ref requires target_ref to be a full commit SHA." >&2
             exit 1
           fi
-          branch_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --heads origin "refs/heads/${TARGET_CONTEXT_REF}" | awk 'NR == 1 { print $1 }')"
+          encoded_ref="$(jq -rn --arg value "refs/heads/${TARGET_CONTEXT_REF}" '$value | @uri')"
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
           if [[ ! "$branch_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "target_context_ref branch ${TARGET_CONTEXT_REF} does not exist." >&2
             exit 1
@@ -914,11 +915,38 @@ jobs:
           fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
+      - name: Setup manifest TypeScript runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve release correction base
+        id: release_correction_base
+        if: github.event_name == 'workflow_dispatch' && (inputs.release_scope == 'npm-beta' || inputs.release_scope == 'npm-stable')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_CONTEXT_REF: ${{ steps.target_context_target.outputs.eligible == 'true' && inputs.target_context_ref || steps.historical_target.outputs.eligible == 'true' && inputs.historical_target_tag || '' }}
+        run: |
+          # Keep the token outside the manifest step, which imports candidate-owned code.
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { resolveReleaseContextIdentity } from './.ci-harness/scripts/lib/release-context.mjs';
+          const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+          const identity = resolveReleaseContextIdentity(process.env.TARGET_CONTEXT_REF, version);
+          if (identity?.baseTag) {
+            const ref = encodeURIComponent(`refs/tags/${identity.baseTag}`);
+            const sha = execFileSync('gh', ['api', `repos/${process.env.GITHUB_REPOSITORY}/commits/${ref}`, '--jq', '.sha'], { encoding: 'utf8' }).trim();
+            if (!/^[0-9a-f]{40}$/u.test(sha)) throw new Error(`Could not resolve correction base ${identity.baseTag}.`);
+            appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
+          }
+          NODE
+
       - name: Classify candidate cache trust
         id: candidate_trust
         env:
           CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DEFAULT_SHA: ${{ steps.diff_base.outputs.default_sha }}
           HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
           RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
@@ -940,7 +968,6 @@ jobs:
             trust=pull-request
             cache_mode=restore
           elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            default_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
             if [[ "$RELEASE_GATE" == "true" ]]; then
               trust=pull-request
               cache_mode=restore
@@ -952,7 +979,7 @@ jobs:
               trust=release
               cache_mode=restore
               cache_write_allowed=true
-            elif [[ -n "$default_sha" && "$CHECKOUT_REVISION" == "$default_sha" ]]; then
+            elif [[ -n "$DEFAULT_SHA" && "$CHECKOUT_REVISION" == "$DEFAULT_SHA" ]]; then
               trust=main
               cache_mode=restore
               cache_write_allowed=true
@@ -1003,11 +1030,6 @@ jobs:
             node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"
           fi
 
-      - name: Setup manifest TypeScript runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
       # Current-revision preflight is dependency-free: the manifest planner
       # closure and protocol coverage import only node builtins and relative
       # files, and Node strips their types natively. Different-revision manual
@@ -1045,6 +1067,7 @@ jobs:
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          OPENCLAW_CI_CORRECTION_BASE_SHA: ${{ steps.release_correction_base.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           OPENCLAW_CI_RELEASE_SCOPE: ${{ inputs.release_scope || 'full' }}
@@ -1065,7 +1088,6 @@ jobs:
             manifest_node_args+=(--import tsx)
           fi
           node "${manifest_node_args[@]}" --input-type=module <<'EOF'
-          import { execFileSync } from "node:child_process";
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
           import { matchesGlob } from "node:path";
           import { resolveTestGitCommits } from "./.ci-harness/.github/actions/git-owner/test-prerequisites.mjs";
@@ -1216,16 +1238,7 @@ jobs:
             }
             if (identity.baseTag) {
               // Base-package corrections reuse the base tag's exact source; ancestry alone is insufficient.
-              const baseRef = `refs/tags/${identity.baseTag}`;
-              const remoteRefs = execFileSync("python3", [
-                "-I", "-S", `${process.env.RUNNER_TEMP}/ci-git-owner.py`, "--git", "120",
-                "ls-remote", "--tags", "https://github.com/openclaw/openclaw.git", baseRef, `${baseRef}^{}`,
-              ], { encoding: "utf8" });
-              const refs = new Map(remoteRefs.trim().split("\n").filter(Boolean).map((line) => {
-                const [sha, ref] = line.split(/\s+/u);
-                return [ref, sha];
-              }));
-              if (!refs.has(baseRef) || (refs.get(`${baseRef}^{}`) ?? refs.get(baseRef)) !== checkoutRevision) {
+              if (process.env.OPENCLAW_CI_CORRECTION_BASE_SHA !== checkoutRevision) {
                 throw new Error(`release_scope ${releaseScope} correction base ${identity.baseTag} does not resolve to ${checkoutRevision}`);
               }
             }

@@ -1,4 +1,5 @@
 // Slack tests cover streaming plugin behavior.
+import { WebClient } from "@slack/web-api";
 import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -34,6 +35,41 @@ function slackApiError(code: string): Error {
 }
 
 describe("stopSlackStream finalize error handling", () => {
+  it("flushes short committed replies through the real SDK before stream finalization", async () => {
+    const client = new WebClient("xoxb-synthetic");
+    const start = vi.spyOn(client.chat, "startStream").mockResolvedValue({
+      ok: true,
+      ts: "1700000000.500300",
+    });
+    const append = vi.spyOn(client.chat, "appendStream").mockResolvedValue({ ok: true });
+    vi.spyOn(client.chat, "stopStream").mockRejectedValue(slackApiError("internal_error"));
+
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      text: "first short answer",
+      chunks: [],
+    });
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread_ts: "1700000000.000100",
+        chunks: [{ type: "markdown_text", text: "first short answer" }],
+      }),
+    );
+
+    await appendSlackStream({ session, text: "second short answer", chunks: [] });
+    expect(append).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ts: "1700000000.500300",
+        chunks: [{ type: "markdown_text", text: "second short answer" }],
+      }),
+    );
+    expect(session.pendingText).toBe("");
+    await expect(stopSlackStream({ session })).rejects.toThrow("internal_error");
+    expect(session.delivered).toBe(true);
+  });
+
   it("starts and appends supported structured stream chunks without buffering markdown text", async () => {
     const append = vi.fn(async () => ({ ts: "1700000000.100205" }));
     const client = {
