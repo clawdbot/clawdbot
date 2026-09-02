@@ -610,8 +610,9 @@ suite.define(() => {
               const thread = element
                 .closest(".chat-main__conversation")
                 ?.querySelector(".chat-thread");
-              if (!thread)
+              if (!thread) {
                 throw new Error("Expected the built-in conversation beside its composer.");
+              }
               const shellBounds = element.getBoundingClientRect();
               const threadBounds = thread.getBoundingClientRect();
               const style = getComputedStyle(element, "::before");
