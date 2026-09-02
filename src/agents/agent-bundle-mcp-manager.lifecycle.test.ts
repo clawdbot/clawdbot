@@ -106,6 +106,7 @@ afterEach(async () => {
   }
   await Promise.all(managers.splice(0).map((manager) => manager.disposeAll()));
   resolverTesting.setMcpServerConnectionResolversForTest();
+  resolverTesting.setMcpConnectionRevalidateMsForTest();
 });
 
 describe("MCP manager creation ownership", () => {
