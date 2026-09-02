@@ -180,6 +180,8 @@ suite.define(() => {
       await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
       await page.keyboard.press("Enter");
       await menu.getByText("Selected for this session", { exact: true }).waitFor();
+      // The new view renders before its frame-bound focus handoff finishes.
+      await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
       expect(await gateway.getRequests("skills.library.activate")).toHaveLength(0);
       await page.keyboard.press("Home");
       await page.keyboard.press("ArrowDown");

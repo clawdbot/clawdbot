@@ -303,6 +303,19 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     return this.getSessionNavigationState().selectedAgentId;
   }
 
+  sidebarSessionHref(session: SidebarRecentSession): string {
+    // Build links only for rendered rows, after full-roster projection and pagination.
+    return sessionNavigationTarget({
+      face: resolveSessionPreferredFace(session),
+      sessionKey: session.key,
+      fallbackAgentId: this.selectedAgentIdForSessions(),
+      basePath: this.context?.basePath ?? "",
+      row: session,
+      mainKey: this.context ? this.sessionMainKey() : undefined,
+      preferenceDerivedFace: true,
+    }).href;
+  }
+
   sidebarSessionStatusFilter(): SidebarSessionStatusFilter {
     return this.sessionsStatusFilter;
   }

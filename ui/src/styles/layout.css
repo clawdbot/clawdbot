@@ -1614,6 +1614,11 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
+.sidebar-session-group-toggle > .sidebar-recent-sessions__label-text {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */

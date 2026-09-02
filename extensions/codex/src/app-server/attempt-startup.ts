@@ -613,10 +613,7 @@ export async function startCodexAttemptThread(params: {
               } else if (
                 !isCodexAppServerStartSelectionChangedError(startupAttemptError) &&
                 (shouldClearSharedClientAfterStartupRace(startupAttemptError) ||
-                  shouldClearSharedClientAfterStartupFailure({
-                    error: startupAttemptError,
-                    spawnedBy: params.spawnedBy,
-                  }))
+                  shouldClearSharedClientAfterStartupFailure(startupAttemptError, params.spawnedBy))
               ) {
                 if (startupClientForAbandonedRequestCleanup === startupClient) {
                   startupClientForAbandonedRequestCleanup = undefined;
@@ -698,10 +695,7 @@ export async function startCodexAttemptThread(params: {
     } else if (
       !isCodexAppServerStartSelectionChangedError(error) &&
       (shouldClearSharedClientAfterStartupRace(error) ||
-        shouldClearSharedClientAfterStartupFailure({
-          error,
-          spawnedBy: params.spawnedBy,
-        }))
+        shouldClearSharedClientAfterStartupFailure(error, params.spawnedBy))
     ) {
       releaseSharedClientLease?.();
       releaseSharedClientLease = undefined;
@@ -718,12 +712,15 @@ function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
   return isCodexAppServerStartupError(error) || isCodexAppServerRequestTimeoutError(error);
 }
 
-function shouldClearSharedClientAfterStartupFailure(params: {
-  error: unknown;
-  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
-}): boolean {
-  if (isCodexAppServerOverloadError(params.error)) {
-    return false;
-  }
-  return isCodexAppServerBrokenPipeError(params.error) || !params.spawnedBy;
+function shouldClearSharedClientAfterStartupFailure(
+  error: unknown,
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
+): boolean {
+  // Model-independent preflights preserve healthy conversations. A handoff with
+  // an uncertain native write owns its retirement at the resume boundary.
+  return (
+    !isCodexAppServerOverloadError(error) &&
+    !(error instanceof AgentHarnessPreflightError && error.scope === undefined) &&
+    (isCodexAppServerBrokenPipeError(error) || !spawnedBy)
+  );
 }

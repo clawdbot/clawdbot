@@ -691,7 +691,7 @@ describe("devices cli tokens", () => {
       { role: "operator", scopes: undefined },
     ])("selects connection scopes for the $role role", async ({ role, scopes }) => {
       const argv = [command, "--device", " device-1 ", "--role", ` ${role} `];
-      const tokenScopes = ["messages:send", "messages:read"] as const;
+      const tokenScopes = [`${role}.read`, `${role}.write`] as const;
       if (command === "rotate") {
         argv.push("--scope", tokenScopes[0], "--scope", tokenScopes[1]);
       }

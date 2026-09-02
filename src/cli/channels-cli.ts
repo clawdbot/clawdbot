@@ -5,7 +5,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
@@ -22,7 +22,6 @@ import { formatHelpExamples } from "./help-format.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
-type ChannelsCommandsModule = typeof import("../commands/channels.js");
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["agent", "channel"]);
 
@@ -58,12 +57,7 @@ const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
   },
 ];
 
-const channelsCommandsLoader = createLazyImportLoader<ChannelsCommandsModule>(
-  () => import("../commands/channels.js"),
-);
-function loadChannelsCommands(): Promise<ChannelsCommandsModule> {
-  return channelsCommandsLoader.load();
-}
+const loadChannelsCommands = createLazyPromise(() => import("../commands/channels.js"));
 
 function runChannelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);

@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url";
 import {
   prepareTsdownBuildExecution,
   TSDOWN_DECLARATION_EXTENSIONS,
-  TSDOWN_DECLARATION_TOOL_INPUTS,
   TSDOWN_UNIFIED_CACHE_ENV,
 } from "../tsdown-build.mts";
 import {
@@ -17,6 +16,7 @@ import {
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
 import { publishStagedDeclarations } from "./declaration-stage.mts";
 import { withDistArtifactOwnership } from "./dist-artifact-ownership.mts";
+import { resolveTsdownDeclarationGeneratorInputs } from "./tsdown-declaration-generator-inputs.mts";
 import {
   createDeclarationStage,
   readDeclarationInputs,
@@ -27,6 +27,7 @@ export async function writeTsdownDeclarations(
   groups: readonly string[],
   label: string,
   previousOutputs: (root: string) => string[],
+  generatorEntry: string,
 ) {
   const root = process.cwd();
   let staging: string | undefined;
@@ -107,18 +108,7 @@ export async function writeTsdownDeclarations(
       if (!plan) {
         throw new Error("Insufficient memory for declaration build");
       }
-      const generatorInputs = [
-        ...TSDOWN_DECLARATION_TOOL_INPUTS,
-        "tsdown.config.ts",
-        "scripts/write-plugin-sdk-entry-dts.ts",
-        "scripts/write-unified-entry-dts.ts",
-        "scripts/lib/tsdown-declaration-writer.mts",
-        "scripts/lib/declaration-stage.mts",
-        "scripts/lib/compiler-input-snapshot.mts",
-        "scripts/lib/tsdown-declaration-inputs.mts",
-        "src/infra/runtime-process-entrypoints.ts",
-        "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts",
-      ];
+      const generatorInputs = resolveTsdownDeclarationGeneratorInputs(root, generatorEntry);
       const step: BuildCacheStep = {
         label,
         cache: {
@@ -133,11 +123,8 @@ export async function writeTsdownDeclarations(
         new CompilerInputSnapshot(root, {
           toolchainFiles: resolveTsdownCompilerFiles(),
           generatorInputs,
-          // Config evaluation reads generator modules and package/plugin metadata.
-          // Keep those bytes conservative; only ordinary compiler sources narrow.
-          isGeneratorInput: (file) =>
-            file.startsWith("scripts/") ||
-            /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
+          // Config evaluation reads package/plugin metadata selected from topology.
+          isGeneratorInput: (file) => /(?:^|\/)(?:package|openclaw\.plugin)\.json$/u.test(file),
         });
       const before = snapshot();
       const liveDist = path.join(root, "dist");

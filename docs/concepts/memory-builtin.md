@@ -111,15 +111,20 @@ which support selective deletion after promotion. For coverage and limits, see
   shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex
   (1.5s default).
-- **Auto-reindex:** the index rebuilds automatically when the embedding
-  provider, model, chunking config, configured sources, or scope change.
-- **Reindex on demand:** `openclaw memory index --force`
+- **Index compatibility:** changing the embedding provider, model, settings,
+  configured sources, or scope can pause search until you explicitly rebuild.
+  See [provider selection](/reference/memory-config#provider-selection).
+- **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache
 is bounded before publication, not after copying excess entries into the
 shared database.
+
+Other agent state, including sessions and transcripts in the same database,
+is retained. Use the [memory index command](/cli/memory#memory-index) for
+memory-only repair.
 
 `openclaw memory status` reports stored chunk text and JSON embedding bytes
 for each source (`sourceCounts[].chunkBytes` in JSON). These are payload sizes,
