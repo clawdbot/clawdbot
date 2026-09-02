@@ -18,6 +18,18 @@ describe("LineConfigSchema", () => {
     });
   });
 
+  it("accepts contextVisibility at the channel and at an account", () => {
+    const parsed = LineConfigSchema.parse({
+      channelAccessToken: "token",
+      channelSecret: "secret",
+      contextVisibility: "allowlist_quote",
+      accounts: { work: { contextVisibility: "allowlist" } },
+    });
+
+    expect(parsed.contextVisibility).toBe("allowlist_quote");
+    expect(parsed.accounts?.work?.contextVisibility).toBe("allowlist");
+  });
+
   it('rejects dmPolicy="open" without wildcard allowFrom', () => {
     const result = LineConfigSchema.safeParse({
       channelAccessToken: "token",

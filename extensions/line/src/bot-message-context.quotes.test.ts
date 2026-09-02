@@ -198,7 +198,11 @@ describe("buildLineMessageContext quotes", () => {
     expect(context?.ctxPayload.ReplyToSender).toBe("Mika");
   });
 
-  it("keeps an explicitly quoted body under allowlist_quote", async () => {
+  it("keeps a quoted body from a sender the allowlist has since dropped", async () => {
+    // The reachable shape of allowlist_quote here: the store only ever holds a
+    // message that passed admission, so the sender was allowlisted when this was
+    // recorded and was removed afterwards. A sender who was never admitted has
+    // nothing stored, and no visibility mode can recover their text.
     recordLineAgentVisibleMessage(account.accountId, {
       id: "m-quoted",
       conversationId: "group-quote",

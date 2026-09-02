@@ -30,6 +30,22 @@ const MESSAGE_LIMIT = 500;
 // so one 5000-character LINE message cannot dominate the store or the prompt.
 const QUOTED_BODY_MAX_CHARS = 2000;
 
+// The prompt layer marks its own cuts only above this same bound, so a body
+// trimmed here would otherwise reach the model looking whole. Same marker text
+// the prompt uses, so a reader cannot tell which layer did the cutting.
+const QUOTED_BODY_TRUNCATION_MARKER = "…[truncated]";
+
+function boundQuotedBody(body: string): string {
+  if (body.length <= QUOTED_BODY_MAX_CHARS) {
+    return body;
+  }
+  const kept = truncateUtf16Safe(
+    body,
+    QUOTED_BODY_MAX_CHARS - QUOTED_BODY_TRUNCATION_MARKER.length,
+  ).trimEnd();
+  return `${kept}${QUOTED_BODY_TRUNCATION_MARKER}`;
+}
+
 // The bounds are per account, not shared: LINE runs several configured accounts in
 // one process, and a busy account must not evict a quiet one's entries or the
 // quiet bot silently stops resolving quotes. The registries only grow with
@@ -68,16 +84,18 @@ export function recordLineSentMessages(accountId: string, messageIds: readonly s
 }
 
 /**
- * Records an inbound message this account has already shown the agent, either as
- * the turn's own message or as an entry in the group's ambient window. Messages
- * the allowlist turned away never reach a caller, so a quote can only ever
- * resolve to content this conversation had already surfaced.
+ * Records an admitted inbound message on its way to the agent, either as the
+ * turn's own message or as an entry in the group's ambient window. Admission,
+ * not the turn's outcome, is the boundary: a failed turn does not roll the
+ * ambient window back, and quotes stay answerable to match. Messages the
+ * allowlist turned away never reach a caller, so a quote can only ever resolve
+ * to content this conversation had already surfaced.
  */
 export function recordLineAgentVisibleMessage(
   accountId: string,
   message: { id: string; conversationId: string; body?: string; senderId?: string },
 ): void {
-  const body = message.body ? truncateUtf16Safe(message.body, QUOTED_BODY_MAX_CHARS) : undefined;
+  const body = message.body ? boundQuotedBody(message.body) : undefined;
   remember(
     receivedByAccount,
     accountId,

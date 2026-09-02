@@ -51,7 +51,21 @@ describe("quoted message store", () => {
       body: "x".repeat(5000),
     });
 
-    expect(resolveLineQuotedMessage("default", "long-1", "C-room")?.body).toHaveLength(2000);
+    // The prompt layer marks its own cuts only above this bound, so an unmarked
+    // body of exactly the bound would reach the model reading as a whole message.
+    const body = resolveLineQuotedMessage("default", "long-1", "C-room")?.body;
+    expect(body).toHaveLength(2000);
+    expect(body?.endsWith("…[truncated]")).toBe(true);
+  });
+
+  it("leaves a body that fits the bound unmarked", () => {
+    recordLineAgentVisibleMessage("default", {
+      id: "exact-1",
+      conversationId: "C-room",
+      body: "y".repeat(2000),
+    });
+
+    expect(resolveLineQuotedMessage("default", "exact-1", "C-room")?.body).toBe("y".repeat(2000));
   });
 
   it("keeps accounts apart so one bot's message never addresses another", () => {
