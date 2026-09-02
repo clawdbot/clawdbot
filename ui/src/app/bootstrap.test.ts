@@ -3,17 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { routeIdFromPath, type RouteId } from "../app-routes.ts";
-import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
-import {
-  normalizeInitialApplicationLocation,
-  resolveInitialApplicationLocation,
-} from "./bootstrap-location.ts";
+import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import * as gatewayStore from "./gateway-store.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
 import { normalizeLegacyTerminalViewLocation } from "./startup-settings.ts";
 
@@ -63,258 +60,7 @@ describe("normalizeLegacyTerminalViewLocation", () => {
   });
 });
 
-describe("normalizeInitialApplicationLocation", () => {
-  it("routes an opaque persisted key without aborting bootstrap", () => {
-    expect(
-      normalizeInitialApplicationLocation(
-        { pathname: "/", search: "", hash: "" },
-        "",
-        "telegram:12345",
-        "main",
-      ),
-    ).toEqual({ pathname: "/chat/main/telegram/12345", search: "", hash: "" });
-  });
-
-  it("leaves the initial location unchanged when a malformed key has no path", () => {
-    const location = { pathname: "/", search: "?draft=hello", hash: "" };
-    expect(normalizeInitialApplicationLocation(location, "", "agent::broken", "main")).toBe(
-      location,
-    );
-  });
-
-  it.each([
-    { persistedSessionKey: "main", connectedSessionKey: "main" },
-    { persistedSessionKey: "", connectedSessionKey: "agent:research:workspace" },
-  ])(
-    "waits for gateway defaults before normalizing '$persistedSessionKey'",
-    async ({ persistedSessionKey, connectedSessionKey }) => {
-      type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-      let listener: GatewayListener | null = null;
-      let snapshot = {
-        phase: "connecting",
-        client: null,
-        hello: null,
-      } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
-      const gateway = {
-        get snapshot() {
-          return snapshot;
-        },
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      };
-      const pending = resolveInitialApplicationLocation({
-        location: { pathname: "/", search: "", hash: "" },
-        basePath: "",
-        sessionKey: persistedSessionKey,
-        gateway,
-        agentsList: () => null,
-        signal: new AbortController().signal,
-      });
-      let settled = false;
-      void pending.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-
-      snapshot = {
-        phase: "connected",
-        client: {},
-        sessionKey: connectedSessionKey,
-        hello: {
-          snapshot: {
-            sessionDefaults: { defaultAgentId: "research", mainKey: "workspace" },
-          },
-        },
-      } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
-      const connectedListener = listener as GatewayListener | null;
-      if (!connectedListener) {
-        throw new Error("expected gateway readiness subscription");
-      }
-      connectedListener(snapshot);
-
-      await expect(pending).resolves.toEqual({
-        pathname: "/chat/research",
-        search: "",
-        hash: "",
-      });
-    },
-  );
-
-  it.each(["main", ""])(
-    "does not wait for gateway defaults on an explicit startup route with '%s'",
-    async (sessionKey) => {
-      const subscribe = vi.fn(() => () => undefined);
-      const location = { pathname: "/settings/appearance", search: "", hash: "" };
-
-      await expect(
-        resolveInitialApplicationLocation({
-          location,
-          basePath: "",
-          sessionKey,
-          gateway: {
-            snapshot: { phase: "connecting", client: null, hello: null },
-            subscribe,
-          } as unknown as ApplicationContext<RouteId>["gateway"],
-          agentsList: () => null,
-          signal: new AbortController().signal,
-        }),
-      ).resolves.toBe(location);
-      expect(subscribe).not.toHaveBeenCalled();
-    },
-  );
-
-  it("canonicalizes a scoped persisted main key when defaults are already known", async () => {
-    const subscribe = vi.fn(() => () => undefined);
-
-    await expect(
-      resolveInitialApplicationLocation({
-        location: { pathname: "/", search: "", hash: "" },
-        basePath: "",
-        sessionKey: "agent:research:workspace",
-        gateway: {
-          snapshot: {
-            phase: "connected",
-            client: {},
-            hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
-          },
-          subscribe,
-        } as unknown as ApplicationContext<RouteId>["gateway"],
-        agentsList: () => null,
-        signal: new AbortController().signal,
-      }),
-    ).resolves.toEqual({ pathname: "/chat/research", search: "", hash: "" });
-    expect(subscribe).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      location: {
-        pathname: "/chat",
-        search: "?session=agent%3Aresearch%3Atelegram%3A12345",
-        hash: "",
-      },
-      expected: { pathname: "/chat/research/telegram/12345", search: "", hash: "" },
-      namespace: "chat",
-      sessionKey: "agent:research:telegram:12345",
-    },
-    {
-      location: {
-        pathname: "/chat",
-        search: "?session=agent%3Aresearch%3Atelegram%3A12345&face=dashboard",
-        hash: "",
-      },
-      expected: { pathname: "/dashboard/research/telegram/12345", search: "", hash: "" },
-      namespace: "dashboard",
-      sessionKey: "agent:research:telegram:12345",
-    },
-    {
-      location: {
-        pathname: "/chat",
-        search: "?session=agent%3Aresearch%3Arelease-deadbeef",
-        hash: "",
-      },
-      expected: { pathname: "/chat/research/~key/release-deadbeef", search: "", hash: "" },
-      namespace: "chat",
-      sessionKey: "agent:research:release-deadbeef",
-    },
-  ] as const)("rewrites released query links to $expected.pathname", async (testCase) => {
-    const subscribe = vi.fn(() => () => undefined);
-    const resolved = await resolveInitialApplicationLocation({
-      location: testCase.location,
-      basePath: "",
-      sessionKey: "agent:main:main",
-      gateway: {
-        snapshot: { phase: "connecting", client: null, hello: null },
-        subscribe,
-      } as unknown as ApplicationContext<RouteId>["gateway"],
-      agentsList: () => ({ defaultId: "main", mainKey: "main", scope: "global", agents: [] }),
-      signal: new AbortController().signal,
-    });
-
-    expect(resolved).toEqual(testCase.expected);
-    expect(sessionRefFromPath(resolved.pathname, "", "main")).toMatchObject({
-      namespace: testCase.namespace,
-      kind: "literal",
-      sessionKey: testCase.sessionKey,
-    });
-    expect(subscribe).not.toHaveBeenCalled();
-  });
-
-  it("does not consume Sessions list row-expansion state", async () => {
-    const location = { pathname: "/sessions", search: "?session=agent%3Amain%3Amain", hash: "" };
-    const subscribe = vi.fn(() => () => undefined);
-    await expect(
-      resolveInitialApplicationLocation({
-        location,
-        basePath: "",
-        sessionKey: "agent:main:main",
-        gateway: {
-          snapshot: { phase: "connecting", client: null, hello: null },
-          subscribe,
-        } as unknown as ApplicationContext<RouteId>["gateway"],
-        agentsList: () => null,
-        signal: new AbortController().signal,
-      }),
-    ).resolves.toBe(location);
-    expect(subscribe).not.toHaveBeenCalled();
-  });
-
-  it("waits for cold custom-main defaults before rewriting a released query link", async () => {
-    type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    let listener: GatewayListener | null = null;
-    let snapshot = {
-      phase: "connecting",
-      client: null,
-      hello: null,
-    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
-    const pending = resolveInitialApplicationLocation({
-      location: {
-        pathname: "/chat",
-        search: "?session=agent%3Aresearch%3Aworkspace",
-        hash: "",
-      },
-      basePath: "",
-      sessionKey: "agent:main:main",
-      gateway: {
-        get snapshot() {
-          return snapshot;
-        },
-        subscribe: (next: GatewayListener) => {
-          listener = next;
-          return () => undefined;
-        },
-      },
-      agentsList: () => null,
-      signal: new AbortController().signal,
-    });
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    snapshot = {
-      phase: "connected",
-      client: {},
-      hello: { snapshot: { sessionDefaults: { mainKey: "workspace" } } },
-    } as unknown as ApplicationContext<RouteId>["gateway"]["snapshot"];
-    const connectedListener = listener as GatewayListener | null;
-    if (!connectedListener) {
-      throw new Error("expected gateway readiness subscription");
-    }
-    connectedListener(snapshot);
-
-    await expect(pending).resolves.toEqual({
-      pathname: "/chat/research",
-      search: "",
-      hash: "",
-    });
-  });
-
+describe("bootstrapApplication", () => {
   it("replaces a released dashboard query bookmark before router start", async () => {
     const initialLocation = {
       pathname: "/chat",
@@ -357,14 +103,6 @@ describe("normalizeInitialApplicationLocation", () => {
   });
 
   it("starts the first-run redirect after installing the persisted session location", async () => {
-    const canonicalLocation = normalizeInitialApplicationLocation(
-      { pathname: "/", search: "", hash: "" },
-      "",
-      "agent:main:main",
-      "main",
-    );
-    expect(canonicalLocation).toEqual({ pathname: "/chat/main", search: "", hash: "" });
-
     let resolveInitialLocation: (location: RouteLocation) => void = () => undefined;
     const initialLocationReady = new Promise<RouteLocation>((resolve) => {
       resolveInitialLocation = resolve;
@@ -403,6 +141,15 @@ describe("normalizeInitialApplicationLocation", () => {
       },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
+    const canonicalLocation = await resolveInitialApplicationLocation({
+      location: { pathname: "/", search: "", hash: "" },
+      basePath: "",
+      sessionKey: "agent:main:main",
+      gateway,
+      agentsList: () => null,
+      signal: new AbortController().signal,
+    });
+    expect(canonicalLocation).toEqual({ pathname: "/chat/main", search: "", hash: "" });
 
     const redirectReady = startModelSetupFirstRunRedirectAfterLocation({
       context,
@@ -515,7 +262,7 @@ describe("normalizeInitialApplicationLocation", () => {
     let runtime: ReturnType<typeof bootstrapApplication> | undefined;
 
     try {
-      runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+      runtime = bootstrapApplication();
 
       expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
         testCase.expectedUrl,
@@ -547,7 +294,7 @@ describe("normalizeInitialApplicationLocation", () => {
     let runtime: ReturnType<typeof bootstrapApplication> | undefined;
 
     try {
-      runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+      runtime = bootstrapApplication();
 
       expect(replaceState).not.toHaveBeenCalled();
       expect(window.location.search).toBe("?keep=yes");
@@ -573,7 +320,7 @@ describe("normalizeInitialApplicationLocation", () => {
     });
     document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, "");
     window.history.replaceState({}, "", "/__openclaw__/new");
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const runtime = bootstrapApplication();
 
     try {
       await runtime.start();
@@ -601,7 +348,7 @@ describe("normalizeInitialApplicationLocation", () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
     window.history.replaceState({}, "", "/focus/terminal");
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const runtime = bootstrapApplication();
     const routerStart = vi.spyOn(runtime.router, "start");
 
     try {
@@ -639,7 +386,7 @@ describe("normalizeInitialApplicationLocation", () => {
       const previousUrl = window.location.href;
       window.history.replaceState({}, "", initialUrl);
       const replaceState = vi.spyOn(window.history, "replaceState");
-      const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+      const runtime = bootstrapApplication();
       const routerStart = vi.spyOn(runtime.router, "start");
 
       try {
@@ -673,7 +420,7 @@ describe("normalizeInitialApplicationLocation", () => {
       const initialUrl = `/?view=${view}&keep=yes#pane`;
       window.history.replaceState({}, "", initialUrl);
       const replaceState = vi.spyOn(window.history, "replaceState");
-      const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+      const runtime = bootstrapApplication();
 
       try {
         expect(runtime.focusLocation).toBeNull();
@@ -695,7 +442,7 @@ describe("normalizeInitialApplicationLocation", () => {
     const previousUrl = window.location.href;
     window.history.replaceState({}, "", "/?view=terminal#token=startup-token&pane=1");
     const replaceState = vi.spyOn(window.history, "replaceState");
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const runtime = bootstrapApplication();
 
     try {
       expect(replaceState.mock.calls.map((call) => call[2])).toEqual([
@@ -720,7 +467,7 @@ describe("normalizeInitialApplicationLocation", () => {
     const previousUrl = window.location.href;
     const initialUrl = "/settings/appearance?view=terminal&keep=yes#pane";
     window.history.replaceState({}, "", initialUrl);
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const runtime = bootstrapApplication();
 
     try {
       expect(runtime.focusLocation).toBeNull();
@@ -743,8 +490,7 @@ describe("normalizeInitialApplicationLocation", () => {
       lastActiveSessionKey: "agent:main:main",
     });
     window.history.replaceState({}, "", "/chat");
-    const sessionPathBuilder = deferred<void>();
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: sessionPathBuilder.promise });
+    const runtime = bootstrapApplication();
     const pushState = vi.spyOn(window.history, "pushState");
 
     try {
@@ -753,7 +499,6 @@ describe("normalizeInitialApplicationLocation", () => {
       runtime.context.navigate("new-session");
       expect(window.location.pathname).toBe("/chat");
 
-      sessionPathBuilder.resolve();
       await start;
 
       expect(runtime.router.getState().matches[0]?.routeId).toBe("new-session");
@@ -777,7 +522,7 @@ describe("normalizeInitialApplicationLocation", () => {
       lastActiveSessionKey: "main",
     });
     window.history.replaceState({}, "", "/settings/appearance");
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const runtime = bootstrapApplication();
     const pushState = vi.spyOn(window.history, "pushState");
     const replaceState = vi.spyOn(window.history, "replaceState");
 
@@ -802,7 +547,7 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("does not restart routing after stop wins the session-path loader race", async () => {
+  it("does not restart routing after stop wins early startup", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
     saveSettings({
@@ -811,8 +556,7 @@ describe("normalizeInitialApplicationLocation", () => {
       lastActiveSessionKey: "agent:main:main",
     });
     window.history.replaceState({}, "", "/");
-    const sessionPathBuilder = deferred<void>();
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: sessionPathBuilder.promise });
+    const runtime = bootstrapApplication();
     const routerStart = vi.spyOn(runtime.router, "start");
     const redirectSubscription = vi.spyOn(runtime.context.gateway, "subscribe");
 
@@ -826,7 +570,6 @@ describe("normalizeInitialApplicationLocation", () => {
       expect(settled).toBe(false);
 
       runtime.stop();
-      sessionPathBuilder.resolve();
       await start;
 
       expect(routerStart).not.toHaveBeenCalled();
@@ -838,7 +581,7 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("consumes an unscoped initial-location abort after stop wins the loader race", async () => {
+  it("consumes an unscoped initial-location abort after stop wins early startup", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
     saveSettings({
@@ -847,15 +590,13 @@ describe("normalizeInitialApplicationLocation", () => {
       lastActiveSessionKey: "main",
     });
     window.history.replaceState({}, "", "/");
-    const sessionPathBuilder = deferred<void>();
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: sessionPathBuilder.promise });
+    const runtime = bootstrapApplication();
     const unhandledRejection = vi.fn((event: PromiseRejectionEvent) => event.preventDefault());
     window.addEventListener("unhandledrejection", unhandledRejection);
 
     try {
       const start = runtime.start();
       runtime.stop();
-      sessionPathBuilder.resolve();
       await expect(start).resolves.toBeUndefined();
       await Promise.resolve();
 
@@ -868,7 +609,7 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("stops a cold released-link startup without leaking its late subscription", async () => {
+  it("stops a cold released-link startup without leaking its readiness subscription", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
     saveSettings({
@@ -877,35 +618,61 @@ describe("normalizeInitialApplicationLocation", () => {
       lastActiveSessionKey: "agent:main:main",
     });
     window.history.replaceState({}, "", "/chat?session=agent%3Aresearch%3Aworkspace");
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     type GatewayListener = Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0];
-    const gateway = runtime.context.gateway as ApplicationContext<RouteId>["gateway"] & {
-      subscribe: (listener: GatewayListener) => () => void;
-    };
     const activeSubscriptions = new Set<GatewayListener>();
-    gateway.subscribe = (listener) => {
-      // Keep the released-link resolver genuinely cold. Forwarding to the live
-      // gateway lets a fast connection remove this transient subscription before
-      // stop() can prove its abort cleanup.
-      activeSubscriptions.add(listener);
-      return () => {
-        activeSubscriptions.delete(listener);
-      };
-    };
+    const createGateway = gatewayStore.createApplicationGateway;
+    const gatewayFactory = vi
+      .spyOn(gatewayStore, "createApplicationGateway")
+      .mockImplementation((...args) => {
+        const gateway = createGateway(...args);
+        const subscribe = gateway.subscribe;
+        // The released-link resolver subscribes during construction. Keep the
+        // real owner cold and track its subscriptions before bootstrap sees it.
+        vi.spyOn(gateway, "start").mockImplementation(() => {});
+        vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
+          activeSubscriptions.add(listener);
+          const unsubscribe = subscribe(listener);
+          return () => {
+            activeSubscriptions.delete(listener);
+            unsubscribe();
+          };
+        });
+        return gateway;
+      });
+    const runtime = bootstrapApplication();
+    const constructionSubscriptions = new Set(activeSubscriptions);
+    const readinessSubscriptions = new Set<GatewayListener>();
+    const signal = runtime.context.lifecycleAbortSignal;
+    if (!signal) {
+      throw new Error("expected application lifecycle signal");
+    }
+    signal.addEventListener("abort", () => {
+      // Readiness retires on abort, before the other application disposers run.
+      for (const listener of constructionSubscriptions) {
+        if (!activeSubscriptions.has(listener)) {
+          readinessSubscriptions.add(listener);
+        }
+      }
+    });
     const routerStart = vi.spyOn(runtime.router, "start");
     const configRefresh = vi.spyOn(runtime.context.config, "refresh");
 
     try {
       const start = runtime.start();
-      await vi.waitFor(() => expect(activeSubscriptions.size).toBe(1), STARTUP_STEP_WAIT);
+      await Promise.resolve();
+      expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
       runtime.stop();
       await start;
 
-      expect(activeSubscriptions.size).toBe(0);
+      expect(readinessSubscriptions.size).toBe(1);
+      expect(
+        [...readinessSubscriptions].filter((listener) => activeSubscriptions.has(listener)),
+      ).toHaveLength(0);
       expect(configRefresh).not.toHaveBeenCalled();
       expect(routerStart).not.toHaveBeenCalled();
     } finally {
       runtime.stop();
+      gatewayFactory.mockRestore();
       saveSettings(previousSettings);
       window.history.replaceState({}, "", previousUrl);
     }
@@ -920,7 +687,7 @@ describe("normalizeInitialApplicationLocation", () => {
       lastActiveSessionKey: "main",
     });
     window.history.replaceState({}, "", "/settings/appearance");
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const runtime = bootstrapApplication();
     const routerStarted = deferred<void>();
     const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
     const routerStop = vi.spyOn(runtime.router, "stop");
@@ -950,7 +717,7 @@ describe("normalizeInitialApplicationLocation", () => {
       lastActiveSessionKey: "main",
     });
     window.history.replaceState({}, "", "/settings/about");
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const runtime = bootstrapApplication();
     const routerStart = vi
       .spyOn(runtime.router, "start")
       .mockRejectedValue({ type: "notFound", data: { routeId: "chat" } });
@@ -968,7 +735,7 @@ describe("normalizeInitialApplicationLocation", () => {
   it("applies and refreshes the saved accent before the gateway connects", () => {
     const previousSettings = loadSettings();
     saveSettings({ ...previousSettings, accent: "#48D6C2" });
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+    const runtime = bootstrapApplication();
 
     try {
       expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
@@ -997,7 +764,7 @@ describe("normalizeInitialApplicationLocation", () => {
     darkMeta.media = "(prefers-color-scheme: dark)";
     document.head.append(style, lightMeta, darkMeta);
     saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+    const runtime = bootstrapApplication();
 
     try {
       expect(lightMeta.content).toBe("#123456");
@@ -1034,7 +801,7 @@ describe("normalizeInitialApplicationLocation", () => {
     meta.name = "theme-color";
     document.head.append(style, meta);
     saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
-    const runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+    const runtime = bootstrapApplication();
 
     try {
       expect(meta.content).toBe("#123456");
