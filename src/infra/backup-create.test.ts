@@ -861,6 +861,7 @@ describe("createBackupArchive", () => {
         expect(
           entries.some((entry) => entry.endsWith("/custom-agent/durable-agent-state.json")),
         ).toBe(true);
+        await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({ ok: true });
       },
     );
   });
