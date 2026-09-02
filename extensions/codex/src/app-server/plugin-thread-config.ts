@@ -676,14 +676,11 @@ function readPersistedAppToolApprovalOverrideNames(
   if (!isJsonObject(tools)) {
     return [];
   }
+  const keys = app.approvalOverrideToolConfigKeys;
   return Object.entries(tools)
-    .filter(
-      ([toolName]) =>
-        !app.approvalOverrideToolConfigKeys ||
-        app.approvalOverrideToolConfigKeys.includes(toolName),
+    .flatMap(([name, value]) =>
+      (!keys || keys.includes(name)) && hasPersistedToolApprovalOverride(value) ? [name] : [],
     )
-    .filter(([, value]) => hasPersistedToolApprovalOverride(value))
-    .map(([toolName]) => toolName)
     .toSorted();
 }
 

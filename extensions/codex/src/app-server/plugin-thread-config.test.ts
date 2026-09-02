@@ -733,7 +733,7 @@ describe("Codex plugin thread config", () => {
         { name: "read-only", tools: { linear_fetch: { approval_mode: "approve" } } },
         { name: "cleared", tools: { linear_save_issue: { approval_mode: null } } },
         { name: "retired", tools: { linear_retired_tool: { approval_mode: "approve" } } },
-      ].map((example) => ({ ...example, allowAllPlugins })),
+      ].map(({ name, tools }) => ({ name, tools, allowAllPlugins })),
     ),
   )(
     "keeps ask policy apps with $name overrides (account-wide: $allowAllPlugins)",
