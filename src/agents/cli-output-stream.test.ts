@@ -213,6 +213,61 @@ describe("createCliJsonlStreamingParser", () => {
 
   it.each([
     {
+      name: "records a Claude hook-stopped terminal result",
+      frames: [] as unknown[],
+      expected: {
+        text: "",
+        sessionId: "hook-stopped",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "tool_use",
+        },
+      },
+    },
+    {
+      name: "keeps streamed text when a hook stops the turn after a reply",
+      frames: [claudeTextDelta("streamed answer")] as unknown[],
+      expected: { text: "streamed answer", sessionId: "hook-stopped", usage: undefined },
+    },
+  ])("$name", ({ frames, expected }) => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+
+    parser.push(
+      joinJsonlFrames(
+        ...frames,
+        {
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          session_id: "hook-stopped",
+          stop_reason: "tool_use",
+          terminal_reason: "hook_stopped",
+          result: "",
+          num_turns: 4,
+        },
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual(expected);
+  });
+
+  it.each([
+    {
       name: "ordinary lookalike",
       frames: [
         {

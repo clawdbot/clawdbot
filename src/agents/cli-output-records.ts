@@ -291,14 +291,38 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
   return "";
 }
 
-function readClaudeMaxTurnsFailure(
+export function describeClaudeTurnStop(failure: {
+  terminalReason: string;
+  stopReason?: string;
+}): string {
+  const stopReason = failure.stopReason ? `, stop_reason: ${failure.stopReason}` : "";
+  return `Claude CLI ended the turn without a reply (terminal_reason: ${failure.terminalReason}${stopReason}).`;
+}
+
+function readClaudeTerminalFailure(
   parsed: Record<string, unknown>,
 ): CliTerminalFailure | undefined {
   const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
   const terminalReason =
     typeof parsed.terminal_reason === "string" ? parsed.terminal_reason.trim() : "";
   if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
-    return undefined;
+    // Any other non-completed terminal reason is the CLI reporting that it
+    // ended the turn itself. Only a reply-less result is a failure: a stopped
+    // turn that still delivered text stays a normal answer.
+    if (
+      parsed.type !== "result" ||
+      !terminalReason ||
+      terminalReason === "completed" ||
+      unwrapNestedCliResultText(collectCliText(parsed.result)).trim()
+    ) {
+      return undefined;
+    }
+    const stopReason = typeof parsed.stop_reason === "string" ? parsed.stop_reason.trim() : "";
+    return {
+      reason: "turn_stopped",
+      terminalReason,
+      ...(stopReason ? { stopReason } : {}),
+    };
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
   for (const error of errors) {
@@ -339,10 +363,13 @@ function resolveCliTerminalErrorText(
   parsed: Record<string, unknown>,
   terminalFailure: CliTerminalFailure | undefined,
 ): string {
-  return (
-    collectExplicitCliErrorText(parsed) ||
-    (terminalFailure ? "Reached maximum number of turns." : "")
-  );
+  const explicit = collectExplicitCliErrorText(parsed);
+  if (explicit || !terminalFailure) {
+    return explicit;
+  }
+  return terminalFailure.reason === "turn_stopped"
+    ? describeClaudeTurnStop(terminalFailure)
+    : "Reached maximum number of turns.";
 }
 
 export function pickCliSessionId(
@@ -430,7 +457,7 @@ export function parseCliJson(
       backend,
       providerId: providerId ?? "",
     })
-      ? readClaudeMaxTurnsFailure(parsed)
+      ? readClaudeTerminalFailure(parsed)
       : undefined;
     if (terminalFailure) {
       return {
@@ -492,7 +519,7 @@ export function parseClaudeCliJsonlResult(params: {
   }
   if (typeof params.parsed.type === "string" && params.parsed.type === "result") {
     const terminalFailure = isClaudeStreamJsonDialect(params)
-      ? readClaudeMaxTurnsFailure(params.parsed)
+      ? readClaudeTerminalFailure(params.parsed)
       : undefined;
     const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
     if (errorText) {

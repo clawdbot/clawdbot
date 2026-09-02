@@ -410,7 +410,18 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       usage,
     });
     if (result) {
-      if (result.errorText) {
+      // A stopped turn is only a failure when nothing was delivered; text
+      // streamed before the stop is still the reply, so this one defers until
+      // the resolved text below is known.
+      const stoppedTurn =
+        result.terminalFailure?.reason === "turn_stopped" ? result.terminalFailure : undefined;
+      const stoppedTurnErrorText = stoppedTurn ? (result.errorText ?? "") : "";
+      if (stoppedTurn) {
+        const delivered = { ...result };
+        delete delivered.errorText;
+        delete delivered.terminalFailure;
+        result = delivered;
+      } else if (result.errorText) {
         output = result;
         return;
       }
@@ -473,6 +484,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
               errorText: CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR,
               terminalFailure: { reason: "synthetic_no_response" as const },
             }
+          : {}),
+        // The CLI's own terminal reason outranks the synthetic marker: it names
+        // why the turn stopped and must not be retried like a format fault.
+        ...(stoppedTurn && !text
+          ? { errorText: stoppedTurnErrorText, terminalFailure: stoppedTurn }
           : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),

@@ -27,6 +27,41 @@ describe("formatCliOutputError", () => {
     expect(hasDanglingSurrogate(error)).toBe(false);
     expect(error).toContain(`Claude session: ${"s".repeat(199)}.`);
   });
+
+  it("names the Claude terminal reason and the hook that stopped the turn", () => {
+    const error = formatCliOutputError(
+      {
+        text: "",
+        sessionId: "claude-session-1",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "tool_use",
+        },
+      },
+      { runId: "run-1", sessionId: "session-1" },
+    );
+
+    expect(error).toBe(
+      "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
+        "OpenClaw run: run-1. OpenClaw session: session-1. Claude session: claude-session-1. " +
+        "Tool actions may already have run; verify their effects before retrying. " +
+        "A Claude Code hook stopped this turn; OpenClaw runs the CLI with --setting-sources user, " +
+        "so user-scope hooks apply — move or disable that hook.",
+    );
+  });
+
+  it("omits the hook guidance for terminal reasons no hook caused", () => {
+    const error = formatCliOutputError({
+      text: "",
+      terminalFailure: { reason: "turn_stopped", terminalReason: "aborted_tools" },
+    });
+
+    expect(error).toBe(
+      "Claude CLI ended the turn without a reply (terminal_reason: aborted_tools). " +
+        "Tool actions may already have run; verify their effects before retrying.",
+    );
+  });
 });
 
 describe("parseCliJsonl errors", () => {

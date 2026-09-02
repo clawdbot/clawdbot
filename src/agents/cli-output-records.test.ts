@@ -143,6 +143,54 @@ describe("parseCliJson", () => {
       },
     },
     {
+      name: "records a Claude hook-stopped terminal result in JSON mode",
+      input: {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "session-json-hook-stopped",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "",
+        num_turns: 4,
+        permission_denials: [],
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-hook-stopped",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "tool_use",
+        },
+      },
+    },
+    {
+      name: "keeps a stopped Claude turn that still delivered result text",
+      input: {
+        type: "result",
+        subtype: "success",
+        session_id: "session-json-hook-text",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "partial answer",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "partial answer",
+        sessionId: "session-json-hook-text",
+        usage: undefined,
+      },
+    },
+    {
       name: "surfaces Claude error_during_execution errors[] and skips ede_diagnostic telemetry",
       input: {
         type: "result",
