@@ -27,6 +27,7 @@ function writeSanitizedVerdict(verdict: Record<string, unknown>): void {
 
 const SETTLE_WAKE_NEEDLE =
   "[Subagent Context] Every subagent spawned from this session has now settled";
+const REQUESTER_SETTLE_RETRY_DELAY_MS = 30_000;
 
 function isRequesterRequest(r: MockOpenAiRequestSnapshot) {
   return r.allInputText.includes(TRIGGER);
@@ -277,10 +278,11 @@ describe("two-wave requester-settle observed proof", () => {
       );
       expect(finalsWithMarker).toHaveLength(1);
 
-      // Step 10: post-final quiet window
+      // Step 10: wait beyond the predecessor retry deadline. A retained Wave 1
+      // wake would otherwise emit a second visible final after 30 seconds.
       await transport.waitForNoOutbound({
         sinceIndex: outboundAfterFinal,
-        quietMs: 6_000,
+        quietMs: REQUESTER_SETTLE_RETRY_DELAY_MS + 1_000,
       });
       postFinalQuiet = true;
     } catch (error) {
@@ -333,5 +335,5 @@ describe("two-wave requester-settle observed proof", () => {
         postFinalQuiet,
     };
     writeSanitizedVerdict(verdict);
-  }, 120_000);
+  }, 180_000);
 });

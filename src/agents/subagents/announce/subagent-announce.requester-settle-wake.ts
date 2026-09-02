@@ -556,24 +556,16 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     }
     // A missing visible reply can mean the requester continued the workflow
     // and yielded again. A successor may settle before this wake returns, so
-    // its own persisted settle wake is durable proof of that continuation.
-    // Retrying here would send a duplicate finalize instruction.
+    // its own persisted settle wake is durable proof that final-delivery
+    // ownership transferred. Retire this predecessor instead of leaving its
+    // retry timer eligible to send a duplicate finalize instruction.
     if (
       delivery.reason === "visible_reply_missing" &&
       (requesterHasUnsettledDescendants() || requesterHasSuccessorSettleWake())
     ) {
-      // A successor may continue the request, but it has not proved delivery of
-      // the original user's final. Preserve this yielded batch as the durable
-      // visible-final owner until the successor settles and this wake can run
-      // again, rather than acknowledging the missing final as delivered. The
-      // gateway returned a definitive terminal result for this attempt, so the
-      // next wake must rotate its idempotency key instead of replaying the
-      // cached no-visible-reply result.
-      deferRequesterSettleWakeBatch({
-        batchRunIds,
+      completeRequesterSettleWakeBatch({
+        runIds: batchRunIds,
         state,
-        resumeWithFreshAttempt: true,
-        transitionBatch: params.transitionBatch,
         completeBatch,
       });
       return false;

@@ -75,8 +75,6 @@ import {
 } from "./subagent-announce.requester-settle-wake.js";
 
 const REQUESTER = "agent:main:main";
-const requesterSettleKey = (suffix: string) =>
-  `announce:requester-settle:main:${REQUESTER}:${suffix}`;
 
 type SettledChildOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & {
   startedAt?: number;
@@ -172,7 +170,7 @@ describe("fast-settled successor requester settle wakes", () => {
       .mockReturnValue(undefined);
   });
 
-  it("retries a fast-settled successor continuation with a fresh idempotency key", async () => {
+  it("retires the predecessor wake when its fast-settled successor owns the final", async () => {
     const original = makeSettledChild({
       runId: "run-original",
       delivery: { status: "delivered" },
@@ -216,26 +214,11 @@ describe("fast-settled successor requester settle wakes", () => {
       await expect(
         maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: original })),
       ).resolves.toBe(false);
-      expect(original.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 1,
-        nextAttemptAt: 30_000,
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      });
+      expect(completeBatchSpy).toHaveBeenCalledWith(["run-original"], 1);
+      expect(original.requesterSettleWake).toBeUndefined();
 
       await vi.advanceTimersByTimeAsync(30_000);
-      await expect(
-        maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: original })),
-      ).resolves.toBe(true);
-      expect(deliverSpy.mock.calls.map(([arg]) => arg.directIdempotencyKey)).toEqual([
-        requesterSettleKey("run-original:yield-1"),
-        requesterSettleKey("run-original:yield-1:retry-1"),
-      ]);
-      expect(completeBatchSpy).toHaveBeenCalledWith(["run-original"], 1, {
-        delivered: true,
-        path: "direct",
-      });
+      expect(deliverSpy).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
