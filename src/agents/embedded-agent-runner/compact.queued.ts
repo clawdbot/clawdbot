@@ -297,6 +297,7 @@ export async function compactEmbeddedAgentSession(
 
 async function runPrimaryNativeCompactionInLanes<T>(
   params: QueuedCompactionParams,
+  expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"],
   host: QueuedCompactionHostOptions,
   run: () => Promise<T>,
 ): Promise<T> {
@@ -307,6 +308,18 @@ async function runPrimaryNativeCompactionInLanes<T>(
   return await enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(() => {
       host.assertActive?.();
+      const currentEntry = loadSessionEntryReadOnly({
+        ...params.sessionTarget,
+        readConsistency: "latest",
+      });
+      if (
+        !currentEntry ||
+        currentEntry.sessionId !== expectedEntry.sessionId ||
+        currentEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
+        currentEntry.activeWriterRunId !== expectedEntry.activeWriterRunId
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
       return run();
     }),
   );
@@ -368,7 +381,8 @@ async function compactEmbeddedAgentSessionImpl(
       agentDir,
       workspaceDir: resolvedWorkspaceDir,
     },
-    runControlOperation: (run) => runPrimaryNativeCompactionInLanes(params, host, run),
+    runControlOperation: (run) =>
+      runPrimaryNativeCompactionInLanes(params, expectedEntry, host, run),
   });
   if (nativeCliResult) {
     return nativeCliResult;
@@ -595,21 +609,9 @@ async function compactResolvedContextEngine(
   let requiredPreflightNativeCapabilityUsed = false;
   const harnessResult =
     attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
-      ? await runPrimaryNativeCompactionInLanes(preparedParams, host, async () => {
+      ? await runPrimaryNativeCompactionInLanes(preparedParams, expectedEntry, host, async () => {
           if (params.abortSignal?.aborted) {
             return createCompactionAbortedResult();
-          }
-          const currentEntry = loadSessionEntryReadOnly({
-            ...preparedParams.sessionTarget,
-            readConsistency: "latest",
-          });
-          if (
-            !currentEntry ||
-            currentEntry.sessionId !== expectedEntry.sessionId ||
-            currentEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
-            currentEntry.activeWriterRunId !== expectedEntry.activeWriterRunId
-          ) {
-            throw new SessionTranscriptWriterClaimReboundError();
           }
           return await maybeCompactAgentHarnessSession(
             {
