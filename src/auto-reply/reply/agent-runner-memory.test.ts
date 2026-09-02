@@ -1272,7 +1272,11 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
   });
 
-  it.each([
+  it.each<{
+    stage: string;
+    afterRegistration: boolean;
+    setup: (error: Error) => void | (() => void);
+  }>([
     {
       stage: "initial plan resolution",
       afterRegistration: false,

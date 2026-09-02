@@ -113,15 +113,15 @@ async function compactEmbeddedAgentSession(
 ): Promise<
   Awaited<ReturnType<typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession>>
 > {
-  const { compactEmbeddedAgentSession } = await embeddedAgentRuntimeLoader.load();
-  return await compactEmbeddedAgentSession(...args);
+  const runtime = await embeddedAgentRuntimeLoader.load();
+  return await runtime.compactEmbeddedAgentSession(...args);
 }
 
 async function runEmbeddedAgent(
   params: RunEmbeddedAgentInternalParams,
 ): Promise<Awaited<ReturnType<typeof import("../../agents/embedded-agent.js").runEmbeddedAgent>>> {
-  const { runEmbeddedAgent } = await embeddedAgentRuntimeLoader.load();
-  return await runEmbeddedAgent(params);
+  const runtime = await embeddedAgentRuntimeLoader.load();
+  return await runtime.runEmbeddedAgent(params);
 }
 
 async function ensureMemoryFlushTargetFile(params: {
