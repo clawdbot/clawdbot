@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.js";
+import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.ts";
 import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
