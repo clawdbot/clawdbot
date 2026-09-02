@@ -193,6 +193,13 @@ It does not install a new core package and does not restart the Gateway.
 Human output ends with a finalization result that distinguishes completion,
 completion with warnings, and failure.
 
+When repair finds a configured npm plugin payload but cannot recover its install
+record, it reinstalls from the selected registry source, using the active channel
+or exact version pin. This requires registry access; if verification fails, repair
+preserves the existing payload and does not publish a new install record.
+Registry verification and any required capability review finish before the
+repaired install record is published.
+
 With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.

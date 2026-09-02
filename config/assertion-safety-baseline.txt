@@ -57,7 +57,7 @@ extensions/browser/src/browser/cdp-page-session.ts	3
 extensions/browser/src/browser/cdp-proxy-bypass.ts	1
 extensions/browser/src/browser/cdp-websocket.ts	2
 extensions/browser/src/browser/cdp.helpers.ts	4
-extensions/browser/src/browser/cdp.ts	16
+extensions/browser/src/browser/cdp.ts	13
 extensions/browser/src/browser/chrome-mcp-routing.ts	1
 extensions/browser/src/browser/chrome-mcp-session.ts	1
 extensions/browser/src/browser/chrome-mcp-tabs.ts	1
@@ -2526,7 +2526,6 @@ src/commands/doctor/shared/legacy-config-record-shared.ts	1
 src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	2
 src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
-src/commands/doctor/shared/missing-configured-plugin-install.install.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
 src/commands/doctor/shared/plugin-dependency-cleanup.ts	1
 src/commands/doctor/shared/plugin-registry-migration.ts	1
