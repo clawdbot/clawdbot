@@ -7,11 +7,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { telegramActionRuntime } from "../extensions/telegram/src/action-runtime.js";
 import { telegramPlugin } from "../extensions/telegram/src/channel.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { buildReplyPayloads } from "../src/auto-reply/reply/agent-runner-payloads.js";
+import { routeReply } from "../src/auto-reply/reply/route-reply.js";
 import type { ChannelPlugin } from "../src/channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createPluginRecord } from "../src/plugins/loader-records.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
@@ -21,6 +22,9 @@ type RecordedRequest = {
   method: string;
   body: Record<string, unknown>;
 };
+
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
 
 async function createBotApiRecorder() {
   const requests: RecordedRequest[] = [];
@@ -110,6 +114,7 @@ async function main() {
     setActivePluginRegistry(registryBuilder.registry, "pr-128580-production-path");
 
     const cfg = {
+      agents: { defaults: { workspace: tempStateDir } },
       channels: {
         telegram: {
           botToken: "123456:proof-token",
@@ -120,82 +125,116 @@ async function main() {
           network: { dangerouslyAllowPrivateNetwork: true },
         },
       },
-    } as never;
-    const originalDurable = telegramActionRuntime.sendDurableMessageBatch;
-    telegramActionRuntime.sendDurableMessageBatch = async (params) =>
-      await originalDurable({ ...params, skipQueue: true });
-
-    try {
-      const tool = createMessageTool({
-        config: cfg,
-        getRuntimeConfig: () => cfg,
-        currentChannelProvider: "telegram",
-        currentChannelId: "12345",
-        currentMessagingTarget: "12345",
-        currentChatType: "direct",
-        conversationReadOrigin: "direct-operator",
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-          resolvedConfig: config,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
-      });
-      const text = "MANTIS BLANK-MEDIA DEDUPE — one visible reply expected";
-      const toolResult = await tool.execute("proof-message-tool-call", {
-        action: "send",
-        to: "12345",
-        message: text,
-      });
-      const common = {
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
-        blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        replyToMode: "off" as const,
-        messageProvider: "telegram",
-        originatingChannel: "telegram",
-        originatingTo: "12345",
-        messagingToolSentTexts: [text],
-        messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "12345", text }],
-      };
-      const blank = await buildReplyPayloads({
-        ...common,
-        payloads: [{ text, mediaUrl: "   " }],
-      });
-      const realMedia = await buildReplyPayloads({
-        ...common,
-        payloads: [{ text, mediaUrl: "https://example.com/report.png" }],
-      });
-      const sendMessageRequests = recorder.requests.filter(
-        (request) => request.method === "sendMessage",
-      );
-      const passed =
-        sendMessageRequests.length === 1 &&
-        blank.replyPayloads.length === 0 &&
-        realMedia.replyPayloads.length === 1;
-      console.log(
-        JSON.stringify(
-          {
-            verdict: passed ? "PASS" : "FAIL",
-            productionPath:
-              "createMessageTool -> runMessageAction -> telegramMessageActions -> handleTelegramAction -> sendDurableMessageBatch -> Telegram Bot API adapter",
-            toolResult: toolResult.content?.[0],
-            botApiMethods: recorder.requests.map((request) => request.method),
-            messageToolSendMessageCalls: sendMessageRequests.length,
-            blankFinalRetainedPayloads: blank.replyPayloads.length,
-            realMediaFinalRetainedPayloads: realMedia.replyPayloads.length,
-          },
-          null,
-          2,
-        ),
-      );
-      if (!passed) {
-        process.exitCode = 1;
+    } as OpenClawConfig;
+    const tool = createMessageTool({
+      config: cfg,
+      getRuntimeConfig: () => cfg,
+      currentChannelProvider: "telegram",
+      currentChannelId: "12345",
+      currentMessagingTarget: "12345",
+      currentChatType: "direct",
+      conversationReadOrigin: "direct-operator",
+      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+      resolveCommandSecretRefsViaGateway: async ({ config }) => ({
+        resolvedConfig: config,
+        diagnostics: [],
+        targetStatesByPath: {},
+        hadUnresolvedTargets: false,
+      }),
+    });
+    const text = "MANTIS BLANK-MEDIA DEDUPE — one visible reply expected";
+    const toolResult = await tool.execute("proof-message-tool-call", {
+      action: "send",
+      to: "12345",
+      message: text,
+    });
+    const common = {
+      isHeartbeat: false,
+      didLogHeartbeatStrip: false,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      replyToMode: "off" as const,
+      messageProvider: "telegram",
+      originatingChannel: "telegram",
+      originatingTo: "12345",
+      messagingToolSentTexts: [text],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "12345", text }],
+    };
+    const blank = await buildReplyPayloads({
+      ...common,
+      payloads: [{ text, mediaUrl: "   " }],
+    });
+    const realMedia = await buildReplyPayloads({
+      ...common,
+      payloads: [{ text, mediaUrl: join(tempStateDir, "report.png") }],
+    });
+    writeFileSync(join(tempStateDir, "report.png"), Buffer.from(TINY_PNG_BASE64, "base64"));
+    const deliverFinalPayloads = async (
+      payloads: Awaited<ReturnType<typeof buildReplyPayloads>>["replyPayloads"],
+    ) => {
+      const results = [];
+      for (const payload of payloads) {
+        results.push(
+          await routeReply({
+            payload,
+            channel: "telegram",
+            to: "12345",
+            cfg,
+            sessionKey: "agent:main:main",
+            mirror: false,
+            replyKind: "final",
+          }),
+        );
       }
-    } finally {
-      telegramActionRuntime.sendDurableMessageBatch = originalDurable;
+      return results;
+    };
+    const blankApiCallsBefore = recorder.requests.length;
+    const blankFinalResults = await deliverFinalPayloads(blank.replyPayloads);
+    const blankApiCalls = recorder.requests.slice(blankApiCallsBefore);
+    const realMediaApiCallsBefore = recorder.requests.length;
+    const realMediaFinalResults = await deliverFinalPayloads(realMedia.replyPayloads);
+    const realMediaApiCalls = recorder.requests.slice(realMediaApiCallsBefore);
+    const sendMessageRequests = recorder.requests.filter(
+      (request) => request.method === "sendMessage",
+    );
+    const sendPhotoRequests = recorder.requests.filter((request) => request.method === "sendPhoto");
+    const passed =
+      sendMessageRequests.length === 1 &&
+      blank.replyPayloads.length === 0 &&
+      blankFinalResults.length === 0 &&
+      blankApiCalls.length === 0 &&
+      realMedia.replyPayloads.length === 1 &&
+      realMediaFinalResults.length === 1 &&
+      realMediaFinalResults[0]?.ok === true &&
+      realMediaFinalResults[0]?.delivered &&
+      realMediaApiCalls.filter((request) => request.method === "sendPhoto").length === 1 &&
+      sendPhotoRequests.length === 1;
+    console.log(
+      JSON.stringify(
+        {
+          verdict: passed ? "PASS" : "FAIL",
+          productionPath:
+            "createMessageTool -> runMessageAction -> Telegram durable send; buildReplyPayloads -> routeReply -> sendDurableMessageBatchCore -> Telegram Bot API adapter",
+          toolResult: toolResult.content?.[0],
+          botApiMethods: recorder.requests.map((request) => request.method),
+          messageToolSendMessageCalls: sendMessageRequests.length,
+          blankFinal: {
+            retainedPayloads: blank.replyPayloads.length,
+            routeResults: blankFinalResults.length,
+            additionalBotApiCalls: blankApiCalls.length,
+          },
+          realMediaFinal: {
+            retainedPayloads: realMedia.replyPayloads.length,
+            routeResults: realMediaFinalResults,
+            additionalBotApiMethods: realMediaApiCalls.map((request) => request.method),
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    if (!passed) {
+      process.exitCode = 1;
     }
   } finally {
     if (previousConfigPath === undefined) {
