@@ -5,48 +5,16 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { parseTcpListenerEndpoint } from "./ports-netstat.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
 
-function readFirstCommandLineToken(commandLine: string): string {
-  const trimmed = commandLine.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.startsWith('"')) {
-    const end = trimmed.indexOf('"', 1);
-    return end === -1 ? trimmed.slice(1) : trimmed.slice(1, end);
-  }
-  if (trimmed.startsWith("'")) {
-    const end = trimmed.indexOf("'", 1);
-    return end === -1 ? trimmed.slice(1) : trimmed.slice(1, end);
-  }
-  return trimmed.split(/\s/, 1)[0] ?? "";
-}
-
-function isSocatExecutableIdentity(value: string): boolean {
-  // argv[0] / lsof command only. `socat` is a valid profile name, so a later
-  // `--profile socat` token must not hide a real Gateway listener.
-  // macOS lsof may suffix a digit when two socat processes share a name.
-  return /(?:^|[/\\])socat(?:\d+)?(?:\.exe)?$/.test(value);
-}
-
-function isSocatPortListener(command: string, commandLine: string): boolean {
-  return (
-    isSocatExecutableIdentity(command) ||
-    isSocatExecutableIdentity(readFirstCommandLineToken(commandLine))
-  );
-}
-
 /** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
 export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
   const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
   const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
-  const raw = normalizeLowercaseStringOrEmpty(
-    `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
-  );
-  // Executable identity first. Unix inspection records the full `ps` command
-  // line, so a socat forward can mention OpenClaw without being the gateway.
-  if (isSocatPortListener(command, commandLine)) {
+  // The inspected command identifies the listener owner. Check it before argv,
+  // where a socat forward may name OpenClaw. Observed macOS output also uses `socat1`.
+  if (command === "socat" || command === "socat1" || command === "socat.exe") {
     return "non_gateway";
   }
+  const raw = `${commandLine} ${command}`;
   if (raw.includes("openclaw")) {
     return "gateway";
   }

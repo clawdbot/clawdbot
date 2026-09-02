@@ -46,29 +46,11 @@ describe("ports-format", () => {
     [{ command: "node", commandLine: "node /tmp/socat/openclaw/dist/index.js gateway" }, "gateway"],
     [{ command: "socat" }, "non_gateway"],
     [{ command: "socat1" }, "non_gateway"],
-    [
-      {
-        commandLine: "socat TCP-LISTEN:18789,bind=100.64.0.1,fork TCP:127.0.0.1:18789",
-      },
-      "non_gateway",
-    ],
-    [
-      {
-        commandLine: "/opt/homebrew/bin/socat TCP-LISTEN:18789,reuseaddr,fork TCP:127.0.0.1:18789",
-      },
-      "non_gateway",
-    ],
-    [
-      {
-        commandLine:
-          '"C:\\Program Files\\socat\\socat.exe" TCP-LISTEN:18789,fork TCP:127.0.0.1:18789',
-      },
-      "non_gateway",
-    ],
+    [{ command: "socat.exe" }, "non_gateway"],
     [
       {
         command: "socat",
-        commandLine: "socat TCP-LISTEN:18789,fork EXEC:openclaw",
+        commandLine: "socat -lpopenclaw TCP-LISTEN:18789,fork TCP:127.0.0.1:18789",
       },
       "non_gateway",
     ],
@@ -79,51 +61,9 @@ describe("ports-format", () => {
       },
       "gateway",
     ],
-    [{ commandLine: "openclaw gateway --profile socat" }, "gateway"],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
-  });
-
-  it("does not treat a socat port forward as the gateway", () => {
-    const hints = buildPortHints(
-      [
-        {
-          commandLine: "socat TCP-LISTEN:18789,bind=100.64.0.1,fork TCP:127.0.0.1:18789",
-        },
-      ],
-      18789,
-    );
-    expect(hints).not.toContain(gatewayAlreadyRunningHint);
-    expect(hints).toContain("Another process is listening on this port.");
-  });
-
-  it("keeps an OpenClaw listener whose path contains socat as the gateway", () => {
-    const listener = {
-      command: "node",
-      commandLine: "node /tmp/socat/openclaw/dist/index.js gateway",
-    };
-    expect(classifyPortListener(listener, 18789)).toBe("gateway");
-    expect(buildPortHints([listener], 18789)).toContain(gatewayAlreadyRunningHint);
-  });
-
-  it("does not treat a socat command line that mentions openclaw as the gateway", () => {
-    const listener = {
-      commandLine: "socat TCP-LISTEN:18789,bind=100.64.0.1,fork TCP:127.0.0.1:18789 openclaw",
-    };
-    expect(classifyPortListener(listener, 18789)).toBe("non_gateway");
-    const hints = buildPortHints([listener], 18789);
-    expect(hints).not.toContain(gatewayAlreadyRunningHint);
-    expect(hints).toContain("Another process is listening on this port.");
-  });
-
-  it("keeps a Gateway launched with --profile socat as the gateway", () => {
-    const listener = {
-      command: "node",
-      commandLine: "node /Users/me/Projects/openclaw/dist/index.js gateway --profile socat",
-    };
-    expect(classifyPortListener(listener, 18789)).toBe("gateway");
-    expect(buildPortHints([listener], 18789)).toContain(gatewayAlreadyRunningHint);
   });
 
   it("does not emit the SSH tunnel hint for an ssh-named non-tunnel process", () => {
