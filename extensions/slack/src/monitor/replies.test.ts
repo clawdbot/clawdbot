@@ -33,7 +33,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
-let resolveDeliveredSlackReplyThreadTs: typeof import("./replies.js").resolveDeliveredSlackReplyThreadTs;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
 import { deliverSlackSlashReplies, sanitizeSlackMonitorReplyPayload } from "./replies.js";
 
@@ -140,12 +139,8 @@ function readPlainSectionTexts(message: SlashTestMessage): string[] {
 
 describe("deliverReplies identity passthrough", () => {
   beforeAll(async () => {
-    ({
-      createSlackReplyDeliveryPlan,
-      deliverReplies,
-      resolveDeliveredSlackReplyThreadTs,
-      resolveSlackThreadTs,
-    } = await import("./replies.js"));
+    ({ createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } =
+      await import("./replies.js"));
   });
 
   beforeEach(() => {
@@ -164,6 +159,35 @@ describe("deliverReplies identity passthrough", () => {
     const options = requireSendCall()[2];
     expect(options.identity).toBe(identity);
   });
+
+  it.each([
+    { name: "current reply", replyToCurrent: true, isCompactionNotice: false },
+    { name: "compaction notice", replyToCurrent: true, isCompactionNotice: true },
+    { name: "explicit target", replyToCurrent: false, isCompactionNotice: false },
+  ])(
+    "routes $name without mistaking a child for its thread root",
+    async ({ replyToCurrent, isCompactionNotice }) => {
+      sendMock.mockResolvedValue({ messageId: "1800000000.000003", channelId: "C123" });
+      await deliverReplies(
+        baseParams({
+          replies: [
+            {
+              text: "Thread reply",
+              replyToId: "1800000000.000002",
+              replyToCurrent,
+              isCompactionNotice,
+            },
+          ],
+          replyThreadTs: "1800000000.000001",
+          replyToMode: "all",
+        }),
+      );
+
+      expect(requireSendCall()[2].threadTs).toBe(
+        replyToCurrent ? "1800000000.000001" : "1800000000.000002",
+      );
+    },
+  );
 
   it("passes identity to sendMessageSlack for media replies", async () => {
     sendMock.mockResolvedValue(undefined);
@@ -449,41 +473,6 @@ describe("deliverReplies identity passthrough", () => {
       expect.objectContaining({ type: "section" }),
       expect.objectContaining({ type: "actions" }),
     ]);
-  });
-});
-
-describe("resolveDeliveredSlackReplyThreadTs", () => {
-  beforeAll(async () => {
-    ({ resolveDeliveredSlackReplyThreadTs } = await import("./replies.js"));
-  });
-
-  it("prefers explicit reply targets when reply tags are enabled", () => {
-    expect(
-      resolveDeliveredSlackReplyThreadTs({
-        replyToMode: "first",
-        payloadReplyToId: "explicit-thread",
-        replyThreadTs: "planned-thread",
-      }),
-    ).toBe("explicit-thread");
-  });
-
-  it("ignores explicit reply tags when replyToMode is off", () => {
-    expect(
-      resolveDeliveredSlackReplyThreadTs({
-        replyToMode: "off",
-        payloadReplyToId: "explicit-thread",
-        replyThreadTs: "planned-thread",
-      }),
-    ).toBe("planned-thread");
-  });
-
-  it("falls back to the planned reply thread when no explicit reply tag exists", () => {
-    expect(
-      resolveDeliveredSlackReplyThreadTs({
-        replyToMode: "batched",
-        replyThreadTs: "planned-thread",
-      }),
-    ).toBe("planned-thread");
   });
 });
 
