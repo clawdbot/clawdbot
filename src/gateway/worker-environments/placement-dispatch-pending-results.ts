@@ -1,5 +1,6 @@
 import {
   isCurrentActiveWorkerEnvironment,
+  workerDisappearanceError,
   type PlacementFailureActions,
   type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
@@ -11,8 +12,12 @@ import {
   completeMovedWorkspaceTeardown,
   completeReclaimedWorkspaceTeardown,
 } from "./placement-teardown.js";
-import type { WorkerEnvironmentService } from "./service.js";
-import type { WorkerWorkspaceResultConflict } from "./workspace-conflicts.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
+import { boundedWorkerError } from "./worker-error.js";
+import type {
+  WorkerWorkspaceRecoveryFailureReport,
+  WorkerWorkspaceResultConflict,
+} from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
@@ -48,34 +53,18 @@ export type PlacementRecoveryDeps = {
       | { cleared: true }
     ),
   ) => Promise<void>;
+  reportWorkspaceResultRecoveryFailure?: (
+    recovery: WorkerWorkspaceRecoveryFailureReport,
+  ) => Promise<void>;
   resolveWorkspaceResultConflict: (params: {
     sessionId: string;
     sessionKey: string;
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
-  recoverPlacementMoves?: () => Promise<Set<string>>;
+  recoverPlacementMoves?: (environmentId?: string) => Promise<Set<string>>;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
-
-function pendingWorkerLossError(
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-  sessionId: string,
-): Error {
-  if (!environment) {
-    return new Error("cloud worker disappeared: environment record missing");
-  }
-  if (
-    environment.state === "destroyed" ||
-    environment.state === "failed" ||
-    environment.state === "orphaned"
-  ) {
-    return new Error(
-      `cloud worker disappeared: ${environment.error ?? `environment state ${environment.state}`}`,
-    );
-  }
-  return new Error(`Pending cloud workspace result lost its worker: ${sessionId}`);
-}
 
 type WorkerOwnedPendingPlacement = Extract<
   WorkerDispatchPlacement,
@@ -119,6 +108,18 @@ export async function recoverPendingWorkspaceResults(
   environmentId?: string,
 ): Promise<Set<string>> {
   const { environments, failure, placements } = deps;
+  const destroyPendingEnvironment = async (placement: WorkerOwnedPendingPlacement) => {
+    const current = environments.get(placement.environmentId);
+    // Drain advances the epoch, but store.requestDestroy is monotonic and forbids
+    // reattachment. Retry its cleanup; a live replacement still needs the exact epoch.
+    if (
+      current &&
+      current.state !== "destroyed" &&
+      (current.ownerEpoch === placement.activeOwnerEpoch || current.destroyRequestedAtMs !== null)
+    ) {
+      await environments.destroy(placement.environmentId);
+    }
+  };
   const stagedResultOwners = new Set<string>();
   for (const pending of placements.listPendingWorkspaceResults()) {
     if (pending.stagedResultRef) {
@@ -248,13 +249,7 @@ export async function recoverPendingWorkspaceResults(
         if (turnClaim.owner.kind === "worker") {
           await placements.closeWorkerTurnToolState(turnClaim);
         }
-        if (
-          environment &&
-          environment.state !== "destroyed" &&
-          environment.ownerEpoch === active.activeOwnerEpoch
-        ) {
-          await environments.destroy(active.environmentId);
-        }
+        await destroyPendingEnvironment(active);
         await prepareAcceptedPublication(deps, turnClaim);
         await deps.publishAcceptedWorkspace?.(turnClaim);
         completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim });
@@ -334,16 +329,7 @@ export async function recoverPendingWorkspaceResults(
             root: localPath,
             stagedResultRef: ownedStagedResultRef,
             conflictRetained: finalized.conflictRetained,
-            beforeComplete: async () => {
-              const currentEnvironment = environments.get(active.environmentId);
-              if (
-                currentEnvironment &&
-                currentEnvironment.state !== "destroyed" &&
-                currentEnvironment.ownerEpoch === active.activeOwnerEpoch
-              ) {
-                await environments.destroy(active.environmentId);
-              }
-            },
+            beforeComplete: () => destroyPendingEnvironment(active),
             complete: () =>
               completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim }),
           });
@@ -367,7 +353,8 @@ export async function recoverPendingWorkspaceResults(
         }
         const failed = placements.failWorkspaceResultAndReleaseTurn(
           pending,
-          pendingWorkerLossError(environment, pending.sessionId),
+          workerDisappearanceError(environment) ??
+            new Error(`Pending cloud workspace result lost its worker: ${pending.sessionId}`),
         );
         if (failed.state === "failed") {
           await failure.retryFailedTeardown(failed);
@@ -480,18 +467,45 @@ export async function recoverPendingWorkspaceResults(
           }
         }
       });
-    } catch {
-      // Keep the result, claim, and environment fenced. The next sweep retries.
+    } catch (error) {
+      try {
+        const current = placements.get(pending.sessionId);
+        const currentPending = placements
+          .listPendingWorkspaceResults()
+          .find(
+            (candidate) =>
+              candidate.sessionId === pending.sessionId &&
+              candidate.environmentId === pending.environmentId &&
+              candidate.ownerEpoch === pending.ownerEpoch &&
+              candidate.placementGeneration === pending.placementGeneration &&
+              candidate.claimId === pending.claimId &&
+              candidate.runId === pending.runId &&
+              candidate.gatewayInstanceId === pending.gatewayInstanceId,
+          );
+        if (currentPending && isCurrentWorkerWorkspacePendingResultOwner(current, currentPending)) {
+          await deps.reportWorkspaceResultRecoveryFailure?.({
+            sessionId: current.sessionId,
+            sessionKey: current.sessionKey,
+            agentId: current.agentId,
+            error: boundedWorkerError(error),
+          });
+        }
+      } catch {
+        // Transcript reporting must not weaken the durable recovery fence.
+      }
     }
   }
   if (cleanupOrphans) {
-    const retainedCleanupRefs = new Set(
-      placements
-        .listPendingWorkspaceResults()
-        .flatMap((pending) =>
-          pending.stagedResultRef ? [cleanupWorkerWorkspaceResultRef(pending.stagedResultRef)] : [],
-        ),
-    );
+    const retainedRefs = () =>
+      new Set(
+        placements
+          .listPendingWorkspaceResults()
+          .flatMap((pending) =>
+            pending.stagedResultRef
+              ? [cleanupWorkerWorkspaceResultRef(pending.stagedResultRef)]
+              : [],
+          ),
+      );
     const cleanedWorkspaceRoots = new Set<string>();
     for (const placement of placements.list()) {
       try {
@@ -500,11 +514,11 @@ export async function recoverPendingWorkspaceResults(
           cleanedWorkspaceRoots.add(root);
           await deleteWorkerWorkspaceResultCleanupRefs({
             root,
-            retainedRefs: retainedCleanupRefs,
+            retainedRefs,
           });
         }
       } catch {
-        // Cleanup refs are independently retryable on the next startup sweep.
+        // Cleanup refs are independently retryable after the next restart.
       }
     }
   }

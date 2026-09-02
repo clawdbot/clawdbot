@@ -35,7 +35,10 @@ export type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "ownerAgentId">;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "mediaMaxMb" | "ownerAgentId" | "dispatchReplyFromConfig"
+  >;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /**
@@ -46,6 +49,7 @@ export type DispatchTelegramMessageParams = {
     admission?: "exclusive" | "cancel-only";
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
+    onDeferredHeartbeat?: () => void;
     onAbandoned?: () => void;
     abortSignal?: AbortSignal;
   };
@@ -119,6 +123,7 @@ export type TelegramQueuedAnswerBlockRotation = {
 export type TelegramBufferedFinalSettlement = {
   visibleReplySent: boolean;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
   resolve: (result: { visibleReplySent: boolean }) => void;
   reject: (error: unknown) => void;
@@ -135,6 +140,7 @@ type TelegramProgressCompositor = {
   readonly commentaryProgressEnabled: boolean;
   readonly hasStatusHeadline: boolean;
   readonly hasPlanProgress: boolean;
+  getSnapshot: () => { lines: ReadonlyArray<string | ChannelProgressDraftLine> };
   markFinalReplyStarted: () => void;
   markFinalReplyDelivered: () => void;
   beginNewTurn: (options?: { force?: boolean }) => boolean;

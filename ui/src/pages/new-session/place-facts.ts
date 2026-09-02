@@ -3,7 +3,7 @@ import { formatDurationCompact, formatRelativeTimestamp } from "../../lib/format
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
-const MAX_PLACE_MENU_FACTS = 4;
+export const MAX_PLACE_MENU_FACTS = 4;
 const CAPABILITY_FACT_KEYS = {
   camera: "newSession.capabilityCamera",
   location: "newSession.capabilityLocation",
@@ -55,14 +55,6 @@ export function environmentMenuFacts(
       })
     : lifecycle;
   const facts = priorityFact ? [priorityFact] : [];
-  if (environment?.workerSlots) {
-    facts.push(
-      t("newSession.workerSlots", {
-        available: String(environment.workerSlots.available),
-        total: String(environment.workerSlots.total),
-      }),
-    );
-  }
   if (environment?.platform) {
     facts.push(prettifyPlatform(environment.platform));
   }

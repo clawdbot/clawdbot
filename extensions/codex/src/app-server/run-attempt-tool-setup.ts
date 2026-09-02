@@ -24,14 +24,18 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
+import type { CodexDynamicToolSpec } from "./protocol.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import {
+  buildScheduledCodexAppServerConnectionIdentity,
   captureScheduledCodexAppAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
   return signal?.aborted === true && error === signal.reason;
@@ -61,9 +65,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
+    contextSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     agentDir,
@@ -139,25 +146,34 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameToolCallId?: string;
     frameImageIdentity?: string;
   } = { value: 0 };
+  const runCleanups: Array<(reason: string) => Promise<void>> = [];
   const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
   const cronCreatorToolAllowlistCaptureRef: {
     value?: { version: 1; source: "final-executable-surface" };
   } = {};
   const scheduledAppAuthoritySourceRef: {
-    current?: Omit<
-      Parameters<typeof captureScheduledCodexAppAuthority>[0],
-      "profileId" | "accountId"
-    >;
+    current?: Omit<Parameters<typeof captureScheduledCodexAppAuthority>[0], "auth">;
   } = {};
   const preparedChatgptAuth =
     connection.startupPreparedAuth?.kind === "profile" &&
     connection.startupPreparedAuth.snapshot?.loginParams.type === "chatgptAuthTokens" &&
     connection.startupPreparedAuth.snapshot.chatgptAccountId
       ? {
+          kind: "prepared-profile" as const,
           profileId: connection.startupPreparedAuth.profileId,
           accountId: connection.startupPreparedAuth.snapshot.chatgptAccountId,
         }
       : undefined;
+  const configuredAppServerAuth =
+    !preparedChatgptAuth && connection.appServer.start.transport !== "stdio"
+      ? {
+          kind: "configured-app-server" as const,
+          connectionFingerprint: buildScheduledCodexAppServerConnectionIdentity(
+            connection.appServer,
+          ),
+        }
+      : undefined;
+  const scheduledCodexAppAuth = preparedChatgptAuth ?? configuredAppServerAuth;
   const appPolicy = resolveCodexPluginsPolicy(pluginConfig);
   const codexAppsMayBeVisible =
     appPolicy.enabled &&
@@ -168,6 +184,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     usesSupervisionConnection: connection.usesSupervisionConnection,
     homeScope: connection.appServer.start.homeScope,
     hasPreparedAccountIdentity: Boolean(preparedChatgptAuth),
+    hasConfiguredAppServerIdentity: Boolean(configuredAppServerAuth),
   });
   const codexAppAuthorityUnavailableReason = appCreatorCapture.unavailableReason;
   const canResolveScheduledCodexAppAuthority = appCreatorCapture.supported;
@@ -191,16 +208,20 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     | undefined;
   const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
+    // Both catalogs describe one attempt; a later attempt discovers fresh connections.
+    nodeExecAvailability: {},
     params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
     sandbox,
+    sessionPermissionPolicy,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
@@ -245,8 +266,35 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         }
       : {}),
   };
+  let nativeSpecs: CodexDynamicToolSpec[] | undefined;
+  if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
+    runAbortController.signal.throwIfAborted();
+    params.hostCapabilities.assertActive();
+    const client = await connection.attemptClientFactory({
+      startOptions: connection.appServer.start,
+      authProfileId: connection.startupClientAuthProfileId,
+      agentDir,
+      config: params.config,
+      timeoutMs: connection.appServer.requestTimeoutMs,
+    });
+    try {
+      nativeSpecs = await loadCodexNativeToolCatalog({
+        client,
+        binding: mutable.startupBinding,
+        appServer: connection.appServer,
+        agentDir,
+        assertCurrent: () => {
+          runAbortController.signal.throwIfAborted();
+          params.hostCapabilities.assertActive();
+        },
+      });
+    } finally {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
+  }
   const tools = await buildDynamicTools({
     ...commonToolParams,
+    registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
     cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     onPersistentWebSearchPolicyResolved: (allowed) => {
@@ -256,12 +304,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState.webSearchAllowed = allowed;
     },
   });
-  const registeredTools = await buildDynamicTools({
-    ...commonToolParams,
-    forceHeartbeatTool: true,
-    ignoreDisableMessageTool: true,
-    ignoreRuntimePlan: true,
-  });
+  const registeredTools = nativeSpecs
+    ? []
+    : await buildDynamicTools({
+        ...commonToolParams,
+        forceHeartbeatTool: true,
+        ignoreDisableMessageTool: true,
+        ignoreRuntimePlan: true,
+      });
   const policyContext = {
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -269,7 +319,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
-    agentId: sessionAgentId,
+    agentId: policyAgentId,
     agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
     agentAccountId: params.agentAccountId,
     messageProvider: params.messageProvider ?? params.messageChannel,
@@ -382,7 +432,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
       currentChannelProvider: resolveCodexMessageToolProvider(params),
@@ -408,6 +458,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
       loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
@@ -461,11 +512,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         }
         const appSource = scheduledAppAuthoritySourceRef.current;
         const runtimeAuthority =
-          canResolveScheduledCodexAppAuthority && preparedChatgptAuth
+          canResolveScheduledCodexAppAuthority && scheduledCodexAppAuth
             ? appSource
               ? await captureScheduledCodexAppAuthority({
                   ...appSource,
-                  ...preparedChatgptAuth,
+                  auth: scheduledCodexAppAuth,
                   signal: options?.signal,
                 })
               : (() => {
@@ -553,6 +604,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       dynamicToolParams,
       compactionPlanState,
       computerContextEpoch,
+      runCleanups,
       toolBridge,
       toolState,
       toolOutcomeOrdinals,

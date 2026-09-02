@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -22,6 +23,7 @@ import { ensureProfileForEmail, setAvatar, setDisplayName } from "../state/user-
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import { SSE_CONTENT_TYPE } from "./http-common.js";
 import { hasExplicitAcceptableMediaRange } from "./http-media-range.js";
+import * as sessionHistoryState from "./session-history-state.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
@@ -33,20 +35,10 @@ import {
   writeSessionStore,
 } from "./test-helpers.server.js";
 
-installGatewayTestHooks();
-
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const cleanupDirs: string[] = [];
 const requireRecord = createRequireRecord("object", "expected-label");
-
-afterEach(async () => {
-  testState.sessionConfig = undefined;
-  testState.agentsConfig = undefined;
-  await Promise.all(
-    cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
-});
 
 const AGENT_ID = "main";
 type SessionHistoryTestDatabase = Pick<
@@ -234,16 +226,11 @@ async function appendVisibleAssistantMessage(params: {
   text: string;
   storePath: string;
 }) {
-  const appended = await appendExactAssistantMessageToSessionTranscript({
+  return await appendTranscriptMessage({
     sessionKey: params.sessionKey,
     storePath: params.storePath,
     message: makeTranscriptAssistantMessage({ text: params.text }),
   });
-  expect(appended.ok).toBe(true);
-  if (!appended.ok) {
-    throw new Error(`append failed: ${appended.reason}`);
-  }
-  return appended.messageId;
 }
 
 async function fetchSessionHistory(
@@ -286,7 +273,7 @@ async function withGatewayHarness<T>(
 
 type SessionHistoryMessage = {
   content?: Array<{ text?: string }>;
-  __openclaw?: { id?: string; seq?: number };
+  __openclaw?: { id?: string; seq?: number; turnBoundary?: boolean };
 };
 
 type SessionHistoryBody = {
@@ -623,6 +610,16 @@ describe("session history Accept parsing", () => {
 });
 
 describe("session history HTTP endpoints", () => {
+  installGatewayTestHooks();
+
+  afterEach(async () => {
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+    await Promise.all(
+      cleanupDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
   test("uses SSE only for an explicit acceptable event-stream media range", async () => {
     const expectedText = "accept negotiation sentinel";
     await seedSession({ text: expectedText });
@@ -732,7 +729,12 @@ describe("session history HTTP endpoints", () => {
         storePath,
         input: {
           idempotencyKey: `session-history-profile:${id}`,
-          sender: { id: profile.id, name: senderName, username: "ada" },
+          sender: {
+            id: profile.id,
+            identity: { type: "profile", id: profile.id },
+            name: senderName,
+            username: "ada",
+          },
           text,
         },
       });
@@ -864,6 +866,14 @@ describe("session history HTTP endpoints", () => {
       expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         seq: 2,
       });
+
+      const older = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: `?limit=1&cursor=${body.nextCursor}`,
+      });
+      expect(older.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "restored first",
+      ]);
+      expect(older.hasMore).toBe(false);
     });
   });
 
@@ -1068,6 +1078,29 @@ describe("session history HTTP endpoints", () => {
       expect(firstBody.hasMore).toBe(true);
       expect(firstBody.nextCursor).toBe("2");
 
+      const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+        agentId: AGENT_ID,
+      }).path;
+      if (!databasePath) {
+        throw new Error("expected session database path");
+      }
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "transcript_events">>(
+            database.db,
+          );
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("transcript_events")
+              .set({ event_json: "{" })
+              .where("session_id", "=", "sess-main")
+              .where("event_json", "like", "%third message%"),
+          );
+        },
+        { agentId: AGENT_ID, path: databasePath },
+      );
+
       const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
         query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
       });
@@ -1215,51 +1248,137 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("keeps older SQLite history reachable past an all-silent bounded tail", async () => {
+  test("keeps repeated assistant replies from separate hidden user turns in REST and SSE history", async () => {
     const storePath = await createSessionStoreFile();
-    const sessionId = "sess-silent-tail";
+    const sessionId = "sess-hidden-turn-replies";
     const sessionKey = "agent:main:main";
     await writeSessionStore({
       entries: { main: { sessionId, updatedAt: Date.now() } },
       storePath,
     });
+    const assistantMessage = (text: string, model: string) =>
+      makeTranscriptAssistantMessage({ text, provider: "openclaw", model });
     await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
       { type: "session", version: 1, id: sessionId },
-      { message: { role: "assistant", content: "reachable older history" } },
-      ...Array.from({ length: 40 }, () => ({
-        message: { role: "assistant", content: "NO_REPLY" },
-      })),
+      { message: assistantMessage("First reply.", "acp-runtime") },
+      { message: { role: "user", content: "" } },
+      { message: assistantMessage("First reply.", "gateway-injected") },
+      { message: assistantMessage("Second reply.", "acp-runtime") },
+      { message: { role: "user", content: HEARTBEAT_PROMPT } },
+      { message: assistantMessage("Second reply.", "gateway-injected") },
+      { message: assistantMessage("Third reply.", "acp-runtime") },
+      { message: { role: "user", content: HEARTBEAT_PROMPT } },
+      { message: { role: "assistant", content: "HEARTBEAT_OK" } },
+      { message: assistantMessage("Third reply.", "gateway-injected") },
     ]);
 
+    const expectedRows = [
+      "1:assistant:First reply.",
+      "3:assistant:First reply.",
+      "4:assistant:Second reply.",
+      "6:assistant:Second reply.",
+      "7:assistant:Third reply.",
+      "10:assistant:Third reply.",
+    ];
     await withGatewayHarness(async (harness) => {
-      const firstPage = await readSessionHistoryBody(harness.port, sessionKey, {
-        query: "?limit=1",
-      });
-      expect(firstPage.messages).toEqual([]);
-      expect(firstPage.hasMore).toBe(true);
-      expect(firstPage.nextCursor).toBe("2");
+      const history = await readSessionHistoryBody(harness.port, sessionKey);
+      expect(history.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);
+      expect(history.messages?.map((message) => message["__openclaw"]?.turnBoundary)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        true,
+        undefined,
+        true,
+      ]);
 
-      const stream = await openSessionHistorySse(harness.port, sessionKey, {
-        query: "?limit=1",
-      });
+      const stream = await openSessionHistorySse(harness.port, sessionKey);
       try {
         const event = await readSseEvent(stream.reader, stream.streamState);
         expect(event.event).toBe("history");
-        expect(event.data).toMatchObject({ messages: [], hasMore: true, nextCursor: "2" });
+        const streamedHistory = event.data as SessionHistoryBody;
+        expect(streamedHistory.messages?.map(sessionHistoryRowIdentity)).toEqual(expectedRows);
       } finally {
         await stream.reader.cancel();
       }
-
-      const olderPage = await readSessionHistoryBody(harness.port, sessionKey, {
-        query: "?limit=1&cursor=2",
-      });
-      expect(olderPage.messages?.map((message) => message.content)).toEqual([
-        "reachable older history",
-      ]);
-      expect(olderPage.hasMore).toBe(false);
-      expect(olderPage.nextCursor).toBeUndefined();
     });
   });
+
+  test.each([
+    { name: "all-silent tail", heartbeatBoundary: false, silentMessages: 40 },
+    { name: "heartbeat context boundary", heartbeatBoundary: true, silentMessages: 39 },
+  ])(
+    "backfills REST and SSE history past an all-silent bounded tail ($name)",
+    async ({ heartbeatBoundary, silentMessages }) => {
+      const storePath = await createSessionStoreFile();
+      const sessionId = "sess-silent-tail";
+      const sessionKey = "agent:main:main";
+      await writeSessionStore({
+        entries: { main: { sessionId, updatedAt: Date.now() } },
+        storePath,
+      });
+      await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+        { type: "session", version: 1, id: sessionId },
+        ...(heartbeatBoundary ? [{ message: { role: "user", content: HEARTBEAT_PROMPT } }] : []),
+        { message: { role: "assistant", content: "reachable older history" } },
+        ...Array.from({ length: silentMessages }, () => ({
+          message: { role: "assistant", content: "NO_REPLY" },
+        })),
+      ]);
+
+      await withGatewayHarness(async (harness) => {
+        const firstPage = await readSessionHistoryBody(harness.port, sessionKey, {
+          query: "?limit=1",
+        });
+        expect(firstPage.messages?.map((message) => message.content)).toEqual([
+          "reachable older history",
+        ]);
+        expect(firstPage.hasMore).toBe(heartbeatBoundary);
+        expect(firstPage.nextCursor).toBe(heartbeatBoundary ? "2" : undefined);
+        expect(firstPage.messages?.[0]?.["__openclaw"]?.turnBoundary === true).toBe(
+          heartbeatBoundary,
+        );
+
+        const stream = await openSessionHistorySse(harness.port, sessionKey, {
+          query: "?limit=1",
+        });
+        try {
+          const event = await readSseEvent(stream.reader, stream.streamState);
+          expect(event.event).toBe("history");
+          const history = event.data as SessionHistoryBody;
+          expect(history.messages?.map((message) => message.content)).toEqual([
+            "reachable older history",
+          ]);
+          expect(history.hasMore).toBe(heartbeatBoundary);
+          expect(history.nextCursor).toBe(heartbeatBoundary ? "2" : undefined);
+          expect(history.messages?.[0]?.["__openclaw"]?.turnBoundary === true).toBe(
+            heartbeatBoundary,
+          );
+        } finally {
+          await stream.reader.cancel();
+        }
+
+        if (!heartbeatBoundary) {
+          await replaceTranscriptEvents({ agentId: AGENT_ID, sessionId, sessionKey, storePath }, [
+            { type: "session", version: 1, id: sessionId },
+            { message: { role: "assistant", content: "older visible history" } },
+            ...Array.from({ length: 60 }, () => ({
+              message: { role: "assistant", content: "NO_REPLY" },
+            })),
+            { message: { role: "assistant", content: "newer visible history" } },
+          ]);
+
+          const sparsePage = await readSessionHistoryBody(harness.port, sessionKey, {
+            query: "?limit=2",
+          });
+          expect(sparsePage.messages?.map((message) => message.content)).toEqual([
+            "older visible history",
+            "newer visible history",
+          ]);
+        }
+      });
+    },
+  );
 
   test("caps all-digit direct REST history limits that exceed safe integer range", async () => {
     const { storePath } = await seedSession({ text: "first message" });
@@ -1399,68 +1518,84 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
-  test("sanitizes phased assistant history entries before returning them", async () => {
-    const storePath = await createSessionStoreFile();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
+  test.each(["text", "output_text", "input_text"])(
+    "sanitizes phased %s assistant history entries before returning them",
+    async (blockType) => {
+      const storePath = await createSessionStoreFile();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
         },
-      },
-      storePath,
-    });
-
-    await withGatewayHarness(async (harness) => {
-      const hidden = await appendAssistantMessageToSessionTranscript({
-        sessionKey: "agent:main:main",
-        text: "NO_REPLY",
         storePath,
       });
-      expect(hidden.ok).toBe(true);
 
-      if (!hidden.ok) {
-        throw new Error(`append failed: ${hidden.reason}`);
-      }
-      const visibleMessageId = await appendTranscriptMessage({
-        sessionKey: "agent:main:main",
-        storePath,
-        message: makeTranscriptAssistantMessage({
-          text: "Done.",
-          content: [
+      await withGatewayHarness(async (harness) => {
+        const visibleMessageId = "visible-phased-assistant";
+        await replaceTranscriptEvents(
+          { agentId: AGENT_ID, sessionId: "sess-main", sessionKey: "agent:main:main", storePath },
+          [
+            { type: "session", version: 1, id: "sess-main" },
+            { id: "hidden-control", message: makeTranscriptAssistantMessage({ text: "NO_REPLY" }) },
             {
-              type: "text",
-              text: "internal reasoning",
-              textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Done.",
-              textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+              id: visibleMessageId,
+              message: {
+                ...makeTranscriptAssistantMessage({ text: "Done." }),
+                content: [
+                  {
+                    type: blockType,
+                    text: "internal reasoning",
+                    textSignature: JSON.stringify({
+                      v: 1,
+                      id: "item_commentary",
+                      phase: "commentary",
+                    }),
+                  },
+                  {
+                    type: blockType,
+                    text: "Done.",
+                    textSignature: JSON.stringify({
+                      v: 1,
+                      id: "item_final",
+                      phase: "final_answer",
+                    }),
+                  },
+                ],
+              },
             },
           ],
-        }),
-        emitInlineMessage: false,
-      });
+        );
 
-      const historyRes = await fetchSessionHistory(harness.port, "agent:main:main");
-      expect(historyRes.status).toBe(200);
-      const body = (await historyRes.json()) as {
-        sessionKey?: string;
-        messages?: Array<{
-          content?: Array<{ text?: string }>;
-          __openclaw?: { id?: string; seq?: number };
-        }>;
-      };
-      expect(body.sessionKey).toBe("agent:main:main");
-      expect(body.messages).toHaveLength(1);
-      expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
-      expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
-        id: visibleMessageId,
-        seq: 2,
+        const historyRes = await fetchSessionHistory(harness.port, "agent:main:main");
+        expect(historyRes.status).toBe(200);
+        const body = (await historyRes.json()) as {
+          sessionKey?: string;
+          messages?: Array<{
+            content?: Array<{ text?: string }>;
+            openclawStreamFallback?: { itemId?: string; replacementText?: string; source?: string };
+            __openclaw?: { id?: string; seq?: number };
+          }>;
+        };
+        expect(body.sessionKey).toBe("agent:main:main");
+        expect(body.messages).toHaveLength(2);
+        expect(body.messages?.[0]).toMatchObject({
+          content: [{ type: "text", text: "internal reasoning" }],
+          openclawStreamFallback: {
+            itemId: "item_commentary",
+            replacementText: "internal reasoning",
+            source: "segment",
+          },
+        });
+        expect(body.messages?.[1]?.content?.map((block) => block.text)).toEqual(["Done."]);
+        expectOpenClawMetadata(body.messages?.[1]?.["__openclaw"], {
+          id: visibleMessageId,
+          seq: 2,
+        });
       });
-    });
-  });
+    },
+  );
 
   test("streams session history updates over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
@@ -1476,6 +1611,56 @@ describe("session history HTTP endpoints", () => {
         seq: 2,
         id: appendedId,
       });
+    });
+  });
+
+  test.each([
+    { name: "complete", query: undefined },
+    { name: "bounded", query: "?limit=2" },
+  ])("includes updates committed while opening $name SSE history", async ({ query }) => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await seedSession({ text: "first message" });
+
+    await withGatewayHarness(async (harness) => {
+      const readSnapshot = sessionHistoryState.readSessionHistoryRawSnapshotAsync;
+      const snapshotSpy = vi
+        .spyOn(sessionHistoryState, "readSessionHistoryRawSnapshotAsync")
+        .mockImplementationOnce(async (params) => {
+          const snapshot = await readSnapshot(params);
+          await appendVisibleAssistantMessage({
+            sessionKey,
+            text: "committed during startup",
+            storePath,
+          });
+          return snapshot;
+        });
+      try {
+        const stream = await openSessionHistorySse(harness.port, sessionKey, { query });
+        try {
+          await expectHistoryEventTexts(stream, ["first message", "committed during startup"]);
+          const thirdId = await appendVisibleAssistantMessage({
+            sessionKey,
+            text: "live after startup",
+            storePath,
+          });
+          if (query) {
+            await expectHistoryEventTexts(stream, [
+              "committed during startup",
+              "live after startup",
+            ]);
+          } else {
+            await expectMessageEventMatch(stream, {
+              text: "live after startup",
+              seq: 3,
+              id: thirdId,
+            });
+          }
+        } finally {
+          await stream.reader.cancel();
+        }
+      } finally {
+        snapshotSpy.mockRestore();
+      }
     });
   });
 

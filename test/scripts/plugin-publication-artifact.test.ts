@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { deflateRawSync, gzipSync } from "node:zlib";
+import { crc32, deflateRawSync, gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -159,17 +159,6 @@ function paxRecord(key: string, value: string): Buffer {
     }
     length = actualLength;
   }
-}
-
-function crc32(bytes: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }
 
 type ZipFile = {
@@ -749,11 +738,31 @@ describe("plugin publication artifact", () => {
     ).toThrow("producer job did not complete successfully");
   });
 
-  it("accepts an environment-waiting current producer attempt", () => {
+  it.each(["waiting", "queued", "pending", "requested"])(
+    "accepts a null-conclusion %s current producer attempt",
+    (status) => {
+      const fixture = createFixture();
+      const workflowRun = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
+      workflowRun.status = status;
+      workflowRun.conclusion = null;
+      writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+
+      expect(
+        verifyFixture(fixture, {
+          consumerRunAttempt: RUN_ATTEMPT,
+          producerJobName: PRODUCER_JOB_NAME,
+          runStatePolicy: "same-run-producer-success",
+          workflowJobsMetadataPath: fixture.workflowJobsPath,
+        }),
+      ).toMatchObject({ producerRunAttempt: RUN_ATTEMPT, producerRunId: RUN_ID });
+    },
+  );
+
+  it("accepts a failed current attempt only when its exact producer job succeeded", () => {
     const fixture = createFixture();
     const workflowRun = JSON.parse(readFileSync(fixture.workflowRunPath, "utf8"));
-    workflowRun.status = "waiting";
-    workflowRun.conclusion = null;
+    workflowRun.status = "completed";
+    workflowRun.conclusion = "failure";
     writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
 
     expect(
@@ -764,6 +773,17 @@ describe("plugin publication artifact", () => {
         workflowJobsMetadataPath: fixture.workflowJobsPath,
       }),
     ).toMatchObject({ producerRunAttempt: RUN_ATTEMPT, producerRunId: RUN_ID });
+
+    workflowRun.conclusion = "cancelled";
+    writeFileSync(fixture.workflowRunPath, `${JSON.stringify(workflowRun)}\n`);
+    expect(() =>
+      verifyFixture(fixture, {
+        consumerRunAttempt: RUN_ATTEMPT,
+        producerJobName: PRODUCER_JOB_NAME,
+        runStatePolicy: "same-run-producer-success",
+        workflowJobsMetadataPath: fixture.workflowJobsPath,
+      }),
+    ).toThrow("Current producer workflow attempt must still be active or failed.");
   });
 
   it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {
@@ -985,6 +1005,15 @@ describe("plugin publication artifact", () => {
     tampered[35] = tampered.readUInt8(35) ^ 0xff;
     writeFileSync(tamperFixture.zipPath, tampered);
     expect(() => verifyFixture(tamperFixture)).toThrow(/digest/u);
+  });
+
+  it("rejects changed ZIP payload bytes with matching header checksums", () => {
+    const zip = createZip([{ bytes: Buffer.from("payload"), name: "payload.txt" }]);
+    const dataOffset = 30 + Buffer.byteLength("payload.txt");
+    // Keep both header CRCs unchanged so corruption reaches the payload check.
+    zip[dataOffset] = zip.readUInt8(dataOffset) ^ 0xff;
+
+    expect(() => inspectTestZip(zip)).toThrow(/checksum mismatch for payload\.txt/u);
   });
 
   it("accepts canonical signed data descriptors and rejects noncanonical ZIP structure", () => {

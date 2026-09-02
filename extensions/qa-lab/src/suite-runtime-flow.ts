@@ -30,6 +30,7 @@ import * as suiteRuntimeAgent from "./suite-runtime-agent.js";
 import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
 import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 import * as webRuntime from "./web-runtime.js";
 
 type QaSuiteScenarioFlowEnv = {
@@ -258,20 +259,23 @@ function createQaSuiteScenarioFlowApi(
 function createQaScenarioDeadline(timeoutMs?: number) {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline =
-    timeoutMs === undefined
-      ? undefined
-      : new Promise<never>((_resolve, reject) => {
-          const timeoutError = new Error(`QA scenario flow timed out after ${timeoutMs}ms`);
-          timer = setTimeout(() => {
-            controller.abort(timeoutError);
-            reject(timeoutError);
-          }, timeoutMs);
-        });
+  const deadlineTimeoutMs = resolveQaGatewayTimeoutWithGraceMs(timeoutMs);
+  let deadline: Promise<never> | undefined;
   return {
     signal: controller.signal,
     run: async <T>(operation: () => Promise<T>) => {
       controller.signal.throwIfAborted();
+      if (deadlineTimeoutMs !== undefined) {
+        deadline ??= new Promise<never>((_resolve, reject) => {
+          const timeoutError = new Error(`QA scenario flow timed out after ${timeoutMs}ms`);
+          // Start at this owner's first operation. Preparation has a separate
+          // budget and must not consume a scenario's complete observation window.
+          timer = setTimeout(() => {
+            controller.abort(timeoutError);
+            reject(timeoutError);
+          }, deadlineTimeoutMs);
+        });
+      }
       // In-flight calls abort cooperatively. The flow runner fences later actions and
       // preserves DSL finally cleanup; the suite owner then tears down runtime resources.
       return deadline ? await Promise.race([operation(), deadline]) : await operation();
@@ -296,43 +300,51 @@ function createQaSuiteScenarioStepRunner(
   const prepareFlow = env.transport.prepareFlow;
   const execution = scenario.execution;
   return async (name, steps) => {
+    const scenarioSteps = steps.map((step) =>
+      Object.assign({}, step, { run: async () => await deadline.run(step.run) }),
+    );
     const preparedSteps =
       prepareFlow && execution.kind === "flow"
         ? [
             {
               name: `Prepare ${env.transport.label}`,
               run: async () => {
-                const prepared = await prepareFlow({
-                  signal: deadline.signal,
-                  config: execution.config ?? {},
-                  gateway: env.gateway,
-                  outputDir: env.outputDir,
-                  primaryModel: env.primaryModel,
-                  scenarioId: scenario.id,
-                  scenarioTitle: scenario.title,
-                  timeoutMs: execution.timeoutMs ?? deps.liveTurnTimeoutMs(env, 60_000),
-                  waitForConfigRestartSettle: async (options) =>
-                    await suiteRuntimeGateway.waitForConfigRestartSettle(
-                      env,
-                      options?.restartDelayMs,
-                      options?.timeoutMs,
-                    ),
-                });
-                deadline.signal.throwIfAborted();
-                if (prepared) {
-                  Object.assign(vars, prepared);
+                const fallbackTimeoutMs = deps.liveTurnTimeoutMs(env, 60_000);
+                const preparationDeadline = createQaScenarioDeadline(
+                  Math.max(execution.timeoutMs ?? 0, fallbackTimeoutMs),
+                );
+                try {
+                  const prepared = await preparationDeadline.run(() =>
+                    prepareFlow({
+                      signal: preparationDeadline.signal,
+                      config: execution.config ?? {},
+                      gateway: env.gateway,
+                      outputDir: env.outputDir,
+                      primaryModel: env.primaryModel,
+                      scenarioId: scenario.id,
+                      scenarioTitle: scenario.title,
+                      timeoutMs: execution.timeoutMs ?? fallbackTimeoutMs,
+                      waitForConfigRestartSettle: async (options) =>
+                        await suiteRuntimeGateway.waitForConfigRestartSettle(
+                          env,
+                          options?.restartDelayMs,
+                          options?.timeoutMs,
+                        ),
+                    }),
+                  );
+                  preparationDeadline.signal.throwIfAborted();
+                  if (prepared) {
+                    Object.assign(vars, prepared);
+                  }
+                } finally {
+                  preparationDeadline.dispose();
                 }
               },
             },
-            ...steps,
+            ...scenarioSteps,
           ]
-        : steps;
-    return await deps.runScenario(
-      name,
-      preparedSteps.map((step) =>
-        Object.assign({}, step, { run: async () => await deadline.run(step.run) }),
-      ),
-    );
+        : scenarioSteps;
+    return await deps.runScenario(name, preparedSteps);
   };
 }
 

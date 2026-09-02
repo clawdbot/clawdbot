@@ -1,5 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setBoundedCache } from "./session-catalog-scan.js";
+
+const groupCache = new Map<string, { signature: string; assignments: Map<string, string> }>();
 
 const LEVELDB_FOOTER_BYTES = 48;
 const LEVELDB_BLOCK_TRAILER_BYTES = 5;
@@ -253,7 +256,10 @@ function scanGroupRecords(raw: Uint8Array, parsed: ParsedGroups): void {
  * Claude Desktop stores Code custom groups in Chromium Local Storage, not beside the session JSON.
  * This reads only labels and local-session assignments; it never mutates Desktop account state.
  */
-export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Map<string, string>> {
+export async function readClaudeDesktopCustomGroups(
+  homeDir: string,
+  forceRefresh = false,
+): Promise<Map<string, string>> {
   const root = path.join(
     homeDir,
     "Library",
@@ -265,6 +271,7 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   const files = await Promise.all(
     entries
+      .toSorted((a, b) => a.name.localeCompare(b.name))
       .filter((entry) => entry.isFile() && /\.(ldb|log)$/.test(entry.name))
       .map(async (entry) => {
         const filePath = path.join(root, entry.name);
@@ -274,9 +281,16 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
           : undefined;
       }),
   );
+  const signature = JSON.stringify(files);
+  const cached = groupCache.get(root);
+  if (!forceRefresh && cached?.signature === signature) {
+    setBoundedCache(groupCache, root, cached, 8);
+    return cached.assignments;
+  }
   const levelDbValues = new Map<string, LevelDbValue>();
   const logRecords: ParsedGroups = { groups: new Map(), assignments: new Map() };
   let remainingBytes = MAX_LEVELDB_TOTAL_BYTES;
+  let complete = true;
   for (const file of files
     .filter(
       (candidate): candidate is { filePath: string; mtimeMs: number; size: number } =>
@@ -292,6 +306,7 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
     remainingBytes -= file.size;
     const raw = await fs.readFile(file.filePath).catch(() => undefined);
     if (!raw) {
+      complete = false;
       continue;
     }
     if (!file.filePath.endsWith(".ldb")) {
@@ -304,6 +319,7 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
       }
     } catch {
       // Chromium can compact while discovery is reading its local store.
+      complete = false;
     }
   }
   // The write-ahead log holds writes that have not been flushed into an SSTable yet, so
@@ -322,6 +338,11 @@ export async function readClaudeDesktopCustomGroups(homeDir: string): Promise<Ma
     if (group) {
       assignments.set(sessionId, group);
     }
+  }
+  if (complete) {
+    setBoundedCache(groupCache, root, { signature, assignments }, 8);
+  } else {
+    groupCache.delete(root);
   }
   return assignments;
 }

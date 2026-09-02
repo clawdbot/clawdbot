@@ -18,7 +18,7 @@ import {
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import {
-  prepareConfigForPendingPluginDirectoryRemovalSet,
+  prepareConfigForDisabledPluginSet,
   recordPluginPackageUninstallPlan,
 } from "./uninstall-package-plan.js";
 import {
@@ -268,8 +268,8 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   });
 }
 
-it("stages only runtime child entries while a package directory removal is pending", () => {
-  const staged = prepareConfigForPendingPluginDirectoryRemovalSet(
+it("disables only runtime child entries for a package uninstall", () => {
+  const staged = prepareConfigForDisabledPluginSet(
     {
       plugins: {
         entries: {
@@ -388,7 +388,11 @@ describe("planPluginUninstall package ownership", () => {
     expect(result.directoryRemoval).toBeNull();
     expect(result.config.plugins).toEqual({
       allow: ["other"],
-      entries: { other: { enabled: true } },
+      entries: {
+        other: { enabled: true },
+        "pack/one": { enabled: false },
+        "pack/two": { enabled: false },
+      },
     });
     expect(result.actions).toMatchObject({
       entry: true,
@@ -946,7 +950,9 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      constructor: { enabled: false },
+    });
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
   });
@@ -1028,6 +1034,11 @@ describe("uninstallPlugin", () => {
         directory: false,
       },
       expectedConfig: {
+        plugins: {
+          entries: {
+            "missing-channel-plugin": { enabled: false },
+          },
+        },
         channels: {
           discord: { enabled: true },
         },
@@ -1058,6 +1069,9 @@ describe("uninstallPlugin", () => {
       },
       expectedConfig: {
         plugins: {
+          entries: {
+            "missing-linked-plugin": { enabled: false },
+          },
           load: {
             paths: ["/keep/this/plugin"],
           },
@@ -1110,7 +1124,7 @@ describe("uninstallPlugin", () => {
     },
   );
 
-  it("removes config entries", async () => {
+  it("removes entry settings and keeps an explicit disabled tombstone", async () => {
     const config = createPluginConfig({
       entries: createSinglePluginEntries(),
       installs: {
@@ -1125,7 +1139,9 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins?.entries).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      "my-plugin": { enabled: false },
+    });
     expect(successfulResult.config.plugins?.installs).toBeUndefined();
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
@@ -1863,50 +1879,80 @@ describe("uninstallPlugin", () => {
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
   });
 
-  it("retries managed peer cleanup without npm-incompatible override kinds", async () => {
-    const npmRoot = path.join(tempDir, "npm-override-cleanup");
-    await fs.mkdir(npmRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: { "stale-peer": "1.0.0" },
-          overrides: {
-            axios: "1.18.1",
-            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-            "werift-ice@0.2.2>ip": "npm:neoip@3.1.0",
+  it.each([false, true])(
+    "removes stale managed peers after override normalization (alias retry: %s)",
+    async (rejectAliases) => {
+      const npmRoot = path.join(tempDir, "npm-override-cleanup");
+      await fs.mkdir(npmRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(npmRoot, "package.json"),
+        `${JSON.stringify(
+          {
+            private: true,
+            dependencies: { "stale-peer": "1.0.0" },
+            overrides: {
+              axios: "1.18.1",
+              "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+              "werift-ice@0.2.2>ip": "npm:neoip@3.1.0",
+            },
+            openclaw: {
+              managedOverrides: ["axios", "node-domexception", "werift-ice@0.2.2>ip"],
+              managedPeerDependencies: ["stale-peer"],
+            },
           },
-          openclaw: {
-            managedOverrides: ["axios", "node-domexception", "werift-ice@0.2.2>ip"],
-            managedPeerDependencies: ["stale-peer"],
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
+          null,
+          2,
+        )}\n`,
+      );
 
-    let cleanupAttempts = 0;
-    const runCommand: typeof runCommandWithTimeout = vi.fn(async (argv, optionsOrTimeout) => {
-      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
-      if (argv.includes("--package-lock-only")) {
-        expect(cwd).toBeTruthy();
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(cwd as string, "package.json"), "utf8"),
-        ) as { overrides?: Record<string, unknown> };
-        if (manifest.overrides?.["werift-ice@0.2.2>ip"]) {
+      let cleanupAttempts = 0;
+      const runCommand: typeof runCommandWithTimeout = vi.fn(async (argv, optionsOrTimeout) => {
+        const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+        if (argv.includes("--package-lock-only")) {
+          expect(cwd).toBeTruthy();
+          const manifest = JSON.parse(
+            await fs.readFile(path.join(cwd as string, "package.json"), "utf8"),
+          ) as { overrides?: Record<string, unknown> };
+          if (manifest.overrides?.["werift-ice@0.2.2>ip"]) {
+            return {
+              code: 1,
+              stdout: "",
+              stderr:
+                'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+          if (rejectAliases && manifest.overrides?.["node-domexception"]) {
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+          await fs.writeFile(
+            path.join(cwd as string, "package-lock.json"),
+            `${JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2)}\n`,
+          );
           return {
-            code: 1,
+            code: 0,
             stdout: "",
-            stderr:
-              'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
+            stderr: "",
             signal: null,
             killed: false,
             termination: "exit" as const,
           };
         }
-        if (manifest.overrides?.["node-domexception"]) {
+        cleanupAttempts += 1;
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+        ) as { overrides?: Record<string, unknown> };
+        expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBeUndefined();
+        if (rejectAliases && manifest.overrides?.["node-domexception"]) {
           return {
             code: 1,
             stdout: "",
@@ -1916,10 +1962,6 @@ describe("uninstallPlugin", () => {
             termination: "exit" as const,
           };
         }
-        await fs.writeFile(
-          path.join(cwd as string, "package-lock.json"),
-          `${JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2)}\n`,
-        );
         return {
           code: 0,
           stdout: "",
@@ -1928,75 +1970,46 @@ describe("uninstallPlugin", () => {
           killed: false,
           termination: "exit" as const,
         };
-      }
-      cleanupAttempts += 1;
+      });
+
+      await expect(
+        pruneManagedNpmPeerDependenciesAfterUninstall({
+          npmRoot,
+          packageName: "@openclaw/kitchen-sink",
+          managedOverrides: {
+            axios: "1.18.1",
+            hono: "4.12.32",
+            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+          },
+          runCommand,
+        }),
+      ).resolves.toBeUndefined();
+      expect(cleanupAttempts).toBe(rejectAliases ? 2 : 1);
       const manifest = JSON.parse(
         await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
-      ) as { overrides?: Record<string, unknown> };
-      if (cleanupAttempts === 1) {
-        expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBe("npm:neoip@3.1.0");
-        return {
-          code: 1,
-          stdout: "",
-          stderr:
-            'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
+      ) as {
+        dependencies?: Record<string, string>;
+        overrides?: Record<string, unknown>;
+        openclaw?: {
+          managedOverrides?: string[];
+          managedPeerDependencies?: string[];
         };
-      }
-      if (cleanupAttempts === 2) {
-        expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBeUndefined();
-        expect(manifest.overrides?.["node-domexception"]).toBe("npm:@nolyfill/domexception@1.0.28");
-        return {
-          code: 1,
-          stdout: "",
-          stderr: "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
-      }
-      expect(manifest.overrides).toEqual({ axios: "1.18.1", hono: "4.12.32" });
-      return {
-        code: 0,
-        stdout: "",
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
       };
-    });
-
-    await expect(
-      pruneManagedNpmPeerDependenciesAfterUninstall({
-        npmRoot,
-        packageName: "@openclaw/kitchen-sink",
-        managedOverrides: {
-          axios: "1.18.1",
-          hono: "4.12.32",
-          "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-          "werift-ice@0.2.2>ip": "npm:neoip@3.1.0",
-        },
-        runCommand,
-      }),
-    ).resolves.toBeUndefined();
-    expect(cleanupAttempts).toBe(3);
-    const manifest = JSON.parse(await fs.readFile(path.join(npmRoot, "package.json"), "utf8")) as {
-      dependencies?: Record<string, string>;
-      overrides?: Record<string, unknown>;
-      openclaw?: {
-        managedOverrides?: string[];
-        managedPeerDependencies?: string[];
+      expect(manifest.dependencies).toEqual({});
+      const expectedOverrides = {
+        axios: "1.18.1",
+        hono: "4.12.32",
+        ...(!rejectAliases ? { "node-domexception": "npm:@nolyfill/domexception@1.0.28" } : {}),
       };
-    };
-    expect(manifest.dependencies).toEqual({});
-    expect(manifest.overrides).toEqual({ axios: "1.18.1", hono: "4.12.32" });
-    expect(manifest.openclaw?.managedOverrides).toEqual(["axios", "hono"]);
-    expect(manifest.openclaw?.managedPeerDependencies).toBeUndefined();
-  });
+      expect(manifest.overrides).toEqual(expectedOverrides);
+      expect(manifest.openclaw?.managedOverrides).toEqual(
+        Object.keys(expectedOverrides).toSorted(),
+      );
+      expect(manifest.openclaw?.managedPeerDependencies).toBeUndefined();
+    },
+  );
 
-  it("stops retrying when an incompatible unmanaged override remains", async () => {
+  it("does not remove incompatible unmanaged overrides", async () => {
     const npmRoot = path.join(tempDir, "npm-unmanaged-override-cleanup");
     await fs.mkdir(npmRoot, { recursive: true });
     await fs.writeFile(
@@ -2053,7 +2066,7 @@ describe("uninstallPlugin", () => {
     ).resolves.toContain(
       "Failed to prune managed peer dependencies after uninstalling @openclaw/kitchen-sink: npm error code EINVALIDTAGNAME",
     );
-    expect(cleanupAttempts).toBe(2);
+    expect(cleanupAttempts).toBe(1);
   });
 
   it("runs npm cleanup when the managed package directory is already absent", async () => {
@@ -2124,7 +2137,9 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      "missing-plugin": { enabled: false },
+    });
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
     expect(successfulResult.actions.directory).toBe(false);

@@ -2,11 +2,12 @@ import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 120_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -18,7 +19,7 @@ const REQUEST_MESSAGE = "Return exactly SESSION-STREAMING-OK.";
 const STREAM_DELTAS = ["SESSION-", "STREAMING-", "OK"] as const;
 const TERMINAL_TEXT = STREAM_DELTAS.join("");
 
-type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+type GatewayHandle = QaGatewayChild;
 type AgentResult = {
   runId?: string;
   status?: string;
@@ -285,11 +286,13 @@ describe("agent session streaming", () => {
     async () => {
       const provider = await startStreamingProvider();
       cleanups.push(() => provider.stop());
-      const gateway = await startQaGatewayChild({
+      const gatewayOwner = createQaGatewayChild();
+      cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+      const gateway = await gatewayOwner.start({
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
-          argsPrefix: ["--import", "tsx", "src/entry.ts"],
+          argsPrefix: ["dist/entry.js"],
           cwd: process.cwd(),
           usePackagedPlugins: true,
         },
@@ -301,13 +304,11 @@ describe("agent session streaming", () => {
         controlUiEnabled: false,
         fastMode: true,
         runtimeEnvPatch: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
-        mutateConfig: ({ plugins: _plugins, ...config }) => config,
+        mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
       });
-      cleanups.push(() => gateway.stop());
 
       const gatewayEvents: GatewayEvent[] = [];
       const client = await connectOperator(gateway, gatewayEvents);

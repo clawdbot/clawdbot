@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-// Slack helper module supports monitor helpers behavior.
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+// Slack helper module supports monitor helpers behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
@@ -111,6 +111,13 @@ export const getSlackTestState = (): SlackTestState => slackTestState;
 
 export function useSlackStartupAuthClientOnce(factory: SlackStartupAuthClientFactory): void {
   slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(factory);
+}
+
+export async function runSlackHandlerWithDispatch(
+  handler: SlackHandler,
+  args: unknown,
+): Promise<void> {
+  await handler(withSlackDispatchLifecycle(args));
 }
 
 type SlackClient = {
@@ -271,9 +278,12 @@ async function runSlackEventOnce(
   const handler = await getSlackHandlerOrThrow(name);
   // Normal Bolt handlers return after queue admission. Terminal-state tests use the
   // durable-ingress lifecycle so this helper can await the actual dispatch boundary.
-  const handlerArgs = opts?.awaitDispatch ? withSlackDispatchLifecycle(args) : args;
   try {
-    await handler(handlerArgs);
+    if (opts?.awaitDispatch) {
+      await runSlackHandlerWithDispatch(handler, args);
+    } else {
+      await handler(args);
+    }
   } finally {
     await stopSlackMonitor({ controller, run });
   }

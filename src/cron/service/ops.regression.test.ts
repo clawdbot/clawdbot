@@ -1068,7 +1068,7 @@ describe("cron service ops regressions", () => {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob:
         params.runStatus === "ok"
-          ? vi.fn().mockResolvedValue({ status: "ok", summary: "ok" })
+          ? vi.fn().mockResolvedValue({ status: "ok", summary: "ok", delivered: true })
           : vi.fn().mockResolvedValue({ status: "error", error: "boom" }),
       onEvent: (event) => events.push(event),
     });

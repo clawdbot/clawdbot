@@ -2,6 +2,52 @@ import Foundation
 import OpenClawKit
 
 extension GatewayConnectionController {
+    static func resolvedManualPort(host: String, port: Int) -> Int? {
+        if port > 0 {
+            return port <= 65535 ? port : nil
+        }
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmedHost.isEmpty else { return nil }
+        if trimmedHost.hasSuffix(".ts.net") || trimmedHost.hasSuffix(".ts.net.") {
+            return 443
+        }
+        return 18789
+    }
+
+    static func clearDeviceAuthTokens(gatewayID: String) {
+        if let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted() {
+            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
+            DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
+        }
+        if let shareIdentity = DeviceIdentityStore.loadOrCreatePersisted(profile: .shareExtension) {
+            DeviceAuthStore.clearToken(
+                deviceId: shareIdentity.deviceId,
+                role: "node",
+                gatewayID: gatewayID,
+                profile: .shareExtension)
+            DeviceAuthStore.clearToken(
+                deviceId: shareIdentity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID,
+                profile: .shareExtension)
+        }
+    }
+
+    func resolveManualTLSParams(
+        stableID: String,
+        tlsEnabled: Bool) -> GatewayTLSParams?
+    {
+        let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
+        if tlsEnabled || stored != nil {
+            return GatewayTLSParams(
+                required: true,
+                expectedFingerprint: stored,
+                allowTOFU: false,
+                storeKey: stableID)
+        }
+        return nil
+    }
+
     static func migrateLegacyDeviceAuth() {
         guard
             let primaryIdentity = DeviceIdentityStore.loadOrCreatePersisted(),
@@ -80,6 +126,8 @@ extension GatewayConnectionController {
             let bootstrapToken: String
             let password: String
             let targetStableID: String
+            let tlsFingerprintSha256: String?
+            let expiresAtMs: Int64?
 
             var hasBootstrapToken: Bool {
                 !self.bootstrapToken.isEmpty
@@ -93,6 +141,9 @@ extension GatewayConnectionController {
                     bootstrapToken: self.bootstrapToken,
                     password: self.password,
                     targetStableID: self.targetStableID,
+                    tlsFingerprintSha256: self.tlsFingerprintSha256,
+                    expiresAtMs: self.expiresAtMs,
+                    isSetupCodeOrigin: true,
                     suppressStoredDeviceAuth: true)
             }
         }
@@ -101,6 +152,9 @@ extension GatewayConnectionController {
         let bootstrapToken: String?
         let password: String?
         let targetStableID: String?
+        let tlsFingerprintSha256: String?
+        let expiresAtMs: Int64?
+        let isSetupCodeOrigin: Bool
         let suppressStoredDeviceAuth: Bool
 
         static func explicit(
@@ -108,6 +162,9 @@ extension GatewayConnectionController {
             bootstrapToken: String?,
             password: String?,
             targetStableID: String? = nil,
+            tlsFingerprintSha256: String? = nil,
+            expiresAtMs: Int64? = nil,
+            isSetupCodeOrigin: Bool = false,
             suppressStoredDeviceAuth: Bool) -> ManualAuthOverride
         {
             let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -118,6 +175,9 @@ extension GatewayConnectionController {
                 bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
                 password: trimmedPassword.isEmpty ? nil : trimmedPassword,
                 targetStableID: targetStableID,
+                tlsFingerprintSha256: tlsFingerprintSha256,
+                expiresAtMs: expiresAtMs,
+                isSetupCodeOrigin: isSetupCodeOrigin,
                 suppressStoredDeviceAuth: suppressStoredDeviceAuth)
         }
 
@@ -154,6 +214,21 @@ extension GatewayConnectionController {
                 suppressStoredDeviceAuth: metadata.suppressStoredDeviceAuth)
         }
 
+        static func selectingCredentialTarget(
+            current: ManualAuthOverride?,
+            instanceId: String,
+            targetStableID: String,
+            allowManualOverride: Bool) -> ManualAuthOverride?
+        {
+            guard allowManualOverride else { return nil }
+            if let current,
+               GatewayStableIdentifier.matches(current.targetStableID, targetStableID)
+            {
+                return current
+            }
+            return self.persisted(instanceId: instanceId, targetStableID: targetStableID)
+        }
+
         static func currentManualInput(
             token: String?,
             pendingOverride: ManualAuthOverride?,
@@ -179,6 +254,8 @@ extension GatewayConnectionController {
                     bootstrapToken: nil,
                     password: normalizedInput.password == pendingOverride.password ? nil : normalizedInput.password,
                     targetStableID: targetStableID,
+                    tlsFingerprintSha256: nil,
+                    expiresAtMs: nil,
                     suppressStoredDeviceAuth: true)
             }
             return ManualAuthOverride.explicit(
@@ -186,6 +263,9 @@ extension GatewayConnectionController {
                 bootstrapToken: pendingOverride.bootstrapToken,
                 password: password,
                 targetStableID: pendingOverride.targetStableID,
+                tlsFingerprintSha256: pendingOverride.tlsFingerprintSha256,
+                expiresAtMs: pendingOverride.expiresAtMs,
+                isSetupCodeOrigin: pendingOverride.isSetupCodeOrigin,
                 suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
         }
 
@@ -207,7 +287,9 @@ extension GatewayConnectionController {
                 targetStableID: self.manualStableID(
                     host: link.host,
                     port: link.port,
-                    contextPath: link.contextPath))
+                    contextPath: link.contextPath),
+                tlsFingerprintSha256: link.tlsFingerprintSha256,
+                expiresAtMs: link.expiresAtMs)
         }
     }
 }

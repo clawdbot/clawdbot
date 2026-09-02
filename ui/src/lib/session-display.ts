@@ -66,25 +66,71 @@ export function resolveChannelSessionInfo(
 type SessionWorktreeDisplayRow = {
   worktree?: { branch?: string; repoRoot?: string };
   execNode?: string;
+  execCwd?: string;
+  spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
 };
+
+export type SessionWorkContext =
+  | { kind: "project"; name: string; path: string; branch?: string }
+  | { kind: "workspace"; name: string; path: string };
 
 /** Basename shown for a repository path on every Control UI surface. */
 export function repoName(repoRoot: string): string {
   return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
 }
 
+export function resolveSessionWorkContext(
+  row: SessionWorktreeDisplayRow,
+): SessionWorkContext | undefined {
+  if (row.execNode) {
+    const workspacePath = normalizeOptionalString(row.execCwd);
+    return workspacePath
+      ? { kind: "workspace", name: repoName(workspacePath), path: workspacePath }
+      : undefined;
+  }
+  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
+  if (repoRoot) {
+    const branch = normalizeOptionalString(row.worktree?.branch);
+    return {
+      kind: "project",
+      name: repoName(repoRoot),
+      path: repoRoot,
+      branch: branch?.startsWith(WORKTREE_BRANCH_PREFIX)
+        ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
+        : branch,
+    };
+  }
+
+  // Match the chat workspace owner: local spawned sessions own their recorded
+  // workspace first, then their spawned cwd.
+  const workspacePath =
+    normalizeOptionalString(row.spawnedWorkspaceDir) ?? normalizeOptionalString(row.spawnedCwd);
+  if (!workspacePath) {
+    return undefined;
+  }
+  return {
+    kind: "workspace",
+    name: repoName(workspacePath),
+    path: workspacePath,
+  };
+}
+
 /** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
-  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
-  const branch = normalizeOptionalString(row.worktree?.branch);
   // execNode is often a raw node id (long hex); never render it in full.
   const rawNode = normalizeOptionalString(row.execNode);
   const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
-  const repo = repoRoot ? repoName(repoRoot) : undefined;
-  const shortBranch = branch?.startsWith(WORKTREE_BRANCH_PREFIX)
-    ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
-    : branch;
-  const checkout = repo ? (shortBranch ? `${repo} ⎇ ${shortBranch}` : repo) : undefined;
+  const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
+  const rawBranch = normalizeOptionalString(row.worktree?.branch);
+  const branch = rawBranch?.startsWith(WORKTREE_BRANCH_PREFIX)
+    ? rawBranch.slice(WORKTREE_BRANCH_PREFIX.length)
+    : rawBranch;
+  const checkout = repoRoot
+    ? branch
+      ? `${repoName(repoRoot)} ⎇ ${branch}`
+      : repoName(repoRoot)
+    : undefined;
   if (checkout && node) {
     // Checkout first: it names the work; the node is routing detail.
     return `${checkout} · ${node}`;
@@ -111,11 +157,8 @@ type SessionKeyInfo = {
  * Two DMs from different accounts routinely share a name, so the account is the
  * only discriminator; `default` is what key builders write for absence and says
  * nothing. Which account to show comes from the recorded fact alone, never from
- * the rendered name. The suffix check is idempotence, not inference: the chat
- * pane's inline rename seeds its input with the rendered title
- * (`beginHeaderRename`), so a partially edited submit can persist a label that
- * already ends in this suffix, and appending twice would render
- * `Alice · cards · cards`.
+ * the rendered name. The suffix check preserves labels persisted by older
+ * clients that included this decoration, avoiding `Alice · cards · cards`.
  */
 function withAccountDisambiguator(name: string, accountId: string | undefined): string {
   if (!accountId || accountId === "default") {

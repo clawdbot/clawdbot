@@ -8,8 +8,8 @@ import type {
   SetupInferenceFailureStatus,
 } from "../system-agent/setup-inference.js";
 import { t } from "../wizard/i18n/index.js";
-import { WizardCancelledError, type WizardPrompter } from "../wizard/prompts.js";
-import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { CORE_AUTH_CHOICE_OPTIONS, type AuthChoiceGroup } from "./auth-choice-options.static.js";
 
 type ActivateSetupInference =
   typeof import("../system-agent/setup-inference.js").activateSetupInference;
@@ -65,22 +65,31 @@ export async function tryCandidate(params: {
   /** Auto-ladder failures collect into one quiet summary; manual retries stay loud. */
   collectFailure?: (failure: SetupCandidateFailure) => void;
 }): Promise<CandidateAttempt> {
-  const progress = params.prompter.progress(
-    t("wizard.guided.testingCandidate", {
-      label: params.candidate.label,
-      modelRef: params.candidate.modelRef,
-    }),
-  );
-  const result = await withConsoleSubsystemsSuppressed(() =>
-    params.activate({
-      kind: params.candidate.kind,
-      modelRef: params.candidate.modelRef,
-      workspace: params.workspace,
-      surface: "cli",
-      runtime: params.runtime,
-    }),
-  );
-  progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
+  // Quiet automatic attempts omit the prompter; interactive activation owns
+  // its progress so two Clack spinners never write over the same terminal row.
+  const progress = params.collectFailure
+    ? params.prompter.progress(
+        t("wizard.guided.testingCandidate", {
+          label: params.candidate.label,
+          modelRef: params.candidate.modelRef,
+        }),
+      )
+    : undefined;
+  let result: ActivateSetupInferenceResult | undefined;
+  try {
+    result = await withConsoleSubsystemsSuppressed(() =>
+      params.activate({
+        kind: params.candidate.kind,
+        modelRef: params.candidate.modelRef,
+        workspace: params.workspace,
+        surface: "cli",
+        runtime: params.runtime,
+        ...(params.collectFailure ? {} : { prompter: params.prompter }),
+      }),
+    );
+  } finally {
+    progress?.stop(result?.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
+  }
   if (result.ok) {
     return { kind: "success", result };
   }
@@ -107,10 +116,14 @@ export async function runManualStage(params: {
   /** A working route is already persisted; skipping keeps it instead of exiting AI-less. */
   hasActiveRoute?: boolean;
 }): Promise<string[] | null> {
+  const interactiveOptions = [
+    ...params.detection.authOptions,
+    ...(params.detection.prepareOptions ?? []),
+    ...CORE_AUTH_CHOICE_OPTIONS.map((option) => ({ id: option.value, label: option.label })),
+  ];
   const allowedChoices = new Set([
     ...params.detection.manualProviders.map((provider) => provider.id),
-    ...params.detection.authOptions.map((option) => option.id),
-    ...(params.detection.prepareOptions ?? []).map((option) => option.id),
+    ...interactiveOptions.map((option) => option.id),
   ]);
   const detectedOptions = params.detection.candidates.map((candidate) => ({
     value: `candidate:${candidate.kind}`,
@@ -124,13 +137,6 @@ export async function runManualStage(params: {
       },
     ),
   }));
-  if (detectedOptions.length === 0 && allowedChoices.size === 0) {
-    await params.prompter.note(
-      t("wizard.guided.noInferenceOptions"),
-      t("wizard.guided.aiAccessTitle"),
-    );
-    throw new WizardCancelledError("no inference setup options");
-  }
   const additionalGroups: AuthChoiceGroup[] = detectedOptions.length
     ? [
         {
@@ -202,10 +208,7 @@ export async function runManualStage(params: {
       continue;
     }
 
-    const providerAuthOption = [
-      ...params.detection.authOptions,
-      ...(params.detection.prepareOptions ?? []),
-    ].find((item) => item.id === choice);
+    const providerAuthOption = interactiveOptions.find((item) => item.id === choice);
     if (providerAuthOption) {
       const result = await withConsoleSubsystemsSuppressed(() =>
         params.activate({
@@ -237,9 +240,6 @@ export async function runManualStage(params: {
       sensitive: true,
       validate: (value) => (value.trim() ? undefined : t("common.required")),
     });
-    const progress = params.prompter.progress(
-      t("wizard.guided.testingManualProvider", { label: provider.label }),
-    );
     const result = await withConsoleSubsystemsSuppressed(() =>
       params.activate({
         kind: "api-key",
@@ -248,9 +248,9 @@ export async function runManualStage(params: {
         workspace: params.workspace,
         surface: "cli",
         runtime: params.runtime,
+        prompter: params.prompter,
       }),
     );
-    progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
     if (result.ok) {
       return activationLines(result);
     }

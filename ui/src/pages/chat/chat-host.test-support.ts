@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { ModelCatalogEntry } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -109,6 +110,7 @@ export function makeChatHost(
     },
   };
   const host = {
+    chatSubmissions: createChatSubmissions(),
     client: request ? createTestGatewayClient(request) : null,
     chatMessages: [],
     chatDisplayedLeafEntryId: undefined,
@@ -134,6 +136,7 @@ export function makeChatHost(
     chatStreamStartedAt: null,
     lastError: null,
     sessionKey: "agent:main",
+    sidebarLayout: { columns: [] },
     basePath: "",
     resourceBasePath: "",
     hello: sessionMutationGatewayHello(),
@@ -147,7 +150,6 @@ export function makeChatHost(
     sessionsError: null,
     sessionsArchivedFilter: "active" as const,
     chatModelsLoading: false,
-    chatMetadataRequestVersion: 0,
     chatModelCatalog: [],
     chatModelCatalogError: null,
     refreshSessionsAfterChat: new Map(),
@@ -158,7 +160,6 @@ export function makeChatHost(
     querySelector: () => null,
     chatScrollCommitCleanup: null,
     chatScrollFrame: null,
-    chatScrollGuardFrame: null,
     chatScrollGeneration: 0,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
@@ -166,8 +167,6 @@ export function makeChatHost(
     chatUserNearBottom: true,
     chatFollowLocked: false,
     chatNewMessagesBelow: false,
-    chatIsProgrammaticScroll: false,
-    chatProgrammaticScrollTarget: 0,
     applySettings: vi.fn((patch: Partial<UiSettings>) => {
       // Chat pages own display/layout settings; active-session persistence belongs to pane bindings.
       const next = { ...settings, ...patch };

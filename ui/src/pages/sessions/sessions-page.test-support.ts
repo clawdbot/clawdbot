@@ -53,7 +53,7 @@ export type TestSessionsPage = HTMLElement & {
   ) => void;
   patchSession: (
     key: string,
-    patch: { archived?: boolean; pinned?: boolean; label?: string | null },
+    patch: { archived?: boolean; pinned?: boolean; label?: string | null; unread?: boolean },
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;
@@ -195,6 +195,7 @@ export function createContext(
     basePath: "",
     gateway,
     sessions,
+    placementStartup: { pause: vi.fn() },
     agents: { state: { agentsList: null }, subscribe },
     agentIdentity: { get: () => undefined, ensure: vi.fn(), subscribe },
     agentSelection: {

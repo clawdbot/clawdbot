@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
 import {
   renderCloudProfileMenuItems,
@@ -9,19 +10,20 @@ import {
 } from "./cloud-target.ts";
 import {
   projectDevicePlacements,
+  resolveAutomaticDevicePlacementDisabledReason,
   type DevicePlacementOption,
   type DevicePlacementRequirement,
 } from "./device-placement.ts";
 import type { DraftCloudProfile, DraftEnvironment, DraftMachineOption } from "./discovery.ts";
 
 type WhereChipState = Readonly<{
-  kind: "local" | "device" | "cloud";
+  kind: "local" | "device" | "auto-device" | "cloud";
   label: string;
   devices: readonly DevicePlacementOption[];
   cloudProfiles: readonly DraftCloudProfile[];
   cloudMachines: readonly DraftMachineOption[];
   selectedMachineId: string;
-  deviceDisabledReason?: string;
+  autoDeviceDisabledReason?: string;
 }>;
 
 export function resolveWhereChip(params: {
@@ -30,10 +32,20 @@ export function resolveWhereChip(params: {
   cloudProfileId: string;
   machineClass?: string;
   deviceId: string;
+  autoDevice?: boolean;
   devicePlacement?: DevicePlacementRequirement;
   deviceDisabledReason?: string;
 }): WhereChipState {
-  const devices = projectDevicePlacements(params.environments, params.devicePlacement);
+  const devices = projectDevicePlacements(
+    params.environments,
+    params.devicePlacement,
+    params.deviceDisabledReason,
+  );
+  const autoDeviceDisabledReason = resolveAutomaticDevicePlacementDisabledReason(
+    params.environments,
+    devices,
+    params.deviceDisabledReason,
+  );
   const device = devices.find((candidate) => candidate.deviceId === params.deviceId);
   const profile = params.cloudProfiles.find((candidate) => candidate.id === params.cloudProfileId);
   if (params.cloudProfileId) {
@@ -54,7 +66,7 @@ export function resolveWhereChip(params: {
       selectedMachineId: selectedMachine?.id ?? "",
       devices,
       cloudProfiles: params.cloudProfiles,
-      deviceDisabledReason: params.deviceDisabledReason,
+      autoDeviceDisabledReason,
     };
   }
   if (params.deviceId) {
@@ -65,7 +77,18 @@ export function resolveWhereChip(params: {
       selectedMachineId: "",
       devices,
       cloudProfiles: params.cloudProfiles,
-      deviceDisabledReason: params.deviceDisabledReason,
+      autoDeviceDisabledReason,
+    };
+  }
+  if (params.autoDevice) {
+    return {
+      kind: "auto-device",
+      label: t("newSession.autoDevice"),
+      cloudMachines: [],
+      selectedMachineId: "",
+      devices,
+      cloudProfiles: params.cloudProfiles,
+      autoDeviceDisabledReason,
     };
   }
   return {
@@ -75,16 +98,18 @@ export function resolveWhereChip(params: {
     selectedMachineId: "",
     devices,
     cloudProfiles: params.cloudProfiles,
-    deviceDisabledReason: params.deviceDisabledReason,
+    autoDeviceDisabledReason,
   };
 }
 
 export function renderWhereChip(params: {
+  autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
   cloudProfileId: string;
   machineClass?: string;
   deviceId: string;
+  autoDevice?: boolean;
   worktreeAvailable: boolean;
   cloudDisabledReason?: string;
   cloudProfileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
@@ -98,6 +123,7 @@ export function renderWhereChip(params: {
   onPopoverHide: () => void;
   onPopoverAfterHide: () => void;
   onSelectDevice: (deviceId: string) => void;
+  onSelectAutoDevice: () => void;
   onSelectCloudProfile: (profileId: string) => void;
   onSelectCloudMachine?: (machineId: string) => void;
   onConnectMachine: () => void;
@@ -119,6 +145,7 @@ export function renderWhereChip(params: {
         data-cloud-profile=${params.cloudProfileId || nothing}
         data-machine-class=${params.machineClass || nothing}
         data-device-id=${params.deviceId || nothing}
+        data-auto-device=${params.autoDevice ? "true" : nothing}
         aria-haspopup="dialog"
         aria-expanded=${String(params.popoverOpen)}
         ?disabled=${params.submitting || params.pendingPlacement}
@@ -126,8 +153,15 @@ export function renderWhereChip(params: {
       >
         <span class="new-session-page__target-icon" aria-hidden="true">${icon}</span>
         <span class="new-session-page__trigger-label">${params.state.label}</span>
-        <span class="new-session-page__trigger-chevron" aria-hidden="true"
+        <span
+          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
+          aria-hidden="true"
           >${icons.chevronDown}</span
+        >
+        <span
+          class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
+          aria-hidden="true"
+          >${icons.chevronsUpDown}</span
         >
       </button>
     </span>
@@ -148,7 +182,7 @@ export function renderWhereChip(params: {
             label: t("newSession.local"),
             icon: icons.monitor,
             sub: params.gatewayName || undefined,
-            checked: !params.deviceId && !params.cloudProfileId,
+            checked: !params.deviceId && !params.autoDevice && !params.cloudProfileId,
             title: gatewayTitle,
             onSelect: () => params.onSelectDevice(""),
           },
@@ -157,20 +191,46 @@ export function renderWhereChip(params: {
         ${params.state.devices.length > 0
           ? html`
               <div class="new-session-page__menu-title">${t("newSession.yourDevices")}</div>
+              ${renderSessionMenuItem(
+                {
+                  value: "auto-device",
+                  label: t("newSession.autoDevice"),
+                  sub: t(
+                    params.autoPlacementMode === "eligible-order"
+                      ? "newSession.autoDeviceSubEligible"
+                      : "newSession.autoDeviceSub",
+                  ),
+                  icon: icons.monitor,
+                  checked: params.autoDevice === true,
+                  disabled: Boolean(params.state.autoDeviceDisabledReason),
+                  title: params.state.autoDeviceDisabledReason,
+                  facts: params.state.autoDeviceDisabledReason
+                    ? [params.state.autoDeviceDisabledReason]
+                    : undefined,
+                  onSelect: params.onSelectAutoDevice,
+                },
+                params.submitting,
+              )}
               ${params.state.devices.map((device) => {
-                const disabledReason = params.state.deviceDisabledReason ?? device.disabledReason;
+                const capacity = workerCapacityPresentation({
+                  workerSlots: device.workerSlots,
+                  capabilities: device.capabilities,
+                  commands: device.invocableCommands,
+                  unavailable: !device.selectable,
+                });
                 return renderSessionMenuItem(
                   {
                     value: `device:${device.deviceId}`,
                     label: device.label,
                     sub: device.subtitle,
                     icon: icons.monitor,
-                    facts: params.state.deviceDisabledReason
-                      ? [params.state.deviceDisabledReason]
-                      : device.facts,
+                    facts: device.facts,
+                    meter: capacity?.meter,
                     checked: params.deviceId === device.deviceId,
-                    disabled: Boolean(params.state.deviceDisabledReason) || !device.selectable,
-                    title: disabledReason,
+                    disabled: !device.selectable,
+                    title:
+                      [device.disabledReason, capacity?.title].filter(Boolean).join(" · ") ||
+                      undefined,
                     onSelect: () => params.onSelectDevice(device.deviceId),
                   },
                   params.submitting,

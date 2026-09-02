@@ -1,3 +1,4 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 // Matrix tests cover approval reactions plugin behavior.
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +9,6 @@ import {
   resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
   unregisterMatrixApprovalReactionTarget as unregisterMatrixApprovalReactionTargetRaw,
 } from "./approval-reactions.js";
-import type { PluginRuntime } from "./runtime-api.js";
 import { setMatrixRuntime } from "./runtime.js";
 
 const { clearRuntime: clearMatrixRuntime } = createPluginRuntimeStore<PluginRuntime>({

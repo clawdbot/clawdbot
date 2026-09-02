@@ -11,7 +11,6 @@ import {
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  mergeImplicitMantleProvider,
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
@@ -78,10 +77,7 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
           return null;
         }
         return {
-          provider: mergeImplicitMantleProvider({
-            existing: ctx.config.models?.providers?.[providerId],
-            implicit,
-          }),
+          provider: implicit,
         };
       },
     },

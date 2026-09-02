@@ -28,6 +28,7 @@ import {
   buildAgentMainSessionKey,
   normalizeSessionKeyForUiComparison,
   resolveAgentIdFromSessionKey,
+  resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import {
   ensureBoardViewElement,
@@ -37,6 +38,7 @@ import {
 } from "./board-session-surface.ts";
 import { ChatPaneHistory } from "./chat-pane-history.ts";
 import { boardChatDockLayout, type ResolvedBoardView } from "./chat-pane-shared.ts";
+import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { renderChatResizableDivider } from "./components/chat-resizable-divider.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
@@ -50,6 +52,16 @@ import {
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
   protected commitSidebarLayout(layout: SidebarLayout): void {
+    // User panel intents and the Board mode must move together. Restored state
+    // bypasses this seam so loading a session never mutates its active tab.
+    const board = this.resolveBoardView();
+    if (board.hasBoard && board.face === "dashboard" && board.provider.canMutate) {
+      if (layout.open === true && board.dock === "hidden") {
+        this.handleBoardDockChange(board.reopenDock);
+      } else if (layout.open !== true && (board.dock === "left" || board.dock === "right")) {
+        this.handleBoardDockChange("hidden");
+      }
+    }
     const state = this.state;
     if (!state) {
       return;
@@ -115,8 +127,19 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     return true;
   }
 
+  protected resolveBoardConversation() {
+    return resolveUiConversationIdentity(
+      {
+        assistantAgentId: this.state?.assistantAgentId,
+        agentsList: this.state?.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      },
+      this.state?.sessionKey || this.sessionKey,
+    );
+  }
+
   protected resolveBoardProvider(): BoardProvider {
-    const sessionKey = this.resolveBoardSessionKey();
+    const session = this.resolveBoardConversation();
     if (this.boardProvider) {
       this.releaseBoardProviderLease();
       return this.boardProvider;
@@ -137,12 +160,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           isGatewayMethodAdvertised(gateway, "board.widget.put") === true));
     const client = gateway?.client;
     if (this.boardProviderLifecycleConnected && client && available) {
-      const key = boardProviderCacheKey(sessionKey);
-      if (this.boardProviderLease?.sessionKey !== key) {
+      const key = boardProviderCacheKey(session);
+      if (this.boardProviderLease?.cacheKey !== key) {
         this.releaseBoardProviderLease();
         this.boardProviderLease = {
           ...acquireBoardProviderForSession(
-            key,
+            session,
             client,
             gateway.phase === "connected",
             canPinWidgets,
@@ -150,7 +173,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
             canMutate,
             canGrant,
           ),
-          sessionKey: key,
+          cacheKey: key,
         };
       } else {
         this.boardProviderLease.update(client, gateway.phase === "connected", {
@@ -163,7 +186,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return this.boardProviderLease.provider;
     }
     this.releaseBoardProviderLease();
-    return boardProviderForSession(sessionKey, available);
+    return boardProviderForSession(session, available);
   }
 
   protected releaseBoardProviderLease(): void {
@@ -228,30 +251,33 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected refreshSwarmRoster(): void {
     const state = this.state;
-    if (!state) {
+    if (!state || !this.presented) {
       return;
     }
     const parentKey = this.resolveBoardSessionKey();
     const sourceEpoch = state.connectionEpoch;
+    const isCurrent = () =>
+      this.state === state &&
+      this.presented &&
+      state.connectionEpoch === sourceEpoch &&
+      parentKey === this.resolveBoardSessionKey();
     void import("../../lib/sessions/swarm-roster.ts").then(
       ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
-        if (
-          !this.state ||
-          this.state.connectionEpoch !== sourceEpoch ||
-          parentKey !== this.resolveBoardSessionKey()
-        ) {
+        if (!isCurrent()) {
           return;
         }
         const enabled =
-          this.state.connected &&
+          state.connected &&
           isSwarmEnabledInConfig(
             this.context.runtimeConfig?.state.configSnapshot?.config,
             resolveAgentIdFromSessionKey(parentKey),
           );
         if (!enabled) {
-          this.swarmHydrator?.dispose();
-          this.swarmHydrator = null;
-          this.requestUpdate();
+          if (this.swarmHydrator) {
+            this.swarmHydrator.dispose();
+            this.swarmHydrator = null;
+            requestChatPageUpdate(state, "animation-frame");
+          }
           return;
         }
         this.swarmHydrator ??= new SwarmRosterHydrator();
@@ -259,11 +285,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           sessions: this.context.sessions,
           parentKey,
           sourceEpoch,
-          currentRows: () =>
-            this.state?.connectionEpoch === sourceEpoch
-              ? (this.state.sessionsResult?.sessions ?? [])
-              : [],
-          onRows: () => this.requestUpdate(),
+          currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
+          onRows: () => {
+            if (isCurrent()) {
+              requestChatPageUpdate(state, "animation-frame");
+            }
+          },
         });
       },
     );
@@ -354,6 +381,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         canMutate: board.provider.canMutate,
         canGrant: board.provider.canGrant,
         callbacks: {
+          appViewGeneration: board.provider.appViewGeneration,
           applyOps: (ops) => board.provider.applyOps(ops),
           grant: (name, decision) => board.provider.grant(name, decision),
           selectTab: (tabId) => {

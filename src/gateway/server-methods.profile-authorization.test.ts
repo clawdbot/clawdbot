@@ -36,9 +36,10 @@ async function dispatchPendingProfileMethod(params: {
     respond,
     client: params.client,
     isWebchatConnect: () => false,
-    context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
-      typeof handleGatewayRequest
-    >[0]["context"],
+    context: {
+      logGateway: { warn: vi.fn() },
+      getRuntimeConfig: () => ({}),
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
     ...(params.methodRegistry
       ? { methodRegistry: params.methodRegistry }
       : { extraHandlers: { [params.method]: params.handler } }),
@@ -53,7 +54,14 @@ describe("Gateway pending-profile authorization", () => {
     client.authenticatedGitHubIdentitySync = vi.fn(async () => await deferred.promise);
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
 
-    const request = dispatchPendingProfileMethod({ client, handler, method: "chat.send" });
+    const request = dispatchPendingProfileMethod({
+      client,
+      handler,
+      method: "chat.send",
+      // chat.send requires a session target at the protocol level; the mutation
+      // pipeline rejects targetless frames before profile-dependent dispatch.
+      requestParams: { sessionKey: "agent:main:main" },
+    });
     await Promise.resolve();
     expect(handler).not.toHaveBeenCalled();
 
@@ -111,6 +119,7 @@ describe("Gateway pending-profile authorization", () => {
       "artifacts.list",
       "board.event",
       "chat.history",
+      "chat.metadata",
       "controlUi.sessionPreview",
       "exec.approval.resolve",
       "mcp.app.view",
@@ -121,14 +130,32 @@ describe("Gateway pending-profile authorization", () => {
       "secrets.store.set",
       "send",
       "sessions.list",
+      "skills.library.list",
+      "skills.library.read",
+      "skills.library.save",
+      "skills.library.mutate",
+      "skills.library.activate",
+      "skills.library.import",
+      "skills.library.upload",
       "taskSuggestions.list",
       "tasks.list",
+      "users.github.status",
+      "users.github.authorize.start",
+      "users.github.authorize.poll",
+      "users.github.authorize.cancel",
+      "users.github.disconnect",
     ];
     for (const method of methods) {
       const client = createPendingProfileClient();
       client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
       const handler = vi.fn<GatewayRequestHandler>();
-      const respond = await dispatchPendingProfileMethod({ client, handler, method });
+      const respond = await dispatchPendingProfileMethod({
+        client,
+        handler,
+        method,
+        requestParams:
+          method === "skills.library.activate" ? { sessionKey: "agent:main:main" } : undefined,
+      });
       expect(handler, method).not.toHaveBeenCalled();
       expect(respond, method).toHaveBeenCalledWith(
         false,

@@ -1,6 +1,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
+
+const sessionsListHandler = vi.hoisted(() =>
+  vi.fn(async ({ respond }: GatewayRequestHandlerOptions) => {
+    respond(true, { count: 1 }, undefined);
+  }),
+);
+
+vi.mock("./sessions-read.js", () => ({ sessionsListHandler }));
+
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -132,6 +141,38 @@ describe("sessions.viewers.set", () => {
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+});
+
+describe("sessions.subscribe", () => {
+  it("registers events before projecting an atomic bootstrap roster", async () => {
+    const subscribeSessionEvents = vi.fn();
+    const context = { subscribeSessionEvents } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+    sessionsListHandler.mockClear();
+
+    await expectDefined(
+      sessionSubscriptionHandlers["sessions.subscribe"],
+      'sessionSubscriptionHandlers["sessions.subscribe"] test invariant',
+    )({
+      req: { id: "req-subscribe", method: "sessions.subscribe" } as never,
+      params: { limit: 1, ownerFirst: true },
+      respond,
+      context,
+      client: { connId: "control-ui-1" } as never,
+      isWebchatConnect: () => false,
+    } satisfies GatewayRequestHandlerOptions);
+
+    expect(subscribeSessionEvents).toHaveBeenCalledWith("control-ui-1");
+    expect(subscribeSessionEvents.mock.invocationCallOrder[0]).toBeLessThan(
+      sessionsListHandler.mock.invocationCallOrder[0]!,
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { subscribed: true, list: { count: 1 } },
+      undefined,
+      undefined,
     );
   });
 });

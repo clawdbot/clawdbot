@@ -1,5 +1,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveActiveEmbeddedRunRecoveryBlocker } from "../../agents/embedded-agent-runner/run-state.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -187,6 +188,32 @@ export function isReplyOperationAbortable(operation: ReplyOperation): boolean {
 export function isReplyRunAbortableForSignal(signal: AbortSignal): boolean {
   const operation = operationsByUpstreamAbortSignal.get(signal);
   return operation ? isReplyOperationAbortable(operation) : true;
+}
+
+/** Resolve only the live operation admitted with this exact upstream signal. */
+export function resolveActiveReplyRunOwnerForSignal(
+  signal: AbortSignal,
+): { sessionId: string; sessionKey: string; abort: () => boolean } | undefined {
+  const operation = operationsByUpstreamAbortSignal.get(signal);
+  if (!operation) {
+    return undefined;
+  }
+  const { key: sessionKey, sessionId } = operation;
+  const isCurrent = () =>
+    !signal.aborted &&
+    !operation.result &&
+    operation.key === sessionKey &&
+    operation.sessionId === sessionId &&
+    replyRunState.activeRunsByKey.get(sessionKey) === operation;
+  if (!isCurrent()) {
+    return undefined;
+  }
+  return {
+    sessionId,
+    sessionKey,
+    // A retained selector must never cancel the operation that replaced this owner.
+    abort: () => isCurrent() && operation.abortByUser(),
+  };
 }
 
 /** Keep terminal state registered until the operation owner exits via complete(). */
@@ -442,7 +469,18 @@ export function markReplyRunDiagnosticProgress(params: {
   });
 }
 
+export function isReplyRunRecoveryBlocked(operation: ReplyOperation): boolean {
+  const backend = getAttachedBackend(operation);
+  const blocker =
+    !operation.result && backend
+      ? resolveActiveEmbeddedRunRecoveryBlocker(operation.sessionId, backend)
+      : undefined;
+  return blocker === "human_input_wait" || blocker === "runtime_owned_wait";
+}
+
 export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
+  // Reading the wait may expire it and record the owner's resumed activity.
+  const recoveryBlocked = isReplyRunRecoveryBlocked(operation);
   const activity = getDiagnosticSessionActivitySnapshot({
     sessionId: operation.sessionId,
     sessionKey: operation.key,
@@ -450,6 +488,8 @@ export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
   return (
     !operation.result &&
     operation.phase !== "waiting_for_global_lane" &&
-    Date.now() - operation.lastActivityAtMs > resolveRunStaleThresholdMs(activity)
+    Date.now() - operation.lastActivityAtMs >
+      resolveRunStaleThresholdMs(activity, Date.now() - operation.lastActivityAtMs) &&
+    !recoveryBlocked
   );
 }

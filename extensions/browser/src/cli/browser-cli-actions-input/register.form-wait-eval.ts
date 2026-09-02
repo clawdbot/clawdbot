@@ -3,7 +3,6 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveBrowserActExecutionBudgetMs } from "../../browser/act-policy.js";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -114,7 +113,6 @@ export function registerBrowserFormWaitEvalCommands(
           parent,
           profile,
           body: request,
-          timeoutMs: resolveBrowserActExecutionBudgetMs(request),
         });
         logBrowserActionResult(parent, result, "wait complete");
       } catch (err) {
@@ -156,7 +154,6 @@ export function registerBrowserFormWaitEvalCommands(
             targetId: normalizeOptionalString(opts.targetId),
             timeoutMs,
           },
-          timeoutMs,
         });
         if (parent?.json) {
           defaultRuntime.writeJson(result);

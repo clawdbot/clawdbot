@@ -3,7 +3,9 @@ import type {
   OpenClawCrablineInbound,
   OpenClawCrablineInboundInput,
   StartedOpenClawCrablineAdapter,
+  StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
+import { parseQaTarget } from "./qa-bus-protocol.js";
 import type { QaBusInboundMessageInput } from "./runtime-api.js";
 
 const TELEGRAM_QA_DRIVER_ID = "100001";
@@ -60,19 +62,12 @@ function resolveMatrixQaTarget(target: string) {
   }
   if (target.startsWith("thread:")) {
     if (target.startsWith("thread:/v1/")) {
-      const rest = target.slice("thread:/v1/".length);
-      const separator = rest.indexOf("/");
-      if (separator > 0) {
-        try {
-          const conversationId = decodeURIComponent(rest.slice(0, separator));
-          const resolvedConversationId =
-            normalizeExplicitMatrixTarget(conversationId) ??
-            resolveMatrixQaConversationId(conversationId);
-          return `thread:/v1/${encodeQaThreadComponent(resolvedConversationId)}${rest.slice(separator)}`;
-        } catch {
-          return target;
-        }
-      }
+      const parsed = parseQaTarget(target);
+      const resolvedConversationId =
+        normalizeExplicitMatrixTarget(parsed.conversationId) ??
+        resolveMatrixQaConversationId(parsed.conversationId);
+      const kind = parsed.chatType === "direct" ? "dm" : "group";
+      return `thread:/v1/${kind}/${encodeQaThreadComponent(resolvedConversationId)}/${encodeQaThreadComponent(parsed.threadId ?? "")}`;
     }
     const threadTarget = target.slice("thread:".length);
     const separator = threadTarget.indexOf("/");
@@ -142,15 +137,11 @@ export function resolveCrablineStateConversation(params: {
 }
 
 export function createCrablineProviderDelivery(
-  adapter: StartedOpenClawCrablineAdapter,
+  adapter: Pick<StartedOpenClawCrablineCorrelatedAdapter, "channel" | "createAgentDelivery">,
   target: string,
 ) {
-  const delivery = adapter.createAgentDelivery({
+  const { providerTargetKey, ...delivery } = adapter.createAgentDelivery({
     target: adapter.channel === "matrix" ? resolveMatrixQaTarget(target) : target,
   });
-  return {
-    delivery,
-    providerTargetKey:
-      adapter.channel === "matrix" ? delivery.to.replace(/^room:/u, "") : delivery.to,
-  };
+  return { delivery, providerTargetKey };
 }

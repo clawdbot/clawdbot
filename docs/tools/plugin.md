@@ -95,8 +95,8 @@ bundled, official external, and source-only plugins, see
     openclaw gateway restart
     ```
 
-    Enable/disable update config and the cold registry. A runtime inspect is
-    still the clearest proof of live runtime surfaces.
+    Enable/disable update config and the cold registry. Inspect registration
+    next, then verify the running Gateway with an actual hook event or tool call.
 
   </Step>
 
@@ -105,9 +105,11 @@ bundled, official external, and source-only plugins, see
     openclaw plugins inspect <plugin-id> --runtime --json
     ```
 
-    Use `--runtime` to prove registered tools, hooks, services, Gateway
-    methods, or plugin-owned CLI commands. Plain `inspect` is a cold manifest
-    and registry check only.
+    `--runtime` loads the plugin in the inspecting CLI process and reports
+    registered tools, hooks, services, Gateway methods, and plugin-owned CLI
+    commands. Plain `inspect` is a cold manifest and registry check only.
+    Neither proves an already-running Gateway has loaded the same code. After
+    restarting it, trigger the hook or capability and verify its actual effect.
 
   </Step>
 </Steps>
@@ -283,8 +285,9 @@ An explicit hook policy is also startup intent. For example,
 `plugins.entries.<id>.hooks.allowConversationAccess: true` both authorizes
 non-bundled conversation hooks and selects that configured plugin for Gateway
 startup; normal plugin policy still applies. After changing manifest or hook
-policy, restart the Gateway and verify the registration with
-`openclaw plugins inspect <id> --runtime --json`.
+policy, inspect registration with `openclaw plugins inspect <id> --runtime --json`,
+restart the Gateway, and trigger an event to verify the running process. See
+[Plugin hooks](/plugins/hooks#quick-start) for a complete example.
 
 ## Verify the active Gateway
 

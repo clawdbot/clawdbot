@@ -1,14 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, assert, describe, expect, it } from "vitest";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
+import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import {
   cleanupPluginLoaderFixturesForTest,
+  makePluginLoaderTempDir,
   resetPluginLoaderTestStateForTest,
   type TempPlugin,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import {
+  completePluginMetadataSnapshot,
+  loadPluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -65,6 +72,75 @@ function writeChannelCapabilityPlugin(id: string): TempPlugin {
 }
 
 describe("loadBundledCapabilityRuntimeRegistry", () => {
+  it("retains the bundled owner under an external shadow without rediscovering changed manifests", () => {
+    const root = makePluginLoaderTempDir();
+    const bundledRoot = path.join(root, "bundled");
+    const target = writePlugin({
+      id: "shadowed-capability",
+      dir: path.join(bundledRoot, "shadowed-capability"),
+      body: `module.exports = {
+        id: "shadowed-capability",
+        register(api) {
+          api.registerProvider({ id: "bundled-capability", label: "Bundled owner", auth: [] });
+        },
+      };`,
+    });
+    fs.writeFileSync(
+      path.join(target.dir, "package.json"),
+      JSON.stringify({
+        name: "@fixture/shadowed-capability",
+        openclaw: { extensions: ["./shadowed-capability.cjs"] },
+      }),
+    );
+    const shadow = writePlugin({
+      id: target.id,
+      body: 'throw new Error("external shadow imported");',
+    });
+    const config = { plugins: { load: { paths: [shadow.dir] } } };
+    const env = {
+      OPENCLAW_HOME: path.join(root, "home"),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+    };
+    const snapshot = completePluginMetadataSnapshot({
+      snapshot: loadPluginMetadataSnapshot({ config, env, preferPersisted: false }),
+      config,
+      env,
+    });
+    assert(snapshot);
+    expect(snapshot.byPluginId.get(target.id)?.origin).toBe("config");
+    expect(
+      snapshot.bundledManifestRegistry?.plugins.find((plugin) => plugin.id === target.id)?.origin,
+    ).toBe("bundled");
+    setGatewayPluginMetadataSnapshot(snapshot, { config, env });
+    fs.writeFileSync(path.join(target.dir, "openclaw.plugin.json"), "{}");
+
+    const registry = loadBundledCapabilityRuntimeRegistry({ pluginIds: [target.id], config, env });
+    expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["bundled-capability"]);
+    expect(registry.plugins.find((plugin) => plugin.id === target.id)?.origin).toBe("bundled");
+    const loadExplicitDiscovery = () =>
+      loadBundledCapabilityRuntimeRegistry({
+        pluginIds: [target.id],
+        config,
+        env,
+        discovery: discoveryFor(target),
+      });
+    expect(loadExplicitDiscovery().providers.map((entry) => entry.provider.id)).toEqual([
+      "bundled-capability",
+    ]);
+    const freshRegistry = withPluginCache(createPluginCache(), loadExplicitDiscovery);
+    expect(freshRegistry.providers).toEqual([]);
+    expect(freshRegistry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ pluginId: target.id, message: "plugin manifest requires id" }),
+      ]),
+    );
+    expect(
+      loadBundledCapabilityRuntimeRegistry({ pluginIds: [target.id], config, env }).providers.map(
+        (entry) => entry.provider.id,
+      ),
+    ).toEqual(["bundled-capability"]);
+  });
+
   it("loads only the requested bundled plugin without replacing the active registry", () => {
     const target = writePlugin({
       id: "capability-target",

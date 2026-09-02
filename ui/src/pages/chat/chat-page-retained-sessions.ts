@@ -98,16 +98,19 @@ export class ChatPageRetainedSessions {
     paneId: string,
     sessionKey: string,
     replacementSessionKey: string,
+    preserveDraft = false,
   ): void => {
     const deletedPane = this.findPane(paneId, sessionKey);
-    deletedPane?.discardStagedAttachments?.();
+    if (!preserveDraft) {
+      deletedPane?.discardStagedAttachments?.();
+    }
     const retained = this.sessionsByPane.get(paneId);
     const retainedIndex = retained?.findIndex((key) => areUiSessionKeysEquivalent(key, sessionKey));
     if (retained && retainedIndex !== undefined && retainedIndex >= 0) {
       retained.splice(retainedIndex, 1);
     }
     const context = this.bindings.context();
-    if (context) {
+    if (context && !preserveDraft) {
       clearPaneSessionHandoff(context, paneId, sessionKey);
     }
     if (

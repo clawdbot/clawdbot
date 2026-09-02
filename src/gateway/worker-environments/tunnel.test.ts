@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
@@ -123,13 +125,21 @@ describe("worker tunnel manager", () => {
   });
 
   it("fences stale owners when a replacement epoch takes ownership", async () => {
-    const fake = fakeRunner();
+    const fake = fakeRunner((argv) =>
+      argv.at(-1)?.includes('process.stdout.write("quiesced "')
+        ? success(`quiesced ${"c".repeat(32)}\n`)
+        : undefined,
+    );
     const manager = createWorkerTunnelManager({ runner: fake.runner });
     const stale = await startTestTunnel(manager, "worker:epoch", 4);
+    const quiescence = await stale.quiesceWorkspace("/home/worker/workspace");
 
     await expect(startTestTunnel(manager, "worker:epoch", 3)).rejects.toThrow("epoch is stale");
 
     const replacement = await startTestTunnel(manager, "worker:epoch", 5);
+    const priorCommands = fake.runs.length;
+    await expect(quiescence.resume()).resolves.toBeUndefined();
+    expect(fake.runs).toHaveLength(priorCommands);
     await expect(stale.runWorkspaceCommand(PWD_COMMAND)).rejects.toThrow(
       "Worker tunnel owner is no longer connected",
     );
@@ -139,24 +149,184 @@ describe("worker tunnel manager", () => {
     await replacement.stop();
   });
 
-  it("fails initialization that loses ownership before identity preparation completes", async () => {
-    const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
-    const fake = fakeRunner();
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const starting = manager.start({
-      environmentId: "worker:pending",
-      ownerEpoch: 1,
-      bundleHash: "a".repeat(64),
-      ssh: SSH,
-      resolveIdentity: async () => await identity.promise,
+  it.each(["stop", "stopAll"] as const)(
+    "joins %s while identity preparation drains",
+    async (operation) => {
+      const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
+      const preparing = deferred<void>();
+      const fake = fakeRunner();
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const starting = manager.start({
+        environmentId: "worker:pending",
+        ownerEpoch: 1,
+        bundleHash: "a".repeat(64),
+        ssh: SSH,
+        resolveIdentity: async () => {
+          preparing.resolve();
+          return await identity.promise;
+        },
+      });
+      const rejected = expect(starting).rejects.toThrow(
+        "Worker tunnel owner is no longer connected",
+      );
+      await preparing.promise;
+      const stops = [
+        operation === "stop" ? manager.stop("worker:pending", 1) : manager.stopAll(),
+        manager.stop("worker:pending", 1),
+        manager.stopAll(),
+      ];
+      const settled = vi.fn();
+      stops.forEach((stopping) => void stopping.then(settled));
+      try {
+        await setImmediate();
+        expect(manager.status("worker:pending")).toBe("stopped");
+        expect(settled).not.toHaveBeenCalled();
+      } finally {
+        identity.resolve(await resolveIdentity());
+        await Promise.all([...stops, rejected]);
+      }
+    },
+  );
+
+  it.each(["stop", "stopAll"] as const)(
+    "joins reentrant %s until workspace commands release their SSH files",
+    async (operation) => {
+      const entered = deferred<void>();
+      const command = deferred<ReturnType<typeof success>>();
+      let reentered: Promise<void> | undefined;
+      let knownHostsPath = "";
+      const fake = fakeRunner(async (argv, options) => {
+        knownHostsPath = argv
+          .find((arg) => arg.startsWith("UserKnownHostsFile="))!
+          .slice("UserKnownHostsFile=".length);
+        options.signal!.addEventListener(
+          "abort",
+          () => {
+            reentered =
+              operation === "stop" ? manager.stop("worker:command", 1) : manager.stopAll();
+          },
+          { once: true },
+        );
+        entered.resolve();
+        return await command.promise;
+      });
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const handle = await startTestTunnel(manager, "worker:command", 1);
+      const running = handle.runWorkspaceCommand(PWD_COMMAND);
+      await entered.promise;
+      const stopping = handle.stop();
+      const settled = vi.fn();
+      void reentered!.then(settled);
+      try {
+        await setImmediate();
+        expect(settled).not.toHaveBeenCalled();
+        await expect(fs.access(knownHostsPath)).resolves.toBeUndefined();
+        await expect(handle.runWorkspaceCommand(PWD_COMMAND)).rejects.toThrow(
+          "no longer connected",
+        );
+      } finally {
+        command.resolve(success());
+        await Promise.all([running, stopping, reentered]);
+      }
+      await expect(fs.access(knownHostsPath)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it.each([
+    { ownerEpoch: 1, stopAgain: false },
+    { ownerEpoch: 1, stopAgain: true },
+    { ownerEpoch: 2, stopAgain: true },
+  ])(
+    "waits for SSH cleanup before replacement epoch $ownerEpoch (stop again: $stopAgain)",
+    async ({ ownerEpoch, stopAgain }) => {
+      const entered = deferred<void>();
+      const command = deferred<ReturnType<typeof success>>();
+      let knownHostsPath = "";
+      const fake = fakeRunner(async (argv) => {
+        knownHostsPath = argv
+          .find((arg) => arg.startsWith("UserKnownHostsFile="))!
+          .slice("UserKnownHostsFile=".length);
+        entered.resolve();
+        return await command.promise;
+      });
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const first = await startTestTunnel(manager, "worker:replacement", 1);
+      const running = first.runWorkspaceCommand(PWD_COMMAND);
+      await entered.promise;
+      const stopping = first.stop();
+      const nextIdentity = vi.fn(async () => {
+        await expect(fs.access(knownHostsPath)).rejects.toMatchObject({ code: "ENOENT" });
+        return await resolveIdentity();
+      });
+      const replacing = manager.start({
+        environmentId: "worker:replacement",
+        ownerEpoch,
+        bundleHash: "a".repeat(64),
+        ssh: SSH,
+        resolveIdentity: nextIdentity,
+      });
+      void replacing.catch(() => undefined);
+      const retainedStop = stopAgain ? manager.stop("worker:replacement", 1) : undefined;
+      const stopped = vi.fn();
+      void retainedStop?.then(stopped);
+      try {
+        await setImmediate();
+        expect(stopped).not.toHaveBeenCalled();
+        expect(nextIdentity).not.toHaveBeenCalled();
+        expect(manager.status("worker:replacement")).toBe(
+          ownerEpoch === 1 && stopAgain ? "stopped" : "connecting",
+        );
+        command.resolve(success());
+        await Promise.all([running, stopping, retainedStop]);
+        if (ownerEpoch === 1 && stopAgain) {
+          await expect(replacing).rejects.toThrow("no longer connected");
+          expect(nextIdentity).not.toHaveBeenCalled();
+        } else {
+          const replacement = await replacing;
+          expect(nextIdentity).toHaveBeenCalledOnce();
+          await expect(replacement.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
+        }
+      } finally {
+        command.resolve(success());
+        await Promise.all([running, stopping, retainedStop, replacing.catch(() => undefined)]);
+        await manager.stopAll();
+      }
+    },
+  );
+
+  it("joins a replacement's initialization when prior-owner abort reenters Stop", async () => {
+    const entered = deferred<void>();
+    const command = deferred<ReturnType<typeof success>>();
+    let shutdown: Promise<void> | undefined;
+    const settled = vi.fn();
+    const fake = fakeRunner(async (_argv, options) => {
+      options.signal!.addEventListener(
+        "abort",
+        () => {
+          shutdown = manager.stopAll();
+          void shutdown.then(settled);
+        },
+        { once: true },
+      );
+      entered.resolve();
+      return await command.promise;
     });
-
-    const stopping = manager.stop("worker:pending", 1);
-    identity.resolve(await resolveIdentity());
-
-    await stopping;
-    await expect(starting).rejects.toThrow("Worker tunnel owner is no longer connected");
-    expect(manager.status("worker:pending")).toBe("stopped");
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    const first = await startTestTunnel(manager, "worker:reentrant-replacement", 1);
+    const running = first.runWorkspaceCommand(PWD_COMMAND);
+    await entered.promise;
+    const replacing = startTestTunnel(manager, "worker:reentrant-replacement", 2);
+    const rejected = expect(replacing).rejects.toThrow("no longer connected");
+    try {
+      expect(shutdown).toBeDefined();
+      await setImmediate();
+      expect(settled).not.toHaveBeenCalled();
+      expect(manager.status("worker:reentrant-replacement")).toBe("stopped");
+    } finally {
+      command.resolve(success());
+      await Promise.all([running, shutdown, rejected]);
+    }
+    expect(fake.runs).toHaveLength(1);
   });
 });
 

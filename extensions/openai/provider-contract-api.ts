@@ -48,7 +48,6 @@ export function createOpenAIProvider(): ProviderPlugin {
           choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
           choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
           assistantPriority: -10,
-          assistantVisibility: "manual-only",
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },

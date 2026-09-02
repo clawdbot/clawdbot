@@ -46,13 +46,12 @@ describe("buildOpenAISdkRequestOptions turn controls", () => {
     baseUrl: "https://api.openai.com/v1",
   } as Model;
 
-  it("forwards an explicit turn timeout and zero retries to the SDK", () => {
+  it("includes the turn timeout and pinned zero retries", () => {
     const signal = new AbortController().signal;
 
     expect(
       buildOpenAISdkRequestOptions(model, signal, {
         timeoutMs: 1_234,
-        maxRetries: 0,
       }),
     ).toEqual({ signal, timeout: 1_234, maxRetries: 0 });
   });

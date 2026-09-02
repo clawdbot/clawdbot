@@ -40,6 +40,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -91,6 +92,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -140,6 +142,7 @@ describe("AppSidebar live narration", () => {
     const rows = keys.map((key, index) => runningRow(key, index + 1));
     sessions.publishList({ result: sessionsResult(rows), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -170,6 +173,7 @@ describe("AppSidebar live narration", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = keys[0]!;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -186,6 +190,7 @@ describe("AppSidebar live narration", () => {
     sessions.publishList({ result: sessionsResult([runningRow(key, 1)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.sidebarLiveActivity = false;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -214,6 +219,7 @@ describe("AppSidebar live narration", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = openKey;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 

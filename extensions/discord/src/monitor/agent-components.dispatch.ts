@@ -282,6 +282,8 @@ export async function dispatchDiscordComponentEvent(params: {
         accountId,
         route: { agentId, sessionKey },
         ctxPayload,
+        // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+        dispatchReplyFromConfig: ctx.channelRuntime?.reply?.dispatchReplyFromConfig,
         record: {
           updateLastRoute: interactionCtx.isDirectMessage
             ? {
@@ -333,6 +335,8 @@ export async function dispatchDiscordComponentEvent(params: {
               mediaLocalRoots,
               kind: info.kind,
               bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+              onPlatformSendDispatch: info.onPlatformSendDispatch,
+              assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
             });
             if (result.visibleReplySent) {
               replyReference.markSent();

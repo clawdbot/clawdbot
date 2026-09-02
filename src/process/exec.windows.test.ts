@@ -258,7 +258,7 @@ describe("Windows command execution", () => {
         });
         const call = requireExecaCall(0);
         expect(call[0]).toBe(expectedTrustedCmdExe());
-        expect(call[1][3]).toContain(`${shimPath} --version`);
+        expect(call[1][3]).toContain(`"${shimPath}" "--version"`);
       });
     });
   });
@@ -289,11 +289,11 @@ describe("Windows command execution", () => {
     });
   });
 
-  it("escapes command arguments inside the trusted cmd.exe wrapper", async () => {
+  it("quotes carets inside the trusted cmd.exe wrapper", async () => {
     await withMockedWindowsPlatform(async () => {
       await runCommandWithTimeout(["pnpm", "run", "value^with^carets"], { timeoutMs: 1_000 });
       const commandLine = String(requireExecaCall(0)[1][3]);
-      expect(commandLine).toContain("value^^with^^carets");
+      expect(commandLine).toContain('"value^with^carets"');
     });
   });
 
@@ -555,6 +555,21 @@ describe("Windows command execution", () => {
         stderr: "；",
       });
       expect(requireExecaCall(0)[2].encoding).toBe("buffer");
+    });
+  });
+
+  it("decodes UTF-16 stdout and stderr from runExec", async () => {
+    execaMock.mockImplementationOnce(() =>
+      createMockSubprocess({
+        stdout: Buffer.from([0xff, 0xfe, 0x6f, 0x00, 0x6b, 0x00]),
+        stderr: Buffer.from([0xfe, 0xff, 0x00, 0x6e, 0x00, 0x6f]),
+      }),
+    );
+    await withMockedWindowsPlatform(async () => {
+      await expect(runExec("node", ["utf16-output.js"], 1_000)).resolves.toEqual({
+        stdout: "ok",
+        stderr: "no",
+      });
     });
   });
 

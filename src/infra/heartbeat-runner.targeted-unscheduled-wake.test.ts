@@ -4,14 +4,87 @@
 // max-lines budget.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
-import { startHeartbeatRunner } from "./heartbeat-runner.js";
+import { wake as wakeCronService } from "../cron/service/wake.js";
+import { setHeartbeatsEnabled, startHeartbeatRunner } from "./heartbeat-runner.js";
 import { requestHeartbeat } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
   type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };
-  const TEST_SCHEDULER_SEED = "heartbeat-runner-test-seed";
-
+  const targetedWakeCases = [
+    {
+      name: "cron",
+      wake: {
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:one-shot",
+        agentId: "main",
+      },
+    },
+    {
+      name: "manual",
+      wake: {
+        source: "manual",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
+      },
+    },
+    {
+      name: "notification",
+      wake: {
+        source: "notifications-event",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
+      },
+    },
+    {
+      name: "restart sentinel",
+      wake: {
+        source: "restart-sentinel",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
+      },
+    },
+    {
+      name: "hook",
+      wake: {
+        source: "hook",
+        intent: "immediate",
+        reason: "hook:123e4567-e89b-12d3-a456-426614174000",
+        agentId: "main",
+      },
+    },
+    {
+      name: "exec event",
+      wake: {
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+      },
+    },
+    {
+      name: "background task",
+      wake: {
+        source: "background-task",
+        intent: "immediate",
+        reason: "background-task",
+        sessionKey: "agent:main:main",
+      },
+    },
+    {
+      name: "blocked background task",
+      wake: {
+        source: "background-task-blocked",
+        intent: "immediate",
+        reason: "background-task-blocked",
+        sessionKey: "agent:main:main",
+      },
+    },
+  ] as const;
   function useFakeHeartbeatTime() {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
@@ -50,7 +123,6 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     const runner = startHeartbeatRunner({
       cfg: params.cfg,
       runOnce: params.runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat(params.wake);
@@ -63,87 +135,116 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   }
 
   afterEach(() => {
+    setHeartbeatsEnabled(true);
     resetConfigRuntimeState();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { name: "session-targeted", sessionKey: "agent:ops:main" },
-    { name: "agent-targeted", sessionKey: undefined },
-  ])("runs one $name hook wake for an agent without a heartbeat schedule", async (testCase) => {
-    useFakeHeartbeatTime();
-    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-    const runner = await expectWakeDispatch({
-      cfg: {
-        agents: { list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }] },
-      } as OpenClawConfig,
-      runSpy,
-      wake: {
-        source: "hook",
-        intent: "immediate",
-        reason: "hook:123e4567-e89b-12d3-a456-426614174000",
-        agentId: "ops",
-        sessionKey: testCase.sessionKey,
-        coalesceMs: 0,
-      },
-      expectedCall: {
-        agentId: "ops",
-        source: "hook",
-        intent: "immediate",
-        reason: "hook:123e4567-e89b-12d3-a456-426614174000",
-        sessionKey: testCase.sessionKey,
-      },
-    });
-    runner.stop();
-  });
-
-  it.each([
-    { source: "background-task", reason: "background-task" },
-    { source: "background-task-blocked", reason: "background-task-blocked" },
-  ] as const)(
-    "runs one targeted unscheduled $source wake for a configured agent",
-    async ({ source, reason }) => {
+  it.each(["now", "next-heartbeat"] as const)(
+    "runs a targeted manual %s wake when recurring heartbeats are disabled",
+    async (mode) => {
       useFakeHeartbeatTime();
       const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-      const runner = await expectWakeDispatch({
+      const runner = startHeartbeatRunner({
         cfg: {
-          agents: { list: [{ id: "main", heartbeat: { every: "30m" } }, { id: "ops" }] },
+          agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
         } as OpenClawConfig,
-        runSpy,
-        wake: {
-          source,
-          intent: "immediate",
-          reason,
-          sessionKey: "agent:ops:main",
-          coalesceMs: 0,
+        runOnce: runSpy,
+      });
+      const enqueueSystemEvent = vi.fn();
+      const state = {
+        deps: {
+          enqueueSystemEvent,
+          requestHeartbeat: (wake: Parameters<typeof requestHeartbeat>[0]) =>
+            requestHeartbeat({ ...wake, coalesceMs: 0 }),
         },
-        expectedCall: {
-          agentId: "ops",
-          source,
-          intent: "immediate",
-          reason,
-          sessionKey: "agent:ops:main",
-        },
+      } as unknown as Parameters<typeof wakeCronService>[0];
+
+      expect(
+        wakeCronService(state, {
+          mode,
+          text: "Operator requested a session update.",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      ).toEqual({ ok: true });
+      expect(enqueueSystemEvent).toHaveBeenCalledWith("Operator requested a session update.", {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(runSpy).toHaveBeenCalledOnce();
+      expectRunCallFields(runSpy, 0, {
+        agentId: "main",
+        source: "manual",
+        intent: "immediate",
+        reason: "wake",
+        sessionKey: "agent:main:main",
       });
       runner.stop();
     },
   );
 
-  it("rejects targeted hook wakes for unconfigured agents", async () => {
+  it.each(
+    targetedWakeCases.flatMap((testCase) =>
+      ["0m", "30m"].map((heartbeatEvery) => ({
+        name: testCase.name,
+        wake: testCase.wake,
+        heartbeatEvery,
+      })),
+    ),
+  )("runs one targeted $name wake with heartbeat cadence $heartbeatEvery", async (testCase) => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: testCase.heartbeatEvery } },
+          list: [{ id: "main" }],
+        },
+      } as OpenClawConfig,
+      runSpy,
+      wake: { ...testCase.wake, coalesceMs: 0 },
+      expectedCall: testCase.wake,
+    });
+    runner.stop();
+  });
+
+  it.each([
+    {
+      name: "without a session target",
+      wake: { agentId: "main", sessionKey: undefined },
+    },
+    {
+      name: "for an unconfigured agent",
+      wake: { agentId: "unknown", sessionKey: "agent:unknown:main" },
+    },
+    {
+      name: "with event intent",
+      wake: { agentId: "main", sessionKey: "agent:main:main", intent: "event" as const },
+    },
+    {
+      name: "with a non-manual reason",
+      wake: { agentId: "main", sessionKey: "agent:main:main", reason: "manual" },
+    },
+  ])("rejects an unscheduled manual wake $name", async ({ wake }) => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = startHeartbeatRunner({
-      cfg: { agents: { list: [{ id: "main", heartbeat: { every: "30m" } }] } } as OpenClawConfig,
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
       runOnce: runSpy,
-      stableSchedulerSeed: TEST_SCHEDULER_SEED,
     });
 
     requestHeartbeat({
-      source: "hook",
+      source: "manual",
       intent: "immediate",
-      reason: "hook:123e4567-e89b-12d3-a456-426614174000",
-      agentId: "bogus",
+      reason: "wake",
+      ...wake,
       coalesceMs: 0,
     });
     await vi.advanceTimersByTimeAsync(1);
@@ -151,4 +252,111 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     expect(runSpy).not.toHaveBeenCalled();
     runner.stop();
   });
+
+  it.each(targetedWakeCases)("keeps targeted $name wakes globally disabled", async (testCase) => {
+    useFakeHeartbeatTime();
+    setHeartbeatsEnabled(false);
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({ ...testCase.wake, coalesceMs: 0 });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it.each([
+    { name: "event intent", wake: { intent: "event" as const } },
+    { name: "a non-namespaced reason", wake: { reason: "cron" } },
+    { name: "another source's reason", wake: { reason: "wake" } },
+    { name: "a non-cron source", wake: { source: "manual" as const } },
+    { name: "no target", wake: { agentId: undefined } },
+  ])("rejects an unscheduled cron wake with $name", async ({ wake }) => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "cron",
+      intent: "immediate",
+      reason: "cron:one-shot",
+      agentId: "main",
+      ...wake,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it.each([
+    {
+      name: "without a session target",
+      wake: { agentId: "main", sessionKey: undefined },
+    },
+    {
+      name: "with event intent",
+      wake: { agentId: "main", sessionKey: "agent:main:main", intent: "event" as const },
+    },
+    {
+      name: "with a non-wake reason",
+      wake: { agentId: "main", sessionKey: "agent:main:main", reason: "manual" },
+    },
+  ])("rejects an unscheduled restart-sentinel wake $name", async ({ wake }) => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    requestHeartbeat({
+      source: "restart-sentinel",
+      intent: "immediate",
+      reason: "wake",
+      ...wake,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
+
+  it.each(targetedWakeCases)(
+    "rejects targeted $name wakes for unconfigured agents",
+    async (testCase) => {
+      useFakeHeartbeatTime();
+      const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      const runner = startHeartbeatRunner({
+        cfg: { agents: { list: [{ id: "main" }] } } as OpenClawConfig,
+        runOnce: runSpy,
+      });
+
+      requestHeartbeat({
+        ...testCase.wake,
+        agentId: "unknown",
+        sessionKey: "agent:unknown:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(runSpy).not.toHaveBeenCalled();
+      runner.stop();
+    },
+  );
 });

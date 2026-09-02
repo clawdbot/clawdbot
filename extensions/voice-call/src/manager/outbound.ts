@@ -1,4 +1,3 @@
-// Voice Call plugin module implements outbound behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
@@ -210,8 +209,9 @@ export async function initiateCall(
     },
   };
 
-  ctx.activeCalls.set(callId, callRecord);
+  // Persist before reserving capacity so storage failures cannot strand undialed calls.
   persistCallRecord(ctx.storePath, callRecord);
+  ctx.activeCalls.set(callId, callRecord);
 
   try {
     // For notify mode with a message, use inline TwiML with <Say>.
@@ -251,11 +251,14 @@ export async function initiateCall(
         : {}),
     });
 
-    callRecord.providerCallId = result.providerCallId;
-    ctx.providerCallIdMap.set(result.providerCallId, callId);
-    persistCallRecord(ctx.storePath, callRecord);
+    // A callback may establish the canonical ID or finalize the call while dialing awaits.
+    if (ctx.activeCalls.get(callId) === callRecord && !callRecord.providerCallId) {
+      callRecord.providerCallId = result.providerCallId;
+      ctx.providerCallIdMap.set(result.providerCallId, callId);
+      persistCallRecord(ctx.storePath, callRecord);
+    }
     console.log(
-      `[voice-call] Outbound call initiated: callId=${callId} providerCallId=${result.providerCallId} mode=${mode} preConnectDtmf=${preConnectTwiml ? "yes" : "no"} initialMessage=${initialMessage ? "yes" : "no"}`,
+      `[voice-call] Outbound call initiated: callId=${callId} providerCallId=${callRecord.providerCallId ?? result.providerCallId} mode=${mode} preConnectDtmf=${preConnectTwiml ? "yes" : "no"} initialMessage=${initialMessage ? "yes" : "no"}`,
     );
 
     return { callId, success: true };

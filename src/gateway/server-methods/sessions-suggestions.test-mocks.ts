@@ -1,7 +1,7 @@
 import { vi } from "vitest";
+import type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 
 const mocks = vi.hoisted(() => ({
-  appendSessionAudit: vi.fn(async () => undefined),
   handleChatSend: vi.fn(),
   suggestionMutationFailure: undefined as
     | "claim"
@@ -9,11 +9,10 @@ const mocks = vi.hoisted(() => ({
     | "release-unexpected"
     | "finalize"
     | undefined,
-  presence: [] as Array<{ user?: { id: string; name?: string }; watchedSessions?: string[] }>,
+  presence: [] as Array<Pick<PresenceEntry, "user" | "watchedSessions">>,
 }));
 
 vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
-vi.mock("./session-audit.js", () => ({ appendSessionAudit: mocks.appendSessionAudit }));
 vi.mock("../../infra/system-presence.js", () => ({
   listSystemPresence: () => mocks.presence,
 }));

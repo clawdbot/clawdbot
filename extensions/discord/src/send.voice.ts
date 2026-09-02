@@ -11,7 +11,6 @@ import {
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { withTempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
-import { resolveDiscordAccount } from "./accounts.js";
 import type { RequestClient } from "./internal/discord.js";
 import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import type { DiscordReplyReference } from "./reply-reference.js";
@@ -39,6 +38,7 @@ type VoiceMessageOpts = Pick<
   | "mediaLocalRoots"
   | "mediaReadFile"
   | "onPlatformSendDispatch"
+  | "assertPlatformSendAuthorized"
 >;
 
 function toDiscordSendResult(
@@ -106,15 +106,12 @@ export async function sendVoiceMessageDiscord(
     let channelId: string | undefined;
 
     try {
-      const accountInfo = resolveDiscordAccount({
-        cfg,
-        accountId: opts.accountId,
-      });
       const client = createDiscordClient({ ...opts, cfg });
       token = client.token;
       rest = client.rest;
       const request = client.request;
-      const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
+      const accountInfo = client.account;
+      const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
       channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
       const ogg = await ensureOggOpus(localInputPath);
@@ -123,7 +120,6 @@ export async function sendVoiceMessageDiscord(
 
       const metadata = await getVoiceMessageMetadata(oggPath);
       const audioBuffer = await fs.readFile(oggPath);
-      await opts.onPlatformSendDispatch?.();
       const result = await sendDiscordVoiceMessage(
         rest,
         channelId,
@@ -133,6 +129,8 @@ export async function sendVoiceMessageDiscord(
         request,
         opts.silent,
         token,
+        opts.onPlatformSendDispatch,
+        opts.assertPlatformSendAuthorized,
       );
 
       recordChannelActivity({

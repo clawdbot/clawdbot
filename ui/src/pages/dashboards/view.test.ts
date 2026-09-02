@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { renderDashboards, type DashboardsRouteData } from "./view.ts";
 
@@ -40,6 +40,7 @@ describe("dashboards index", () => {
             ],
             basePath,
           ),
+          vi.fn(),
         ),
         container,
       );
@@ -60,7 +61,7 @@ describe("dashboards index", () => {
 
   it("explains how to create a dashboard when the list is empty", () => {
     const container = document.createElement("div");
-    render(renderDashboards(routeData([])), container);
+    render(renderDashboards(routeData([]), vi.fn()), container);
 
     const empty = container.querySelector("[data-dashboards-empty]");
     expect(empty?.textContent).toContain("No dashboards yet");

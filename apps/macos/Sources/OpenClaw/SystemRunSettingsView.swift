@@ -205,6 +205,23 @@ struct SystemRunSettingsView: View {
 
     private var allowlistView: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if self.model.obsoleteGeneratedApprovalCount > 0 {
+                SettingsCardGroup("Approval Update") {
+                    SettingsCardRow(
+                        title: "Some approvals need renewal",
+                        subtitle: .localized(
+                            "Older generated approvals are inactive because they were not tied " +
+                                "to a working directory. Manual rules are unchanged."),
+                        showsDivider: false)
+                    {
+                        Button("Remove Inactive") {
+                            self.model.removeObsoleteGeneratedApprovals()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
             SettingsCardGroup("Automatic Trust") {
                 SettingsCardToggleRow(
                     title: "Auto-allow skill CLIs",
@@ -375,19 +392,21 @@ struct ExecAllowlistRow: View {
 
             if let lastUsedAt = self.entry.lastUsedAt {
                 let date = Date(timeIntervalSince1970: lastUsedAt / 1000.0)
-                Text("Last used \(Self.relativeFormatter.localizedString(for: date, relativeTo: Date()))")
+                Text(String(
+                    format: String(localized: "Last used %@"),
+                    Self.relativeFormatter.localizedString(for: date, relativeTo: Date())))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             if let lastUsedCommand = self.entry.lastUsedCommand, !lastUsedCommand.isEmpty {
-                Text("Last command: \(lastUsedCommand)")
+                Text(String(format: String(localized: "Last command: %@"), lastUsedCommand))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             if let lastResolvedPath = self.entry.lastResolvedPath, !lastResolvedPath.isEmpty {
-                Text("Resolved path: \(lastResolvedPath)")
+                Text(String(format: String(localized: "Resolved path: %@"), lastResolvedPath))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -500,6 +519,16 @@ final class ExecApprovalsSettingsModel {
     var policyLoadState: ExecApprovalsPolicyLoadState = .loading
     var mutationErrorMessage: String?
 
+    var obsoleteGeneratedApprovalCount: Int {
+        self.entries.count { entry in
+            let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            return entry.source == "allow-always" &&
+                !pattern.hasPrefix("=command:") &&
+                !pattern.hasPrefix("=node-command:") &&
+                entry.argPattern?.hasPrefix("sha256:cwd-argv:v1:") != true
+        }
+    }
+
     var policyAvailable: Bool {
         self.policyLoadState.isAvailable
     }
@@ -594,6 +623,18 @@ final class ExecApprovalsSettingsModel {
             await task.value
             guard let self, self.selectedAgentId == id, self.policyAvailable else { return }
             await self.refreshSkillBins()
+        }
+    }
+
+    func removeObsoleteGeneratedApprovals() {
+        switch ExecApprovalsStore.removeObsoleteGeneratedAllowAlwaysEntries() {
+        case .success:
+            let agentId = self.selectedAgentId
+            Task { [weak self] in
+                await self?.loadSettings(for: agentId)
+            }
+        case let .failure(error):
+            self.mutationErrorMessage = error.localizedDescription
         }
     }
 
@@ -861,9 +902,6 @@ final class ExecApprovalsSettingsModel {
         case .success:
             applyPersisted()
             self.mutationErrorMessage = nil
-            if self.isDefaultsScope {
-                AppStateStore.shared.retryExecApprovalModeRead()
-            }
             self.startSettingsRead(for: self.selectedAgentId, showLoading: showLoading)
             return true
         case let .failure(error):

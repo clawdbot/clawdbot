@@ -18,6 +18,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
@@ -181,8 +182,8 @@ function listProjectRecents(
   const candidates = Object.entries(store)
     .filter(
       ([, entry]) =>
-        entry.createdActor?.type === "human" &&
-        Boolean(entry.createdActor.id && profileIds.has(entry.createdActor.id)),
+        Boolean(sessionCreatorProfileId(entry.createdActor)) &&
+        Boolean(entry.createdActor?.id && profileIds.has(entry.createdActor.id)),
     )
     .toSorted(
       ([leftKey, left], [rightKey, right]) =>
@@ -286,11 +287,12 @@ async function listObservedProjects(
   context: Parameters<GatewayRequestHandlers["projects.list"]>[0]["context"],
   client: Parameters<GatewayRequestHandlers["projects.list"]>[0]["client"],
 ): Promise<ProjectSummary[]> {
-  const { store } = loadCombinedSessionStoreForGatewayCore(context.getRuntimeConfig(), {
+  const cfg = context.getRuntimeConfig();
+  const { store } = loadCombinedSessionStoreForGatewayCore(cfg, {
     projection: "list",
   });
   const rawCandidates: RawProjectCandidate[] = [];
-  const visibilityFilter = createSessionListEntryFilter({ client });
+  const visibilityFilter = createSessionListEntryFilter({ client, cfg });
   const canSeeAll = !visibilityFilter;
   for (const [sessionKey, entry] of Object.entries(store)) {
     if (visibilityFilter && !visibilityFilter(sessionKey, entry)) {

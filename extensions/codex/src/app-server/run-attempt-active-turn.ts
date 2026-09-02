@@ -1,11 +1,15 @@
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
+  detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
   formatErrorMessage,
+  resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { retireCodexAppServerClientAfterTimedOutTurn } from "./attempt-client-cleanup.js";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
@@ -28,8 +32,9 @@ import {
   mirrorPromptAtTurnStartBestEffort,
 } from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
+import { buildCodexUserInput } from "./user-input.js";
 
-export async function activateCodexAttemptTurn(
+export function activateCodexAttemptTurn(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
@@ -44,7 +49,7 @@ export async function activateCodexAttemptTurn(
     pendingNativePreToolUseFailures,
   } = resources;
   const { context, turnState } = prompt;
-  const { runtime, attemptTools } = context;
+  const { runtime, attemptTools, hookContext } = context;
   const { connection } = runtime;
   const {
     params,
@@ -52,16 +57,21 @@ export async function activateCodexAttemptTurn(
     terminalState,
     abortExplicitly,
     abortFromUpstream,
-    bindingStore,
-    bindingIdentity,
     sessionAgentId,
-    sandboxSessionKey,
     contextSessionKey,
     effectiveCwd,
   } = connection;
   const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
-  const { state, userInputBridgeRef, steeringQueueRef, turnWatches, completeTurn, interruptTurn } =
-    turnRuntime;
+  const {
+    state,
+    completion,
+    userInputBridgeRef,
+    steeringQueueRef,
+    deadlines,
+    noteProgress,
+    completeTurn,
+    interruptTurn,
+  } = turnRuntime;
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
@@ -100,10 +110,24 @@ export async function activateCodexAttemptTurn(
     resourceState.thread.threadId,
     activeTurnId,
     {
+      agentHookContext: hookContext,
       initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      asyncUserMessageAllowed:
+        params.disableTools !== true &&
+        (params.toolsAllow === undefined ||
+          toolBridge.availableTools.some((tool) => tool.name === "message")),
+      onAsyncDelivery: async (delivery) => {
+        return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
+          params: dynamicToolParams,
+          cwd: effectiveCwd,
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+          ...delivery,
+        });
+      },
       readRecentRateLimits: () => readRecentCodexRateLimits(resourceState.client),
       runAbortSignal: runAbortController.signal,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
@@ -171,67 +195,153 @@ export async function activateCodexAttemptTurn(
   );
   if (isTerminalTurnStatus(turn.turn.status)) {
     state.terminalTurnNotificationQueued = true;
+    deadlines.beginSettlement(Date.now());
   }
   emitLifecycleStart();
   const activeProjector = projectorRef.current;
-  turnWatches.armTerminalIdleWatch();
-  turnWatches.touchActivity("turn:start", { arm: true });
-  turnWatches.armAttemptIdleWatch();
-  turnWatches.touchActivity("turn:start", { attemptProgress: true });
+  noteProgress("turn:start");
+  const abortListener = () => {
+    state.abortCleanup = interruptTurn(activeTurnId).then(async (confirmed) => {
+      if (
+        !terminalState.explicitCancellationObserved &&
+        !state.permissionChangeRestart &&
+        !state.timeout
+      ) {
+        return;
+      }
+      if (!confirmed) {
+        throw new Error(
+          state.permissionChangeRestart
+            ? "Permission change could not confirm the previous Codex turn stopped."
+            : "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
+        );
+      }
+      // Native terminal receipt leaves background terminals alive. Cancellation,
+      // budget expiry, and policy replacement close that thread's execution too.
+      await terminateCodexBackgroundTerminals(resourceState.client, resourceState.thread.threadId);
+      if (state.permissionChangeRestart) {
+        state.permissionChangeRestart = "confirmed";
+      }
+    });
+    void state.abortCleanup.then(completeTurn, (error: unknown) => {
+      embeddedAgentLog.warn("codex app-server cancellation cleanup failed", { error });
+      completeTurn();
+    });
+  };
+  runAbortController.signal.addEventListener("abort", abortListener, { once: true });
+  if (runAbortController.signal.aborted) {
+    abortListener();
+  }
   for (const failure of pendingNativePreToolUseFailures.splice(0)) {
     activeProjector.recordNativeToolPreToolUseFailure(failure);
   }
-  // The route buffers early events. Publish full turn context, then release in wire order.
-  if (resourceState.turnRoute) {
-    try {
-      await resourceState.turnRoute.bindTurn(activeTurnId);
-    } catch (error) {
-      if (!state.terminalTurnNotificationQueued) {
-        throw error;
-      }
-      await resourceState.turnRoute.drain();
-      if (!state.completed) {
-        turnWatches.clearAllTimers();
-        throw error;
-      }
-    }
-  }
-  if (!state.completed && isTerminalTurnStatus(turn.turn.status)) {
-    if (!isJsonObject(turn.turn)) {
-      throw new Error("Codex turn completion payload is not a JSON object");
-    }
-    await enqueueNotification(
-      {
-        method: "turn/completed",
-        params: {
-          threadId: resourceState.thread.threadId,
-          turnId: activeTurnId,
-          turn: turn.turn,
-        },
-      },
-      { threadId: resourceState.thread.threadId, turnId: activeTurnId },
-    );
-  }
   const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
+  // Buffered async items can persist immediately when the route opens. Commit
+  // their owning user admission first so durable history stays chronological.
   const promptMirrorPromise = mirrorPromptAtTurnStartBestEffort({
     params,
     agentId: sessionAgentId,
     notifyUserMessagePersisted,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     cwd: effectiveCwd,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     upstreamUserText: turnState.codexTurnPromptText,
   });
+  const bindProjection = async () => {
+    state.activeLocalProjections += 1;
+    try {
+      await Promise.race([promptMirrorPromise, completion]);
+      if (state.completed) {
+        return;
+      }
+      // Stop and deadlines own activation too; a blocked pre-bind projection
+      // must enter the same bounded finalization and cleanup as an active turn.
+      if (resourceState.turnRoute) {
+        try {
+          await Promise.race([resourceState.turnRoute.bindTurn(activeTurnId), completion]);
+        } catch (error) {
+          if (!state.terminalTurnNotificationQueued && !runAbortController.signal.aborted) {
+            throw error;
+          }
+          await Promise.race([resourceState.turnRoute.drain(), completion]);
+          if (!state.completed) {
+            throw error;
+          }
+        }
+      }
+      if (!state.completed && isTerminalTurnStatus(turn.turn.status)) {
+        if (!isJsonObject(turn.turn)) {
+          throw new Error("Codex turn completion payload is not a JSON object");
+        }
+        await enqueueNotification(
+          {
+            method: "turn/completed",
+            params: {
+              threadId: resourceState.thread.threadId,
+              turnId: activeTurnId,
+              turn: turn.turn,
+            },
+          },
+          { threadId: resourceState.thread.threadId, turnId: activeTurnId },
+        );
+      }
+    } finally {
+      state.activeLocalProjections -= 1;
+    }
+  };
+  const assertSteeringActive = () => {
+    params.hostCapabilities.assertActive();
+    runAbortController.signal.throwIfAborted();
+    if (state.completed || state.terminalTurnNotificationQueued) {
+      throw new Error("codex app-server turn is no longer accepting steering");
+    }
+  };
+  const workspaceOnly = resolveAttemptFsWorkspaceOnly({ config: params.config, sessionAgentId });
+  const imageContext = {
+    workspaceDir: connection.effectiveWorkspace,
+    model: params.model,
+    config: params.config,
+    workspaceOnly,
+    localRoots: workspaceOnly
+      ? undefined
+      : getAgentScopedMediaLocalRoots(params.config ?? {}, sessionAgentId),
+    sandbox:
+      connection.sandbox?.enabled && connection.sandbox.fsBridge
+        ? { root: connection.sandbox.workspaceDir, bridge: connection.sandbox.fsBridge }
+        : undefined,
+  };
   const activeSteeringQueue = createCodexSteeringQueue({
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
+    assertActive: assertSteeringActive,
+    prepareMessage: async (text, options) => {
+      const result = await detectAndLoadAgentHarnessPromptImages({
+        ...imageContext,
+        prompt: text,
+        existingImages: options.images,
+        imageOrder: options.imageOrder,
+        media: options.media,
+        userTurnTranscriptRecorder: options.userTurnTranscriptRecorder,
+      });
+      if (result.failedMediaCount) {
+        throw new Error(
+          `failed to hydrate ${result.failedMediaCount} structured image attachment(s) for Codex steering`,
+        );
+      }
+      return buildCodexUserInput(text, result.images);
+    },
     beforeConfirmConsumed: async (items) => {
-      const inboundItems = items.filter((item) => item.isInboundUserMessage === true);
-      if (inboundItems.length === 0) {
+      // Internal steering can own a user turn too. Commit its recorder after the
+      // preceding answers so source provenance and transcript ordering survive.
+      const transcriptItems = items.filter(
+        (item) =>
+          item.isInboundUserMessage === true || item.userTurnTranscriptRecorder !== undefined,
+      );
+      if (transcriptItems.length === 0) {
         return;
       }
       await promptMirrorPromise;
@@ -245,10 +355,13 @@ export async function activateCodexAttemptTurn(
           cwd: effectiveCwd,
           messages,
           idempotencyScope: `codex-app-server:${resourceState.thread.threadId}`,
+          runId: params.runId,
+          runMirrorIdentityPrefix: `${activeTurnId}:`,
           config: params.config,
         });
+        activeProjector.markSteeringTranscriptPersisted();
       }
-      for (const item of inboundItems) {
+      for (const item of transcriptItems) {
         const recorder = item.userTurnTranscriptRecorder;
         if (!recorder) {
           continue;
@@ -265,10 +378,11 @@ export async function activateCodexAttemptTurn(
     text: string,
     optionsLocal?: CodexSteeringQueueOptions,
   ) => {
-    if (optionsLocal?.isInboundUserMessage !== true || optionsLocal.images?.length) {
+    if (optionsLocal?.isInboundUserMessage !== true || hasPromptImageInput(optionsLocal)) {
       return false;
     }
-    const claimed = await claimPendingAgentQuestionAnswer({
+    assertSteeringActive();
+    return await claimPendingAgentQuestionAnswer({
       sessionKey: params.sessionKey ?? params.sessionId,
       text,
       persist: optionsLocal.userTurnTranscriptRecorder
@@ -277,7 +391,6 @@ export async function activateCodexAttemptTurn(
           }
         : undefined,
     });
-    return claimed;
   };
   const cancelPendingUserInput = (resolvedBy: string) =>
     cancelPendingAgentQuestionForSession({
@@ -285,11 +398,14 @@ export async function activateCodexAttemptTurn(
       resolvedBy,
     });
   const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
-    const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
     if (await claimPendingUserInputAnswer(text, optionsLocal)) {
+      // A question claim is already consumption. Closing the run during its
+      // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
       return undefined;
-    } else if (isInboundUserMessage && optionsLocal?.images?.length) {
+    }
+    if (optionsLocal?.isInboundUserMessage === true && hasPromptImageInput(optionsLocal)) {
+      assertSteeringActive();
       try {
         await cancelPendingUserInput("image-reply");
       } catch (error) {
@@ -315,7 +431,29 @@ export async function activateCodexAttemptTurn(
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
+    startedAtMs: params.startedAtMs,
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    permissionChangeOwner: params.permissionChange?.owner,
+    applyPermissionMode: async (
+      mode: NonNullable<typeof params.permissionMode> | null,
+      revokeApprovals: () => void,
+    ) => {
+      if (
+        !params.permissionChange ||
+        terminalState.terminalOutcomeFrozen ||
+        params.abortSignal?.aborted ||
+        (!state.permissionChangeRestart && (state.completed || runAbortController.signal.aborted))
+      ) {
+        return false;
+      }
+      const applied = params.permissionChange.request(mode);
+      state.permissionChangeRestart ??= "requested";
+      // A policy replacement cancels this native turn, not the admitted outer
+      // run. Its successor must be prepared only after native stop and cleanup.
+      runAbortController.abort("permission-change");
+      revokeApprovals();
+      return await applied;
+    },
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
     queueMessage,
@@ -323,20 +461,26 @@ export async function activateCodexAttemptTurn(
       isAvailable: () =>
         !state.completed &&
         !state.terminalTurnNotificationQueued &&
-        !state.timedOut &&
         !runAbortController.signal.aborted,
       queueMessage,
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,
     isAborted: () => runAbortController.signal.aborted,
-    isStopped: () => state.completed || state.timedOut || runAbortController.signal.aborted,
+    isStopped: () => state.completed || runAbortController.signal.aborted,
+    ownsLiveness: () =>
+      deadlines.ownsExecutionWait() &&
+      resourceState.turnRoute?.signal.aborted === false &&
+      !state.completed &&
+      !state.terminalTurnNotificationQueued &&
+      state.activeAppServerTurnRequests === 0 &&
+      state.activeLocalProjections === 0,
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
     // queueMessage resolves only after Codex echoes the steered userMessage completion.
     // Gateway-owned turns rely on that boundary before finalizing adoption.
     supportsTranscriptCommitWait: true,
-    supportsQueueMessageImages: true,
+    supportsQueueMessageImages: params.model.input.includes("image"),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
@@ -351,30 +495,13 @@ export async function activateCodexAttemptTurn(
     terminalState.terminalOutcomeFrozen = true;
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
   };
-  const abortListener = () => {
-    if (state.timedOut) {
-      void (async () => {
-        // Supervised sessions stay native; clearing scope would silently move the next attempt.
-        if (resourceState.thread.connectionScope !== "supervision") {
-          await bindingStore.mutate(bindingIdentity, {
-            kind: "clear",
-            threadId: resourceState.thread.threadId,
-          });
-        }
-        await retireCodexAppServerClientAfterTimedOutTurn(resourceState.client, {
-          threadId: resourceState.thread.threadId,
-          turnId: activeTurnId,
-          reason: String(runAbortController.signal.reason ?? "timeout"),
-          suspectPhysicalClient: state.turnWatchTimeoutKind === "terminal",
-        });
-      })().finally(completeTurn);
-      return;
-    }
-    void interruptTurn(activeTurnId).finally(completeTurn);
-  };
-  runAbortController.signal.addEventListener("abort", abortListener, { once: true });
-  if (runAbortController.signal.aborted) {
-    abortListener();
+  if (
+    !runAbortController.signal.aborted &&
+    params.permissionChange &&
+    !params.permissionChange.applied()
+  ) {
+    state.permissionChangeRestart = "requested";
+    runAbortController.abort("permission-change");
   }
   return {
     activeTurnId,
@@ -384,6 +511,7 @@ export async function activateCodexAttemptTurn(
     freezeRunTerminalOutcome,
     notifyUserMessagePersisted,
     abortListener,
+    ready: bindProjection(),
   };
 }
 

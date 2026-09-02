@@ -229,6 +229,19 @@ Auto-capture also rejects text that looks like envelope/transport metadata,
 prompt-injection payloads, or already-injected `<relevant-memories>` context,
 and caps at 3 captured memories per agent turn.
 
+Completed message occurrences are not processed again while they remain in the
+conversation transcript, including after compaction. The last 60 completed text
+blocks also stay deduplicated after their messages leave the transcript. This
+history includes text that matched an existing memory and successful blocks from
+a partially failed message. A later message can still capture text that an
+earlier occurrence skipped because of the per-turn limit. Identical replacements
+without a distinct timestamp or retained context can be indistinguishable from
+an unchanged replay. Resetting or ending
+the conversation clears that progress. Overlapping completions in one conversation
+share capture progress; other conversations can proceed independently. On shutdown,
+the plugin stops new capture work and waits for pending captures before closing
+its storage.
+
 Every memory is owned by one agent. Recall, duplicate detection, capture,
 listing, raw queries, and deletion all enforce that owner before returning or
 mutating rows. An agent with `memory.search.enabled: false` in its `agents.entries.*`
@@ -266,7 +279,9 @@ Agents get three tools from the active memory plugin:
 
 - `memory_recall`: vector search over stored memories.
 - `memory_store`: save a fact, preference, decision, or entity (rejects text
-  that looks like a prompt-injection payload; skips near-duplicate stores).
+  that looks like a prompt-injection payload; skips exact duplicates after
+  normalizing line endings, Unicode NFC, and surrounding whitespace, but stores
+  semantically similar memories with different text).
 - `memory_forget`: delete by `memoryId`, or by `query` (auto-deletes a single
   match above 90% score, otherwise lists candidate IDs to disambiguate).
 
@@ -335,8 +350,9 @@ completed; other agents never inherit the old shared rows.
 
 ## Runtime dependencies and platform support
 
-`memory-lancedb` depends on the native `@lancedb/lancedb` package, owned by the
-plugin package (not the OpenClaw core dist). Gateway startup does not repair
+`memory-lancedb` bundles LanceDB's JavaScript. Its plugin package declares native
+`@lancedb/lancedb-*` packages as optional dependencies, so installation selects
+the matching binary for the host platform. Gateway startup does not repair
 plugin dependencies; if the native dependency is missing or fails to load,
 reinstall or update the plugin package and restart the Gateway.
 

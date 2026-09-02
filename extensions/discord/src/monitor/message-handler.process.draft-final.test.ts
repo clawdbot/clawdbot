@@ -236,6 +236,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       allowedMentions: { parse: ["users", "roles"] },
+      onPlatformSendDispatch: expect.any(Function),
     });
   });
 
@@ -361,7 +362,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["Working\n\n🛠️ Exec\n• exec done"]);
+    expect(updates).toEqual(["Working"]);
     expectFinalAnswerText("done");
     // The working draft deletes once the receipt-bearing final landed.
     expect(editMessageDiscord).not.toHaveBeenCalled();
@@ -394,7 +395,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toContain("Reading the gateway config and restarting agents.\n\n🛠️ Exec");
+    expect(updates).toContain("Reading the gateway config and restarting agents.");
     expectFinalAnswerText("done");
   });
 
@@ -647,7 +648,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["Shelling\n\n🛠️ Exec\n• exec running"]);
+    expect(updates).toEqual(["Shelling"]);
     expectFinalAnswerText("done");
   });
 
@@ -680,11 +681,11 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["Shelling\n\n🛠️ Exec\n• exec running"]);
+    expect(updates).toEqual(["Shelling"]);
     expectFinalAnswerText("done");
   });
 
-  it("streams Discord tool progress for coding-profile message-tool-only guild replies", async () => {
+  it("streams a quiet work summary for coding-profile message-tool-only guild replies", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -725,7 +726,7 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).toHaveBeenCalledWith("Working\n\n🛠️ Exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Working");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 

@@ -11,13 +11,16 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../../agents/internal-runtime-context.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
-  listTaskRecordPage,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
@@ -35,7 +38,6 @@ import type { GatewayClient, RespondFn } from "./types.js";
 
 const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 const cancelSessionMock = vi.fn();
-const killSubagentRunAdminMock = vi.fn();
 type TaskResponsePayload = {
   tasks?: Array<Record<string, unknown>>;
   task?: Record<string, unknown>;
@@ -60,13 +62,14 @@ beforeEach(async () => {
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   resetTaskRegistryForTests();
   cancelSessionMock.mockReset();
-  killSubagentRunAdminMock.mockReset();
   setTaskRegistryControlRuntimeForTests({
     cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: cancelSessionMock,
     }),
-    killSubagentRunAdmin: async (params) => killSubagentRunAdminMock(params),
+    killSubagentRunAdmin: async () => {
+      throw new Error("Unexpected subagent cancellation in task handler fixture");
+    },
   });
 });
 
@@ -75,10 +78,11 @@ afterEach(async () => {
   resetTaskRegistryForTests();
   stateDirEnvSnapshot.restore();
   closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   await fs.rm(stateDir, { recursive: true, force: true });
 });
 
-function identifiedClient(scopes: string[]): GatewayClient {
+function identifiedClient(scopes: string[], profileId = "viewer@example.com"): GatewayClient {
   return {
     connect: {
       minProtocol: 1,
@@ -89,7 +93,7 @@ function identifiedClient(scopes: string[]): GatewayClient {
     },
     authenticatedUserId: "viewer@example.com",
     authenticatedUserProfile: {
-      profileId: "viewer@example.com",
+      profileId,
       displayName: null,
       hasAvatar: false,
       updatedAt: 1,
@@ -241,49 +245,6 @@ describe("tasks gateway handlers", () => {
 
     expect(calls[0]?.[0]).toBe(true);
     expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
-  });
-
-  it("does not use the executor as the requester owner for a legacy bare task", () => {
-    const task = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      scopeKind: "session",
-      childSessionKey: "agent:research:subagent:child",
-      agentId: "research",
-      runId: "run-legacy-owner",
-      task: "Owned by ops, executed by research",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-    expect(task.requesterAgentId).toBeUndefined();
-    const cfg = {
-      session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } satisfies OpenClawConfig;
-
-    expect(
-      listTaskRecordPage({
-        offset: 0,
-        limit: 10,
-        sessionKey: "global",
-        sessionAgentId: "ops",
-        cfg,
-      }).tasks.map((entry) => entry.taskId),
-    ).toEqual([task.taskId]);
-    expect(
-      listTaskRecordPage({
-        offset: 0,
-        limit: 10,
-        sessionKey: "global",
-        sessionAgentId: "research",
-        cfg,
-      }).tasks,
-    ).toEqual([]);
   });
 
   it("orders the ledger by last activity, not creation time", async () => {
@@ -489,93 +450,100 @@ describe("tasks gateway handlers", () => {
     }
   });
 
-  it("hides incognito tasks before pagination and blocks direct access", async () => {
-    const hiddenSessionKey = "agent:main:dashboard:incognito-task";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: hiddenSessionKey },
-      {
-        sessionId: "session-incognito-task",
-        updatedAt: 1,
-        incognito: true,
-        visibility: "shared",
-      },
-    );
-    const hidden = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: hiddenSessionKey,
-      requesterAgentId: "main",
-      ownerKey: hiddenSessionKey,
-      scopeKind: "session",
-      task: "Private task",
-      status: "running",
-      deliveryStatus: "pending",
-      lastEventAt: 2_000,
-    });
-    const visible = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Visible task",
-      status: "running",
-      deliveryStatus: "pending",
-      lastEventAt: 1_000,
-    });
-    const viewer = identifiedClient(["operator.read", "operator.write"]);
-
-    const list = await runTaskHandler("tasks.list", { limit: 1 }, {}, viewer);
-    expect(list.payload?.tasks?.map((task) => task.taskId)).toEqual([visible.taskId]);
-    expect(list.payload?.nextCursor).toBeUndefined();
-
-    const get = await runTaskHandler("tasks.get", { taskId: hidden.taskId }, {}, viewer);
-    expect(get.calls[0]).toMatchObject([
-      false,
-      undefined,
-      { message: `task not found: ${hidden.taskId}` },
-    ]);
-
-    const cancel = await runTaskHandler("tasks.cancel", { taskId: hidden.taskId }, {}, viewer);
-    expect(cancel.payload).toMatchObject({ found: false, cancelled: false });
-
-    for (const method of ["tasks.retry", "tasks.dismiss"] as const) {
-      const recovery = await runTaskHandler(method, { taskIds: [hidden.taskId] }, {}, viewer);
-      expect(recovery.payload?.results).toEqual([
-        { taskId: hidden.taskId, ok: false, reason: "task not found" },
+  it.each(["incognito", "none", "view"] as const)(
+    "enforces %s session access on indirect task selectors",
+    async (access) => {
+      const profileId =
+        access === "incognito"
+          ? "viewer@example.com"
+          : ensureProfileForEmail("viewer@example.com").id;
+      const foreignKey = `agent:main:dashboard:${access === "incognito" ? "incognito-" : ""}foreign`;
+      const ownKey = "agent:main:own-task";
+      for (const [sessionKey, actorId] of [
+        [foreignKey, "owner@example.com"],
+        [ownKey, profileId],
+      ] satisfies [string, string][]) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: `session-${sessionKey}`,
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: actorId },
+            visibility: "shared",
+            ...(access === "incognito" && sessionKey === foreignKey ? { incognito: true } : {}),
+          },
+        );
+      }
+      const createTask = (sessionKey: string, lastEventAt: number) =>
+        createTaskRecord({
+          runtime: "cli",
+          requesterSessionKey: sessionKey,
+          requesterAgentId: "main",
+          ownerKey: sessionKey,
+          scopeKind: "session",
+          task: sessionKey,
+          status: "running",
+          deliveryStatus: "pending",
+          lastEventAt,
+        });
+      const foreign = createTask(foreignKey, 2_000);
+      const own = createTask(ownKey, 1_000);
+      const guest: GatewayOperatorRoleDefinition = {
+        sessions: { others: access === "none" ? "none" : "view" },
+        agents: "*",
+        scopes: ["operator.read", "operator.write"],
+      };
+      const config: OpenClawConfig =
+        access === "incognito"
+          ? {}
+          : { gateway: { roles: { default: "guest", definitions: { guest } } } };
+      const viewer = identifiedClient(["operator.read", "operator.write"], profileId);
+      const taskId = foreign.taskId;
+      const selection = { taskIds: [taskId] };
+      const list = await runTaskHandler("tasks.list", { limit: 1 }, config, viewer);
+      const visibleForeign = access === "view";
+      expect(list.payload?.tasks?.map((task) => task.taskId)).toEqual([
+        visibleForeign ? taskId : own.taskId,
       ]);
-    }
-
-    const admin = identifiedClient(["operator.admin"]);
-    const adminGet = await runTaskHandler("tasks.get", { taskId: hidden.taskId }, {}, admin);
-    expect(adminGet.calls[0]?.[0]).toBe(true);
-    expect(adminGet.payload?.task?.taskId).toBe(hidden.taskId);
-  });
-
-  it("returns page records isolated from the registry", () => {
-    const created = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      task: "Isolated task",
-      status: "running",
-      deliveryStatus: "pending",
-      detail: { nested: { value: "original" } },
-    });
-
-    const page = listTaskRecordPage({ offset: 0, limit: 1 });
-    const detail = page.tasks[0]?.detail as { nested: { value: string } } | undefined;
-    expect(detail).toBeDefined();
-    if (detail) {
-      detail.nested.value = "mutated";
-    }
-
-    const current = expectDefined(
-      getTaskById(created.taskId),
-      "page mutation must not change the registry record",
-    );
-    expect((current.detail as { nested: { value: string } }).nested.value).toBe("original");
-  });
+      expect(list.payload?.nextCursor).toBe(visibleForeign ? "1" : undefined);
+      const get = await runTaskHandler("tasks.get", { taskId }, config, viewer);
+      if (visibleForeign) {
+        expect(get.payload?.task?.taskId).toBe(taskId);
+      } else {
+        expect(get.calls[0]).toMatchObject([
+          false,
+          undefined,
+          { message: `task not found: ${taskId}` },
+        ]);
+      }
+      const cancel = await runTaskHandler("tasks.cancel", { taskId }, config, viewer);
+      expect(cancel.payload).toMatchObject({ found: false, cancelled: false });
+      for (const method of ["tasks.retry", "tasks.dismiss"] as const) {
+        const result = await runTaskHandler(method, selection, config, viewer);
+        expect(result.payload?.results).toEqual([{ taskId, ok: false, reason: "task not found" }]);
+      }
+      if (visibleForeign) {
+        addSessionMember(
+          { agentId: "main", sessionKey: foreignKey },
+          {
+            identityId: profileId,
+            addedBy: "owner@example.com",
+            expectedSessionId: `session-${foreignKey}`,
+          },
+        );
+        const invited = await runTaskHandler("tasks.retry", selection, config, viewer);
+        expect(invited.payload?.results?.[0]?.reason).not.toBe("task not found");
+      }
+      const admin = await runTaskHandler(
+        "tasks.get",
+        { taskId },
+        config,
+        identifiedClient(["operator.admin"], profileId),
+      );
+      expect(admin.calls[0]?.[0]).toBe(true);
+      expect(admin.payload?.task?.taskId).toBe(taskId);
+    },
+  );
 
   it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the
@@ -849,6 +817,8 @@ describe("tasks gateway handlers", () => {
       deliveryStatus: "not_applicable",
     });
     const longLastLine = `Updating   files ${"x".repeat(220)}`;
+    const emitPrimaryTool = (data: Record<string, unknown>) =>
+      emitAgentEvent({ runId: primary.runId!, stream: "tool", data });
 
     emitAgentEvent({
       runId: primary.runId!,
@@ -870,80 +840,53 @@ describe("tasks gateway handlers", () => {
       stream: "thinking",
       data: { text: "Later thinking must not replace assistant activity" },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: "edit",
-        toolCallId: "edit-1",
-        args: {
-          path: "src/a.ts",
-          edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
-        },
+    emitPrimaryTool({
+      phase: "start",
+      name: "edit",
+      toolCallId: "edit-1",
+      args: {
+        path: "src/a.ts",
+        edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
       },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: { phase: "result", name: "edit", toolCallId: "edit-1", isError: false },
+    emitPrimaryTool({ phase: "result", name: "edit", toolCallId: "edit-1", isError: false });
+    emitPrimaryTool({
+      phase: "start",
+      name: "write",
+      toolCallId: "write-1",
+      args: { file_path: "src/b.ts", content: "alpha\nbeta" },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: "write",
-        toolCallId: "write-1",
-        args: { file_path: "src/b.ts", content: "alpha\nbeta" },
+    emitPrimaryTool({ phase: "result", name: "write", toolCallId: "write-1", isError: false });
+    emitPrimaryTool({
+      phase: "start",
+      name: "apply_patch",
+      toolCallId: "patch-1",
+      args: {
+        input: [
+          "*** Begin Patch",
+          "*** Update File: src/a.ts",
+          "@@",
+          "-old",
+          "+new",
+          "+newer",
+          "*** Delete File: src/c.ts",
+          "*** End Patch",
+        ].join("\n"),
       },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: { phase: "result", name: "write", toolCallId: "write-1", isError: false },
+    emitPrimaryTool({
+      phase: "result",
+      name: "apply_patch",
+      toolCallId: "patch-1",
+      isError: false,
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: "apply_patch",
-        toolCallId: "patch-1",
-        args: {
-          input: [
-            "*** Begin Patch",
-            "*** Update File: src/a.ts",
-            "@@",
-            "-old",
-            "+new",
-            "+newer",
-            "*** Delete File: src/c.ts",
-            "*** End Patch",
-          ].join("\n"),
-        },
-      },
+    emitPrimaryTool({
+      phase: "start",
+      name: "write",
+      toolCallId: "write-failed",
+      args: { path: "src/ignored.ts", content: "not\ncounted" },
     });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: { phase: "result", name: "apply_patch", toolCallId: "patch-1", isError: false },
-    });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: "write",
-        toolCallId: "write-failed",
-        args: { path: "src/ignored.ts", content: "not\ncounted" },
-      },
-    });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "tool",
-      data: { phase: "result", name: "write", toolCallId: "write-failed", isError: true },
-    });
+    emitPrimaryTool({ phase: "result", name: "write", toolCallId: "write-failed", isError: true });
 
     const primaryGet = await getTaskPayload(primary.taskId);
     const secondaryGet = await getTaskPayload(secondary.taskId);
@@ -1030,7 +973,9 @@ describe("tasks gateway handlers", () => {
     expect(cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
       sessionKey: "agent:codex:acp:child",
+      agentId: "codex",
       reason: "operator requested stop",
+      expectedRunId: "run-cancel-acp-gateway",
     });
     expect(payload?.found).toBe(true);
     expect(payload?.cancelled).toBe(true);

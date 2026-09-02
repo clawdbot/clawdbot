@@ -1,5 +1,4 @@
 // Implements task-list commands that route through the current session agent.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
@@ -9,19 +8,20 @@ import {
 } from "../../tasks/task-status-access.js";
 import {
   buildTaskStatusSnapshot,
+  formatTaskStatus,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../../tasks/task-status.js";
-import type { ReplyPayload } from "../types.js";
 import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
-import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import type { CommandHandler } from "./commands-types.js";
 
 const MAX_VISIBLE_TASKS = 5;
 
-const TASK_STATUS_ICONS: Record<TaskRecord["status"], string> = {
+const TASK_STATUS_ICONS: Record<ReturnType<typeof formatTaskStatus>, string> = {
   queued: "🟡",
   running: "🟢",
   succeeded: "✅",
+  blocked: "⚠️",
   failed: "🔴",
   timed_out: "⏱️",
   cancelled: "⚪️",
@@ -62,20 +62,16 @@ function formatTaskTiming(task: TaskRecord): string | undefined {
   return `finished ${formatTimeAgo(Date.now() - endedAt)}`;
 }
 
-function formatTaskDetail(task: TaskRecord): string | undefined {
-  return formatTaskStatusDetail(task);
-}
-
 function formatVisibleTask(task: TaskRecord, index: number): string {
   const title = formatTaskStatusTitle(task);
-  const status = task.status.replaceAll("_", " ");
+  const status = formatTaskStatus(task);
   const timing = formatTaskTiming(task);
-  const detail = formatTaskDetail(task);
-  let meta = `${TASK_RUNTIME_LABELS[task.runtime]} · ${status}`;
+  const detail = formatTaskStatusDetail(task);
+  let meta = `${TASK_RUNTIME_LABELS[task.runtime]} · ${status.replaceAll("_", " ")}`;
   if (timing) {
     meta += ` · ${timing}`;
   }
-  const lines = [`${index + 1}. ${TASK_STATUS_ICONS[task.status]} ${title}`, `   ${meta}`];
+  const lines = [`${index + 1}. ${TASK_STATUS_ICONS[status]} ${title}`, `   ${meta}`];
   if (detail) {
     lines.push(`   ${detail}`);
   }
@@ -84,7 +80,7 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
 
 function buildTasksText(params: { sessionKey: string; agentId: string }): string {
   const sessionSnapshot = buildTaskStatusSnapshot(
-    listTasksForSessionKeyForStatus(params.sessionKey),
+    listTasksForSessionKeyForStatus(params.sessionKey, params.agentId),
   );
   const lines = ["📋 Tasks", formatTaskHeadline(sessionSnapshot)];
 
@@ -111,27 +107,14 @@ function buildTasksText(params: { sessionKey: string; agentId: string }): string
   return lines.join("\n");
 }
 
-async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
-  const agentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  return {
-    text: buildTasksText({
-      sessionKey: params.sessionKey,
-      agentId,
-    }),
-  };
-}
-
 export const handleTasksCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/tasks",
     match: (body) => matchCommandPrefix(body, "/tasks"),
     silentUnauthorized: true,
   },
-  async (params) =>
+  (params) =>
     params.command.commandBodyNormalized === "/tasks"
-      ? { shouldContinue: false, reply: await buildTasksReply(params) }
+      ? commandReply(buildTasksText(params))
       : commandReply("Usage: /tasks"),
 );

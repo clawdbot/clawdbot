@@ -21,16 +21,14 @@ describe("handleMessageUpdate commentary phase", () => {
       flushBlockReplyBuffer,
     });
 
-    updateMessage(
+    await updateMessage(
       ctx,
       createTextUpdateEvent({ type: "text_delta", text: "Need send.", messagePhase: "commentary" }),
     );
-    updateMessage(
+    await updateMessage(
       ctx,
       createTextUpdateEvent({ type: "text_end", text: "Need send.", messagePhase: "commentary" }),
     );
-
-    await Promise.resolve();
 
     expect(onAgentEvent).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
@@ -52,7 +50,7 @@ describe("handleMessageUpdate commentary phase", () => {
       flushBlockReplyBuffer,
     });
 
-    updateMessage(
+    await updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -60,7 +58,7 @@ describe("handleMessageUpdate commentary phase", () => {
         content: [commentaryBlock],
       }),
     );
-    updateMessage(
+    await updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_end",
@@ -69,25 +67,23 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     );
 
-    await Promise.resolve();
-
     // Archive-always: commentary (textSignature-only phase — the F3 shape) is
     // emitted on the bus for archival + window, but kept out of the reply lanes.
     expect(onAgentEvent).toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
     expect(ctx.state.deltaBuffer).toBe("");
-    expect(ctx.state.blockBuffer).toBe("");
+    expect(ctx.blockChunker.bufferedText).toBe("");
   });
 
-  it("keeps commentary partials out of reply lanes while emitting them on the bus", () => {
+  it("keeps commentary partials out of reply lanes while emitting them on the bus", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createMessageUpdateContext({
       onAgentEvent,
       shouldEmitPartialReplies: false,
     });
 
-    updateMessage(
+    await updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -109,11 +105,17 @@ describe("handleMessageUpdate commentary phase", () => {
       | undefined;
     expect(commentaryEvent?.stream).toBe("assistant");
     expect(commentaryEvent?.data?.phase).toBe("commentary");
-    expect(commentaryEvent?.data?.delta).toBe("Working...");
+    expect(commentaryEvent?.data).toMatchObject({
+      text: "Working...",
+      delta: "",
+      replace: true,
+      phase: "commentary",
+      itemId: "item_commentary",
+    });
     expect(ctx.state.deltaBuffer).toBe("Working...");
-    expect(ctx.state.blockBuffer).toBe("");
+    expect(ctx.blockChunker.bufferedText).toBe("");
 
-    updateMessage(
+    await updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -146,10 +148,8 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     });
 
-    updateMessage(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
-
-    await vi.waitFor(() => {
-      expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
-    });
+    const pending = updateMessage(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
+    expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
+    await pending;
   });
 });

@@ -149,8 +149,9 @@ Notes:
   limits: ref-driven actions only, one file per upload, no dialog `timeoutMs`
   overrides, no `wait --load networkidle`, and no `responsebody`, PDF export,
   download interception, or batch actions.
-- Local `openclaw`-driver profiles auto-assign `cdpPort`/`cdpUrl`; only set
-  those manually for remote CDP.
+- Local `openclaw`-driver profiles get a `cdpPort` allocated when OpenClaw
+  creates them; a profile you declare by hand must set `cdpPort` itself, or
+  `cdpUrl` for remote CDP.
 - Remote CDP profiles accept `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) for `/json/version` discovery, or WS(S) when your browser
   service gives you a direct DevTools socket URL.

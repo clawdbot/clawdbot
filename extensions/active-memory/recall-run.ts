@@ -158,6 +158,7 @@ async function runRecallSubagent(params: {
   fastMode?: ActiveMemoryFastMode;
   abortSignal?: AbortSignal;
   onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
+  onEmbeddedRunSettled?: () => void;
 }): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.runtimeConfig, params.agentId);
   const agentDir = resolveAgentDir(params.runtimeConfig, params.agentId);
@@ -223,6 +224,45 @@ async function runRecallSubagent(params: {
   let harnessHasUnavailableMemorySearchResult = false;
   let transcriptArtifactPersisted = false;
   let runtimeSessionCreated = false;
+  let resultStatus: RecallSubagentResult["resultStatus"];
+  const cleanupRecallResources = async () => {
+    try {
+      try {
+        if (runtimeSessionCreated) {
+          if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
+            await persistActiveMemoryTranscriptArtifact({
+              sources: transcriptSources,
+              sessionFile: artifactSessionFile,
+            }).catch((error: unknown) => {
+              const message = toSingleLineErrorMessage(error);
+              params.api.logger.debug?.(
+                `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
+              );
+            });
+          }
+          await cleanupActiveMemoryRecallSession({
+            agentId: params.agentId,
+            sessionId: subagentSessionId,
+            sessionKey: subagentSessionKey,
+            storePath,
+          }).catch((error: unknown) => {
+            const message = toSingleLineErrorMessage(error);
+            params.api.logger.warn?.(
+              `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
+            );
+            throw error;
+          });
+        }
+      } finally {
+        await transientWorkspace?.cleanup();
+      }
+    } catch (error) {
+      // Cleanup failure invalidates recall, independently of the completed agent outcome.
+      attachPartialTimeoutData(error, { cleanupFailed: true });
+      throw error;
+    }
+  };
+
   try {
     const runtimeEntry = {
       pluginOwnerId: params.api.id,
@@ -262,56 +302,59 @@ async function runRecallSubagent(params: {
       channelId: params.channelId,
     });
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
-    const result = await params.api.runtime.agent.runEmbeddedAgent({
-      sessionId: subagentSessionId,
-      sessionKey: subagentSessionKey,
-      agentId: params.agentId,
-      sessionTarget: {
-        agentId: params.agentId,
+    const result = await params.api.runtime.agent
+      .runEmbeddedAgent({
         sessionId: subagentSessionId,
         sessionKey: subagentSessionKey,
-        storePath,
-      },
-      messageChannel,
-      messageProvider,
-      sessionFile: runtimeSessionFile,
-      workspaceDir,
-      agentDir,
-      config: params.runtimeConfig,
-      prompt,
-      provider: modelRef.provider,
-      model: modelRef.model,
-      lane: ACTIVE_MEMORY_RECALL_LANE,
-      timeoutMs: embeddedTimeoutMs,
-      runId: subagentSessionId,
-      trigger: "manual",
-      conversationRecall: params.conversationRecall,
-      toolsAllow: [...params.config.toolsAllow],
-      disableMessageTool: true,
-      allowGatewaySubagentBinding: true,
-      bootstrapContextMode: "lightweight",
-      verboseLevel: "off",
-      thinkLevel: params.config.thinking,
-      fastMode: params.fastMode,
-      reasoningLevel: "off",
-      silentExpected: true,
-      authProfileFailurePolicy: "local",
-      // On subscription-only claude-cli setups, direct provider API calls
-      // either fail with a billing rejection or silently draw metered extra
-      // usage; route recall through the CLI backend so it runs on plan
-      // limits like the session's main turns.
-      cliBackendDispatch: "subscription-auth",
-      cleanupBundleMcpOnRunEnd: true,
-      abortSignal: params.abortSignal,
-      onAgentToolResult: (event) => {
-        const evidence = readMemoryToolResultEvidence({
-          ...event,
-          toolsAllow: params.config.toolsAllow,
-        });
-        harnessHasUsableMemoryResult ||= evidence.hasUsableMemoryResult;
-        harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
-      },
-    });
+        agentId: params.agentId,
+        sessionTarget: {
+          agentId: params.agentId,
+          sessionId: subagentSessionId,
+          sessionKey: subagentSessionKey,
+          storePath,
+        },
+        messageChannel,
+        messageProvider,
+        sessionFile: runtimeSessionFile,
+        workspaceDir,
+        agentDir,
+        config: params.runtimeConfig,
+        prompt,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        lane: ACTIVE_MEMORY_RECALL_LANE,
+        timeoutMs: embeddedTimeoutMs,
+        runId: subagentSessionId,
+        trigger: "manual",
+        conversationRecall: params.conversationRecall,
+        toolsAllow: [...params.config.toolsAllow],
+        disableMessageTool: true,
+        allowGatewaySubagentBinding: true,
+        bootstrapContextMode: "lightweight",
+        verboseLevel: "off",
+        thinkLevel: params.config.thinking,
+        fastMode: params.fastMode,
+        reasoningLevel: "off",
+        silentExpected: true,
+        authProfileFailurePolicy: "local",
+        // On subscription-only claude-cli setups, direct provider API calls
+        // either fail with a billing rejection or silently draw metered extra
+        // usage; route recall through the CLI backend so it runs on plan
+        // limits like the session's main turns.
+        cliBackendDispatch: "subscription-auth",
+        cleanupBundleMcpOnRunEnd: true,
+        abortSignal: params.abortSignal,
+        onAgentToolResult: (event) => {
+          const evidence = readMemoryToolResultEvidence({
+            ...event,
+            toolsAllow: params.config.toolsAllow,
+          });
+          harnessHasUsableMemoryResult ||= evidence.hasUsableMemoryResult;
+          harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
+        },
+      })
+      .finally(params.onEmbeddedRunSettled);
+    resultStatus = result.meta.error ? "failed" : undefined;
     const activeSessionFile =
       readActiveMemorySessionFileFromRunResult(result) ?? runtimeSessionFile;
     transcriptSources = collectActiveMemoryTranscriptSources({
@@ -334,6 +377,7 @@ async function runRecallSubagent(params: {
       throw abortErr;
     }
     const rawReply = (result.payloads ?? [])
+      .filter((payload) => payload.isError !== true)
       .map((payload) => payload.text?.trim() ?? "")
       .filter(Boolean)
       .join("\n")
@@ -353,6 +397,7 @@ async function runRecallSubagent(params: {
       transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
+      resultStatus,
       transcriptPath: params.config.persistTranscripts ? artifactSessionFile : undefined,
       searchDebug,
       hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
@@ -366,12 +411,16 @@ async function runRecallSubagent(params: {
         sources: transcriptSources,
         toolsAllow: params.config.toolsAllow,
       });
-      attachPartialTimeoutData(
-        error,
-        partialReply,
-        transcriptState.searchDebug,
-        transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
-      );
+      attachPartialTimeoutData(error, {
+        rawReply: partialReply ?? undefined,
+        resultStatus,
+        searchDebug: transcriptState.searchDebug,
+        hasUnavailableMemorySearchResult:
+          transcriptState.hasUnavailableMemorySearchResult ||
+          harnessHasUnavailableMemorySearchResult,
+        hasUsableMemoryResult:
+          transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
+      });
     }
     if (
       !params.abortSignal?.aborted &&
@@ -391,35 +440,7 @@ async function runRecallSubagent(params: {
     }
     throw error;
   } finally {
-    try {
-      if (runtimeSessionCreated) {
-        if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
-          await persistActiveMemoryTranscriptArtifact({
-            sources: transcriptSources,
-            sessionFile: artifactSessionFile,
-          }).catch((error: unknown) => {
-            const message = toSingleLineErrorMessage(error);
-            params.api.logger.debug?.(
-              `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
-            );
-          });
-        }
-        await cleanupActiveMemoryRecallSession({
-          agentId: params.agentId,
-          sessionId: subagentSessionId,
-          sessionKey: subagentSessionKey,
-          storePath,
-        }).catch((error: unknown) => {
-          const message = toSingleLineErrorMessage(error);
-          params.api.logger.warn?.(
-            `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
-          );
-          throw error;
-        });
-      }
-    } finally {
-      await transientWorkspace?.cleanup();
-    }
+    await cleanupRecallResources();
   }
 }
 

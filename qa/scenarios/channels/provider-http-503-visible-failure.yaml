@@ -35,6 +35,7 @@ scenario:
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
+    retryCount: 0
     channel: qa-channel
     summary: Run one channel turn whose mock provider returns HTTP 503 after a tool result, then verify one sanitized reply and no tool replay.
     config:
@@ -73,14 +74,18 @@ flow:
             senderName: Alice
             text:
               expr: config.prompt
-        - call: waitForOutboundMessage
+        - call: state.waitFor
           saveAs: outbound
           args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'channel' && String(candidate.text ?? '') === config.expectedReply"
-            - expr: liveTurnTimeoutMs(env, 180000)
+            - kind: message-text
+              direction: outbound
+              textIncludes:
+                ref: config.expectedReply
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 180000)
+        - assert:
+            expr: "!outbound.deleted && outbound.accountId === env.transport.accountId && outbound.conversation.id === config.conversationId && outbound.conversation.kind === 'channel' && outbound.isError === true && outbound.text === config.expectedReply"
+            message: expected one classified provider failure on the original account and conversation
         - call: sleep
           args:
             - expr: liveTurnTimeoutMs(env, 8000)

@@ -1,8 +1,9 @@
 import type { ControlUiSessionNamespace } from "@openclaw/session-url-contract";
-import type MarkdownIt from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 import type { ApplicationContext } from "../app/context.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 
 export const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
@@ -25,16 +26,6 @@ export type SessionLinkTarget = SessionKeyTarget | SessionPathTarget;
 type SessionLinkMeta = {
   sessionKey: string;
 };
-
-function isSessionLinkBoundaryBefore(value: string, index: number): boolean {
-  const char = value[index - 1];
-  return char === undefined || /\s/.test(char) || "([{<\"'`".includes(char);
-}
-
-function isSessionLinkBoundaryAfter(value: string, index: number): boolean {
-  const char = value[index];
-  return char === undefined || /\s/.test(char) || ".,;:!?)]}>\"'".includes(char);
-}
 
 function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   const sessionKey = raw.trim();
@@ -95,8 +86,7 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPatt
           const matched = match[0];
           const matchEnd = matchIndex + matched.length;
           if (
-            !isSessionLinkBoundaryBefore(token.content, matchIndex) ||
-            !isSessionLinkBoundaryAfter(token.content, matchEnd) ||
+            !hasMarkdownLinkBoundaries(token.content, matchIndex, matchEnd) ||
             !parseSessionLinkKey(matched)
           ) {
             continue;

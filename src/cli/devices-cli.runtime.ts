@@ -35,6 +35,7 @@ import {
 } from "../shared/device-pairing-access.js";
 import { formatCliCommand } from "./command-format.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
+import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 type DevicesRpcOpts = {
@@ -144,16 +145,6 @@ function buildNodeApproveCommand(opts: DevicesRpcOpts, requestId: string): strin
   return formatCliCommand(args.map(quoteCliArg).join(" "));
 }
 
-function formatNodeConnectionFlagReminder(opts: DevicesRpcOpts): string | null {
-  const flags = [
-    normalizeOptionalString(opts.url) ? "--url" : null,
-    normalizeOptionalString(opts.token) ? "--token" : null,
-  ].filter((flag) => flag !== null);
-  return flags.length > 0
-    ? `Reuse the same connection option${flags.length === 1 ? "" : "s"} when rerunning: ${flags.join(", ")}.`
-    : null;
-}
-
 function stringsMatch(left: unknown, right: unknown): boolean {
   const normalizedLeft = normalizeOptionalString(left);
   const normalizedRight = normalizeOptionalString(right);
@@ -186,7 +177,7 @@ function buildPendingNodeApprovalNotice(
       normalizeOptionalString(device.displayName) ??
       device.deviceId,
     command: buildNodeApproveCommand(opts, requestId),
-    connectionReminder: formatNodeConnectionFlagReminder(opts),
+    connectionReminder: formatConnectionFlagReminder(opts),
   };
 }
 
@@ -1173,11 +1164,11 @@ export async function runDevicesRotateCommand(opts: DevicesRpcOpts): Promise<voi
   if (!required) {
     return;
   }
-  const result = await callGatewayCli("device.token.rotate", opts, {
-    deviceId: required.deviceId,
-    role: required.role,
-    scopes: Array.isArray(opts.scope) ? opts.scope : undefined,
-  });
+  // Non-operator token management requires admin even with shared Gateway auth.
+  const scopes: OperatorScope[] | undefined =
+    required.role === OPERATOR_ROLE ? undefined : [ADMIN_SCOPE];
+  const params = { ...required, scopes: Array.isArray(opts.scope) ? opts.scope : undefined };
+  const result = await callGatewayCli("device.token.rotate", opts, params, { scopes });
   defaultRuntime.writeJson(result);
 }
 
@@ -1186,10 +1177,9 @@ export async function runDevicesRevokeCommand(opts: DevicesRpcOpts): Promise<voi
   if (!required) {
     return;
   }
-  const result = await callGatewayCli("device.token.revoke", opts, {
-    deviceId: required.deviceId,
-    role: required.role,
-  });
+  const scopes: OperatorScope[] | undefined =
+    required.role === OPERATOR_ROLE ? undefined : [ADMIN_SCOPE];
+  const result = await callGatewayCli("device.token.revoke", opts, required, { scopes });
   defaultRuntime.writeJson(result);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

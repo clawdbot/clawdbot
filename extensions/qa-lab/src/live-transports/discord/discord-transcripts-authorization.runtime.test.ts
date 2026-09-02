@@ -15,7 +15,7 @@ import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("Discord transcript authorization live scenario", () => {
+describe("Discord transcript authorization scenario runner", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });

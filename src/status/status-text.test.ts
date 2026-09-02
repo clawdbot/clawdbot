@@ -1,8 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
-import { buildStatusText } from "./status-text.js";
+import { buildStatusReplyParts, buildStatusText } from "./status-text.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionCostSummariesFromCache: vi.fn(),
@@ -31,11 +35,14 @@ async function renderTelegramStatus(params: {
   cfg: StatusTextParams["cfg"];
   sessionEntry: NonNullable<StatusTextParams["sessionEntry"]>;
   statusAccountId?: string;
+  sessionKey?: string;
+  agentId?: string;
 }): Promise<string> {
   return await buildStatusText({
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
-    sessionKey: "agent:main:main",
+    sessionKey: params.sessionKey ?? "agent:main:main",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     statusChannel: "telegram",
     ...(params.statusAccountId ? { statusAccountId: params.statusAccountId } : {}),
     provider: "openai",
@@ -119,6 +126,50 @@ describe("buildStatusText channel features", () => {
     expect(text).toContain("Telegram rich messages: off");
     expect(text).toContain("enable richMessages for this Telegram account");
   });
+});
+
+describe("buildStatusText global subagent scope", () => {
+  beforeEach(() => resetSubagentRegistryForTests({ persist: false }));
+  afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+
+  it.each(["research", "ops"])(
+    "shows the selected global agent's children when the default is %s",
+    async (defaultAgentId) => {
+      for (const agentId of ["research", "ops"]) {
+        addSubagentRunForTests({
+          runId: `status-global-${agentId}`,
+          childSessionKey: `agent:${agentId}:subagent:status-worker`,
+          controllerSessionKey: "global",
+          requesterSessionKey: "global",
+          requesterAgentId: agentId,
+          requesterDisplayKey: "global",
+          task: `${agentId} status worker`,
+          cleanup: "keep",
+          createdAt: Date.now() - 1_000,
+          startedAt: Date.now() - 1_000,
+        });
+      }
+
+      const text = await renderTelegramStatus({
+        cfg: {
+          agents: {
+            entries: {
+              research: { default: defaultAgentId === "research" },
+              ops: { default: defaultAgentId === "ops" },
+            },
+          },
+          session: { scope: "global" },
+        },
+        sessionEntry: { sessionId: "global-status", updatedAt: 0 },
+        sessionKey: "global",
+        agentId: "research",
+      });
+
+      expect(text).toContain("🤖 Subagents: 1 active");
+      expect(text).toContain("research status worker");
+      expect(text).not.toContain("ops status worker");
+    },
+  );
 });
 
 describe("Codex usage after runtime fallback", () => {
@@ -351,5 +402,246 @@ describe("buildStatusText thinking facts", () => {
 
     expect(text).toContain("think high");
     expect(text).not.toMatch(/think\s+off\b/);
+  });
+});
+
+describe("buildStatusText prepared context windows", () => {
+  const catalog = [
+    {
+      provider: "deepseek",
+      id: "deepseek-v4-flash",
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+    },
+    {
+      provider: "fallback",
+      id: "small-model",
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+    },
+    {
+      provider: "openrouter",
+      id: "deepseek/deepseek-v4-flash",
+      contextWindow: 1_000_000,
+      contextTokens: 1_000_000,
+    },
+  ];
+
+  async function renderPreparedStatus(
+    overrides: Partial<Parameters<typeof buildStatusReplyParts>[0]> = {},
+  ) {
+    return await buildStatusReplyParts({
+      cfg: {},
+      sessionEntry: {
+        sessionId: "prepared-context",
+        updatedAt: 0,
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      sessionKey: "agent:main:main",
+      statusChannel: "mobilechat",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      thinkingCatalog: catalog,
+      resolvedHarness: "openclaw",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      pluginHealthLineOverride: "Plugins: test",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+      includeTranscriptUsage: false,
+      ...overrides,
+    });
+  }
+
+  it("renders a cold-cache prepared window in plain and rich status", async () => {
+    const parts = await renderPreparedStatus();
+    const table = parts.presentation.blocks.find((block) => block.type === "table");
+
+    expect(parts.text).toContain("Context: 45k/1.0m");
+    expect(parts.text).not.toContain("Context: 45k/200k");
+    expect(table?.type === "table" ? table.rows : []).toContainEqual([
+      "📚 Context",
+      expect.stringContaining("45k/1.0m"),
+    ]);
+  });
+
+  it("keeps the selected prepared window over stale active model state", async () => {
+    const parts = await renderPreparedStatus({
+      sessionEntry: {
+        sessionId: "selected-prepared-context",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+        modelProvider: "fallback",
+        model: "small-model",
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+    });
+
+    expect(parts.text).toContain("Context: 45k/1.0m");
+    expect(parts.text).not.toContain("Context: 45k/128k");
+  });
+
+  it("uses the active prepared window for an established fallback", async () => {
+    const parts = await renderPreparedStatus({
+      sessionEntry: {
+        sessionId: "active-prepared-context",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelProvider: "fallback",
+        model: "small-model",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "deepseek/deepseek-v4-flash",
+          activeModel: "fallback/small-model",
+          reason: "provider unavailable",
+        },
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+    });
+
+    expect(parts.text).toContain("Context: 45k/128k");
+    expect(parts.text).not.toContain("Context: 45k/1.0m");
+  });
+
+  it("keeps Anthropic authored caps below the prepared Claude CLI window", async () => {
+    const parts = await renderPreparedStatus({
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      resolvedHarness: "claude-cli",
+      sessionEntry: {
+        sessionId: "claude-cli-authored-cap",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "claude-haiku-4-5",
+        agentHarnessId: "claude-cli",
+        contextTokens: 256_000,
+        contextTokensSource: "resolved",
+        totalTokens: 45_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      thinkingCatalog: [
+        {
+          provider: "anthropic",
+          id: "claude-haiku-4-5",
+          contextWindow: 1_000_000,
+          contextTokens: 1_000_000,
+        },
+      ],
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.test",
+              models: [
+                {
+                  id: "claude-haiku-4-5",
+                  name: "Claude Haiku 4.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  contextTokens: 256_000,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(parts.text).toContain("Context: 45k/256k");
+    expect(parts.text).not.toContain("Context: 45k/1.0m");
+  });
+
+  it("matches namespaced prepared model IDs without stripping them", async () => {
+    const parts = await renderPreparedStatus({
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-flash",
+      thinkingCatalog: [
+        ...catalog,
+        {
+          provider: "openrouter",
+          id: "deepseek-v4-flash",
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 128_000,
+          contextTokens: 128_000,
+        },
+      ],
+    });
+
+    expect(parts.text).toContain("Context: 45k/1.0m");
+    expect(parts.text).not.toContain("Context: 45k/128k");
+  });
+});
+
+describe("buildStatusText lazy loader retry", () => {
+  afterEach(() => {
+    vi.doUnmock("./status-plugin-health.runtime.js");
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  function retryStatusParams(sessionId: string): Parameters<typeof buildStatusText>[0] {
+    return {
+      cfg: {},
+      sessionEntry: { sessionId, updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      resolvedHarness: "openclaw",
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      taskLineOverride: "",
+      skipDefaultTaskLookup: true,
+      primaryModelLabelOverride: "openai/gpt-5.4-mini",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+      includeTranscriptUsage: false,
+    };
+  }
+
+  it("falls back on import failure and retries in the same module instance", async () => {
+    vi.doMock("./status-plugin-health.runtime.js", async () => {
+      throw new Error("Module load failure");
+    });
+    vi.resetModules();
+
+    const { buildStatusText: firstLoadBuildStatusText } = await import("./status-text.js");
+    const failed = await firstLoadBuildStatusText(retryStatusParams("retry-failure"));
+    expect(failed).toContain("Plugins: health unavailable");
+
+    vi.doMock("./status-plugin-health.runtime.js", () => ({
+      collectRuntimePluginHealthSnapshot: () => ({
+        plugins: [],
+        diagnostics: [],
+        contextEngineQuarantines: [],
+        runtimeToolQuarantines: [],
+        channelPluginFailures: [],
+      }),
+    }));
+
+    const recovered = await firstLoadBuildStatusText(retryStatusParams("retry-recovery"));
+    expect(recovered).not.toContain("Plugins: health unavailable");
   });
 });

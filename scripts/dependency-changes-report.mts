@@ -2,16 +2,18 @@
 
 // Builds dependency change reports from lockfile and manifest diffs.
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
+import { writeReportArtifact } from "./lib/report-cli-helpers.mts";
 import {
   collectAllResolvedPackagesFromLockfile,
   createBulkAdvisoryPayload,
 } from "./pre-commit/pnpm-audit-prod.mjs";
 
 const DEPENDENCY_FILE_PATTERNS = [
-  /^\.github\/release\/clawhub-cli\/package-lock\.json$/u,
+  /^\.github\/release\/[^/]+\/package-lock\.json$/u,
   /^package\.json$/u,
   /^pnpm-lock\.yaml$/u,
   /^pnpm-workspace\.yaml$/u,
@@ -21,6 +23,7 @@ const DEPENDENCY_FILE_PATTERNS = [
 
 const DEPENDENCY_DIFF_PATHS = [
   ".github/release/clawhub-cli/package-lock.json",
+  ".github/release/vercel-cli/package-lock.json",
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
@@ -138,7 +141,7 @@ function renderMarkdownReport(report: ReturnType<typeof createDependencyChangesR
     "",
     "It reports two related but different things:",
     "",
-    "- Dependency file changes: package manifests, pnpm workspace config, pnpm lockfile, the trusted ClawHub CLI package lock, and patches.",
+    "- Dependency file changes: package manifests, pnpm workspace config, pnpm lockfile, trusted release CLI package locks, and patches.",
     "- Resolved package changes: package versions added, removed, or changed in pnpm-lock.yaml.",
     "",
     "## Summary",
@@ -250,14 +253,6 @@ function gitDiffDependencyFiles(baseRef: string, cwd: string) {
     });
 }
 
-function readRequiredValue(argv: string[], index: number, flag: string) {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv: string[]) {
   const options = {
     rootDir: process.cwd(),
@@ -267,51 +262,31 @@ export function parseArgs(argv: string[]) {
     jsonPath: nullableString(null),
     markdownPath: nullableString(null),
   };
-  const seen = new Set<string>();
-  const setOnce = (flag: string, key: keyof typeof options, value: string) => {
-    if (seen.has(flag)) {
-      throw new Error(`${flag} was provided more than once.`);
-    }
-    seen.add(flag);
-    Object.assign(options, { [key]: value });
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--root") {
-      setOnce(arg, "rootDir", readRequiredValue(argv, index, "--root"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--base-ref") {
-      setOnce(arg, "baseRef", readRequiredValue(argv, index, "--base-ref"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--base-lockfile") {
-      setOnce(arg, "baseLockfile", readRequiredValue(argv, index, "--base-lockfile"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--head-lockfile") {
-      setOnce(arg, "headLockfile", readRequiredValue(argv, index, "--head-lockfile"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--json") {
-      setOnce(arg, "jsonPath", readRequiredValue(argv, index, "--json"));
-      index += 1;
-      continue;
-    }
-    if (arg === "--markdown") {
-      setOnce(arg, "markdownPath", readRequiredValue(argv, index, "--markdown"));
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unsupported argument: ${arg}`);
-  }
+  const flagEntries = [
+    ["--root", "rootDir"],
+    ["--base-ref", "baseRef"],
+    ["--base-lockfile", "baseLockfile"],
+    ["--head-lockfile", "headLockfile"],
+    ["--json", "jsonPath"],
+    ["--markdown", "markdownPath"],
+  ] satisfies Array<[string, keyof typeof options]>;
+  parseFlagArgs(
+    argv,
+    options,
+    flagEntries.map(([flag, key]) =>
+      stringFlag<typeof options>(flag, key, {
+        allowInline: false,
+        missingValueMessage: `${flag} requires a value`,
+        rejectShortOptions: true,
+      }),
+    ),
+    {
+      duplicateOptionMessage: (flag) => `${flag} was provided more than once.`,
+      onUnhandledArg(arg) {
+        throw new Error(`Unsupported argument: ${arg}`);
+      },
+    },
+  );
   const { baseRef, baseLockfile } = options;
   if (baseRef && baseLockfile) {
     throw new Error("Use either --base-ref or --base-lockfile, not both.");
@@ -323,14 +298,6 @@ export function parseArgs(argv: string[]) {
     return { ...options, baseLockfile, baseRef: null };
   }
   throw new Error("Expected --base-ref <git-ref> or --base-lockfile <path>.");
-}
-
-async function writeArtifact(filePath: string | null, content: string) {
-  if (!filePath) {
-    return;
-  }
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, content, "utf8");
 }
 
 /**
@@ -359,8 +326,8 @@ async function runDependencyChangesReport(options: ReturnType<typeof parseArgs>)
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const report = await runDependencyChangesReport(options);
-  await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
-  await writeArtifact(options.markdownPath, renderMarkdownReport(report));
+  await writeReportArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  await writeReportArtifact(options.markdownPath, renderMarkdownReport(report));
   const artifactHint =
     typeof options.markdownPath === "string" ? " See ".concat(options.markdownPath, ".") : "";
   process.stdout.write(

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { HealthSummary } from "../gateway/health/types.js";
-import { formatGatewayClosedDiagnostic, formatHealthChannelLines } from "./health-format.js";
+import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import {
+  formatDeliveryQueueHealthLine,
+  formatGatewayClosedDiagnostic,
+  formatHealthChannelLines,
+} from "./health-format.js";
 
 describe("formatGatewayClosedDiagnostic", () => {
   it("formats a coded gateway transport close", () => {
@@ -28,7 +32,11 @@ describe("formatGatewayClosedDiagnostic", () => {
 });
 
 const createHealthSummary = (
-  params: Pick<HealthSummary, "channels" | "channelOrder" | "channelLabels">,
+  params: Pick<HealthSummary, "channels" | "channelOrder" | "channelLabels"> = {
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+  },
 ): HealthSummary => ({
   ok: true,
   ts: 0,
@@ -39,6 +47,38 @@ const createHealthSummary = (
   sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
   ...params,
 });
+
+function createMultiAccountHealthSummary(
+  secondary: Partial<ChannelAccountHealthSummary>,
+): HealthSummary {
+  const primary = {
+    accountId: "main",
+    enabled: true,
+    configured: true,
+    linked: true,
+    healthState: "healthy",
+    probe: { ok: true, elapsedMs: 12 },
+  };
+  return createHealthSummary({
+    channels: {
+      matrix: {
+        ...primary,
+        accounts: {
+          main: primary,
+          alerts: {
+            accountId: "alerts",
+            enabled: true,
+            configured: true,
+            linked: true,
+            ...secondary,
+          },
+        },
+      },
+    },
+    channelOrder: ["matrix"],
+    channelLabels: { matrix: "Matrix" },
+  });
+}
 
 describe("formatHealthChannelLines", () => {
   it("formats per-account probe timings", () => {
@@ -164,37 +204,113 @@ describe("formatHealthChannelLines", () => {
     expect(formatHealthChannelLines(summary)).toStrictEqual([`Test: ${expected}`]);
   });
 
+  it.each([
+    ["blocked", { healthState: "blocked" }],
+    ["disconnected", { healthState: "disconnected" }],
+    ["ingress-unavailable", { healthState: "ingress-unavailable" }],
+    ["stale-socket", { healthState: "stale-socket" }],
+    ["auth stabilizing", { healthState: "healthy", statusState: "unstable" }],
+  ])(
+    "surfaces secondary account state %s in default and verbose health output",
+    (expected, state) => {
+      const summary = createMultiAccountHealthSummary(state);
+
+      for (const accountMode of ["default", "all"] as const) {
+        expect(formatHealthChannelLines(summary, { accountMode })).toStrictEqual([
+          `Matrix: ${expected}`,
+        ]);
+      }
+    },
+  );
+
+  it("preserves explicitly scoped account health outside verbose output", () => {
+    const summary = createMultiAccountHealthSummary({ healthState: "blocked" });
+    const accountIdsByChannel = { matrix: ["main"] };
+
+    expect(
+      formatHealthChannelLines(summary, { accountMode: "default", accountIdsByChannel }),
+    ).toStrictEqual(["Matrix: ok (12ms)"]);
+    expect(
+      formatHealthChannelLines(summary, { accountMode: "all", accountIdsByChannel }),
+    ).toStrictEqual(["Matrix: blocked"]);
+  });
+
+  it.each([
+    ["disabled", { enabled: false }],
+    ["unconfigured", { configured: false }],
+    ["unlinked", { linked: false }],
+    ["disabled by status", { statusState: "disabled" }],
+    ["unconfigured by status", { statusState: "unconfigured" }],
+  ])("does not promote stale failures from an intentionally %s account", (_reason, inactive) => {
+    const summary = createMultiAccountHealthSummary({
+      healthState: "blocked",
+      probe: { ok: false, error: "stale old failure" },
+      ...inactive,
+    });
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual(["Matrix: ok (12ms)"]);
+    expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
+      "Matrix: ok (main:main:12ms)",
+    ]);
+  });
+
   it("surfaces a failed sibling probe over the selected account's passive healthy state", () => {
-    const summary = createHealthSummary({
-      channels: {
-        matrix: {
-          accountId: "main",
-          configured: true,
-          healthState: "healthy",
-          probe: { ok: true, elapsedMs: 12 },
-          accounts: {
-            main: {
-              accountId: "main",
-              configured: true,
-              healthState: "healthy",
-              probe: { ok: true, elapsedMs: 12 },
-            },
-            alerts: {
-              accountId: "alerts",
-              configured: true,
-              healthState: "healthy",
-              probe: { ok: false, error: "sync rejected" },
-            },
-          },
-        },
-      },
-      channelOrder: ["matrix"],
-      channelLabels: { matrix: "Matrix" },
+    const summary = createMultiAccountHealthSummary({
+      healthState: "healthy",
+      probe: { ok: false, error: "sync rejected" },
     });
 
     expect(formatHealthChannelLines(summary, { accountMode: "all" })).toStrictEqual([
       "Matrix: failed (unknown) - sync rejected",
     ]);
+  });
+
+  it("surfaces activated plugin failures without promoting inactive load errors", () => {
+    const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
+    summary.plugins = {
+      loaded: ["calendar"],
+      errors: [
+        {
+          id: "calendar",
+          origin: "workspace",
+          activated: true,
+          failurePhase: "service",
+          error: "service scheduler: address already in use",
+        },
+        {
+          id: "inactive",
+          origin: "workspace",
+          activated: false,
+          failurePhase: "load",
+          error: "inactive plugin load failed",
+        },
+      ],
+    };
+
+    expect(formatHealthChannelLines(summary)).toStrictEqual([
+      "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
+    ]);
+  });
+
+  it("bounds activated plugin failure details and summarizes omitted failures", () => {
+    const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
+    summary.plugins = {
+      loaded: [],
+      errors: Array.from({ length: 22 }, (_, index) => ({
+        id: `plugin-${index}`,
+        origin: "workspace",
+        activated: true,
+        error: "x".repeat(600),
+      })),
+    };
+
+    const lines = formatHealthChannelLines(summary);
+
+    expect(lines).toHaveLength(21);
+    expect(lines[0]).toBe(`Plugin plugin-0: failed - ${"x".repeat(500)}; run openclaw doctor`);
+    expect(lines.at(-1)).toBe(
+      "Plugins: failed - 2 additional activated failures; run openclaw doctor",
+    );
   });
 
   it("formats iMessage probe failures as failed health lines", () => {
@@ -217,5 +333,86 @@ describe("formatHealthChannelLines", () => {
     expect(formatHealthChannelLines(summary)).toContain(
       "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
+  });
+});
+
+describe("formatDeliveryQueueHealthLine", () => {
+  it("summarizes dead-lettered delivery queue entries with the oldest age", () => {
+    const summary = createHealthSummary();
+    summary.deliveryQueues = {
+      failed: [
+        { queueName: "outbound", count: 3, oldestFailedAt: 90_000 },
+        { queueName: "session", count: 1 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead-lettered ingress entries per channel account", () => {
+    const summary = createHealthSummary();
+    summary.deliveryQueues = {
+      failed: [],
+      ingressFailed: [
+        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
+        { channelId: "telegram", accountId: "ops", count: 2 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes ingress pressure per channel account", () => {
+    const summary = createHealthSummary();
+    summary.deliveryQueues = {
+      failed: [],
+      ingressPressure: [
+        {
+          channelId: "telegram",
+          accountId: "ops",
+          laneCount: 1,
+          pendingCount: 56,
+          claimedCount: 0,
+          blockedCount: 55,
+          oldestReceivedAt: 90_000,
+        },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (ingress pressure — inbound telegram/ops: 1 pressured lane, 56 pending, 0 claimed, 55 blocked; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead letters and ingress pressure together", () => {
+    const summary = createHealthSummary();
+    summary.deliveryQueues = {
+      failed: [{ queueName: "outbound", count: 2, oldestFailedAt: 90_000 }],
+      ingressPressure: [
+        {
+          channelId: "line",
+          accountId: "default",
+          laneCount: 2,
+          pendingCount: 3,
+          claimedCount: 1,
+          blockedCount: 2,
+          oldestReceivedAt: 3_690_000,
+        },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — outbound: 2; oldest 2h ago; ingress pressure — inbound line/default: 2 pressured lanes, 3 pending, 1 claimed, 2 blocked; oldest 1h ago)",
+    );
+  });
+
+  it("returns null when no dead-lettered entries are reported", () => {
+    const summary = createHealthSummary();
+
+    expect(formatDeliveryQueueHealthLine(summary)).toBeNull();
   });
 });

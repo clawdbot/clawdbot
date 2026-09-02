@@ -217,6 +217,9 @@ export class TerminalPanelSessionController
       this.host.client !== null &&
       this.host.client === this.activeClient &&
       this.host.available &&
+      // A lazy upgrade also mounts the closed shell. Only the visible owner
+      // may consume intent; a viewport-less boot would discard it as failed.
+      this.host.terminalPanelOpen &&
       this.host.isConnected
     );
   }
@@ -363,7 +366,7 @@ export class TerminalPanelSessionController
     const { createTerminalDefaultColorQueryResponder } =
       await import("@openclaw/libterminal/browser");
     const defaultColorQueries = createTerminalDefaultColorQueryResponder({
-      getColors: () => terminalDynamicColors(this.host.themeMode),
+      getColors: terminalDynamicColors,
       reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
     });
     const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>

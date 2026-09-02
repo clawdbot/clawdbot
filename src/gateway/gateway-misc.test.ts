@@ -55,6 +55,7 @@ const wsMockState = vi.hoisted(() => ({
 
 vi.mock("ws", () => ({
   WebSocket: class MockWebSocket {
+    static readonly OPEN = 1;
     on = vi.fn();
     close = vi.fn();
     send = vi.fn();
@@ -272,9 +273,11 @@ describe("GatewayClient", () => {
 });
 
 type TestSocket = {
+  readyState: number;
   bufferedAmount: number;
   send: (payload: string) => void;
   close: (code: number, reason: string) => void;
+  terminate: () => void;
 };
 
 type EventFrame = {
@@ -291,11 +294,13 @@ type RecordingSocket = TestSocket & {
 function makeRecordingSocket(): RecordingSocket {
   const sent: EventFrame[] = [];
   return {
+    readyState: 1,
     bufferedAmount: 0,
     send: vi.fn((payload: string) => {
       sent.push(JSON.parse(payload) as EventFrame);
     }),
     close: vi.fn(),
+    terminate: vi.fn(),
     sent,
   };
 }
@@ -362,10 +367,11 @@ function makeScopedBroadcastClients() {
 
 function makeScopedBroadcastContext() {
   const scoped = makeScopedBroadcastClients();
-  return {
-    ...scoped,
-    ...createGatewayBroadcaster({ clients: scoped.clients }),
-  };
+  const broadcaster = createGatewayBroadcaster({
+    clients: scoped.clients,
+    preparePresenceProjection: (presence) => () => presence,
+  });
+  return { ...scoped, ...broadcaster };
 }
 
 function sentEvents(socket: RecordingSocket) {
@@ -432,6 +438,7 @@ describe("gateway broadcaster", () => {
     broadcastToConnIds("session.message", payload, new Set(["slow-session", "healthy-session"]));
 
     expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+    expect(slowSocket.terminate).toHaveBeenCalledOnce();
     expect(slowSocket.send).not.toHaveBeenCalled();
     expect(healthySocket.sent).toEqual([
       { type: "event", event: "session.message", payload, seq: 1 },
@@ -450,6 +457,8 @@ describe("gateway broadcaster", () => {
     // number: the next delivered frame exposes the loss to gap detection.
     socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
     broadcastToConnIds("tick", { ts: 3 }, new Set(["c-seq"]), { dropIfSlow: true });
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(socket.terminate).not.toHaveBeenCalled();
     socket.bufferedAmount = 0;
     broadcastToConnIds("tick", { ts: 4 }, new Set(["c-seq"]));
 
@@ -592,8 +601,8 @@ describe("gateway broadcaster", () => {
   });
 
   it("requires operator.questions for question broadcasts", () => {
-    const questionSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-    const readSocket: TestSocket = { bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
+    const questionSocket = makeRecordingSocket();
+    const readSocket = makeRecordingSocket();
     const clients = new Set<GatewayWsClient>([
       makeOperatorWsClient("c-questions", questionSocket, ["operator.questions"]),
       makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
@@ -739,20 +748,12 @@ describe("gateway broadcaster", () => {
 
     expectSentEvents(pairingSocket, [
       "heartbeat",
-      "presence",
       "health",
       "tick",
       "shutdown",
       "update.available",
     ]);
-    expectSentEvents(nodeSocket, [
-      "heartbeat",
-      "presence",
-      "health",
-      "tick",
-      "shutdown",
-      "update.available",
-    ]);
+    expectSentEvents(nodeSocket, ["heartbeat", "health", "tick", "shutdown", "update.available"]);
     expectSentEvents(readSocket, [
       "cron",
       "voicewake.changed",
@@ -767,7 +768,6 @@ describe("gateway broadcaster", () => {
     expectSentEvents(talkSocket, [
       "talk.mode",
       "heartbeat",
-      "presence",
       "health",
       "tick",
       "shutdown",
@@ -798,9 +798,14 @@ describe("gateway broadcaster", () => {
       readSocket,
     );
 
-    const { broadcast } = createGatewayBroadcaster({ clients });
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
+      clients,
+      preparePresenceProjection: (presence) => () => presence,
+    });
 
     broadcast("chat", chatPayload());
+    broadcast("presence", { presence: [] });
+    broadcastToConnIds("presence", { presence: [] }, new Set(["c-pairing", "c-read"]));
     broadcast("heartbeat", { ts: 1 });
     broadcast("chat.side_result", chatSideResultPayload());
     broadcast("tick", { ts: 2 });
@@ -811,9 +816,11 @@ describe("gateway broadcaster", () => {
     ]);
     expect(sentEventSeq(readSocket)).toEqual([
       ["chat", 1],
-      ["heartbeat", 2],
-      ["chat.side_result", 3],
-      ["tick", 4],
+      ["presence", 2],
+      ["presence", 3],
+      ["heartbeat", 4],
+      ["chat.side_result", 5],
+      ["tick", 6],
     ]);
   });
 

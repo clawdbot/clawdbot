@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "nostr-tools": "2.24.1",
+    "nostr-tools": "2.24.3",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -28,6 +28,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": "preserve-root"
+    },
     "channel": {
       "id": "buzz",
       "configuredState": {

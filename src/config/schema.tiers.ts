@@ -4,8 +4,8 @@ import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js"
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
 cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
-meta models nodeHost plugins proxy secrets security session skills surfaces talk tools transcripts
-tts ui update wizard
+meta models nodeHost plugins proxy secrets security session skills surfaces talk telemetry tools transcripts
+tts ui update wizard worktreeRoot
 `
   .trim()
   .split(/\s+/);
@@ -159,7 +159,7 @@ tools.media.models.*.request.auth.token tools.profile tools.sessions
 tools.web transcripts.enabled
 tts.auto tts.persona tts.personas.*.providers.*.apiKey tts.provider
 tts.providers.* tts.providers.*.apiKey
-ui.assistant.avatar ui.assistant.name ui.prefs.chatFollowUpMode
+ui.prefs.accent ui.prefs.chatFollowUpMode
 ui.prefs.chatPersistCommentary ui.prefs.chatSendShortcut ui.prefs.chatShowThinking
 ui.prefs.chatShowToolCalls ui.prefs.locale
 ui.prefs.theme ui.prefs.themeMode update.auto.enabled update.channel
@@ -192,11 +192,10 @@ function splitPath(path: string): string[] {
 }
 
 function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | undefined {
+  type TierRule = { parts: string[]; advanced: boolean; wildcardCount: number; order: number };
   const exact = new Map<string, boolean>();
-  const wildcardByLength = new Map<
-    number,
-    Array<{ parts: string[]; advanced: boolean; wildcardCount: number }>
-  >();
+  const wildcardsByPrefix = new Map<string, TierRule[]>();
+  let order = 0;
   for (const [hintPath, hint] of Object.entries(hints)) {
     if (typeof hint.advanced !== "boolean") {
       continue;
@@ -207,25 +206,47 @@ function createTierMatcher(hints: ConfigUiHints): (path: string) => boolean | un
       exact.set(parts.join("."), hint.advanced);
       continue;
     }
-    const bucket = wildcardByLength.get(parts.length) ?? [];
-    bucket.push({ parts, advanced: hint.advanced, wildcardCount });
-    wildcardByLength.set(parts.length, bucket);
+    const prefix = parts.slice(0, parts.indexOf("*")).join(".");
+    const key = `${parts.length}:${prefix}`;
+    const bucket = wildcardsByPrefix.get(key) ?? [];
+    bucket.push({ parts, advanced: hint.advanced, wildcardCount, order: order++ });
+    wildcardsByPrefix.set(key, bucket);
   }
-  for (const bucket of wildcardByLength.values()) {
+  for (const bucket of wildcardsByPrefix.values()) {
     bucket.sort((left, right) => left.wildcardCount - right.wildcardCount);
   }
   return (path) => {
+    const canonical = exact.get(path);
+    if (canonical !== undefined) {
+      return canonical;
+    }
     const parts = splitPath(path);
     const direct = exact.get(parts.join("."));
     if (direct !== undefined) {
       return direct;
     }
-    for (const candidate of wildcardByLength.get(parts.length) ?? []) {
-      if (candidate.parts.every((part, index) => part === "*" || part === parts[index])) {
-        return candidate.advanced;
+    let best: TierRule | undefined;
+    let prefix = parts.slice(0, -1).join(".");
+    // Prefixes narrow the search; specificity and authored order still decide
+    // precedence across buckets, including the empty prefix for leading wildcards.
+    for (;;) {
+      const candidate = wildcardsByPrefix
+        .get(`${parts.length}:${prefix}`)
+        ?.find((rule) => rule.parts.every((part, index) => part === "*" || part === parts[index]));
+      if (
+        candidate &&
+        (!best ||
+          candidate.wildcardCount < best.wildcardCount ||
+          (candidate.wildcardCount === best.wildcardCount && candidate.order < best.order))
+      ) {
+        best = candidate;
       }
+      if (!prefix) {
+        break;
+      }
+      prefix = prefix.slice(0, Math.max(0, prefix.lastIndexOf(".")));
     }
-    return undefined;
+    return best?.advanced;
   };
 }
 
@@ -234,20 +255,11 @@ function isNumericSchema(schema: ConfigJsonSchemaObject): boolean {
   return types.includes("number") || types.includes("integer");
 }
 
-function isNumericCommonException(path: string): boolean {
-  return splitPath(path).at(-1) === "port";
-}
-
-function resolveTier(params: { inheritedTier: boolean; ownTier: boolean | undefined }): boolean {
-  if (params.ownTier !== undefined) {
-    return params.ownTier;
-  }
-  return params.inheritedTier;
-}
-
 function mergeTierHint(hints: ConfigUiHints, path: string, advanced: boolean): void {
   const current = hints[path];
-  hints[path] = current ? { ...current, advanced } : { advanced };
+  if (current?.advanced !== advanced) {
+    hints[path] = current ? { ...current, advanced } : { advanced };
+  }
 }
 
 function visitSchemaNodes<T>(
@@ -311,42 +323,30 @@ export function applyConfigTierHints(
   return next;
 }
 
-function applyNumericTuningTierHints(
+/** Materialize the resolved tier on every schema path for RPC/UI consumers. */
+export function applyResolvedConfigTierHints(
   schema: Record<string, unknown>,
   hints: ConfigUiHints,
 ): ConfigUiHints {
   const next = { ...hints };
   const authoredTier = createTierMatcher(hints);
+  // Discover numeric defaults across every composition branch before resolving
+  // inheritance; generated wildcard hints participate in normal tier precedence.
   visitSchemaNodes(schema, undefined, (node, path) => {
     if (
       path &&
       isNumericSchema(node) &&
-      !isNumericCommonException(path) &&
+      splitPath(path).at(-1) !== "port" &&
       authoredTier(path) === undefined
     ) {
       mergeTierHint(next, path, true);
     }
     return undefined;
   });
-  return next;
-}
-
-/** Materialize the resolved tier on every schema path for RPC/UI consumers. */
-export function applyResolvedConfigTierHints(
-  schema: Record<string, unknown>,
-  hints: ConfigUiHints,
-): ConfigUiHints {
-  const tierHints = applyNumericTuningTierHints(schema, hints);
-  const next = { ...tierHints };
-  const matchTier = createTierMatcher(tierHints);
+  const matchTier = createTierMatcher(next);
 
   visitSchemaNodes(schema, true, (_node, path, inheritedTier) => {
-    const advanced = path
-      ? resolveTier({
-          inheritedTier,
-          ownTier: matchTier(path),
-        })
-      : inheritedTier;
+    const advanced = path ? (matchTier(path) ?? inheritedTier) : inheritedTier;
     if (path) {
       mergeTierHint(next, path, advanced);
     }

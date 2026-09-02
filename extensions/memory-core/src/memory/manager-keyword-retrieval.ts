@@ -35,7 +35,12 @@ export type KeywordSearchHit = MemorySearchResult & {
   textScore: number;
   pathScore: number;
   exactPathSpecificity: ExactPathSpecificity;
+  hasBodyMatch: boolean;
 };
+
+function keywordHitHasBody(hit: KeywordSearchHit): boolean {
+  return hit.hasBodyMatch;
+}
 
 function compareKeywordSearchHits(
   a: KeywordSearchHit,
@@ -47,7 +52,7 @@ function compareKeywordSearchHits(
     return specificityDelta;
   }
   if (preferExactBody && a.exactPathSpecificity > 0) {
-    const bodyPresenceDelta = Number(b.textScore > 0) - Number(a.textScore > 0);
+    const bodyPresenceDelta = Number(keywordHitHasBody(b)) - Number(keywordHitHasBody(a));
     if (bodyPresenceDelta !== 0) {
       return bodyPresenceDelta;
     }
@@ -110,27 +115,21 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   ): Promise<MemorySearchResult[]> {
     return await this.withManagerOperation(async () => {
       if (this.memorySourceProvenanceRepairPending) {
-        const repairPending = () =>
+        this.memorySourceProvenanceRepairPending =
           this.db
             .prepare(
               `SELECT 1 FROM memory_index_sources
                WHERE source = 'memory' AND hash = '' LIMIT 1`,
             )
             .get() !== undefined;
-        try {
-          // Provenance schema adoption invalidates legacy source hashes. Finish that
-          // owner-classified reindex before the first automatic candidate read.
-          if (repairPending()) {
-            await this.syncAdmitted(
-              { reason: "search" },
-              { allowEmbeddingBootstrapFallback: true },
-            );
-          }
-        } catch (err) {
-          log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
-        }
-        this.memorySourceProvenanceRepairPending = repairPending();
         if (this.memorySourceProvenanceRepairPending) {
+          // Automatic recall runs before the model. Keep repair admitted for teardown
+          // without holding the reply; unclassified sources stay excluded.
+          void this.withManagerOperation(() =>
+            this.syncAdmitted({ reason: "search" }, { allowEmbeddingBootstrapFallback: true }),
+          ).catch((err: unknown) => {
+            log.warn(`memory sync failed (automatic candidates): ${formatErrorMessage(err)}`);
+          });
           return [];
         }
       }
@@ -193,7 +192,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
           if (entry.exactPathSpecificity === 0) {
             return entry;
           }
-          const contentScore = entry.textScore > 0 ? entry.score : 0;
+          const contentScore = keywordHitHasBody(entry) ? entry.score : 0;
           return { ...entry, score: scoreExactPathTieForTemporalDecay(contentScore) };
         })
       : params.results;
@@ -363,8 +362,8 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
           seenIds.set(result.id, result);
           continue;
         }
-        const existingHasBody = existing.textScore > 0;
-        const resultHasBody = result.textScore > 0;
+        const existingHasBody = keywordHitHasBody(existing);
+        const resultHasBody = keywordHitHasBody(result);
         const existingBodyScore = existingHasBody ? existing.score : 0;
         const resultBodyScore = resultHasBody ? result.score : 0;
         existing.textScore = Math.max(existing.textScore, result.textScore);
@@ -373,6 +372,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
           existing.exactPathSpecificity,
           result.exactPathSpecificity,
         ) as ExactPathSpecificity;
+        existing.hasBodyMatch ||= result.hasBodyMatch;
         const bodyScore = Math.max(existingBodyScore, resultBodyScore);
         existing.score = bodyScore > 0 ? bodyScore : existing.pathScore;
         // Path hits project the first chunk; keep a real body-match snippet
@@ -394,7 +394,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       }
     }
     for (const result of merged) {
-      if (result.textScore === 0) {
+      if (!keywordHitHasBody(result)) {
         // A uniform exact-only baseline lets temporal decay order otherwise
         // equivalent filename hits without reusing incomparable path BM25.
         result.score = result.exactPathSpecificity > 0 ? 1 : result.pathScore;
@@ -409,10 +409,10 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   ): KeywordSearchHit[] {
     const ranked = results.toSorted(compareKeywordSearchHits);
     const exactBody = ranked
-      .filter((entry) => entry.exactPathSpecificity > 0 && entry.textScore > 0)
+      .filter((entry) => entry.exactPathSpecificity > 0 && keywordHitHasBody(entry))
       .slice(0, nonExactLimit);
     const exactPathOnly = ranked.filter(
-      (entry) => entry.exactPathSpecificity > 0 && entry.textScore === 0,
+      (entry) => entry.exactPathSpecificity > 0 && !keywordHitHasBody(entry),
     );
     const boundedExact = exactBody.concat(exactPathOnly).toSorted(compareKeywordSearchHits);
     const selectedPathKeys = new Set<string>();
@@ -437,6 +437,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         id: _id,
         pathScore: _pathScore,
         exactPathSpecificity: _exactPathSpecificity,
+        hasBodyMatch: _hasBodyMatch,
         ...result
       }) => result,
     );

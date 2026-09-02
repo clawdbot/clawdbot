@@ -2,14 +2,22 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -194,6 +202,108 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun lockedParentRejectsGenericForkAndWorktreeChats() =
+    runTest {
+      for (action in listOf("fork", "worktree")) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            respond("sessions.create", """{"key":"agent:main:dashboard:child"}""")
+            respond(
+              "chat.history",
+              """{"sessionId":"locked-parent","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"locked-parent","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+            )
+            respond("sessions.list", """{"sessions":[]}""")
+          }
+        controller.load("main")
+        runCurrent()
+
+        val accepted =
+          if (action == "fork") {
+            controller.forkSession("main", ownerAgentId = "main") != null
+          } else {
+            controller.startNewChatAwait(worktree = action == "worktree")
+          }
+
+        assertFalse("$action must not create a child of a locked parent", accepted)
+        assertTrue(requests.none { it.first == "sessions.create" })
+        assertTrue("The rejected action needs a visible explanation", !controller.errorText.value.isNullOrBlank())
+        assertEquals("main", controller.sessionKey.value)
+      }
+    }
+
+  @Test
+  fun parentActionsRecheckLockBeforeTransportEnqueue() =
+    runTest {
+      for (fork in listOf(false, true)) {
+        val transportStarted = CompletableDeferred<Unit>()
+        val releaseTransport = CompletableDeferred<Unit>()
+        val creates = mutableListOf<String?>()
+
+        suspend fun request(
+          method: String,
+          paramsJson: String?,
+          withEnqueue: (() -> Unit) -> Unit = { it() },
+        ): String {
+          if (method == "sessions.create") {
+            transportStarted.complete(Unit)
+            releaseTransport.await()
+          }
+          withEnqueue { if (method == "sessions.create") creates += paramsJson }
+          return when (method) {
+            "sessions.create" -> {
+              """{"key":"agent:main:dashboard:child"}"""
+            }
+
+            "chat.history" -> {
+              """{"sessionId":"lineage-parent","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"lineage-parent","modelSelectionLocked":false}}"""
+            }
+
+            "sessions.list" -> {
+              """{"sessions":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+
+        val controller =
+          createChatController(
+            captureRequestLease = {
+              GatewaySession.RequestLease(endpointStableId = "") { method, paramsJson, _, withEnqueue ->
+                request(method, paramsJson, withEnqueue)
+              }
+            },
+          ) { method, paramsJson -> request(method, paramsJson) }
+        controller.load("main")
+        runCurrent()
+        val pending =
+          async {
+            if (fork) {
+              controller.forkSession("main", ownerAgentId = "main") != null
+            } else {
+              controller.startNewChatAwait(worktree = true)
+            }
+          }
+
+        try {
+          transportStarted.await()
+          controller.handleGatewayEvent(
+            "sessions.changed",
+            """{"sessionKey":"main","agentId":"main","phase":"message","session":{"key":"main","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+          )
+        } finally {
+          releaseTransport.complete(Unit)
+        }
+
+        assertFalse("A newly locked parent must reject fork=$fork before enqueue", pending.await())
+        assertTrue("No child-create request may reach the transport", creates.isEmpty())
+        assertEquals("main", controller.sessionKey.value)
+      }
+    }
+
+  @Test
   fun startNewChatRetriesWithoutParentLifecycleAgainstOlderGateway() =
     runTest {
       var createCalls = 0
@@ -231,6 +341,35 @@ class ChatControllerCommandControlsTest {
       assertTrue(creates[1].second.orEmpty().contains("\"agentId\":\"main\""))
       assertFalse(creates.any { it.second.orEmpty().contains("\"label\"") })
       assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+    }
+
+  @Test
+  fun newSessionCreatesRootSessionFromLockedParentForSelectedAgent() =
+    runTest {
+      for (catalogId in listOf(null, "codex")) {
+        val (controller, requests) =
+          chatControllerTestSetup {
+            respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+            respond(
+              "chat.history",
+              """{"sessionId":"locked-session","messages":[],"sessionInfo":{"key":"main","agentId":"main","sessionId":"locked-session","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"}}}""",
+            )
+            respond("health", "{}")
+            respond("sessions.list", """{"sessions":[]}""")
+          }
+        controller.handleGatewayEvent("health", null)
+        controller.load("main")
+        advanceUntilIdle()
+
+        assertTrue("New session must work with catalog=$catalogId", controller.startNewChatAwait(catalogId = catalogId))
+
+        val create = json.parseToJsonElement(requests.single { it.first == "sessions.create" }.second.orEmpty()).jsonObject
+        assertEquals(setOfNotNull("agentId", catalogId?.let { "catalogId" }), create.keys)
+        assertEquals(JsonPrimitive("main"), create["agentId"])
+        assertEquals(catalogId?.let(::JsonPrimitive), create["catalogId"])
+        assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+        assertEquals(null, controller.errorText.value)
+      }
     }
 
   @Test
@@ -291,6 +430,23 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun sessionColorCanBeSetAndClearedWithoutOtherChanges() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("sessions.list", """{"sessions":[]}""")
+        }
+
+      assertTrue(controller.patchSession(key = "main", ownerAgentId = "owner-a", color = "purple"))
+      assertTrue(controller.patchSession(key = "main", ownerAgentId = "owner-a", clearColor = true))
+
+      val patches = requests.filter { it.first == "sessions.patch" }.map { json.parseToJsonElement(it.second!!).jsonObject }
+      assertEquals(listOf(JsonPrimitive("purple"), JsonNull), patches.map { it["color"] })
+      assertTrue(patches.all { it["agentId"] == JsonPrimitive("owner-a") })
+      assertEquals(2, requests.count { it.first == "sessions.list" })
+    }
+
+  @Test
   fun manualSessionRenamePersistsExplicitLabel() =
     runTest {
       val (controller, requests) =
@@ -317,13 +473,19 @@ class ChatControllerCommandControlsTest {
           scope = this,
           json = json,
           requestGateway = { method, _ ->
+            check(method != "sessions.patch") { "archive must use its captured request lease" }
             if (method == "sessions.list") """{"sessions":[]}""" else "{}"
           },
-          requestGatewayWithTimeout = { method, paramsJson, timeoutMs ->
-            assertEquals("sessions.patch", method)
-            archiveParams = paramsJson
-            archiveTimeoutMs = timeoutMs
-            "{}"
+          cacheScope = { ChatCacheScope("gateway-a", 1) },
+          captureRequestLease = { capturedScope ->
+            assertEquals(ChatCacheScope("gateway-a", 1), capturedScope)
+            GatewaySession.RequestLease(endpointStableId = "gateway-a") { method, paramsJson, timeoutMs, withEnqueue ->
+              withEnqueue {}
+              assertEquals("sessions.patch", method)
+              archiveParams = paramsJson
+              archiveTimeoutMs = timeoutMs
+              "{}"
+            }
           },
         )
 
@@ -371,6 +533,10 @@ class ChatControllerCommandControlsTest {
           }
         }
 
+      controller.refreshSessions(limit = 100)
+      advanceUntilIdle()
+      requests.clear()
+
       controller.renameSessionGroup(from = "Work", to = "Focus")
 
       // Membership enumeration sends the explicit high bound (absent limit is
@@ -383,8 +549,8 @@ class ChatControllerCommandControlsTest {
       assertEquals(2, patches.size)
       assertTrue(patches.any { it.contains("\"key\":\"agent:main:active\"") && it.contains("\"category\":\"Focus\"") })
       assertTrue(patches.any { it.contains("\"key\":\"agent:main:archived\"") && it.contains("\"category\":\"Focus\"") })
-      // The session list refreshes (windowed) after the fan-out.
-      assertTrue(lists.last().contains("\"limit\""))
+      // Group enumeration must not replace the requested display window.
+      assertEquals(JsonPrimitive(100), json.parseToJsonElement(lists.last()).jsonObject["limit"])
     }
 
   @Test
@@ -498,11 +664,11 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun sessionEventsApplyExplicitLabelAndCategoryClears() =
+  fun sessionEventsApplyExplicitMetadataClears() =
     runTest {
       val controller =
         createScriptedChatController {
-          respond("sessions.list", """{"sessions":[{"key":"main","label":"Named","category":"Work"}]}""")
+          respond("sessions.list", """{"sessions":[{"key":"main","label":"Named","category":"Work","color":" BLUE "}]}""")
         }
 
       controller.refreshSessions()
@@ -514,15 +680,23 @@ class ChatControllerCommandControlsTest {
           .category,
       )
 
-      // Another client cleared the group and name; the gateway sends explicit nulls.
+      assertEquals(
+        "blue",
+        controller.sessions.value
+          .single()
+          .color,
+      )
+
+      // Another client cleared the metadata; the gateway sends explicit nulls.
       controller.handleGatewayEvent(
         "sessions.changed",
-        """{"sessionKey":"main","session":{"key":"main","agentId":"main","label":null,"category":null}}""",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","label":null,"category":null,"color":null}}""",
       )
       advanceUntilIdle()
       val merged = controller.sessions.value.single()
       assertEquals(null, merged.label)
       assertEquals(null, merged.category)
+      assertEquals(null, merged.color)
     }
 
   @Test
@@ -554,10 +728,28 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
+  fun explicitMarkReadUsesLegacyCompatiblePayloadOnCurrentGateway() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = { it == SESSION_UNREAD_ACK_CAPABILITY }
+        }
+
+      assertTrue(controller.patchSession(key = "main", unread = false))
+      advanceUntilIdle()
+
+      val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
+      assertTrue(patch.contains("\"unread\":false"))
+      assertFalse(patch.contains("readIntent"))
+      assertFalse(patch.contains("expectedMarkedUnreadAt"))
+    }
+
+  @Test
   fun archivingOrDeletingTheOpenSessionFallsBackToMain() =
     runTest {
       val (controller, requests) =
         chatControllerTestSetup {
+          respond("chat.history", """{"sessionId":"session-side","messages":[]}""")
           respond("sessions.list", """{"sessions":[{"key":"agent:main:side","sessionId":"session-side"}]}""")
           respond("sessions.delete", """{"deleted":true}""")
         }
@@ -602,6 +794,13 @@ class ChatControllerCommandControlsTest {
       )
       advanceUntilIdle()
       assertEquals(1, requests.count { it.first == "sessions.patch" })
+      assertFalse(
+        requests
+          .single { it.first == "sessions.patch" }
+          .second
+          .orEmpty()
+          .contains("expectedMarkedUnreadAt"),
+      )
 
       // Server-confirmed read resets the episode; a stale duplicate must not re-patch.
       controller.handleGatewayEvent(
@@ -615,6 +814,55 @@ class ChatControllerCommandControlsTest {
       )
       advanceUntilIdle()
       assertEquals(2, requests.count { it.first == "sessions.patch" })
+    }
+
+  @Test
+  fun manualUnreadOnOpenSessionSurvivesRunUpdatesUntilReactivation() =
+    runTest {
+      val (controller, requests) =
+        chatControllerTestSetup {
+          gatewayAdvertisesCapability = { it == SESSION_UNREAD_ACK_CAPABILITY }
+          respond(
+            "sessions.list",
+            """{"sessions":[{"key":"main","unread":false},{"key":"other","unread":false}]}""",
+          )
+        }
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.switchSession("main")
+      advanceUntilIdle()
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true,"markedUnreadAt":100}}""",
+      )
+      advanceUntilIdle()
+      assertEquals(0, requests.count { it.first == "sessions.patch" })
+      val retained = controller.sessions.value.first { it.key == "main" }
+      assertEquals(true, retained.unread)
+      assertEquals(100L, retained.markedUnreadAt)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true,"markedUnreadAt":100,"hasActiveRun":true,"status":"running"}}""",
+      )
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"main","session":{"key":"main","agentId":"main","unread":true,"markedUnreadAt":100,"hasActiveRun":false,"status":"done"}}""",
+      )
+      advanceUntilIdle()
+      assertEquals(0, requests.count { it.first == "sessions.patch" })
+
+      controller.switchSession("other")
+      advanceUntilIdle()
+      controller.switchSession("main")
+      advanceUntilIdle()
+
+      val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
+      assertTrue(patch.contains("\"unread\":false"))
+      assertTrue(patch.contains("\"expectedMarkedUnreadAt\":100"))
+      assertFalse(patch.contains("readIntent"))
     }
 
   @Test
@@ -727,31 +975,315 @@ class ChatControllerCommandControlsTest {
     }
 
   @Test
-  fun startNewChatIgnoresStaleCreateResponseAfterSessionSwitch() =
+  fun startNewChatSelectsCreatedSessionAfterConcurrentSameSessionHistoryLoad() =
     runTest {
-      val requests = mutableListOf<Pair<String, String?>>()
-      lateinit var controller: ChatController
-      controller =
-        createChatController { method, paramsJson ->
-          requests += method to paramsJson
-          when (method) {
-            "sessions.create" -> {
-              controller.switchSession("agent:main:dashboard:other")
+      for (refreshLoadedParent in listOf(false, true)) {
+        val createEntered = CompletableDeferred<Unit>()
+        val releaseCreate = CompletableDeferred<Unit>()
+        val (controller, requests) =
+          chatControllerTestSetup {
+            respond("sessions.create") {
+              createEntered.complete(Unit)
+              releaseCreate.await()
               """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
             }
-            "chat.history" -> """{"sessionId":"other-session","messages":[]}"""
-            "health" -> "{}"
-            "sessions.list" -> """{"sessions":[]}"""
-            else -> "{}"
+            respond("chat.history") { paramsJson ->
+              val sessionId =
+                if (paramsJson.orEmpty().contains("agent:main:dashboard:fresh")) "fresh-session" else "parent-session"
+              historyResponse(sessionId, emptyList())
+            }
+            respond("health", "{}")
+            respond("sessions.list", """{"sessions":[]}""")
+          }
+        controller.handleGatewayEvent("health", null)
+        if (refreshLoadedParent) {
+          controller.load("main")
+          advanceUntilIdle()
+          assertEquals("parent-session", controller.sessionId.value)
+        }
+
+        val historyRequests = requests.count { it.first == "chat.history" }
+        val create = async { controller.startNewChatAwait() }
+        createEntered.await()
+        try {
+          if (refreshLoadedParent) controller.refresh() else controller.load("main")
+          advanceUntilIdle()
+          assertEquals(historyRequests + 1, requests.count { it.first == "chat.history" })
+          assertEquals("main", controller.sessionKey.value)
+          assertEquals("parent-session", controller.sessionId.value)
+          assertFalse(controller.historyLoading.value)
+        } finally {
+          releaseCreate.complete(Unit)
+        }
+
+        assertTrue("New must survive same-session history; refreshLoadedParent=$refreshLoadedParent", create.await())
+        assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+        assertEquals("fresh-session", controller.sessionId.value)
+        assertEquals(1, requests.count { it.first == "sessions.create" })
+      }
+    }
+
+  @Test
+  fun startNewChatIgnoresStaleCreateResponseAfterOwnershipChanges() =
+    runTest {
+      for (change in listOf("navigation", "navigation-away-back", "canonical-parent", "default-owner-away-back", "gateway", "connection")) {
+        val createEntered = CompletableDeferred<Unit>()
+        val createResponse = CompletableDeferred<String>()
+        val gateway = ScriptedGateway(json)
+        var gatewayScope = ChatCacheScope("gateway-a", 1)
+        var defaultAgentId = "main"
+        var defaultAgentRevision = 0L
+        var parentSessionId = "session-a"
+        var leaseCurrent = true
+        gateway.respond("sessions.create") {
+          createEntered.complete(Unit)
+          createResponse.await()
+        }
+        gateway.respond("chat.history") { paramsJson ->
+          val params = json.parseToJsonElement(paramsJson!!).jsonObject
+          val key = params.getValue("sessionKey").jsonPrimitive.content
+          val owner = params.getValue("agentId").jsonPrimitive.content
+          historyResponse(if (key == "main") "$owner-$parentSessionId" else "$key-session", emptyList())
+        }
+        gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+        val controller =
+          createChatController(
+            cacheScope = { gatewayScope },
+            currentDefaultAgentId = { defaultAgentId },
+            currentDefaultAgentRevision = { defaultAgentRevision },
+            captureRequestLease = { capturedScope ->
+              GatewaySession.RequestLease(
+                endpointStableId = capturedScope?.gatewayId.orEmpty(),
+                isCurrentImpl = { leaseCurrent },
+              ) { method, paramsJson, _, withEnqueue ->
+                withEnqueue {}
+                gateway.request(method, paramsJson)
+              }
+            },
+            requestGateway = gateway::request,
+          )
+        controller.load("main")
+        runCurrent()
+        assertEquals("main-session-a", controller.sessionId.value)
+
+        val create = async { controller.startNewChatAwait() }
+        try {
+          createEntered.await()
+          when (change) {
+            "navigation" -> {
+              controller.switchSession("other")
+            }
+
+            "navigation-away-back" -> {
+              controller.switchSession("other")
+              runCurrent()
+              controller.switchSession("main")
+            }
+
+            "canonical-parent" -> {
+              parentSessionId = "session-b"
+              controller.refresh()
+            }
+
+            "default-owner-away-back" -> {
+              for (owner in listOf("ops", "main")) {
+                defaultAgentId = owner
+                defaultAgentRevision += 1
+                controller.onDefaultAgentChanged(owner)
+                runCurrent()
+              }
+            }
+
+            "gateway" -> {
+              gatewayScope = ChatCacheScope("gateway-b", 2)
+              controller.onGatewayScopeChanging()
+              controller.load("main")
+            }
+
+            "connection" -> {
+              // Socket retirement precedes delivery of the controller's disconnect callback.
+              leaseCurrent = false
+            }
+          }
+          runCurrent()
+          val selectedKey = controller.sessionKey.value
+          val selectedOwner = controller.sessionOwnerAgentId.value
+          val selectedSessionId = controller.sessionId.value
+          val historyRequests = gateway.callCount("chat.history")
+          createResponse.complete("""{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+
+          assertFalse("A stale create must not select its result after $change", create.await())
+          runCurrent()
+          assertEquals(selectedKey, controller.sessionKey.value)
+          assertEquals(selectedOwner, controller.sessionOwnerAgentId.value)
+          assertEquals(selectedSessionId, controller.sessionId.value)
+          assertNull(controller.errorText.value)
+          assertEquals(historyRequests, gateway.callCount("chat.history"))
+          assertEquals(1, gateway.callCount("sessions.create"))
+        } finally {
+          createResponse.complete("""{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+        }
+      }
+    }
+
+  @Test
+  fun startNewChatLateFailurePreservesNewerSessionHistoryLoad() =
+    runTest {
+      val createEntered = CompletableDeferred<Unit>()
+      val createResponse = CompletableDeferred<String>()
+      val historyEntered = CompletableDeferred<Unit>()
+      val historyResponse = CompletableDeferred<String>()
+      val controller =
+        createScriptedChatController {
+          respond("sessions.create") {
+            createEntered.complete(Unit)
+            createResponse.await()
+          }
+          respond("chat.history") {
+            historyEntered.complete(Unit)
+            historyResponse.await()
           }
         }
-      controller.handleGatewayEvent("health", null)
+      val create = async { controller.startNewChatAwait() }
+      try {
+        createEntered.await()
+        controller.switchSession("other")
+        historyEntered.await()
+        assertTrue(controller.historyLoading.value)
 
-      assertEquals(false, controller.startNewChatAwait())
+        createResponse.completeExceptionally(IllegalStateException("old create failed"))
+        assertFalse(create.await())
+        assertEquals("other", controller.sessionKey.value)
+        assertTrue(controller.historyLoading.value)
+        assertNull(controller.errorText.value)
+
+        historyResponse.complete("""{"sessionId":"other-session","messages":[]}""")
+      } finally {
+        createResponse.complete("{}")
+        historyResponse.complete("""{"sessionId":"other-session","messages":[]}""")
+      }
       advanceUntilIdle()
-      assertEquals("agent:main:dashboard:other", controller.sessionKey.value)
       assertEquals("other-session", controller.sessionId.value)
-      assertTrue(requests.any { it.first == "sessions.create" })
+      assertFalse(controller.historyLoading.value)
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
+  fun startNewChatPropagatesCancellationAndAllowsAnotherCreate() =
+    runTest {
+      val cancellation = CancellationException("create cancelled")
+      var cancelCreate = true
+      val controller =
+        createScriptedChatController {
+          respond("sessions.create") {
+            if (cancelCreate) throw cancellation
+            """{"ok":true,"key":"agent:main:dashboard:fresh"}"""
+          }
+          respond("chat.history", """{"sessionId":"fresh-session","messages":[]}""")
+        }
+
+      assertSame(cancellation, runCatching { controller.startNewChatAwait() }.exceptionOrNull())
+      assertNull(controller.errorText.value)
+      cancelCreate = false
+
+      assertTrue(controller.startNewChatAwait())
+      assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+    }
+
+  @Test
+  fun startNewChatCancellationClearsSpinnerWhenRefreshFinishesBeforeAdmission() =
+    runTest {
+      val gatewayScope = ChatCacheScope("gateway-a", 1)
+      val gateway = ScriptedGateway(json)
+      val cancellation = CancellationException("create cancelled")
+      var refreshBeforeAdmission = false
+      lateinit var controller: ChatController
+      gateway.respondWith("chat.history", historyResponse("parent-session", emptyList()))
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      gateway.respond("sessions.create") { throw cancellation }
+      controller =
+        createChatController(
+          cacheScope = { gatewayScope },
+          captureRequestLease = {
+            GatewaySession.RequestLease(
+              endpointStableId = gatewayScope.gatewayId,
+              commitIfCurrentImpl = { block ->
+                if (refreshBeforeAdmission) {
+                  refreshBeforeAdmission = false
+                  controller.refresh()
+                  runCurrent()
+                  assertEquals("parent-session", controller.sessionId.value)
+                  assertFalse(controller.historyLoading.value)
+                }
+                block()
+                true
+              },
+            ) { method, paramsJson, _, withEnqueue ->
+              withEnqueue {}
+              gateway.request(method, paramsJson)
+            }
+          },
+          requestGateway = gateway::request,
+        )
+      controller.load("main")
+      runCurrent()
+      assertEquals("parent-session", controller.sessionId.value)
+      refreshBeforeAdmission = true
+
+      assertSame(cancellation, runCatching { controller.startNewChatAwait() }.exceptionOrNull())
+
+      assertEquals("main", controller.sessionKey.value)
+      assertEquals(2, gateway.callCount("chat.history"))
+      assertEquals(1, gateway.callCount("sessions.create"))
+      assertNull(controller.errorText.value)
+      assertFalse(controller.historyLoading.value)
+    }
+
+  @Test
+  fun startNewChatCancellationClearsOnlyItsOwnFreshHistoryLoad() =
+    runTest {
+      for (refreshBeforeCancellation in listOf(false, true)) {
+        val firstHistoryEntered = CompletableDeferred<Unit>()
+        val refreshedHistoryEntered = CompletableDeferred<Unit>()
+        val releaseHistory = CompletableDeferred<Unit>()
+        var historyRequests = 0
+        val controller =
+          createScriptedChatController {
+            respond("sessions.create", """{"ok":true,"key":"agent:main:dashboard:fresh"}""")
+            respond("chat.history") {
+              historyRequests += 1
+              if (historyRequests == 1) firstHistoryEntered.complete(Unit) else refreshedHistoryEntered.complete(Unit)
+              releaseHistory.await()
+              """{"sessionId":"fresh-session","messages":[]}"""
+            }
+          }
+        val create = async { controller.startNewChatAwait() }
+        try {
+          firstHistoryEntered.await()
+          assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+          assertTrue(controller.historyLoading.value)
+          if (refreshBeforeCancellation) {
+            controller.refresh()
+            refreshedHistoryEntered.await()
+          }
+
+          create.cancelAndJoin()
+
+          assertTrue(create.isCancelled)
+          assertEquals("agent:main:dashboard:fresh", controller.sessionKey.value)
+          assertEquals("Only a newer history request may retain loading", refreshBeforeCancellation, controller.historyLoading.value)
+          assertNull(controller.errorText.value)
+
+          releaseHistory.complete(Unit)
+          if (!refreshBeforeCancellation) controller.refresh()
+          advanceUntilIdle()
+          assertEquals("fresh-session", controller.sessionId.value)
+          assertFalse(controller.historyLoading.value)
+        } finally {
+          releaseHistory.complete(Unit)
+          create.cancelAndJoin()
+        }
+      }
     }
 
   private fun commandResponse(

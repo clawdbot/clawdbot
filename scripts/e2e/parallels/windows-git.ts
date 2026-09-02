@@ -1,9 +1,19 @@
 // Windows Git script supports OpenClaw repository automation.
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import type { WindowsGuest } from "./guest-transports.ts";
 import { die, run, say } from "./host-command.ts";
 import { psSingleQuote } from "./powershell.ts";
 import type { HostServer } from "./types.ts";
+
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
 
 export async function prepareMinGitZip(tgzDir: string): Promise<string> {
   const metadata = run(
@@ -11,15 +21,22 @@ export async function prepareMinGitZip(tgzDir: string): Promise<string> {
     [
       "-c",
       String.raw`import json
+import re
 import urllib.request
 
 preferred_names = [
-    "MinGit-2.55.0.3-64-bit.zip",
-    "MinGit-2.55.0.3-arm64.zip",
+    "MinGit-2.55.0.5-64-bit.zip",
+    "MinGit-2.55.0.5-arm64.zip",
 ]
-fallback_urls = {
-    "MinGit-2.55.0.3-arm64.zip": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-arm64.zip",
-    "MinGit-2.55.0.3-64-bit.zip": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip",
+fallback_assets = {
+    "MinGit-2.55.0.5-arm64.zip": {
+        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-arm64.zip",
+        "digest": "sha256:05843f9d6e60306c3ab886799e2c67200caab921571f10512df3493049179ddb",
+    },
+    "MinGit-2.55.0.5-64-bit.zip": {
+        "browser_download_url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-64-bit.zip",
+        "digest": "sha256:56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e",
+    },
 }
 
 try:
@@ -33,8 +50,10 @@ try:
     with urllib.request.urlopen(req, timeout=30) as response:
         data = json.load(response)
 except Exception:
+    fallback = fallback_assets[preferred_names[0]]
     print(preferred_names[0])
-    print(fallback_urls[preferred_names[0]])
+    print(fallback["browser_download_url"])
+    print(fallback["digest"])
     raise SystemExit(0)
 
 assets = data.get("assets", [])
@@ -71,14 +90,20 @@ if best is None:
 if best is None:
     raise SystemExit("no MinGit asset found")
 
+digest = best.get("digest", "")
+if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+    raise SystemExit("MinGit asset missing SHA-256 digest")
+
 print(best["name"])
-print(best["browser_download_url"])`,
+print(best["browser_download_url"])
+print(digest)`,
     ],
     { quiet: true },
   ).stdout.trim();
-  const [name, url] = metadata.split("\n");
-  if (!name || !url) {
-    die("failed to resolve MinGit download metadata");
+  const [name, url, digest] = metadata.split("\n");
+  const expectedSha256 = digest?.match(/^sha256:([a-f\d]{64})$/u)?.[1];
+  if (!name || !url || !expectedSha256) {
+    die("failed to resolve checksummed MinGit download metadata");
   }
   const zipPath = path.join(tgzDir, name);
   say(`Download ${name}`);
@@ -106,6 +131,10 @@ print(best["browser_download_url"])`,
       timeoutMs: 270_000,
     },
   );
+  const actualSha256 = await sha256File(zipPath);
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`MinGit SHA-256 mismatch: expected ${expectedSha256}, got ${actualSha256}`);
+  }
   return zipPath;
 }
 

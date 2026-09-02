@@ -53,8 +53,11 @@ describe("qa runner model catalog", () => {
     );
 
     await expect(loadQaRunnerModelOptions({ repoRoot })).resolves.toEqual([
-      expect.objectContaining({ key: "openai/gpt-5.6-luna" }),
-      expect.objectContaining({ key: "anthropic/claude-sonnet-4-6" }),
+      expect.objectContaining({ key: "openai/gpt-5.6-luna", provider: "openai" }),
+      expect.objectContaining({
+        key: "anthropic/claude-sonnet-4-6",
+        provider: "anthropic",
+      }),
     ]);
   });
 

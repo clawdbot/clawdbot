@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
@@ -95,6 +96,21 @@ function compactSlackResponseUrlFallback(
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
+}
+
+export function sanitizeSlackMonitorReplyPayload(payload: ReplyPayload): ReplyPayload | null {
+  if (payload.isReasoning === true || typeof payload.text !== "string") {
+    return payload.isReasoning === true ? null : payload;
+  }
+  const text = sanitizeAssistantVisibleText(payload.text);
+  if (text === payload.text) {
+    return payload;
+  }
+  return text ||
+    resolveSendableOutboundReplyParts(payload).hasMedia ||
+    hasSlackReplyStructuredContent(payload)
+    ? { ...payload, text: text || undefined }
+    : null;
 }
 
 function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefined {

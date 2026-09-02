@@ -122,8 +122,11 @@ function createFixture(overrides: FixtureOverrides = {}) {
         agentSession: {
           activeSession,
           clientToolCallSlots: [],
+          coreReadAuthorized: true,
+          getCodeModeRecoveryCandidate: vi.fn(() => undefined),
           hasDeliveredSourceReply: vi.fn(() => false),
           hookRunner: {},
+          setCodeModeReconciliationReadAuthorized: vi.fn(),
           setActiveSessionSystemPrompt: vi.fn(),
           settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
         },
@@ -156,7 +159,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: undefined,
       },
-      toolBase: { toolSearchTargetTranscriptProjections: [] },
+      toolBase: { nestedToolActivities: [] },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,
@@ -442,7 +445,8 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     expect(fixture.order).toEqual(["pending-events", "settle", "settled-published", "after-turn"]);
     expect(mocks.settleStream).toHaveBeenCalledWith(
       expect.objectContaining({
-        runAbortDeadlineAtMs: 123,
+        getRunAbortDeadlineAtMs:
+          fixture.input.preparedStreamRuntime.timeout.getRunAbortDeadlineAtMs,
         shouldFlushForContextEngine: true,
       }),
     );

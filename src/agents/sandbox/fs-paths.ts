@@ -75,7 +75,7 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     {
       hostRoot: path.resolve(sandbox.workspaceDir),
       containerRoot: normalizeContainerPathCore(sandbox.containerWorkdir),
-      writable: sandbox.workspaceAccess === "rw",
+      writable: sandbox.workspaceAccess !== "ro",
       source: "workspace",
     },
   ];
@@ -128,6 +128,14 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     });
   }
 
+  for (const resource of sandbox.readOnlyResourceMounts ?? []) {
+    mounts.push({
+      hostRoot: resource.hostPath,
+      containerRoot: resource.containerPath,
+      writable: false,
+      source: "protectedSkill",
+    });
+  }
   return dedupeMounts(mounts);
 }
 
@@ -313,7 +321,10 @@ function formatSandboxRootEscapeMessage(params: {
   defaultContainerRoot: string;
 }): string {
   const containerRoot = normalizeContainerPathCore(params.defaultContainerRoot);
-  const workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
+  let workspaceRoot = shortenHomePath(path.resolve(params.defaultWorkspaceRoot));
+  if (workspaceRoot.startsWith(`~${path.sep}`)) {
+    workspaceRoot = workspaceRoot.replaceAll(path.sep, path.posix.sep);
+  }
   return `Path escapes sandbox root (${workspaceRoot}; container root ${containerRoot}): ${params.input}. Use a path under ${containerRoot}/ instead.`;
 }
 

@@ -3,6 +3,7 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-t
 import { describe, expect, it } from "vitest";
 import {
   applyConfigDefaults,
+  deprecatedProfileIds,
   normalizeConfig,
   resolveThinkingProfile,
 } from "./provider-policy-api.js";
@@ -39,6 +40,10 @@ function levelIds(levels: readonly { id: string }[] | undefined): string[] {
 }
 
 describe("anthropic provider policy public artifact", () => {
+  it("publishes native Claude profiles retired from generic auth", () => {
+    expect(deprecatedProfileIds).toEqual(["anthropic:claude-cli"]);
+  });
+
   it("normalizes Anthropic provider config", () => {
     const normalized = normalizeConfig({
       provider: "anthropic",
@@ -136,7 +141,7 @@ describe("anthropic provider policy public artifact", () => {
     expect(profile?.defaultLevel).toBe("off");
   });
 
-  it.each(["claude-fable-5", "claude-mythos-5"])(
+  it.each(["claude-fable-5", "claude-fable-5-1", "claude-mythos-5"])(
     "exposes the mandatory-adaptive %s thinking profile",
     (modelId) => {
       const profile = resolveThinkingProfile({
@@ -160,12 +165,14 @@ describe("anthropic provider policy public artifact", () => {
     },
   );
 
-  it("keeps the Fable thinking profile identical across API and CLI routes", () => {
-    const modelId = "claude-fable-5";
-    expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
-      resolveThinkingProfile({ provider: "anthropic", modelId }),
-    );
-  });
+  it.each(["claude-fable-5", "claude-fable-5-1"])(
+    "keeps the %s thinking profile identical across API and CLI routes",
+    (modelId) => {
+      expect(resolveThinkingProfile({ provider: "claude-cli", modelId })).toEqual(
+        resolveThinkingProfile({ provider: "anthropic", modelId }),
+      );
+    },
+  );
 
   it("keeps direct-only Mythos thinking disabled on the CLI route", () => {
     expect(resolveThinkingProfile({ provider: "claude-cli", modelId: "claude-mythos-5" })).toEqual({

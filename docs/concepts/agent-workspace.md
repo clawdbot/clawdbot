@@ -81,7 +81,7 @@ Standard files OpenClaw expects inside the workspace:
     The `## Tools` section holds local environment notes and conventions. It does not control tool availability; it is only guidance.
   </Accordion>
   <Accordion title="BOOT.md - startup checklist">
-    Optional startup checklist run automatically on gateway restart (when [internal hooks](/automation/hooks) are enabled). Keep it short; use the message tool for outbound sends.
+    Optional startup checklist run on Gateway startup when the [boot-md hook](/automation/hooks#boot-md) is enabled. Enabling a different internal hook does not enable `boot-md`. Keep it short; use the message tool for outbound sends.
   </Accordion>
   <Accordion title="BOOTSTRAP.md - first-run ritual">
     One-time first-run ritual. Only created for a brand-new workspace. Delete it after the ritual is complete.
@@ -120,7 +120,10 @@ Older OpenClaw releases wrote `openclaw-workspace-state.json`,
 `.openclaw/workspace-state.json`, and `.attested` workspace sidecars. Current
 runtime uses only the shared SQLite database for that state. If Doctor reports
 one of these files, run `openclaw doctor --fix`; Doctor imports valid legacy
-state and deletes a source only after verifying the database rows.
+state and deletes a source only after verifying the database rows. Empty reserved
+hashed files under `workspace-attestations/` are discarded because they contain
+no importable state; other unreadable sources stay in place and Doctor names
+their paths.
 
 ## Git backup (recommended, private)
 

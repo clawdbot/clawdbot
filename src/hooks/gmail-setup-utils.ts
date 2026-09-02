@@ -1,9 +1,9 @@
 // Gmail setup utilities write helper files and normalize Gmail setup settings.
 import fs from "node:fs";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveExecutable } from "../infra/executable-path.js";
+import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { hasBinary } from "../skills/loading/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -11,54 +11,10 @@ import { normalizeServePath } from "./gmail.js";
 
 let cachedPythonPath: string | null | undefined;
 let gcloudBin: string | undefined;
-const MAX_OUTPUT_CHARS = 800;
-
-function trimOutput(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed.length <= MAX_OUTPUT_CHARS) {
-    return trimmed;
-  }
-  return `${truncateUtf16Safe(trimmed, MAX_OUTPUT_CHARS)}…`;
-}
-
-function formatCommandResultInternal(
-  command: string,
-  result: SpawnResult,
-  statusLabel: "failed" | "exited",
-): string {
-  const code = result.code ?? "null";
-  const signal = result.signal ? `, signal=${result.signal}` : "";
-  const killed = result.killed ? ", killed=true" : "";
-  const stderr = trimOutput(result.stderr);
-  const stdout = trimOutput(result.stdout);
-  const lines = [`${command} ${statusLabel} (code=${code}${signal}${killed})`];
-  if (stderr) {
-    lines.push(`stderr: ${stderr}`);
-  }
-  if (stdout) {
-    lines.push(`stdout: ${stdout}`);
-  }
-  return lines.join("\n");
-}
-
-function formatCommandFailure(command: string, result: SpawnResult): string {
-  return formatCommandResultInternal(command, result, "failed");
-}
-
-function formatCommandResult(command: string, result: SpawnResult): string {
-  return formatCommandResultInternal(command, result, "exited");
-}
 
 function formatJsonParseFailure(command: string, result: SpawnResult, err: unknown): string {
-  const reason = formatErrorMessage(err);
+  const reason = formatCommandOutput(formatErrorMessage(err));
   return `${command} returned invalid JSON: ${reason}\n${formatCommandResult(command, result)}`;
-}
-
-function formatCommand(command: string, args: string[]): string {
-  return [command, ...args].join(" ");
 }
 
 function findExecutablesOnPath(bins: string[]): string[] {
@@ -207,7 +163,7 @@ export async function ensureDependency(bin: string, brewArgs: string[]) {
     env: brewEnv,
   });
   if (result.code !== 0) {
-    throw new Error(`brew install failed for ${bin}: ${result.stderr || result.stdout}`);
+    throw new Error(formatCommandResult(`brew install for ${bin}`, result));
   }
   if (!hasBinary(bin)) {
     throw new Error(`${bin} still not available after brew install`);
@@ -224,14 +180,14 @@ export async function ensureGcloudAuth() {
   }
   const login = await runGcloudCommand(["auth", "login"], 600_000);
   if (login.code !== 0) {
-    throw new Error(login.stderr || "gcloud auth login failed");
+    throw new Error(formatCommandResult("gcloud auth login", login));
   }
 }
 
 export async function runGcloud(args: string[]) {
   const result = await runGcloudCommand(args, 120_000);
   if (result.code !== 0) {
-    throw new Error(result.stderr || result.stdout || "gcloud command failed");
+    throw new Error(formatCommandResult("gcloud command", result));
   }
   return result;
 }
@@ -298,13 +254,13 @@ export async function ensureTailscaleEndpoint(params: {
 
   const tailscaleBin = resolveExecutable("tailscale");
   const statusArgs = ["status", "--json"];
-  const statusCommand = formatCommand("tailscale", statusArgs);
+  const statusCommand = "tailscale status --json";
   const status = await runCommandWithTimeout([tailscaleBin, ...statusArgs], {
     timeoutMs: 30_000,
     signal: params.signal,
   });
   if (status.code !== 0) {
-    throw new Error(formatCommandFailure(statusCommand, status));
+    throw new Error(formatCommandResult(statusCommand, status));
   }
   let parsed: { Self?: { DNSName?: string } };
   try {
@@ -328,13 +284,12 @@ export async function ensureTailscaleEndpoint(params: {
   }
   const pathArg = normalizeServePath(params.path);
   const funnelArgs = [params.mode, "--bg", "--set-path", pathArg, "--yes", target];
-  const funnelCommand = formatCommand("tailscale", funnelArgs);
   const funnelResult = await runCommandWithTimeout([tailscaleBin, ...funnelArgs], {
     timeoutMs: 30_000,
     signal: params.signal,
   });
   if (funnelResult.code !== 0) {
-    throw new Error(formatCommandFailure(funnelCommand, funnelResult));
+    throw new Error(formatCommandResult(`tailscale ${params.mode}`, funnelResult));
   }
 
   const baseUrl = `https://${dnsName}${pathArg}`;
