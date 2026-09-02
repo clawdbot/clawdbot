@@ -56,6 +56,7 @@ describe("scpFile", () => {
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
     expect(message).toMatch(/^scp failed \(1\):/);
     expect(message).toContain("fail");
     expect(message).not.toContain("🤖");
