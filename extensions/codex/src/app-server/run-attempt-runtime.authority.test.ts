@@ -86,7 +86,11 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
     ).not.toThrow();
   });
 
-  it("admits the exact configured app-server connection", () => {
+  it.each([
+    ["endpoint URL rotation", { url: "wss://other.example.com" }, {}],
+    ["endpoint removal", { transport: "stdio", url: undefined }, { connectionClass: "local" }],
+    ["remote workspace rotation", {}, { remoteWorkspaceRoot: "/different-workspace" }],
+  ])("continues across account rotation but rejects %s", (_name, startOverride, serverOverride) => {
     const appServer = {
       start: {
         transport: "websocket",
@@ -98,7 +102,6 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
       },
       connectionClass: "remote",
     } as const;
-    const agentDir = "/agent";
     const connectionIdentity = buildScheduledCodexAppServerConnectionIdentity(appServer);
     const configuredAuthority = {
       ...scheduledAuthority,
@@ -122,20 +125,36 @@ describe("assertScheduledCodexAppAuthorityRuntime", () => {
       }),
     ).toBe(connectionIdentity);
 
-    expect(() =>
-      assertScheduledCodexAppAuthorityRuntime(
-        scheduledConnection({ appServer, agentDir, startupPreparedAuth: undefined }),
-        { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },
-      ),
-    ).not.toThrow();
+    // Configured authority is endpoint-owned; prepared-profile accounts do not
+    // replace it when the endpoint is reauthenticated between scheduled runs.
+    for (const accountId of [undefined, "account-1", "account-2"]) {
+      expect(() =>
+        assertScheduledCodexAppAuthorityRuntime(
+          scheduledConnection({
+            appServer,
+            startupPreparedAuth: accountId
+              ? {
+                  kind: "profile",
+                  profileId: "openai:work",
+                  snapshot: {
+                    loginParams: { type: "chatgptAuthTokens" },
+                    chatgptAccountId: accountId,
+                  },
+                }
+              : undefined,
+          }),
+          { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },
+        ),
+      ).not.toThrow();
+    }
     expect(() =>
       assertScheduledCodexAppAuthorityRuntime(
         scheduledConnection({
           appServer: {
             ...appServer,
-            start: { ...appServer.start, url: "wss://other.example.com" },
+            ...serverOverride,
+            start: { ...appServer.start, ...startOverride },
           },
-          agentDir,
           startupPreparedAuth: undefined,
         }),
         { trigger: "cron", scheduledRuntimeAuthority: configuredAuthority },

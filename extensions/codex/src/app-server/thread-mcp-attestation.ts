@@ -14,18 +14,18 @@ export async function attestCodexRestrictedToolSurfaceMcpServersDisabled(
   }
   // Codex reports configured-but-disabled servers as inactive status rows.
   // Match those rows to the exact per-thread deny patch instead of requiring an empty inventory.
-  const expectedDisabledServerNames = new Set<string>();
+  const expectedServers = new Map<string, "disabled" | "active">();
   for (const [name, serverConfig] of Object.entries(configuredServers ?? {})) {
     if (!isJsonObject(serverConfig) || serverConfig.enabled !== false) {
       throw new Error(`Codex restricted-tool-surface MCP server ${name} is not disabled`);
     }
-    expectedDisabledServerNames.add(name);
+    expectedServers.set(name, "disabled");
   }
-  const expectedActiveServers = new Set(expectedActiveServerNames);
-  for (const name of expectedActiveServers) {
-    if (expectedDisabledServerNames.has(name)) {
+  for (const name of expectedActiveServerNames) {
+    if (expectedServers.get(name) === "disabled") {
       throw new Error(`Codex restricted-tool-surface MCP server ${name} has conflicting policy`);
     }
+    expectedServers.set(name, "active");
   }
   const response = await client.request(
     "mcpServerStatus/list",
@@ -44,7 +44,7 @@ export async function attestCodexRestrictedToolSurfaceMcpServersDisabled(
         "Codex mcpServerStatus/list returned an invalid restricted-tool-surface server",
       );
     }
-    if (!expectedDisabledServerNames.has(status.name) && !expectedActiveServers.has(status.name)) {
+    if (!expectedServers.has(status.name)) {
       throw new Error(
         `Codex restricted-tool-surface MCP attestation found unexpected server ${status.name}`,
       );
@@ -60,7 +60,7 @@ export async function attestCodexRestrictedToolSurfaceMcpServersDisabled(
         `Codex restricted-tool-surface MCP attestation returned malformed server ${status.name}`,
       );
     }
-    if (expectedActiveServers.has(status.name)) {
+    if (expectedServers.get(status.name) === "active") {
       if (status.serverInfo === null || Object.keys(status.tools).length === 0) {
         throw new Error(
           `Codex restricted-tool-surface MCP attestation found inactive admitted server ${status.name}`,
@@ -79,17 +79,10 @@ export async function attestCodexRestrictedToolSurfaceMcpServersDisabled(
       );
     }
   }
-  for (const expectedName of expectedDisabledServerNames) {
+  for (const [expectedName, state] of expectedServers) {
     if (!observedServerNames.has(expectedName)) {
       throw new Error(
-        `Codex restricted-tool-surface MCP attestation is missing server ${expectedName}`,
-      );
-    }
-  }
-  for (const expectedName of expectedActiveServers) {
-    if (!observedServerNames.has(expectedName)) {
-      throw new Error(
-        `Codex restricted-tool-surface MCP attestation is missing admitted server ${expectedName}`,
+        `Codex restricted-tool-surface MCP attestation is missing ${state === "active" ? "admitted " : ""}server ${expectedName}`,
       );
     }
   }

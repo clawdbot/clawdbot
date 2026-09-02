@@ -234,7 +234,12 @@ describe("Codex app inventory across physical process restart", () => {
                   tools:
                     accountRevoked || (threadId && threadToolRevocations.has(threadId))
                       ? {}
-                      : { list: { _meta: { connector_id: appId } } },
+                      : {
+                          list: {
+                            _meta: { connector_id: appId },
+                            annotations: { destructiveHint: false, openWorldHint: false },
+                          },
+                        },
                 },
               ],
               nextCursor: null,

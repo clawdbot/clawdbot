@@ -31,9 +31,14 @@ const CODEX_APP_AUTHORITY_CAPTURE_MIN_TIMEOUT_MS = 100;
 
 type CronRuntimeAuthority = NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
 type CodexAppToolApprovalMode = "auto" | "prompt" | "writes" | "approve";
+type CodexScheduledAppTool = {
+  title?: string;
+  destructiveHint?: boolean;
+  openWorldHint?: boolean;
+};
 export type CurrentCodexScheduledAppPolicy = {
   config: Record<string, unknown>;
-  toolsByApp: ReadonlyMap<string, ReadonlyMap<string, string | undefined>>;
+  toolsByApp: ReadonlyMap<string, ReadonlyMap<string, CodexScheduledAppTool>>;
 };
 
 export type ScheduledCodexAppCreatorAuth =
@@ -218,8 +223,8 @@ type CodexScheduledAppPolicyRequest = (
 async function readCodexScheduledAppToolsByApp(params: {
   request: CodexScheduledAppPolicyRequest;
   threadId?: string;
-}): Promise<Map<string, Map<string, string | undefined>>> {
-  const toolsByApp = new Map<string, Map<string, string | undefined>>();
+}): Promise<Map<string, Map<string, CodexScheduledAppTool>>> {
+  const toolsByApp = new Map<string, Map<string, CodexScheduledAppTool>>();
   const seenCursors = new Set<string>();
   let cursor: string | null | undefined;
   for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
@@ -242,9 +247,14 @@ async function readCodexScheduledAppToolsByApp(params: {
       for (const [toolName, tool] of Object.entries(status.tools)) {
         const connectorId = readCodexMcpToolConnectorId(tool);
         if (connectorId) {
-          const tools = toolsByApp.get(connectorId) ?? new Map<string, string | undefined>();
-          const title = asOptionalRecord(tool)?.title;
-          tools.set(toolName, typeof title === "string" ? title : undefined);
+          const tools = toolsByApp.get(connectorId) ?? new Map<string, CodexScheduledAppTool>();
+          const metadata = asOptionalRecord(tool);
+          const annotations = asOptionalRecord(metadata?.annotations);
+          tools.set(toolName, {
+            title: typeof metadata?.title === "string" ? metadata.title : undefined,
+            destructiveHint: annotations?.destructiveHint === false ? false : undefined,
+            openWorldHint: annotations?.openWorldHint === false ? false : undefined,
+          });
           toolsByApp.set(connectorId, tools);
         }
       }
@@ -294,26 +304,49 @@ function readCurrentToolPolicy(
   config: Record<string, unknown>,
   appId: string,
   toolName: string,
-  toolTitle: string | undefined,
+  metadata: CodexScheduledAppTool | undefined,
   fallbackApprovalMode: CodexAppToolApprovalMode = "auto",
 ): { enabled: boolean; approvalMode: CodexAppToolApprovalMode } {
-  const app = asOptionalRecord(asOptionalRecord(config.apps)?.[appId]);
+  const apps = asOptionalRecord(config.apps);
+  const app = asOptionalRecord(apps?.[appId]);
+  const defaults = asOptionalRecord(apps?.["_default"]);
   const tools = asOptionalRecord(app?.tools);
   // Codex selects the full-name entry before the title entry, not each field
   // independently. Preserve that precedence for both enablement and approval.
   const tool = asOptionalRecord(
-    tools?.[toolName] ?? (toolTitle !== undefined ? tools?.[toolTitle] : undefined),
+    tools?.[toolName] ?? (metadata?.title !== undefined ? tools?.[metadata.title] : undefined),
   );
   const defaultToolsEnabled = app?.default_tools_enabled;
   return {
     enabled:
-      typeof tool?.enabled === "boolean"
+      (app ? app.enabled !== false : defaults?.enabled !== false) &&
+      (typeof tool?.enabled === "boolean"
         ? tool.enabled
         : typeof defaultToolsEnabled === "boolean"
           ? defaultToolsEnabled
-          : true,
-    approvalMode: normalizeAppToolApprovalMode(tool?.approval_mode) ?? fallbackApprovalMode,
+          : appToolHintsAllowed(metadata, {
+              allowDestructiveActions:
+                (app?.destructive_enabled ?? defaults?.destructive_enabled) !== false,
+              allowOpenWorld: (app?.open_world_enabled ?? defaults?.open_world_enabled) !== false,
+            })),
+    approvalMode:
+      normalizeAppToolApprovalMode(tool?.approval_mode) ??
+      normalizeAppToolApprovalMode(app?.default_tools_approval_mode) ??
+      normalizeAppToolApprovalMode(defaults?.default_tools_approval_mode) ??
+      fallbackApprovalMode,
   };
+}
+
+function appToolHintsAllowed(
+  tool: CodexScheduledAppTool | undefined,
+  policy: Pick<CodexAppPolicyContextEntry, "allowDestructiveActions" | "allowOpenWorld">,
+): boolean {
+  // Codex treats missing annotations as destructive/open-world. Explicit tool
+  // enablement bypasses its app flags, so enforce the stored cap before projecting it.
+  return (
+    (policy.allowDestructiveActions || tool?.destructiveHint === false) &&
+    (policy.allowOpenWorld !== false || tool?.openWorldHint === false)
+  );
 }
 
 /** Captures only apps callable on the exact active Codex client/thread. */
@@ -351,9 +384,10 @@ export async function captureScheduledCodexAppAuthority(params: {
   };
   let installed: v2.AppsInstalledResponse;
   let currentPolicy: CurrentCodexScheduledAppPolicy;
-  let managedRequirementsFingerprint: string | undefined;
+  let auth: ScheduledCodexAppAuthorityAuth;
+  const creatorAuth = params.auth;
   try {
-    [installed, currentPolicy, managedRequirementsFingerprint] = await withAbortableTimeout({
+    [installed, currentPolicy, auth] = await withAbortableTimeout({
       promise: Promise.all([
         boundedClient.request("app/installed", {
           threadId: params.threadId,
@@ -365,9 +399,15 @@ export async function captureScheduledCodexAppAuthority(params: {
           threadId: params.threadId,
           configCwd: params.configCwd,
         }),
-        params.auth.kind === "configured-app-server"
-          ? readCodexManagedRequirementsFingerprint(boundedClient, params.signal)
-          : Promise.resolve(undefined),
+        creatorAuth.kind === "prepared-profile"
+          ? Promise.resolve({ profileId: creatorAuth.profileId, accountId: creatorAuth.accountId })
+          : readCodexManagedRequirementsFingerprint(boundedClient, params.signal).then(
+              (managedRequirementsFingerprint) => ({
+                kind: creatorAuth.kind,
+                connectionFingerprint: creatorAuth.connectionFingerprint,
+                managedRequirementsFingerprint,
+              }),
+            ),
       ]),
       timeoutMs,
       signal: params.signal,
@@ -416,20 +456,6 @@ export async function captureScheduledCodexAppAuthority(params: {
   if (apps.length === 0) {
     return undefined;
   }
-  const auth: ScheduledCodexAppAuthorityAuth =
-    params.auth.kind === "prepared-profile"
-      ? { profileId: params.auth.profileId, accountId: params.auth.accountId }
-      : {
-          kind: "configured-app-server",
-          connectionFingerprint: params.auth.connectionFingerprint,
-          managedRequirementsFingerprint:
-            managedRequirementsFingerprint ??
-            (() => {
-              throw new Error(
-                "Codex configured app-server authority capture omitted managed requirements",
-              );
-            })(),
-        };
   return {
     version: 1,
     runtimeId: "codex",
@@ -570,7 +596,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     const currentAppCeiling = appApprovalCeiling(defaultApprovalMode(currentApp));
     // Current inventory owns existence; captured modes only cap tools that
     // still exist (and tools added later within the already-authorized app).
-    const tools = currentPolicy.toolsByApp.get(appId) ?? new Map<string, string | undefined>();
+    const tools = currentPolicy.toolsByApp.get(appId) ?? new Map<string, CodexScheduledAppTool>();
     appPatch.tools = Object.fromEntries(
       [...tools.keys()].toSorted().map((toolName) => {
         const capturedMode = captured.tools[toolName] ?? storedAppCeiling;
@@ -584,7 +610,8 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
         return [
           toolName,
           {
-            enabled: currentToolPolicy.enabled,
+            enabled:
+              currentToolPolicy.enabled && appToolHintsAllowed(tools.get(toolName), currentApp),
             approval_mode: intersectToolApprovalMode(
               intersectToolApprovalMode(capturedMode, storedAppCeiling),
               intersectToolApprovalMode(currentToolPolicy.approvalMode, currentAppCeiling),
@@ -616,17 +643,11 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   };
 }
 
-function readScheduledCodexAppAuthorityAuth(
-  authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
-): ScheduledCodexAppAuthorityPayload["auth"] | undefined {
-  return parseScheduledCodexAppAuthority(authority)?.auth;
-}
-
 /** Returns the managed-requirements identity captured for a configured app-server job. */
 export function readScheduledCodexAppManagedRequirementsFingerprint(
   authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
 ): string | undefined {
-  const auth = readScheduledCodexAppAuthorityAuth(authority);
+  const auth = parseScheduledCodexAppAuthority(authority)?.auth;
   return auth?.kind === "configured-app-server" ? auth.managedRequirementsFingerprint : undefined;
 }
 
@@ -637,7 +658,7 @@ export function assertScheduledCodexAppAuthorityRuntime(
   >,
   params: Pick<EmbeddedRunAttemptParams, "trigger" | "scheduledRuntimeAuthority">,
 ): void {
-  const scheduledAuth = readScheduledCodexAppAuthorityAuth(params.scheduledRuntimeAuthority);
+  const scheduledAuth = parseScheduledCodexAppAuthority(params.scheduledRuntimeAuthority)?.auth;
   if (!scheduledAuth) {
     return;
   }
@@ -651,6 +672,8 @@ export function assertScheduledCodexAppAuthorityRuntime(
     );
   }
   if (scheduledAuth.kind === "configured-app-server") {
+    // Configured jobs belong to the endpoint, not its current ChatGPT account.
+    // Removal or fingerprint rotation rejects before prewarm; cron records the failure.
     const connectionFingerprint = buildScheduledCodexAppServerConnectionIdentity(
       connection.appServer,
     );

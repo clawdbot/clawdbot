@@ -12,6 +12,7 @@ import {
   buildScheduledCodexAppAuthorityInputFingerprint,
   captureScheduledCodexAppAuthority,
   intersectCodexPluginThreadConfigWithScheduledAuthority,
+  readCurrentCodexScheduledAppPolicy,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
 import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
@@ -389,10 +390,10 @@ describe("scheduled Codex app authority", () => {
         toolsByApp: new Map([
           [
             "calendar",
-            new Map<string, string | undefined>([
-              ["list", undefined],
-              ["edit", undefined],
-              ["newly_added", undefined],
+            new Map([
+              ["list", {}],
+              ["edit", {}],
+              ["newly_added", {}],
             ]),
           ],
         ]),
@@ -420,9 +421,9 @@ describe("scheduled Codex app authority", () => {
           open_world_enabled: false,
           approvals_reviewer: "user",
           tools: {
-            list: { enabled: true, approval_mode: "prompt" },
-            edit: { enabled: true, approval_mode: "prompt" },
-            newly_added: { enabled: true, approval_mode: "prompt" },
+            list: { enabled: false, approval_mode: "prompt" },
+            edit: { enabled: false, approval_mode: "prompt" },
+            newly_added: { enabled: false, approval_mode: "prompt" },
           },
         },
       },
@@ -444,9 +445,28 @@ describe("scheduled Codex app authority", () => {
       expectedEnabled: false,
     },
     {
+      name: "app destructive restriction with unknown annotations",
+      appConfig: { destructive_enabled: false },
+      expectedEnabled: false,
+    },
+    {
+      name: "app open-world restriction with unknown annotations",
+      appConfig: { open_world_enabled: false },
+      expectedEnabled: false,
+    },
+    {
       name: "explicit tool enablement over app default disablement",
       appConfig: {
         default_tools_enabled: false,
+        tools: { edit: { enabled: true } },
+      },
+      expectedEnabled: true,
+    },
+    {
+      name: "explicit tool enablement over current app hint defaults",
+      appConfig: {
+        destructive_enabled: false,
+        open_world_enabled: false,
         tools: { edit: { enabled: true } },
       },
       expectedEnabled: true,
@@ -484,12 +504,14 @@ describe("scheduled Codex app authority", () => {
       expectedEnabled: false,
     },
   ])("preserves $name from the current Codex config", ({ appConfig, expectedEnabled }) => {
+    const config = threadConfig();
+    config.policyContext = policyContext();
     const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
-      threadConfig(),
+      config,
       authority(),
       {
         config: { apps: { calendar: appConfig } },
-        toolsByApp: new Map([["calendar", new Map([["edit", "Edit event"]])]]),
+        toolsByApp: new Map([["calendar", new Map([["edit", { title: "Edit event" }]])]]),
       },
     );
 
@@ -504,6 +526,131 @@ describe("scheduled Codex app authority", () => {
     });
   });
 
+  it.each(["stored", "current"] as const)(
+    "keeps %s app caps authoritative over explicit tool enablement",
+    async (owner) => {
+      const config = threadConfig();
+      if (owner === "stored") {
+        config.policyContext = policyContext();
+      }
+      const stored = authority();
+      if (owner === "stored") {
+        for (const app of stored.payload.apps) {
+          app.allowDestructiveActions = false;
+          app.allowOpenWorld = false;
+        }
+      }
+      const currentPolicy = await readCurrentCodexScheduledAppPolicy({
+        request: async (method) =>
+          method === "config/read"
+            ? {
+                config: {
+                  apps: {
+                    calendar: {
+                      default_tools_enabled: true,
+                      tools: { destructive: { enabled: true } },
+                    },
+                  },
+                },
+              }
+            : {
+                data: [
+                  {
+                    name: "codex_apps",
+                    tools: {
+                      newly_benign: {
+                        _meta: { connector_id: "calendar" },
+                        annotations: { destructiveHint: false, openWorldHint: false },
+                      },
+                      destructive: {
+                        _meta: { connector_id: "calendar" },
+                        annotations: { destructiveHint: true, openWorldHint: false },
+                      },
+                      open_world: {
+                        _meta: { connector_id: "calendar" },
+                        annotations: { destructiveHint: false, openWorldHint: true },
+                      },
+                      unannotated: { _meta: { connector_id: "calendar" } },
+                    },
+                  },
+                ],
+                nextCursor: null,
+              },
+      });
+
+      const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+        config,
+        stored,
+        currentPolicy,
+      );
+
+      expect(intersected.configPatch).toMatchObject({
+        apps: {
+          calendar: {
+            tools: {
+              newly_benign: { enabled: true },
+              destructive: { enabled: false },
+              open_world: { enabled: false },
+              unannotated: { enabled: false },
+            },
+          },
+        },
+      });
+    },
+  );
+
+  it.each([
+    { name: "global default", app: {}, expected: "prompt" },
+    {
+      name: "app default over global default",
+      app: { default_tools_approval_mode: "writes" },
+      expected: "writes",
+    },
+    {
+      name: "tool override over app default",
+      app: {
+        default_tools_approval_mode: "prompt",
+        tools: { edit: { approval_mode: "approve" } },
+      },
+      expected: "approve",
+    },
+  ])("preserves approval $name during capture and continuation", async ({ app, expected }) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "app/installed") {
+        return { apps: [{ id: "calendar", enabled: true, callable: true }] };
+      }
+      if (method === "config/read") {
+        return {
+          config: {
+            apps: { _default: { default_tools_approval_mode: "prompt" }, calendar: app },
+          },
+        };
+      }
+      return {
+        data: [{ name: "codex_apps", tools: { edit: { _meta: { connector_id: "calendar" } } } }],
+        nextCursor: null,
+      };
+    });
+    const captured = await captureScheduledCodexAppAuthority({
+      client: { request } as never,
+      threadId: "thread-final",
+      policyContext: policyContext(),
+      auth: { kind: "prepared-profile", profileId: "openai:work", accountId: "acct-1" },
+    });
+    expect(captured).toMatchObject({ payload: { apps: [{ tools: { edit: expected } }] } });
+
+    const config = threadConfig();
+    config.policyContext = policyContext();
+    const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
+      config,
+      authority(),
+      await readCurrentCodexScheduledAppPolicy({ request }),
+    );
+    expect(intersected.configPatch).toMatchObject({
+      apps: { calendar: { tools: { edit: { approval_mode: expected } } } },
+    });
+  });
+
   it("removes tools missing from current inventory and rotates the fingerprint", () => {
     const full = intersectCodexPluginThreadConfigWithScheduledAuthority(
       threadConfig(),
@@ -513,9 +660,9 @@ describe("scheduled Codex app authority", () => {
         toolsByApp: new Map([
           [
             "calendar",
-            new Map<string, string | undefined>([
-              ["list", undefined],
-              ["edit", undefined],
+            new Map([
+              ["list", {}],
+              ["edit", {}],
             ]),
           ],
         ]),
@@ -526,9 +673,7 @@ describe("scheduled Codex app authority", () => {
       authority(),
       {
         config: {},
-        toolsByApp: new Map([
-          ["calendar", new Map<string, string | undefined>([["list", undefined]])],
-        ]),
+        toolsByApp: new Map([["calendar", new Map([["list", {}]])]]),
       },
     );
 
@@ -582,9 +727,7 @@ describe("scheduled Codex app authority", () => {
       authority(),
       {
         config: {},
-        toolsByApp: new Map([
-          ["calendar", new Map<string, string | undefined>([["edit", undefined]])],
-        ]),
+        toolsByApp: new Map([["calendar", new Map([["edit", {}]])]]),
       },
     );
 

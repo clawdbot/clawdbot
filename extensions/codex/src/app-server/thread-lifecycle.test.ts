@@ -328,6 +328,47 @@ describe("Codex ring-zero thread config", () => {
   });
 
   it.each([
+    { name: "missing", rows: [], failure: "is missing admitted server codex_apps" },
+    {
+      name: "inactive",
+      rows: [{ name: "codex_apps", serverInfo: null, tools: { lookup: {} } }],
+      failure: "found inactive admitted server codex_apps",
+    },
+    {
+      name: "empty tools",
+      rows: [{ name: "codex_apps", serverInfo: { name: "codex_apps" }, tools: {} }],
+      failure: "found inactive admitted server codex_apps",
+    },
+  ])("rejects an admitted app server with $name status", async ({ rows, failure }) => {
+    const request = vi.fn(async () => ({ data: rows, nextCursor: null }));
+
+    await expect(
+      attestCodexRestrictedToolSurfaceMcpServersDisabled(
+        { request } as never,
+        "thread-restricted",
+        {},
+        undefined,
+        ["codex_apps"],
+      ),
+    ).rejects.toThrow(failure);
+  });
+
+  it("rejects an admitted app server that the thread disabled", async () => {
+    const request = vi.fn();
+
+    await expect(
+      attestCodexRestrictedToolSurfaceMcpServersDisabled(
+        { request } as never,
+        "thread-restricted",
+        { mcp_servers: { codex_apps: { enabled: false } } },
+        undefined,
+        ["codex_apps"],
+      ),
+    ).rejects.toThrow("MCP server codex_apps has conflicting policy");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
     {
       name: "an unexpected server",
       status: { name: "unexpected", serverInfo: null, tools: {} },

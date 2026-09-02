@@ -66,13 +66,7 @@ export function commitCronRuntimeRows<T>(params: {
     ({ db }) => {
       const rows = loadCronRows(db, storeKey).filter((row) => jobIds.has(row.job_id));
       const rowsByJobId = new Map(rows.map((row) => [row.job_id, row] as const));
-      const loadedJobs: CronStoredJob[] = [];
-      for (const row of rows) {
-        const job = loadedCronStoreFromRows([row]).store.jobs[0];
-        if (job) {
-          loadedJobs.push(job);
-        }
-      }
+      const loadedJobs = loadedCronStoreFromRows(rows).store.jobs;
       const { repairJobIds } = loadCronRuntimeAuthorities({ db, storeKey, jobs: loadedJobs });
       if (repairJobIds.length > 0) {
         repairCronRuntimeAuthorityRows({

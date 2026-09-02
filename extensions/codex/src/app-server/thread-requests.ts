@@ -576,20 +576,8 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   },
   signal?: AbortSignal,
 ): Promise<void> {
-  const response: CodexConfigRequirementsReadResponse = await client.request(
-    "configRequirements/read",
-    undefined,
-    { signal },
-  );
-  if (!isJsonObject(response) || !Object.hasOwn(response, "requirements")) {
-    throw new Error("Codex configRequirements/read returned an invalid response");
-  }
-  if (response.requirements !== null && !isJsonObject(response.requirements)) {
-    throw new Error("Codex configRequirements/read returned invalid requirements");
-  }
-  const managedRequirementsFingerprint = buildCodexManagedRequirementsFingerprint(
-    response.requirements,
-  );
+  const requirements = await readCodexManagedRequirements(client, signal);
+  const managedRequirementsFingerprint = buildCodexManagedRequirementsFingerprint(requirements);
   const managedRequirementsMatch =
     options.allowedManagedRequirementsFingerprint !== undefined &&
     managedRequirementsFingerprint === options.allowedManagedRequirementsFingerprint;
@@ -600,12 +588,12 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
       "Codex managed requirements changed since this automation was authorized; reauthorize the automation from a fresh owner turn",
     );
   }
-  if (response.requirements === null) {
+  if (requirements === null) {
     return;
   }
   if (options.restrictedToolSurface) {
     for (const key of ["hooks", "managedHooks", "managed_hooks"] as const) {
-      const hooks = response.requirements[key];
+      const hooks = requirements[key];
       if (hooks === undefined || hooks === null) {
         continue;
       }
@@ -619,14 +607,14 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   }
   const additionalDeniedFeatures = new Set(options.additionalDeniedFeatures);
   for (const key of ["featureRequirements", "feature_requirements"] as const) {
-    const requirements = response.requirements[key];
-    if (requirements === undefined || requirements === null) {
+    const featureRequirements = requirements[key];
+    if (featureRequirements === undefined || featureRequirements === null) {
       continue;
     }
-    if (!isJsonObject(requirements)) {
+    if (!isJsonObject(featureRequirements)) {
       throw new Error("Codex configRequirements/read returned invalid feature requirements");
     }
-    for (const [feature, enabled] of Object.entries(requirements)) {
+    for (const [feature, enabled] of Object.entries(featureRequirements)) {
       if (typeof enabled !== "boolean") {
         throw new Error("Codex configRequirements/read returned invalid feature requirements");
       }
@@ -656,6 +644,15 @@ export async function readCodexManagedRequirementsFingerprint(
   client: Pick<CodexAppServerClient, "request">,
   signal?: AbortSignal,
 ): Promise<string> {
+  return buildCodexManagedRequirementsFingerprint(
+    await readCodexManagedRequirements(client, signal),
+  );
+}
+
+async function readCodexManagedRequirements(
+  client: Pick<CodexAppServerClient, "request">,
+  signal?: AbortSignal,
+): Promise<JsonObject | null> {
   const response: CodexConfigRequirementsReadResponse = await client.request(
     "configRequirements/read",
     undefined,
@@ -667,7 +664,7 @@ export async function readCodexManagedRequirementsFingerprint(
   if (response.requirements !== null && !isJsonObject(response.requirements)) {
     throw new Error("Codex configRequirements/read returned invalid requirements");
   }
-  return buildCodexManagedRequirementsFingerprint(response.requirements);
+  return response.requirements;
 }
 
 export { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-mcp-attestation.js";
