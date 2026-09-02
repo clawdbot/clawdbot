@@ -204,6 +204,10 @@
           "description": "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Omitted with worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
           "type": "string"
         },
+        "expectsCompletionMessage": {
+          "description": "false: fire-and-forget; requester gets no completion handoff when the child finishes. collect=true forces false.",
+          "type": "boolean"
+        },
         "group": {
           "description": "Custom sidebar group for a visible session; a new name creates the group. Omit or pass an empty string to leave it ungrouped.",
           "type": "string"

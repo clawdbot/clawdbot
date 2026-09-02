@@ -24,6 +24,7 @@ public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authTailscaleProxyMissing = "AUTH_TAILSCALE_PROXY_MISSING"
     case authTailscaleWhoisFailed = "AUTH_TAILSCALE_WHOIS_FAILED"
     case authTailscaleIdentityMismatch = "AUTH_TAILSCALE_IDENTITY_MISMATCH"
+    case authVerifiedUserRequired = "AUTH_VERIFIED_USER_REQUIRED"
     case pairingRequired = "PAIRING_REQUIRED"
     case protocolMismatch = "PROTOCOL_MISMATCH"
     case controlUiDeviceIdentityRequired = "CONTROL_UI_DEVICE_IDENTITY_REQUIRED"
@@ -189,6 +190,7 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
              .authPasswordNotConfigured,
              .authRateLimited,
              .authScopeMismatch,
+             .authVerifiedUserRequired,
              .pairingRequired,
              .protocolMismatch,
              .controlUiDeviceIdentityRequired,

@@ -1,9 +1,14 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -570,6 +575,313 @@ class ChatControllerReconnectRestoreTest {
       releaseReconnectHistory.complete(history(emptyList()))
       runCurrent()
       assertTrue(controller.healthOk.value)
+    }
+
+  @Test
+  fun lateHealthSuccessCannotOverrideNewerSelectionFailure() = runTest { verifyLateHealthAfterSelection(cancelOlder = false) }
+
+  @Test
+  fun forcedRefreshSurvivesNewerNonforcedRecovery() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      val healthRequests = gateway.callCount("health")
+      gateway.respond("health") { error("health unavailable") }
+      val refreshStarted = CompletableDeferred<Unit>()
+      val releaseRefresh = CompletableDeferred<String>()
+      var historyRequests = 0
+      gateway.respond("chat.history") {
+        if (historyRequests++ == 0) {
+          refreshStarted.complete(Unit)
+          releaseRefresh.await()
+        } else {
+          history(listOf(ReplayHistoryMessage("assistant", "newer history", 2)))
+        }
+      }
+      controller.refresh()
+      runCurrent()
+      refreshStarted.await()
+      recoverSeqGap(controller)
+
+      assertEquals(listOf("newer history"), controller.messageTexts)
+      assertEquals("Nonforced recovery must retain Refresh's forced health check", healthRequests + 1, gateway.callCount("health"))
+      assertFalse(controller.healthOk.value)
+      releaseRefresh.complete(history(listOf(ReplayHistoryMessage("assistant", "older history", 1))))
+      runCurrent()
+      assertEquals(listOf("newer history"), controller.messageTexts)
+      assertEquals(healthRequests + 1, gateway.callCount("health"))
+      assertFalse(controller.healthOk.value)
+    }
+
+  @Test
+  fun failedSupersedingHistoryDoesNotStrandPeriodicHealth() = runTest { verifyHealthAfterSupersedingHistoryEnds(cancelHistory = false) }
+
+  @Test
+  fun cancelledSupersedingHistoryDoesNotStrandPeriodicHealth() = runTest { verifyHealthAfterSupersedingHistoryEnds(cancelHistory = true) }
+
+  private suspend fun TestScope.verifyHealthAfterSupersedingHistoryEnds(cancelHistory: Boolean) {
+    val gateway = ScriptedGateway(json)
+    val releaseRefresh = CompletableDeferred<String>()
+    val releaseMutationHistory = CompletableDeferred<String>()
+    val mutationHistoryStarted = CompletableDeferred<Job>()
+    var historyRequests = 0
+    gateway.respond("chat.history") {
+      if (historyRequests++ == 0) {
+        releaseRefresh.await()
+      } else {
+        mutationHistoryStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseMutationHistory.await()
+      }
+    }
+    val controller = newScopedController(gateway)
+    controller.handleGatewayEvent("health", null)
+    runCurrent()
+    controller.handleGatewayEvent("tick", null)
+    runCurrent()
+    assertEquals(1, gateway.callCount("health"))
+    gateway.respond("health") { error("health unavailable") }
+    controller.refresh()
+    runCurrent()
+    assertEquals(1, gateway.callCount("chat.history"))
+
+    controller.handleGatewayEvent(
+      "sessions.changed",
+      """{"reason":"branch-switch","sessionKey":"main","agentId":"main"}""",
+    )
+    runCurrent()
+    val mutationHistoryJob = mutationHistoryStarted.await()
+    if (cancelHistory) {
+      mutationHistoryJob.cancelAndJoin()
+    } else {
+      releaseMutationHistory.completeExceptionally(
+        GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "history unavailable")),
+      )
+      mutationHistoryJob.join()
+    }
+    releaseRefresh.complete(history(listOf(ReplayHistoryMessage("assistant", "superseded", 1))))
+    runCurrent()
+
+    assertEquals(2, gateway.callCount("chat.history"))
+    assertTrue(controller.messages.value.isEmpty())
+    assertTrue("History failure or cancellation is not a health result", controller.healthOk.value)
+    controller.handleGatewayEvent("tick", null)
+    runCurrent()
+
+    assertEquals("A finished history request must retain Refresh's forced health poll", 2, gateway.callCount("health"))
+    assertFalse(controller.healthOk.value)
+  }
+
+  @Test
+  fun failedOlderHistoryDoesNotReleaseHealthWhileSameGenerationHistoryIsPending() = runTest { verifyPendingSiblingHistoryHealth(olderFails = true) }
+
+  @Test
+  fun failedNewerHistoryKeepsOlderHistoryHealthGate() = runTest { verifyPendingSiblingHistoryHealth(olderFails = false) }
+
+  private fun TestScope.verifyPendingSiblingHistoryHealth(olderFails: Boolean) {
+    val gateway = ScriptedGateway(json)
+    val releaseRefresh = CompletableDeferred<String>()
+    val releaseTerminalHistory = CompletableDeferred<String>()
+    var historyRequests = 0
+    gateway.respond("chat.history") {
+      if (historyRequests++ == 0) releaseRefresh.await() else releaseTerminalHistory.await()
+    }
+    gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+    gateway.respond("health") { error("health unavailable") }
+    val controller = newScopedController(gateway)
+    controller.handleGatewayEvent("health", null)
+    runCurrent()
+    controller.refresh()
+    runCurrent()
+    controller.handleGatewayEvent("chat", chatTerminalPayload("main", "external-run", seq = 1, assistantText = "newer history"))
+    runCurrent()
+    assertEquals(2, gateway.callCount("chat.history"))
+
+    val failedHistory = if (olderFails) releaseRefresh else releaseTerminalHistory
+    val pendingHistory = if (olderFails) releaseTerminalHistory else releaseRefresh
+    failedHistory.completeExceptionally(IllegalStateException("history failed"))
+    runCurrent()
+    controller.handleGatewayEvent("tick", null)
+    runCurrent()
+
+    assertEquals("A failed request must not release its held sibling's health gate", 0, gateway.callCount("health"))
+    assertTrue(controller.healthOk.value)
+    pendingHistory.complete(history(listOf(ReplayHistoryMessage("assistant", "accepted history", 2))))
+    runCurrent()
+
+    assertEquals(listOf("accepted history"), controller.messageTexts)
+    assertEquals(1, gateway.callCount("health"))
+    assertFalse(controller.healthOk.value)
+  }
+
+  @Test
+  fun cancelledNewChatHealthRecoversWithoutManualRefresh() = runTest { verifyCancelledNewRecovery(holdHistory = false) }
+
+  @Test
+  fun cancelledNewChatHistoryRecoversWithoutManualRefresh() = runTest { verifyCancelledNewRecovery(holdHistory = true) }
+
+  private suspend fun TestScope.verifyCancelledNewRecovery(holdHistory: Boolean) {
+    val key = "agent:main:health-fresh"
+    val gateway = ScriptedGateway(json)
+    val entered = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    gateway.respondWith("sessions.create", """{"ok":true,"key":"$key"}""")
+    gateway.respond("chat.history") {
+      if (holdHistory) {
+        entered.complete(Unit)
+        release.await()
+      }
+      historyResponse("fresh-session", emptyList())
+    }
+    gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+    gateway.respond("health") {
+      if (!holdHistory) {
+        entered.complete(Unit)
+        release.await()
+      }
+      "{}"
+    }
+    val controller = newScopedController(gateway)
+    val create = async { controller.startNewChatAwait() }
+    try {
+      entered.await()
+      assertEquals(key, controller.sessionKey.value)
+      assertEquals(holdHistory, controller.historyLoading.value)
+      assertFalse(controller.healthOk.value)
+
+      create.cancelAndJoin()
+      release.complete(Unit)
+      controller.handleGatewayEvent("tick", null)
+      runCurrent()
+
+      assertTrue("Cancelled New must not strand the selected chat's recovery", controller.healthOk.value)
+      assertEquals(key, controller.sessionKey.value)
+      assertEquals("fresh-session", controller.sessionId.value)
+      assertFalse(controller.historyLoading.value)
+      assertEquals(1, gateway.callCount("sessions.create"))
+    } finally {
+      release.complete(Unit)
+      create.cancelAndJoin()
+    }
+  }
+
+  @Test
+  fun cancelledHealthPollCannotOverrideNewerSelectionSuccess() = runTest { verifyLateHealthAfterSelection(cancelOlder = true) }
+
+  private suspend fun TestScope.verifyLateHealthAfterSelection(cancelOlder: Boolean) {
+    val gateway = ScriptedGateway(json)
+    gateway.respond("chat.history") { params ->
+      val key = requireNotNull(gateway.sessionKeyOf(params))
+      historyResponse(key, listOf(ReplayHistoryMessage("assistant", key, 1)))
+    }
+    val controller = newScopedController(gateway)
+    controller.load("main")
+    runCurrent()
+    assertTrue(controller.healthOk.value)
+
+    val oldHealthStarted = CompletableDeferred<Job>()
+    val releaseOldHealth = CompletableDeferred<String>()
+    var healthRequests = 0
+    gateway.respond("health") {
+      if (healthRequests++ == 0) {
+        oldHealthStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseOldHealth.await()
+      } else {
+        check(cancelOlder) { "new selection health unavailable" }
+        "{}"
+      }
+    }
+    controller.refresh()
+    runCurrent()
+    val oldHealthJob = oldHealthStarted.await()
+    val selectedKey = "agent:main:other"
+    controller.switchSession(selectedKey)
+    runCurrent()
+    assertEquals(cancelOlder, controller.healthOk.value)
+
+    if (cancelOlder) oldHealthJob.cancel()
+    releaseOldHealth.complete("{}")
+    oldHealthJob.join()
+    runCurrent()
+    assertEquals(selectedKey, controller.sessionKey.value)
+    assertEquals(listOf(selectedKey), controller.messageTexts)
+    assertEquals("A retired health request must not replace the new selection's result", cancelOlder, controller.healthOk.value)
+  }
+
+  @Test
+  fun lateHealthSuccessAfterDisconnectDoesNotRestoreReadiness() = runTest { verifyLateHealthAfterDisconnect(periodic = false) }
+
+  @Test
+  fun latePeriodicHealthSuccessAfterDisconnectDoesNotRestoreReadiness() = runTest { verifyLateHealthAfterDisconnect(periodic = true) }
+
+  private suspend fun TestScope.verifyLateHealthAfterDisconnect(periodic: Boolean) {
+    val gateway = ScriptedGateway(json)
+    gateway.respondWith("chat.history", history(emptyList()))
+    val controller = newScopedController(gateway)
+    if (periodic) controller.handleGatewayEvent("health", null) else controller.load("main")
+    runCurrent()
+    assertTrue(controller.healthOk.value)
+
+    val healthStarted = CompletableDeferred<Unit>()
+    val releaseHealth = CompletableDeferred<String>()
+    gateway.respond("health") {
+      healthStarted.complete(Unit)
+      releaseHealth.await()
+    }
+    if (periodic) controller.handleGatewayEvent("tick", null) else controller.refresh()
+    runCurrent()
+    healthStarted.await()
+    controller.onDisconnected("Offline")
+    val metadataRequests = gateway.callCount("chat.metadata")
+    releaseHealth.complete("{}")
+    runCurrent()
+
+    assertFalse(controller.healthOk.value)
+    assertNull(controller.sessionId.value)
+    assertEquals("Disconnected health must not trigger metadata requests", metadataRequests, gateway.callCount("chat.metadata"))
+  }
+
+  @Test
+  fun healthFromRetiredConnectionCannotPublishBeforeDisconnectCallback() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", history(emptyList()))
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      val healthStarted = CompletableDeferred<Unit>()
+      val releaseHealth = CompletableDeferred<String>()
+      gateway.respond("health") {
+        healthStarted.complete(Unit)
+        releaseHealth.await()
+      }
+      val gatewayScope = ChatCacheScope("gateway-a", 1)
+      var physicalConnection = 1
+      val controller =
+        backgroundScope.createChatController(
+          cacheScope = { gatewayScope },
+          captureRequestLease = { capturedScope ->
+            val connection = physicalConnection
+            GatewaySession.RequestLease(
+              endpointStableId = requireNotNull(capturedScope).gatewayId,
+              isCurrentImpl = { physicalConnection == connection },
+            ) { method, params, _, withEnqueue ->
+              withEnqueue {}
+              gateway.request(method, params)
+            }
+          },
+          requestGateway = gateway::request,
+        )
+      controller.load("main")
+      runCurrent()
+      healthStarted.await()
+      assertFalse(controller.healthOk.value)
+
+      // The socket owner retires first; the controller has not received its disconnect callback.
+      physicalConnection += 1
+      val metadataRequests = gateway.callCount("chat.metadata")
+      releaseHealth.complete("{}")
+      runCurrent()
+
+      assertFalse("Health from a replaced socket must stay inert before the logical callback", controller.healthOk.value)
+      assertEquals(metadataRequests, gateway.callCount("chat.metadata"))
     }
 
   @Test

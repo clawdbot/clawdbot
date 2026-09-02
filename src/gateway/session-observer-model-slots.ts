@@ -30,29 +30,31 @@ export function createSessionObserverModelSlots(params: {
       if (!resolved || current?.utilityModelRef === resolved) {
         return resolved;
       }
-      const occupied = [...params.states.values()].filter(
-        (state) => state !== current && state.utilityModelRef,
-      );
-      if (current && demoted.has(current)) {
-        if (occupied.length >= params.maxSessions) {
-          return undefined;
+      let occupied = 0;
+      let evicted: SessionObserverState | undefined;
+      for (const state of params.states.values()) {
+        if (state === current || !state.utilityModelRef) {
+          continue;
         }
-        demoted.delete(current);
-        return resolved;
+        occupied += 1;
+        if (
+          !state.terminalHealth &&
+          !state.finalPending &&
+          (!evicted ||
+            (state.lastActivityAt - evicted.lastActivityAt ||
+              state.sessionKey.localeCompare(evicted.sessionKey)) < 0)
+        ) {
+          evicted = state;
+        }
       }
-      if (occupied.length >= params.maxSessions) {
-        const evicted = occupied
-          .filter((state) => !state.terminalHealth && !state.finalPending)
-          .toSorted(
-            (left, right) =>
-              left.lastActivityAt - right.lastActivityAt ||
-              left.sessionKey.localeCompare(right.sessionKey),
-          )[0];
-        if (!evicted) {
+      if (occupied >= params.maxSessions) {
+        if ((current && demoted.has(current)) || !evicted) {
           return undefined;
         }
         demoted.add(evicted);
         params.demote(evicted);
+      } else if (current) {
+        demoted.delete(current);
       }
       return resolved;
     },
