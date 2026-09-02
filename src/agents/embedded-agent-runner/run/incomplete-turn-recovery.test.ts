@@ -33,6 +33,85 @@ function emptyAttempt(assistant = emptyAssistant()) {
 describe("incomplete-turn recovery policy", () => {
   it.each([
     {
+      name: "a completed reaction",
+      aborted: false,
+      timedOut: false,
+      yielded: false,
+      error: false,
+      silent: true,
+    },
+    {
+      name: "a failed reaction",
+      aborted: false,
+      timedOut: false,
+      yielded: false,
+      error: true,
+      silent: false,
+    },
+    {
+      name: "an aborted turn",
+      aborted: true,
+      timedOut: false,
+      yielded: false,
+      error: false,
+      silent: false,
+    },
+    {
+      name: "a timed-out turn",
+      aborted: false,
+      timedOut: true,
+      yielded: false,
+      error: false,
+      silent: false,
+    },
+    {
+      name: "pending work",
+      aborted: false,
+      timedOut: false,
+      yielded: true,
+      error: false,
+      silent: false,
+    },
+  ])(
+    "classifies explicit silence after $name without replaying tools",
+    ({ aborted, timedOut, yielded, error, silent }) => {
+      const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        toolMetas: [{ toolName: "message", meta: "react", replaySafe: false, isError: error }],
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        ...(yielded ? { yieldDetected: true } : {}),
+        ...(error ? { lastToolError: { toolName: "message", error: "reaction failed" } } : {}),
+      });
+      // A user-triggered turn can intentionally end with only a reaction. Do not
+      // conflate permission to stay silent with permission to replay that effect.
+      expect(
+        shouldTreatEmptyAssistantReplyAsSilent({
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "required",
+          onlyExplicitSilentReply: true,
+          payloadCount: 0,
+          aborted,
+          timedOut,
+          attempt,
+        }),
+      ).toBe(silent);
+      expect(
+        resolveEmptyResponseRetryInstruction({
+          payloadCount: 0,
+          aborted,
+          timedOut,
+          attempt,
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    {
       name: "zero-token Anthropic stop",
       provider: "anthropic",
       modelId: "claude-opus-4.7",
