@@ -2505,7 +2505,7 @@ describe("openclaw state database", () => {
         sessionTarget: "main",
         wakeMode: "now",
         payload: { kind: "systemEvent", text: "tick" },
-        ...(delivery ? { delivery } : {}),
+        delivery,
         state: {},
       }));
       const insert = legacy.prepare(
