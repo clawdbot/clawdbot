@@ -11,7 +11,6 @@ openclaw-chat-page {
 }
 
 .chat {
-  --chat-thread-max-width: 48rem;
   /* Keep overlays clear of the edge-hugging scrollbar and add room on wide screens. */
   --chat-thread-gutter: 18px;
   /* Composer box insets. The docked progress card derives its own edge from
@@ -673,14 +672,14 @@ openclaw-chat-page {
      .chat-thread's horizontal padding (moved off the scroll container so
      overlay scrollbars sit flush at the pane edge). */
   width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * var(--chat-thread-side-inset));
-  max-width: var(--chat-thread-max-width);
+  max-width: var(--chat-thread-max-width, 48rem);
   margin-inline: auto;
 }
 
 .chat-inline-approval {
   flex: 0 0 auto;
   width: calc(100% - 2 * var(--chat-thread-gutter) - 2 * var(--chat-thread-side-inset));
-  max-width: var(--chat-thread-max-width);
+  max-width: var(--chat-thread-max-width, 48rem);
   margin: 8px auto;
 }
 

@@ -1733,14 +1733,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("applies configured chat width to tool rows and composer without changing defaults", async () => {
+  it("inherits configured chat width for tool rows and composer without changing defaults", async () => {
     const page = await openBrowserPage(1600, 900);
     const renderFixture = async (configured: boolean) => {
       const style = configured
         ? 'style="--chat-thread-max-width: 82%; --chat-message-max-width: 100%"'
         : "";
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <section class="card chat" ${style}>
+        <openclaw-chat-page ${style}>
+        <section class="card chat">
           <div class="chat-thread chat-thread--direct" role="log">
             <div class="chat-thread-inner">
               <div class="chat-group tool">
@@ -1767,6 +1768,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="agent-chat__input">Composer</div>
           </div>
         </section>
+        </openclaw-chat-page>
       </body></html>`);
       return await page.evaluate(() => {
         const rect = (selector: string) => {
