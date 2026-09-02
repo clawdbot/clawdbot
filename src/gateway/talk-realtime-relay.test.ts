@@ -3057,38 +3057,51 @@ describe("talk realtime gateway relay", () => {
     expect(events.some((entry) => entry.payload.type === "close")).toBe(false);
   });
 
-  it.each(["idle", "completed response", "replacement response before audio"] as const)(
-    "forwards provider playback clear without borrowing a turn from %s",
-    (phase) => {
-      let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
-      const bridge = makeRelayTransport();
-      const provider = createIdleRelayProvider();
-      provider.createBridge = (request) => {
-        bridgeRequest = request;
-        return bridge;
-      };
-      const broadcastToConnIds = vi.fn();
-      const session = createTalkRealtimeRelaySession({
-        context: { broadcastToConnIds } as never,
-        connId: "conn-1",
-        provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
-      });
-      if (!bridgeRequest) {
-        throw new Error("expected realtime bridge request");
-      }
-      const relay = relaySessions.get(session.relaySessionId)!;
+  it.each(
+    [
+      "idle",
+      "active response",
+      "completed response",
+      "replacement response before audio",
+      "replacement transcript before audio",
+      "replacement audio",
+    ].flatMap((phase) => [
+      { phase, source: "provider" },
+      { phase, source: "continuity reset" },
+    ]),
+  )("clears the delivered audio owner during $phase ($source)", ({ phase, source }) => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = makeRelayTransport();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = (request) => {
+      bridgeRequest = request;
+      return bridge;
+    };
+    const broadcastToConnIds = vi.fn();
+    const session = createTalkRealtimeRelaySession({
+      context: { broadcastToConnIds } as never,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+    if (!bridgeRequest) {
+      throw new Error("expected realtime bridge request");
+    }
+    const relay = relaySessions.get(session.relaySessionId)!;
+    let playbackTurnId: string | undefined;
 
-      if (phase !== "idle") {
-        bridgeRequest.onEvent?.({
-          direction: "server",
-          type: "response.created",
-          responseId: "response-a",
-        });
-        bridgeRequest.onAudio(Buffer.alloc(960));
-        bridgeRequest.onMark?.("audio-1");
+    if (phase !== "idle") {
+      bridgeRequest.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: "response-a",
+      });
+      bridgeRequest.onAudio(Buffer.alloc(960));
+      playbackTurnId = relay.harness.talk.activeTurnId;
+      bridgeRequest.onMark?.("audio-1");
+      if (phase !== "active response") {
         bridgeRequest.onResponseDone?.({ status: "completed", responseId: "response-a" });
         bridgeRequest.onEvent?.({
           direction: "server",
@@ -3096,56 +3109,114 @@ describe("talk realtime gateway relay", () => {
           responseId: "response-a",
         });
         expect(relay.harness.talk.activeTurnId).toBeUndefined();
-        // Provider generation finished; the client has not acknowledged this playback.
-        expect(bridge.acknowledgeMark).not.toHaveBeenCalled();
       }
-      if (phase === "replacement response before audio") {
-        bridgeRequest.onEvent?.({
-          direction: "server",
-          type: "response.created",
-          responseId: "response-b",
-        });
-      }
-      const activeTurnId = relay.harness.talk.activeTurnId;
-      const eventCount = broadcastToConnIds.mock.calls.length;
-      const talkEventCount = relay.harness.talk.recentEvents.length;
-
-      bridgeRequest.onClearAudio("barge-in");
-
-      expect(broadcastToConnIds.mock.calls.slice(eventCount)).toEqual([
-        [
-          "talk.event",
-          { relaySessionId: session.relaySessionId, type: "clear", reason: "barge-in" },
-          new Set(["conn-1"]),
-          { dropIfSlow: false },
-        ],
-      ]);
-      expect(relay.harness.talk.activeTurnId).toBe(activeTurnId);
-      expect(relay.harness.talk.recentEvents).toHaveLength(talkEventCount);
+      // The client still owns buffered audio, regardless of provider completion.
       expect(bridge.acknowledgeMark).not.toHaveBeenCalled();
-
-      if (phase !== "replacement response before audio") {
-        bridgeRequest.onEvent?.({
-          direction: "server",
-          type: "response.created",
-          responseId: "response-b",
-        });
+    }
+    if (phase.startsWith("replacement")) {
+      bridgeRequest.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: "response-b",
+      });
+      if (phase === "replacement transcript before audio") {
+        bridgeRequest.onTranscript?.("assistant", "The next answer", false);
+      } else if (phase === "replacement audio") {
+        bridgeRequest.onAudio(Buffer.alloc(960));
+        playbackTurnId = relay.harness.talk.activeTurnId;
       }
-      bridgeRequest.onAudio(Buffer.from([1, 2]));
-      expect(broadcastToConnIds).toHaveBeenLastCalledWith(
+    }
+    const activeTurnId = relay.harness.talk.activeTurnId;
+    const eventCount = broadcastToConnIds.mock.calls.length;
+    const talkEventCount = relay.harness.talk.recentEvents.length;
+    const lastTalkEventSeq = relay.harness.talk.recentEvents.at(-1)?.seq ?? 0;
+
+    const resetting = source === "continuity reset";
+    if (resetting) {
+      bridgeRequest.onEvent?.({ direction: "client", type: "session.continuity.reset" });
+    } else {
+      bridgeRequest.onClearAudio("barge-in");
+    }
+    const expectedClears: Array<{ turnId?: string; type: string; reason: string }> = [];
+    if (!resetting || !activeTurnId || (playbackTurnId && playbackTurnId !== activeTurnId)) {
+      expectedClears.push({
+        turnId: playbackTurnId,
+        type: "output.audio.done",
+        reason: resetting ? "clear" : "barge-in",
+      });
+    }
+    if (resetting && activeTurnId) {
+      expectedClears.push({
+        turnId: activeTurnId,
+        type: "turn.cancelled",
+        reason: "session.continuity.reset",
+      });
+    }
+    expect(broadcastToConnIds.mock.calls.slice(eventCount)).toEqual(
+      expectedClears.map(({ turnId, type, reason }, index) => [
         "talk.event",
-        expect.objectContaining({
-          type: "audio",
-          responseId: "response-b",
-          audioBase64: "AQI=",
-        }),
+        {
+          relaySessionId: session.relaySessionId,
+          type: "clear",
+          ...(!resetting ? { reason: "barge-in" } : {}),
+          ...(turnId
+            ? {
+                talkEvent: expect.objectContaining({
+                  type,
+                  turnId,
+                  seq: lastTalkEventSeq + index + 1,
+                  payload: { reason },
+                  final: true,
+                }),
+              }
+            : {}),
+        },
         new Set(["conn-1"]),
-        { dropIfSlow: true },
-      );
-      expect(relaySessions.get(session.relaySessionId)).toBe(relay);
-      expect(bridge.close).not.toHaveBeenCalled();
-    },
-  );
+        { dropIfSlow: false },
+      ]),
+    );
+    expect(relay.harness.talk.activeTurnId).toBe(resetting ? undefined : activeTurnId);
+    expect(relay.harness.talk.recentEvents).toHaveLength(
+      talkEventCount + expectedClears.filter(({ turnId }) => turnId).length,
+    );
+    expect(bridge.acknowledgeMark).not.toHaveBeenCalled();
+
+    bridgeRequest.onClearAudio("barge-in");
+    expect(broadcastToConnIds).toHaveBeenLastCalledWith(
+      "talk.event",
+      { relaySessionId: session.relaySessionId, type: "clear", reason: "barge-in" },
+      new Set(["conn-1"]),
+      { dropIfSlow: false },
+    );
+
+    if (resetting) {
+      bridgeRequest.onEvent?.({ direction: "server", type: "session.created" });
+    }
+    if (resetting || phase === "idle" || phase === "completed response") {
+      bridgeRequest.onEvent?.({
+        direction: "server",
+        type: "response.created",
+        responseId: resetting ? "response-c" : "response-b",
+      });
+    }
+    bridgeRequest.onAudio(Buffer.from([1, 2]));
+    expect(broadcastToConnIds).toHaveBeenLastCalledWith(
+      "talk.event",
+      expect.objectContaining({
+        type: "audio",
+        responseId: resetting
+          ? "response-c"
+          : phase === "active response"
+            ? "response-a"
+            : "response-b",
+        audioBase64: "AQI=",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+    expect(relaySessions.get(session.relaySessionId)).toBe(relay);
+    expect(bridge.close).not.toHaveBeenCalled();
+  });
 
   it("aborts linked agent consult runs when the relay turn is cancelled", () => {
     const { abortController, broadcast, nodeSendToSession, removeChatRun, chatRunState, session } =

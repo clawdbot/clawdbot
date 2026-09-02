@@ -1372,6 +1372,40 @@ class TalkModeManagerTest {
 
   @Test
   @Config(shadows = [PlayoutAudioTrack::class])
+  fun providerClearStopsPreviousAudioAfterNextTranscript() =
+    runBlocking {
+      PlayoutAudioTrack.reset()
+      try {
+        withRealtimePlayback { proof ->
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"First question","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
+          val track = startRealtimeAudio(proof)
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"First answer","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":true,"talkEvent":{"turnId":"next-turn"}}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Second answer","final":false,"talkEvent":{"turnId":"next-turn"}}""")
+          proof.scheduler.runCurrent()
+          assertTrue(proof.manager.isSpeaking.value)
+          assertTrue(proof.manager.awaitingAgent.value)
+
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"type":"output.audio.done","turnId":"realtime-turn","final":true}}""")
+          proof.scheduler.runCurrent()
+
+          assertEquals("A newer transcript cannot prevent clearing queued playback", AudioTrack.STATE_UNINITIALIZED, track.state)
+          assertFalse(proof.manager.isSpeaking.value)
+          assertTrue("Clearing old audio cannot finish the next response", proof.manager.awaitingAgent.value)
+          assertEquals("Thinking…", proof.manager.statusText.value)
+          assertEquals(
+            listOf("First question", "First answer", "Second question", "Second answer"),
+            proof.manager.conversation.value
+              .map { it.text },
+          )
+        }
+      } finally {
+        PlayoutAudioTrack.reset()
+      }
+    }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
   fun queuedFinalTextCannotFinishNewerUserThinking() = assertOldOutputPreservesNewerUserThinking(withAudio = false)
 
   @Test
@@ -1729,7 +1763,7 @@ class TalkModeManagerTest {
     runBlocking {
       installSpeechRecognitionService()
       val pending = CompletableDeferred<Pair<String, WebSocket>>()
-      val providerClearDrained = CompletableDeferred<Unit>()
+      val providerClearDrained = mapOf("unkeyed" to CompletableDeferred<Unit>(), "keyed" to CompletableDeferred<Unit>())
       withRealtimePlayback(interceptRequest = { request, socket ->
         when (request.getValue("method").jsonPrimitive.content) {
           "talk.session.cancelOutput" -> {
@@ -1738,14 +1772,12 @@ class TalkModeManagerTest {
           }
 
           "talk.session.acknowledgeMark" -> {
-            if (request["params"]
-                ?.jsonObject
-                ?.get("markName")
-                ?.jsonPrimitive
-                ?.content == "after-provider-clear"
-            ) {
-              providerClearDrained.complete(Unit)
-            }
+            request["params"]
+              ?.jsonObject
+              ?.get("markName")
+              ?.jsonPrimitive
+              ?.content
+              ?.let { providerClearDrained[it]?.complete(Unit) }
             false
           }
 
@@ -1770,12 +1802,16 @@ class TalkModeManagerTest {
         val (requestId, socket) = pending.await()
         var replied = false
         try {
-          socket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"clear","reason":"barge-in"}}""")
-          // A mark after clear observes the real playback queue retiring before its acknowledgement.
-          socket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"mark","markName":"after-provider-clear"}}""")
-          awaitState { providerClearDrained.isCompleted && !proof.manager.audioRetirement.pending }
-          val completedByUnkeyedClear = clear.isCompleted
-          assertFalse("PTT must still await the cancellation RPC", starting.isCompleted)
+          val completedByProviderClear = mutableMapOf<String, Boolean>()
+          for ((kind, drained) in providerClearDrained) {
+            val talkEvent = if (kind == "keyed") """, "talkEvent":{"type":"output.audio.done","turnId":"old-turn","final":true}""" else ""
+            socket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"clear","reason":"barge-in"$talkEvent}}""")
+            // A mark after clear observes the real playback queue retiring before its acknowledgement.
+            socket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"mark","markName":"$kind"}}""")
+            awaitState { drained.isCompleted && !proof.manager.audioRetirement.pending }
+            completedByProviderClear[kind] = clear.isCompleted
+            assertFalse("PTT must still await the cancellation RPC", starting.isCompleted)
+          }
 
           socket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"type":"turn.cancelled","turnId":"old-turn"}}}""")
           socket.send("""{"type":"res","id":"$requestId","ok":true,"payload":{"ok":true,"status":"applied","turnId":"old-turn"}}""")
@@ -1783,10 +1819,10 @@ class TalkModeManagerTest {
           awaitState { starting.isCompleted }
 
           assertEquals(
-            "A provider playback clear must not poison a matching push-to-talk cancellation",
-            mapOf("unkeyedClearCompletedCancellation" to false, "relaySessionId" to "playback-relay", "pushToTalkStarted" to true),
+            "Provider playback clears cannot acknowledge explicit push-to-talk cancellation",
+            mapOf("providerClearCompletedCancellation" to mapOf("unkeyed" to false, "keyed" to false), "relaySessionId" to "playback-relay", "pushToTalkStarted" to true),
             mapOf(
-              "unkeyedClearCompletedCancellation" to completedByUnkeyedClear,
+              "providerClearCompletedCancellation" to completedByProviderClear,
               "relaySessionId" to readPrivateField(proof.manager, "realtimeSessionId"),
               "pushToTalkStarted" to starting.await().isSuccess,
             ),

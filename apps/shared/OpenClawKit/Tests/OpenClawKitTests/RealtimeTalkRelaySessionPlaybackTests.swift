@@ -273,7 +273,8 @@ struct RealtimeTalkRelaySessionPlaybackTests {
         #expect(speakingStates == [true, false, true, false])
     }
 
-    @Test func `unkeyed clear stops buffered keyed output after provider completion`() async throws {
+    @Test(arguments: [false, true])
+    func `provider clear stops buffered keyed output after provider completion`(keyed: Bool) async throws {
         let requests = RealtimeRelayStartupRequestLog()
         let player = StalledPCMStreamingAudioPlayer()
         var speakingStates: [Bool] = []
@@ -300,7 +301,8 @@ struct RealtimeTalkRelaySessionPlaybackTests {
         #expect(player.stopCount == 0)
         #expect(speakingStates == [true])
 
-        await session._test_handleGatewayEvent(outputClearEvent())
+        await session._test_handleGatewayEvent(outputClearEvent(
+            turnId: keyed ? "turn-1" : nil, talkEventType: "output.audio.done"))
         try #require(player.stopCount == 1)
         #expect(speakingStates == [true, false])
         try await requests.waitForRequestCount(1)
@@ -308,7 +310,8 @@ struct RealtimeTalkRelaySessionPlaybackTests {
         #expect(acknowledgements.map(\.method) == ["talk.session.acknowledgeMark"])
         #expect(acknowledgements.first?.params?["markName"]?.stringValue == "buffered-output")
 
-        await session._test_handleGatewayEvent(outputClearEvent())
+        await session._test_handleGatewayEvent(outputClearEvent(
+            turnId: keyed ? "turn-1" : nil, talkEventType: "output.audio.done"))
         #expect(player.stopCount == 1)
         #expect(speakingStates == [true, false])
         #expect(await requests.snapshot().count == 1)

@@ -1,9 +1,11 @@
 import Foundation
+import Observation
 import OpenClawKit
 import OpenClawProtocol
 import Testing
 import UIKit
 import UserNotifications
+import XCTest
 @testable import OpenClaw
 @testable import OpenClawChatUI
 
@@ -7697,12 +7699,17 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         watchService.emitReply(first)
         let firstStarted = await waitForMainActorWork { gate.commandIDs == [first.replyId] }
         try #require(firstStarted)
+        let freshReplyCompleted = XCTestExpectation(description: "fresh Watch reply forwarded while first send is held")
+        withObservationTracking {
+            _ = appModel.openChatRequestID
+        } onChange: {
+            freshReplyCompleted.fulfill()
+        }
         watchService.emitReply(second)
         watchService.emitReply(first)
-        let freshReplyCompleted = await waitForMainActorWork {
-            gate.commandIDs.count { $0 == second.replyId } == 2 && appModel.openChatRequestID >= 1
-        }
-        #expect(freshReplyCompleted)
+        let completion = await XCTWaiter.fulfillment(of: [freshReplyCompleted], timeout: 2)
+        #expect(completion == .completed)
+        #expect(gate.commandIDs.count { $0 == second.replyId } == 2 && appModel.openChatRequestID >= 1)
         let duplicateForwarded = await waitForMainActorWork {
             gate.commandIDs.count { $0 == first.replyId } > 1
         }

@@ -632,20 +632,14 @@ extension RealtimeTalkRelaySession {
 
     private func handleOutputClear(_ payload: [String: AnyCodable]) {
         let clearIdentity = OutputIdentity(payload)
-        var clearsSuppressed = false
-        if self.awaitingOutputClear,
-           let suppressed = self.suppressedOutputIdentity
-        {
-            clearsSuppressed =
-                clearIdentity.isEmpty()
-                ? suppressed.isEmpty()
-                : suppressed.isEmpty() || suppressed.relation(to: clearIdentity) == .same
-            if clearsSuppressed {
-                self.awaitingOutputClear = false
-                if self.outputCancellationTask == nil { self.retireOutputCancellation() }
-            }
+        // Provider clears retire playback; only turn.cancelled acknowledges turn cancellation.
+        let clearsSuppressed = self.awaitingOutputClear &&
+            payload["talkEvent"]?.dictionaryValue?["type"]?.stringValue == "turn.cancelled" &&
+            self.suppressedOutputIdentity?.relation(to: clearIdentity) == .same
+        if clearsSuppressed {
+            self.awaitingOutputClear = false
+            if self.outputCancellationTask == nil { self.retireOutputCancellation() }
         }
-        // Unkeyed provider clears stop the relay sink without settling a turn-scoped cancellation.
         let currentMatches = clearIdentity.isEmpty() || self.outputIdentity?.relation(to: clearIdentity) == .same
         guard clearsSuppressed || currentMatches else { return }
         let marks = self.takePendingPlaybackMarks()

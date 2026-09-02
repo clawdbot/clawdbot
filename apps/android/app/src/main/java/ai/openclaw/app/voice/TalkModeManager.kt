@@ -1459,10 +1459,11 @@ class TalkModeManager internal constructor(
         }
 
         "clear" -> {
+          val cancelsTurn = obj["talkEvent"].asObjectOrNull()?.get("type").asStringOrNull() == "turn.cancelled"
           val activeTurnId = realtimeOutputTurn?.id
-          if (!turnId.isNullOrBlank() && activeTurnId != null && turnId != activeTurnId) return
-          // Clear retires playback; only a keyed clear can acknowledge turn cancellation.
-          val pending = pendingRealtimeOutputClear.takeIf { !turnId.isNullOrBlank() }
+          if (cancelsTurn && !turnId.isNullOrBlank() && activeTurnId != null && turnId != activeTurnId) return
+          // Provider clears flush the sink; only turn.cancelled acknowledges cancellation.
+          val pending = pendingRealtimeOutputClear.takeIf { cancelsTurn && !turnId.isNullOrBlank() }
           val cleared = stopRealtimePlayback(owner)
           afterDispatch = {
             cleared.invokeOnCompletion { error -> pending?.complete(if (error == null) turnId else null) }

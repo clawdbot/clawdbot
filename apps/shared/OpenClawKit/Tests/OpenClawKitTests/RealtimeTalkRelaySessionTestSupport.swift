@@ -473,13 +473,16 @@ func outputAudioEvent(
         stateversion: nil)
 }
 
-func outputClearEvent(turnId: String? = nil) -> EventFrame {
+func outputClearEvent(
+    turnId: String? = nil,
+    talkEventType: String = "turn.cancelled") -> EventFrame
+{
     var payload: [String: AnyCodable] = [
         "relaySessionId": AnyCodable("relay-1"),
         "type": AnyCodable("clear"),
     ]
     if let turnId {
-        payload["talkEvent"] = AnyCodable(["turnId": turnId])
+        payload["talkEvent"] = AnyCodable(["turnId": turnId, "type": talkEventType])
     }
     return EventFrame(
         type: "event",
