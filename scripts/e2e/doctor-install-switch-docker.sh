@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Verifies Doctor preserves service definitions and explicit gateway install
-# switches package/git entrypoints. Both fixtures use the same prepared tarball.
+# Verifies the target's Doctor service-maintenance contract across package and
+# git installs. Both fixtures use the same prepared tarball.
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+HARNESS_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$HARNESS_ROOT_DIR}" && pwd)"
+DOCKER_E2E_HARNESS_ROOT_DIR="$HARNESS_ROOT_DIR"
+source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$HARNESS_ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-doctor-install-switch-e2e" OPENCLAW_DOCTOR_INSTALL_SWITCH_E2E_IMAGE)"
 NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
 COMMAND_TIMEOUT="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-900s}"
