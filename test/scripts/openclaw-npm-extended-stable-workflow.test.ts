@@ -224,7 +224,14 @@ describe("minimal npm extended-stable workflow", () => {
     expect(trustedToolingCheckout.with?.ref).toBe("${{ github.workflow_sha }}");
     expect(preflightDiff.run).toContain('git -C "$tooling_dir" status --porcelain');
     expect(preflightDiff.run).not.toContain('pkg.scripts?.["plugin-sdk:api:diff"]');
-    expect(preflightDiff.run).toContain('pnpm --dir "$tooling_dir" run plugin-sdk:api:diff');
+    // Corepack resolves packageManager from its working directory before pnpm
+    // receives command flags. The trusted tooling checkout must own both calls.
+    expect(preflightDiff.run).toContain('cd "$tooling_dir"');
+    expect(preflightDiff.run).toContain(
+      "pnpm install --frozen-lockfile --ignore-scripts --filter openclaw",
+    );
+    expect(preflightDiff.run).toContain('pnpm run plugin-sdk:api:diff -- "${diff_args[@]}"');
+    expect(preflightDiff.run).not.toContain('pnpm --dir "$tooling_dir"');
     expect(publishProvenanceRun).toContain("plugin-sdk-api-release-evidence.mjs");
     expect(publishProvenanceRun).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
     expect(publishProvenanceRun).toContain('--npm-dist-tag "$RELEASE_NPM_DIST_TAG"');
