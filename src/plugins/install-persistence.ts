@@ -29,6 +29,7 @@ import {
   recordPluginInstallInRecords,
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
+import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { reconcileNpmPluginLoadPath, type PluginInstallUpdate } from "./installs.js";
 import {
   isPluginManifestInstallOwnerAmbiguous,
@@ -37,6 +38,7 @@ import {
 import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./manifest-registry.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { validatePluginSchemaValue } from "./schema-validator.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
@@ -605,10 +607,27 @@ export async function persistPluginInstall(params: {
     }
   }
   const slotWarnings: string[] = [];
+  // Select from this install's candidate before its record reaches the durable index.
+  const slotMetadata = enabledPluginIds.length
+    ? loadPluginMetadataSnapshot({
+        allowCurrent: false,
+        config: next,
+        index: loadInstalledPluginIndex({
+          config: next,
+          candidates: installedCandidates,
+          diagnostics: installedDiscovery.diagnostics,
+          installRecords: nextInstallRecords,
+        }),
+      })
+    : undefined;
   for (const pluginId of enabledPluginIds) {
     const slotResult = await tracePluginLifecyclePhaseAsync(
       "slot selection",
-      async () => applySlotSelectionForPlugin(next, pluginId),
+      async () => {
+        // Legacy kind inspection executes plugin code; every entry follows an awaited boundary.
+        params.beforePersistentApply?.();
+        return applySlotSelectionForPlugin(next, pluginId, slotMetadata);
+      },
       { command: "install", pluginId },
     );
     next = slotResult.config;
