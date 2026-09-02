@@ -398,16 +398,19 @@ function shouldDropStaleInternalOrphanedUserPrompt(params: {
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt.
  *
- * External user leaves stay on the canonical session branch (`removeLeaf:
- * false`) so later turns still see them in model context. This turn still
- * folds their text into the active prompt and the session boundary excludes
- * them from assembled history, which keeps the no-duplicate provider-turn
- * invariant. Empty or stale internal leaves are still detached.
+ * By default the leaf is detached (`removeLeaf: true`) after merge so an
+ * ordinary next prompt does not become a second durable user row under a
+ * preserved orphan. Preserve the leaf (`removeLeaf: false`) only for restart
+ * recovery, when `preserveTrailingUserLeaf` is set from
+ * `suppressNextUserMessagePersistence`. Empty or stale internal leaves are
+ * always detached.
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown; provenance?: unknown };
+  /** Restart-recovery only: keep the interrupted external user leaf durable. */
+  preserveTrailingUserLeaf?: boolean;
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
@@ -421,15 +424,17 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
+  const removeLeaf = params.preserveTrailingUserLeaf !== true;
   if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
-    // Text is already in the active prompt; keep the leaf for later turns.
-    return { prompt: params.prompt, merged: false, removeLeaf: false };
+    // Text is already in the active prompt; detach unless restart recovery
+    // asked to keep the interrupted leaf for later turns.
+    return { prompt: params.prompt, merged: false, removeLeaf };
   }
 
   return {
     prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
     merged: true,
-    removeLeaf: false,
+    removeLeaf,
   };
 }
 

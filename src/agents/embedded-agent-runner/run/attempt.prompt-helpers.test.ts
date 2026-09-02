@@ -65,6 +65,39 @@ function hasLoneSurrogate(value: string): boolean {
 }
 
 describe("mergeOrphanedTrailingUserPrompt", () => {
+  it("detaches ordinary unsuppressed orphans after merge", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "Continue.",
+      trigger: "user",
+      leafMessage: { content: "queued wake" },
+    });
+    expect(result.merged).toBe(true);
+    expect(result.removeLeaf).toBe(true);
+    expect(result.prompt).toContain("queued wake");
+  });
+
+  it("preserves the leaf only when restart recovery asks to keep it", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "Continue.",
+      trigger: "user",
+      leafMessage: { content: "interrupted wake" },
+      preserveTrailingUserLeaf: true,
+    });
+    expect(result.merged).toBe(true);
+    expect(result.removeLeaf).toBe(false);
+  });
+
+  it("detaches an already-included ordinary orphan so the next prompt is not a duplicate leaf", () => {
+    const orphan = "already present wake";
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: orphan,
+      trigger: "user",
+      leafMessage: { content: orphan },
+    });
+    expect(result.merged).toBe(false);
+    expect(result.removeLeaf).toBe(true);
+  });
+
   it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "Continue.",

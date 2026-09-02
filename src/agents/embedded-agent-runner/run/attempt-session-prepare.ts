@@ -402,6 +402,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         sessionManager,
         prompt: attempt.prompt,
         trigger: attempt.trigger,
+        suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
       });
   // Admission can persist the turn before prompt preparation intentionally omits it.
   // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.

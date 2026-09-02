@@ -102,6 +102,8 @@ export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
+  /** Restart-recovery fact: preserve the interrupted user leaf when true. */
+  suppressNextUserMessagePersistence?: boolean;
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
   if (!candidate || !isUserSessionMessageEntry(candidate.messageEntry)) {
@@ -112,6 +114,7 @@ export function resolveOrphanRepairPlan(params: {
     prompt: params.prompt,
     trigger: params.trigger,
     leafMessage: candidate.messageEntry.message,
+    preserveTrailingUserLeaf: params.suppressNextUserMessagePersistence === true,
   });
   return {
     contextEnginePrompt: merge.prompt,
