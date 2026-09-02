@@ -3533,7 +3533,8 @@ process.on("SIGINT", shutdown);`,
         JSON.stringify({
           claim: "real requester-scoped MCP transport survives idle sweep during resolution",
           evictedWhileResolving,
-          runtimeReused: (await getOrCreateRequesterScopedMcpRuntime(params))?.runtime === firstRuntime,
+          runtimeReused:
+            (await getOrCreateRequesterScopedMcpRuntime(params))?.runtime === firstRuntime,
           mcpSessionReused: secondSessionId === firstSessionId,
         }),
       );
