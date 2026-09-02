@@ -382,11 +382,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
           archiveNames: [hit.path.replace(/\\/g, "/").split("/").at(-1) ?? ""],
         })[0]
       : undefined;
-    const resolvedKeys = resolveTranscriptStemToSessionKeys({
-      store: combinedSessionStore,
-      stem: canonicalArchive?.sessionId ?? identity.stem,
-      ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-    });
+    const resolvedKeys = canonicalArchive?.sessionKey
+      ? [canonicalArchive.sessionKey]
+      : resolveTranscriptStemToSessionKeys({
+          store: combinedSessionStore,
+          stem: canonicalArchive?.sessionId ?? identity.stem,
+          ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+        });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,

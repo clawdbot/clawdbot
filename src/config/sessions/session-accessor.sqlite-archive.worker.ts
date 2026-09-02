@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { parentPort, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
@@ -214,15 +215,14 @@ async function encodeStagedTranscriptArchive(params: {
       await pipeline(
         fs.createReadStream(params.stagedPath),
         createZstdCompress.call(zlib),
+        createArchiveByteLimitTransform(),
         fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
       );
     } else {
-      fs.copyFileSync(params.stagedPath, encodedPath, fs.constants.COPYFILE_EXCL);
-    }
-    const size = fs.statSync(encodedPath).size;
-    if (size > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
-      throw new Error(
-        `Archive exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes after encoding`,
+      await pipeline(
+        fs.createReadStream(params.stagedPath),
+        createArchiveByteLimitTransform(),
+        fs.createWriteStream(encodedPath, { flags: "wx", mode: 0o600 }),
       );
     }
     const bytes = fs.readFileSync(encodedPath);

@@ -58,20 +58,20 @@ describe("reset-generation session search visibility", () => {
   });
 
   it("resolves bounded archive filenames through canonical SQLite identity", async () => {
-    const sessionId = `oversized-${"x".repeat(300)}`;
+    const archivedSessionId = `oversized-${"x".repeat(300)}`;
     const sessionKey = "agent:main:telegram:direct:owner";
     const archiveName =
       "session-aa13e98ac2c9f443812f1871d56ffcb3.jsonl.reset.2026-08-11T08-00-00.000Z.zst";
     combinedSessionStore = {
       [sessionKey]: {
-        sessionId,
+        sessionId: "current-after-reset",
         updatedAt: 2,
-        sessionFile: `/tmp/sessions/${sessionId}.jsonl`,
+        sessionFile: "/tmp/sessions/current-after-reset.jsonl",
         chatType: "direct",
       },
     };
     vi.mocked(engineSessions.loadArchivedSessions).mockReturnValue([
-      { archiveName, sessionId, sessionKey, createdAt: 1 },
+      { archiveName, sessionId: archivedSessionId, sessionKey, createdAt: 1 },
     ]);
     const hit: MemorySearchResult = {
       path: `sessions/main/${archiveName}`,

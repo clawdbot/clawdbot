@@ -147,7 +147,7 @@ function findMatchingSqliteTranscriptArchive(params: {
   } catch {
     return null;
   }
-  const prefix = `${params.sessionId}.jsonl.${params.reason}.`;
+  const prefix = `${resolveArchiveSessionIdComponent(params.sessionId)}.jsonl.${params.reason}.`;
   for (const entry of entries) {
     if (!entry.startsWith(prefix) || entry.endsWith(".tmp")) {
       continue;

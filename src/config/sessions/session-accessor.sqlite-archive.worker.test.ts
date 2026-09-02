@@ -23,7 +23,10 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import {
+  materializeSessionStateDeletePlans,
+  writeTranscriptArchive,
+} from "./session-accessor.sqlite-archive.js";
 import {
   deleteMaterializedSessionStatePlans,
   planSessionStateDeleteIfUnreferenced,
@@ -89,6 +92,32 @@ describe("SQLite transcript archive worker", () => {
     await expect(
       listUsageCountedTranscriptStats("main", { sessionsDir: path.dirname(storePath) }),
     ).resolves.toEqual([expect.objectContaining({ sessionId })]);
+  });
+
+  it("reuses bounded archives for oversized session IDs", () => {
+    const sessionId = `oversized-${"x".repeat(300)}`;
+    const archiveDirectory = path.dirname(storePath);
+    const content = `${JSON.stringify(createTranscriptEvent("reuse-event", "archive once"))}\n`;
+
+    const first = writeTranscriptArchive({
+      archiveDirectory,
+      content,
+      reason: "deleted",
+      sessionId,
+    });
+    const second = writeTranscriptArchive({
+      archiveDirectory,
+      content,
+      reason: "deleted",
+      sessionId,
+    });
+
+    expect(second).toBe(first);
+    expect(
+      fs
+        .readdirSync(archiveDirectory)
+        .filter((entry) => entry.startsWith("session-") && entry.includes(".jsonl.deleted.")),
+    ).toHaveLength(1);
   });
 
   it("keeps the event loop responsive while a transcript archive is built", async () => {
