@@ -15,8 +15,7 @@ import {
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
-const LIVE_MODEL_ID =
-  process.env.OPENCLAW_LIVE_OPENCODE_DEEPSEEK_MODEL?.trim() || "deepseek-v4-flash";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "mimo-v2.5-free";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -24,7 +23,7 @@ type OpencodeModelsResponse = {
   data?: Array<{ id?: unknown; object?: unknown }>;
 };
 
-async function resolveOpencodeDeepSeekLiveModel() {
+async function resolveOpencodeReasoningReplayLiveModel() {
   const provider = await buildOpencodeZenLiveProviderConfig({ apiKey: OPENCODE_API_KEY });
   const row = provider.models.find((model) => model.id === LIVE_MODEL_ID);
   if (
@@ -41,9 +40,6 @@ async function resolveOpencodeDeepSeekLiveModel() {
   const reasoning = (["low", "medium", "high", "max"] as const).find((effort) =>
     row.compat?.supportedReasoningEfforts?.includes(effort),
   );
-  if (!reasoning) {
-    throw new Error(`OpenCode catalog has no supported reasoning effort for ${LIVE_MODEL_ID}`);
-  }
   const model: Model<"openai-completions"> = {
     ...row,
     api: row.api,
@@ -52,7 +48,7 @@ async function resolveOpencodeDeepSeekLiveModel() {
     baseUrl: row.baseUrl ?? provider.baseUrl,
     input,
   };
-  return { model, reasoning };
+  return { model, reasoningOptions: reasoning ? { reasoning } : {} };
 }
 
 function liveEchoTool(): Tool {
@@ -71,7 +67,7 @@ function liveEchoTool(): Tool {
 function requireToolCall(message: AssistantMessage) {
   const toolCall = message.content.find((block) => block.type === "toolCall");
   if (toolCall?.type !== "toolCall") {
-    throw new Error(`OpenCode DeepSeek live model did not call a tool: ${message.stopReason}`);
+    throw new Error(`OpenCode Zen live model did not call a tool: ${message.stopReason}`);
   }
   return toolCall;
 }
@@ -123,12 +119,12 @@ describeLive("opencode Zen live catalog drift", () => {
 });
 
 describeLive("opencode plugin live", () => {
-  it("accepts discovered DeepSeek V4 thinking replay after a tool call", async () => {
-    const { model, reasoning } = await resolveOpencodeDeepSeekLiveModel();
+  it("accepts discovered reasoning-content replay after a tool call", async () => {
+    const { model, reasoningOptions } = await resolveOpencodeReasoningReplayLiveModel();
     const tool = liveEchoTool();
     const firstOptions = {
       apiKey: OPENCODE_API_KEY,
-      reasoning,
+      ...reasoningOptions,
       maxTokens: 128,
     } as const;
 
@@ -148,7 +144,7 @@ describeLive("opencode plugin live", () => {
     );
 
     if (first.stopReason === "error") {
-      throw new Error(first.errorMessage || "OpenCode DeepSeek first turn returned an error");
+      throw new Error(first.errorMessage || "OpenCode Zen first turn returned an error");
     }
 
     const toolCall = requireToolCall(first);
@@ -182,13 +178,13 @@ describeLive("opencode plugin live", () => {
       },
       {
         apiKey: OPENCODE_API_KEY,
-        reasoning,
+        ...reasoningOptions,
         maxTokens: 64,
       },
     );
 
     if (second.stopReason === "error") {
-      throw new Error(second.errorMessage || "OpenCode DeepSeek replay returned an error");
+      throw new Error(second.errorMessage || "OpenCode Zen replay returned an error");
     }
 
     expect(extractNonEmptyAssistantText(second.content)).toMatch(/^ok[.!]?$/i);
