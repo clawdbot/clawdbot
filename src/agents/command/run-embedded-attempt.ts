@@ -21,6 +21,7 @@ import {
   markAutoFallbackPrimaryProbe,
   resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
+import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import {
   runEmbeddedAgentEntry,
   type EmbeddedAgentRunEntryTerminal,
@@ -498,6 +499,10 @@ export async function runEmbeddedAgentAttempt(params: {
               body,
               transcriptBody,
               isFallbackRetry: runOptions.isFallbackRetry,
+              classifyResult: runOptions.classifyResult,
+              preserveCliSessionBinding:
+                isHeartbeatLifecycleRunKind(logicalTurnOpts.bootstrapContextRunKind) ||
+                params.preserveUserFacingSessionModelState,
               modelRoutingProvenance: runOptions.modelRoutingProvenance,
               resolvedThinkLevel: candidateThinkLevel,
               fastMode,
@@ -628,8 +633,10 @@ export async function runEmbeddedAgentAttempt(params: {
             { cause: err },
           );
         }
-        const previousProvider = provider;
-        const previousModel = model;
+        if (storedModelOverride || err.model !== model || err.provider !== provider) {
+          storedModelOverride = err.model;
+          storedModelOverrideSource = "user";
+        }
         if (autoFallbackPrimaryProbe) {
           autoFallbackPrimaryProbeInterruptedByLiveSwitch = true;
         }
@@ -651,14 +658,6 @@ export async function runEmbeddedAgentAttempt(params: {
             : undefined;
           sessionEntry.authProfileOverrideCompactionCount = undefined;
           sessionEntryForAttempt = sessionEntry;
-        }
-        if (
-          storedModelOverride ||
-          err.model !== previousModel ||
-          err.provider !== previousProvider
-        ) {
-          storedModelOverride = err.model;
-          storedModelOverrideSource = "user";
         }
         attemptLifecycleState.lifecycleEnded = false;
         log.info(

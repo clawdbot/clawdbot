@@ -2120,6 +2120,7 @@ describe("scripts/changed-lanes", () => {
       "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      "apps/mobile/version.json",
       "docs/.generated/config-baseline.counts.json",
       "docs/.generated/config-baseline.sha256",
       "package.json",
@@ -2421,6 +2422,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs wrapper shadowing for source and guard-owner changes", () => {
+    expect(shouldRunWrapperShadowingCheck(["scripts/lib/source-file-scan-cache.mts"])).toBe(true);
     expect(
       shouldRunWrapperShadowingCheck([
         "src/channels/turn/run-channel-turn.ts",

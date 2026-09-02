@@ -3,6 +3,7 @@ import { t } from "../../i18n/index.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { icons } from "../icons.ts";
 import { renderBoardPendingCapabilities } from "./board-widget-capabilities.ts";
 
 export const BOARD_SIZE_PRESETS = {
@@ -74,6 +75,7 @@ export function renderBoardWidgetMenu(options: {
         : nothing}
       <div class="board-widget__menu-separator" role="separator"></div>
       <wa-dropdown-item class="board-widget__menu-danger" value="remove" ?disabled=${disabled}>
+        <span slot="icon" class="board-widget__menu-icon" aria-hidden="true">${icons.trash}</span>
         ${t("board.widget.remove")}
       </wa-dropdown-item>
     </wa-dropdown>

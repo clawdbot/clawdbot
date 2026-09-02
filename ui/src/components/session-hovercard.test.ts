@@ -236,9 +236,9 @@ describe("renderSessionHovercard", () => {
     expect(links[0]?.target).toBe("_blank");
     expect(links[0]?.rel).toContain("noopener");
     expect(links[0]?.querySelector(".session-hovercard__pr-title")?.textContent).toBe("First");
-    expect(links[0]?.querySelector(".session-hovercard__pr-title")?.getAttribute("title")).toBe(
-      "First",
-    );
+    expect(
+      links[0]?.querySelector(".session-hovercard__pr-title")?.getAttribute("title"),
+    ).toBeNull();
     expect(links[0]?.querySelector(".session-hovercard__pr-number")).toBeNull();
     expect(links[0]?.querySelector(".session-hovercard__pr-author")).toBeNull();
     expect(
@@ -652,7 +652,10 @@ describe("renderSessionHovercard", () => {
       "openclaw-viewer-facepile",
     );
     await facepile?.updateComplete;
-    expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toBe("+3");
+    expect(facepile?.querySelectorAll(".viewer-avatar:not(.viewer-avatar--overflow)")).toHaveLength(
+      4,
+    );
+    expect(facepile?.querySelector(".viewer-avatar--overflow")?.textContent).toBe("+1");
   });
 
   it("renders nothing when no session facts are known", () => {

@@ -56,7 +56,7 @@ suite.define(() => {
       await group.waitFor({ state: "visible", timeout: 10_000 });
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      await page.getByRole("menuitem", { name: "New session defaults…" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults" }).click();
       await page.evaluate(async () => customElements.whenDefined("wa-popover"));
       const dialog = page.locator(
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
@@ -211,7 +211,7 @@ suite.define(() => {
         await group.waitFor({ state: "visible", timeout: 10_000 });
         await group.locator(".sidebar-recent-sessions__head").hover();
         await group.getByRole("button", { name: "Group options for Client work" }).click();
-        await page.getByRole("menuitem", { name: "New session defaults…" }).click();
+        await page.getByRole("menuitem", { name: "New session defaults" }).click();
         const dialog = page.locator(
           `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
         );
@@ -463,7 +463,7 @@ suite.define(() => {
       await group.waitFor({ state: "visible", timeout: 10_000 });
       await group.locator(".sidebar-recent-sessions__head").hover();
       await group.getByRole("button", { name: "Group options for Client work" }).click();
-      await page.getByRole("menuitem", { name: "New session defaults…" }).click();
+      await page.getByRole("menuitem", { name: "New session defaults" }).click();
       const dialog = page.locator(
         `openclaw-modal-dialog[label='New session defaults for "Client work"']`,
       );

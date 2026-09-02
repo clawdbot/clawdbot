@@ -2231,6 +2231,7 @@
     {"id":"native.apple.806bacb5f14df90c","source":"Cost","surface":"apple","sites":[{"kind":"ui-named-argument","path":"apps/ios/Sources/Design/AgentProTab+Usage.swift"}]},
     {"id":"native.apple.104c29e39856706e","source":"Cost: %@","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatContextUsage.swift"}]},
     {"id":"native.apple.23f447855b25395a","source":"Could Not Change Primary Gateway","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/DashboardGatewayCatalog.swift"}]},
+    {"id":"native.apple.4adc28ed0e25f735","source":"Could Not Open Background Session","surface":"apple","sites":[{"kind":"ui-named-argument","path":"apps/macos/Sources/OpenClaw/DashboardManager.swift"}]},
     {"id":"native.apple.2e44cb00b99f5c81","source":"Could Not Open Gateway Window","surface":"apple","sites":[{"kind":"ui-named-argument","path":"apps/macos/Sources/OpenClaw/DashboardManager.swift"},{"kind":"ui-named-argument","path":"apps/macos/Sources/OpenClaw/WebChatManager.swift"}]},
     {"id":"native.apple.493c8a7bdfc34dcb","source":"Could Not Set Primary Gateway","surface":"apple","sites":[{"kind":"ui-named-argument","path":"apps/macos/Sources/OpenClaw/DashboardManager.swift"}]},
     {"id":"native.apple.b26583d7bf77eff2","source":"Could Not Switch Gateway","surface":"apple","sites":[{"kind":"ui-named-argument","path":"apps/macos/Sources/OpenClaw/DashboardManager.swift"}]},

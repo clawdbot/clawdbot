@@ -65,6 +65,12 @@ export function renderNewSessionDraftView(options: {
     >
       ${renderTargetBar()}
       ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+      ${isCatalogTarget && capabilities.toolOverrides
+        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
+            label: t("common.reset"),
+            onClick: () => capabilities.setToolOverrides(null),
+          })
+        : nothing}
       ${submission.submissionOutcomeUnknown
         ? renderDraftError(
             t(
@@ -114,14 +120,9 @@ export function renderNewSessionDraftView(options: {
         textareaController: submission.composerTextarea,
         voiceControl,
         messageLocked: Boolean(submission.pendingPlacement.sessionKey),
-        terminalAction: submission.showStartInTerminal()
-          ? {
-              canStart:
-                !submission.submitting && !dictationLocked && submission.canSubmit("terminal"),
-              disabledReason: submission.submitBlock("terminal")?.reason,
-              onStart: () => void submission.startInTerminal(),
-            }
-          : undefined,
+        nativeTerminal: isCatalogTarget,
+        onUnsupportedAttachment: () =>
+          submission.setError(t("newSession.terminalAttachmentsUnsupported")),
         onInput: onMessage,
         onOpenImage,
         onVisibilityChange: (visibility) => {
@@ -131,7 +132,7 @@ export function renderNewSessionDraftView(options: {
         },
         onSubmit: () => void submission.submit(),
         onBackgroundSubmit:
-          submission.visibility === "draft"
+          submission.visibility === "draft" || isCatalogTarget
             ? undefined
             : () => void submission.submit(undefined, true),
       })}
@@ -145,7 +146,9 @@ export function renderNewSessionDraftView(options: {
               : nothing}
           </div>`
         : nothing}
-      ${renderNewSessionIncognitoNotice(submission.visibility === "incognito")}
+      ${!isCatalogTarget
+        ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
+        : nothing}
     </div>
   `;
 }

@@ -1115,13 +1115,6 @@ function normalizeAllowlistEntry(entry: { pattern?: string } | null): string | n
   return pattern ? pattern : null;
 }
 
-function ensureAgent(file: ExecApprovalsFile, agentKey: string): ExecApprovalsAgent {
-  const agents = file.agents ?? {};
-  const entry = agents[agentKey] ?? {};
-  file.agents = agents;
-  return entry;
-}
-
 function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
   const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
   return (
@@ -1134,16 +1127,7 @@ function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
   );
 }
 
-async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
-  nodeId: string | null;
-  source: "gateway" | "node" | "local";
-  targetLabel: string;
-  baseHash: string;
-  file: ExecApprovalsFile;
-  agentKey: string;
-  agent: ExecApprovalsAgent;
-  allowlistEntries: NonNullable<ExecApprovalsAgent["allowlist"]>;
-}> {
+async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
   const agentKey = resolveAgentKey(opts.agent);
   if (agentKey !== "*") {
     const source = !opts.gateway && !opts.node ? "local" : opts.gateway ? "gateway" : "node";
@@ -1153,8 +1137,8 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
     }
     resolveConfiguredAgentId(config, agentKey);
   }
-  const { snapshot, nodeId, source, targetLabel, baseHash, kind } =
-    await loadWritableSnapshotTarget(opts);
+  const target = await loadWritableSnapshotTarget(opts);
+  const { snapshot, kind } = target;
   if (kind === "native" || !isFileApprovalsSnapshot(snapshot)) {
     exitWithError(
       "Host-native node approvals do not support allowlist mutations; use approvals set --node with host-native JSON.",
@@ -1163,10 +1147,10 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   const file = snapshot.file;
   file.version = 1;
 
-  const agent = ensureAgent(file, agentKey);
+  const agent: ExecApprovalsAgent = file.agents?.[agentKey] ?? {};
   const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
 
-  return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
+  return { ...target, snapshot, file, agentKey, agent, allowlistEntries };
 }
 
 type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
@@ -1184,16 +1168,12 @@ async function runAllowlistMutation(
     const context = await loadWritableAllowlistAgent(opts);
     const shouldSave = await mutate({ ...context, trimmedPattern });
     if (!shouldSave) {
+      if (opts.json) {
+        defaultRuntime.writeJson(redactExecApprovals(context.snapshot), 0);
+      }
       return;
     }
-    await saveSnapshotTargeted({
-      opts,
-      source: context.source,
-      nodeId: context.nodeId,
-      file: context.file,
-      baseHash: context.baseHash,
-      targetLabel: context.targetLabel,
-    });
+    await saveSnapshotTargeted({ ...context, opts });
   } catch (err) {
     failApprovalsCommand(err, opts);
   }

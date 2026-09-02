@@ -17,7 +17,6 @@ import {
   resolveCliSessionClearReason,
   resolveCliSessionReuse,
   setCliSessionBinding,
-  setCliSessionId,
   shouldClearFailedCliSessionBinding,
 } from "./cli-session.js";
 import { FailoverError } from "./failover-error.js";
@@ -177,9 +176,6 @@ describe("cli-session helpers", () => {
       reseedReceipt: receipt,
     });
     setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-1" });
-    expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toEqual(receipt);
-
-    setCliSessionId(entry, "claude-cli", "cli-session-1");
     expect(getCliSessionBinding(entry, "claude-cli")?.reseedReceipt).toEqual(receipt);
 
     setCliSessionBinding(entry, "claude-cli", { sessionId: "cli-session-2" });

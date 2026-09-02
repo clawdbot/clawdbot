@@ -12,13 +12,58 @@ import {
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
+import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveOwnerPromptNumbers } from "./owner-display.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
-import { buildSubagentSystemPrompt } from "./subagents/spawn/subagent-system-prompt.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { describeSessionsSpawnTool } from "./tool-description-presets.js";
+import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 describe("buildAgentSystemPrompt", () => {
+  it.each([
+    { available: [], mode: "suggest", deferred: false },
+    { available: ["sessions_yield"], mode: "suggest", deferred: false },
+    { available: ["agents_wait"], mode: "suggest", deferred: false },
+    { available: ["sessions_yield", "agents_wait"], mode: "suggest", deferred: false },
+    { available: [], mode: "prefer", deferred: true },
+    { available: ["sessions_yield"], mode: "prefer", deferred: true },
+    { available: ["agents_wait"], mode: "prefer", deferred: true },
+    { available: ["sessions_yield", "agents_wait"], mode: "prefer", deferred: true },
+  ] as const)(
+    "separates collector waits from announcing yields: $available $mode deferred=$deferred",
+    ({ available, mode, deferred }) => {
+      const availableNames = new Set<string>(available);
+      const tools = applyToolAvailabilityDescriptions([
+        { name: "sessions_spawn", description: describeSessionsSpawnTool({ swarmEnabled: true }) },
+        ...available.map((name) =>
+          name === "sessions_yield" ? createSessionsYieldTool() : { name, description: "Wait" },
+        ),
+      ] as AnyAgentTool[]);
+      const toolNames = tools.map((tool) => tool.name);
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        subagentDelegationMode: mode,
+        toolNames: deferred ? ["tool_search"] : toolNames,
+        capabilityToolNames: deferred ? toolNames : [],
+      });
+      const guidance = [prompt, ...tools.map((tool) => tool.description)].join("\n");
+      expect.soft(guidance).toMatch(/collector[^.\n]*no completion notification/i);
+      expect.soft(guidance).not.toContain("completion push-based.");
+      expect.soft(guidance).not.toContain("Need results before reply: `sessions_yield`");
+      expect
+        .soft(guidance)
+        .not.toContain("End turn after subagent spawn; results arrive next message");
+      for (const name of ["agents_wait", "sessions_yield"] as const) {
+        expect(guidance.includes(name)).toBe(availableNames.has(name));
+      }
+      if (availableNames.has("agents_wait")) {
+        expect(guidance).toMatch(/await with agents_wait/);
+      }
+    },
+  );
+
   it("resolves helper session keys to scoped prompt surfaces", () => {
     expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
     expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");
@@ -764,7 +809,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Long wait: no rapid poll. Use exec yieldMs or process(poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("Large work: `sessions_spawn`; completion push-based.");
+    expect(prompt).toContain("Large work: `sessions_spawn`; follow the accepted completion mode.");
     expect(prompt).toContain("Never loop-poll `subagents list`/`sessions_list`");
     expect(prompt).not.toContain("wait with `sessions_yield`");
     expect(prompt).toContain(
@@ -1643,9 +1688,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Subagents: `sessions_spawn` with objective/output/write-scope/verification; stable handle needs `taskName`, UI title `label`; clean context needs `context:"isolated"`, transcript needs `context:"fork"`; `subagents(action=list)` only status/debug.',
+      "Follow the accepted completion mode. `subagents(action=list)` only status/debug.",
     );
-    expect(orchestrationWaitPrompt).toContain("wait via `sessions_yield`");
+    expect(orchestrationWaitPrompt).toContain("Announcing children: wait via `sessions_yield`.");
   });
 
   it("adds stronger sub-agent delegation guidance in prefer mode", () => {
@@ -2358,155 +2403,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(first.slice(0, firstBoundary)).toContain(toolSchemaDirectoryPrompt);
     expect(first.slice(firstBoundary)).toContain("Allowlisted senders: +123");
     expect(second.slice(secondBoundary)).toContain("Allowlisted senders: +456");
-  });
-});
-
-describe("buildSubagentSystemPrompt", () => {
-  it("renders depth-1 orchestrator guidance, labels, and recovery notes", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc",
-      childDepth: 1,
-      maxSpawnDepth: 2,
-      acpEnabled: true,
-    });
-
-    expect(prompt).toContain("## Sub-Agent Spawning");
-    expect(prompt).toContain("May delegate descendants for parallel/complex work");
-    expect(prompt).not.toContain("sessions_spawn");
-    expect(prompt).toContain("ACP harness:");
-    expect(prompt).toContain("set `agentId` unless default");
-    expect(prompt).toContain("Never ask the user for slash/CLI");
-    expect(prompt).toContain("exec openclaw/acpx");
-    expect(prompt).toContain(
-      "Local subagent list/status tools cover OpenClaw runtime=subagent only",
-    );
-    expect(prompt).toContain("Subagent results auto-announce");
-    expect(prompt).toContain("never list histories, sleep, or poll in loops");
-    expect(prompt).toContain("available turn-yield tool when needed");
-    expect(prompt).toContain("objective, output, inputs/files, write scope");
-    expect(prompt).toContain("Track expected session keys");
-    expect(prompt).toContain("Late completion after final: reply ONLY NO_REPLY");
-    expect(prompt).toContain("No polling");
-    expect(prompt).toContain("spawned by main agent");
-    expect(prompt).toContain("auto-reported to main agent");
-    expect(prompt).toContain("Truncation notice");
-    expect(prompt).toContain("offset/limit");
-    expect(prompt).toContain("no full cat");
-    expect(prompt).toContain(
-      "No external message unless explicitly tasked to message specific recipient/channel",
-    );
-  });
-
-  it("selects the current child's task instead of inherited envelopes", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc",
-      requesterSessionKey: "agent:main:subagent:parent",
-      childDepth: 2,
-      maxSpawnDepth: 2,
-    });
-
-    expect(prompt).toContain("## Your Role");
-    expect(prompt).not.toContain("First visible `[Subagent Task]`");
-    expect(prompt).toMatch(
-      /\[Subagent Task\].*(?:current|your|this) (?:child )?session|(?:current|your|this) (?:child )?session.*\[Subagent Task\]/i,
-    );
-    expect(prompt).toMatch(/inherited[^.\n]*(?:task|envelope)[^.\n]*(?:background|reference)/i);
-  });
-
-  it("omits ACP spawning guidance when ACP is disabled", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc",
-      childDepth: 1,
-      maxSpawnDepth: 2,
-      acpEnabled: false,
-    });
-
-    expect(prompt).not.toContain("ACP harness:");
-    expect(prompt).not.toContain("set `agentId` unless default");
-    expect(prompt).toContain("May delegate descendants");
-  });
-
-  it("renders subagent-scoped native command guidance when ACP is disabled", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc",
-      childDepth: 1,
-      maxSpawnDepth: 2,
-      acpEnabled: false,
-      nativeCommandGuidanceLines: ["Subagent-only command guidance."],
-    });
-
-    expect(prompt).toContain("Subagent-only command guidance.");
-    expect(prompt).not.toContain("ACP harness:");
-  });
-
-  it("omits ACP spawning guidance by default", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc",
-      childDepth: 1,
-      maxSpawnDepth: 2,
-    });
-
-    expect(prompt).not.toContain("ACP harness:");
-    expect(prompt).toContain("May delegate descendants");
-  });
-
-  it("prefers native Codex commands over Codex ACP when available", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc",
-      childDepth: 1,
-      maxSpawnDepth: 2,
-      nativeCommandGuidanceLines: [
-        "Native Codex app-server plugin is available (`/codex ...`). Prefer that path for Codex bind/control/thread/resume/steer/stop requests; use Codex ACP only when explicitly requested.",
-      ],
-      acpEnabled: true,
-    });
-
-    expect(prompt).toContain("Native Codex app-server plugin is available");
-    expect(prompt).toContain("use Codex ACP only when explicitly requested");
-  });
-
-  it("renders depth-2 leaf guidance with parent orchestrator labels", () => {
-    const prompt = buildSubagentSystemPrompt({
-      childSessionKey: "agent:main:subagent:abc:subagent:def",
-      childDepth: 2,
-      maxSpawnDepth: 2,
-    });
-
-    expect(prompt).toContain("## Sub-Agent Spawning");
-    expect(prompt).toContain("Leaf worker");
-    expect(prompt).toContain("cannot spawn");
-    expect(prompt).toContain("spawned by parent orchestrator");
-    expect(prompt).toContain("auto-reported to parent orchestrator");
-  });
-
-  it("omits spawning guidance for depth-1 leaf agents", () => {
-    const leafCases = [
-      {
-        name: "explicit maxSpawnDepth 1",
-        input: {
-          childSessionKey: "agent:main:subagent:abc",
-          childDepth: 1,
-          maxSpawnDepth: 1,
-        },
-        expectMainAgentLabel: false,
-      },
-      {
-        name: "implicit default depth/maxSpawnDepth",
-        input: {
-          childSessionKey: "agent:main:subagent:abc",
-        },
-        expectMainAgentLabel: true,
-      },
-    ] as const;
-
-    for (const testCase of leafCases) {
-      const prompt = buildSubagentSystemPrompt(testCase.input);
-      expect(prompt, testCase.name).not.toContain("## Sub-Agent Spawning");
-      expect(prompt, testCase.name).not.toContain("May delegate descendants");
-      if (testCase.expectMainAgentLabel) {
-        expect(prompt, testCase.name).toContain("spawned by main agent");
-      }
-    }
   });
 });
 

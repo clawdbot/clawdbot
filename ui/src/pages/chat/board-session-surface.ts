@@ -67,6 +67,10 @@ function dockLabel(dock: BoardVisibleChatDock): string {
   return t("chat.board.dockRight");
 }
 
+function modeLabel(icon: TemplateResult, label: string) {
+  return html`${icon}<span class="sr-only">${label}</span>`;
+}
+
 export function renderBoardViewSwitch(props: {
   hasBoard: boolean;
   face: BoardFace;
@@ -87,9 +91,21 @@ export function renderBoardViewSwitch(props: {
         value: mode,
         ariaLabel: t("chat.board.faceLabel"),
         options: [
-          { value: "chat", label: t("chat.board.chatFace") },
-          { value: "split", label: t("chat.board.splitFace") },
-          { value: "dashboard", label: t("chat.board.dashboardFace") },
+          {
+            value: "chat",
+            label: modeLabel(icons.messageSquare, t("chat.board.chatFace")),
+            title: t("chat.board.chatFace"),
+          },
+          {
+            value: "split",
+            label: modeLabel(icons.columns2, t("chat.board.splitFace")),
+            title: t("chat.board.splitFace"),
+          },
+          {
+            value: "dashboard",
+            label: modeLabel(icons.layoutDashboard, t("chat.board.dashboardFace")),
+            title: t("chat.board.dashboardFace"),
+          },
         ],
         onChange: (value) => props.onSelectMode(value),
       })
@@ -97,8 +113,16 @@ export function renderBoardViewSwitch(props: {
         value: props.face,
         ariaLabel: t("chat.board.faceLabel"),
         options: [
-          { value: "chat", label: t("chat.board.chatFace") },
-          { value: "dashboard", label: t("chat.board.dashboardFace") },
+          {
+            value: "chat",
+            label: modeLabel(icons.messageSquare, t("chat.board.chatFace")),
+            title: t("chat.board.chatFace"),
+          },
+          {
+            value: "dashboard",
+            label: modeLabel(icons.layoutDashboard, t("chat.board.dashboardFace")),
+            title: t("chat.board.dashboardFace"),
+          },
         ],
         onChange: (value) => props.onSelectMode(value),
       });

@@ -64,8 +64,7 @@ suite.define(() => {
       await captureUiProof(suite, page, `${status}-session-ring.png`);
 
       const listRequests = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         sessionsListResponse([
           sessionRow(mainKey, "Main", 2),
           sessionRow(queuedKey, "Queued repair", 1, {

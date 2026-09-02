@@ -19,7 +19,19 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("gateway network client", () => {
+  function expectDeadlineBudgets(calls: Array<[number]>) {
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [timeoutMs] of calls) {
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(timeoutMs).toBeLessThanOrEqual(25);
+    }
+  }
+
   function rejectWhenAborted(signal: AbortSignal | null | undefined): Promise<never> {
     expect(signal).toBeInstanceOf(AbortSignal);
     const requestSignal = signal as AbortSignal;
@@ -159,13 +171,13 @@ describe("gateway network client", () => {
   });
 
   it("bounds a stalled suspension admin request by the client deadline", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     let requestSignal: AbortSignal | null | undefined;
     const fetchImpl = vi.fn<typeof fetch>((_input, init) => {
       requestSignal = init?.signal;
       return rejectWhenAborted(requestSignal);
     });
 
-    const startedAt = Date.now();
     await expect(
       runGatewaySuspensionPreRestartClient(
         {
@@ -178,12 +190,13 @@ describe("gateway network client", () => {
       ),
     ).rejects.toMatchObject({ name: "TimeoutError" });
 
-    expect(Date.now() - startedAt).toBeLessThan(500);
+    expectDeadlineBudgets(timeoutSpy.mock.calls);
     expect(requestSignal?.aborted).toBe(true);
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("keeps a stalled suspension response body inside the client deadline", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     let callCount = 0;
     let bodySignal: AbortSignal | null | undefined;
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
@@ -206,7 +219,6 @@ describe("gateway network client", () => {
       return response;
     });
 
-    const startedAt = Date.now();
     await expect(
       runGatewaySuspensionPreRestartClient(
         {
@@ -219,7 +231,7 @@ describe("gateway network client", () => {
       ),
     ).rejects.toMatchObject({ name: "TimeoutError" });
 
-    expect(Date.now() - startedAt).toBeLessThan(500);
+    expectDeadlineBudgets(timeoutSpy.mock.calls);
     expect(bodySignal?.aborted).toBe(true);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     const request = fetchImpl.mock.calls[1]?.[0];
@@ -233,6 +245,7 @@ describe("gateway network client", () => {
   });
 
   it("bounds a stalled post-restart admin request by the client deadline", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const workDir = tempDirs.make("openclaw-gateway-network-post-restart-");
     const statePath = join(workDir, "suspension.json");
     writeFileSync(
@@ -249,7 +262,6 @@ describe("gateway network client", () => {
       return rejectWhenAborted(requestSignal);
     });
 
-    const startedAt = Date.now();
     await expect(
       runGatewaySuspensionPostRestartClient(
         {
@@ -262,7 +274,7 @@ describe("gateway network client", () => {
       ),
     ).rejects.toMatchObject({ name: "TimeoutError" });
 
-    expect(Date.now() - startedAt).toBeLessThan(500);
+    expectDeadlineBudgets(timeoutSpy.mock.calls);
     expect(requestSignal?.aborted).toBe(true);
     expect(fetchImpl).toHaveBeenCalledOnce();
   });

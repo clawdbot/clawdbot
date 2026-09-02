@@ -54,6 +54,16 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
             "commit", "-m", "fixture", cwd=source)
     revision = checked(git, "rev-parse", "HEAD", cwd=source)
     historical_revision = revision
+    if mode.startswith("qa-") and mode not in ("qa-main", "qa-main-no-dotgit", "qa-mismatch", "qa-foreign-origin"):
+        checked(git, "checkout", "-b", "release/2026.9.1", cwd=source)
+        (source / "payload.txt").write_text("release candidate outside main\n")
+        checked(git, "add", "payload.txt", cwd=source)
+        checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "-m", "release candidate", cwd=source)
+        revision = checked(git, "rev-parse", "HEAD", cwd=source)
+        if mode == "qa-tag":
+            checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
+                    "tag", "-a", "v2026.9.1", "-m", "release", cwd=source)
     if mode == "historical":
         (source / "payload.txt").write_text("current checkout\n")
         checked(git, "add", "payload.txt", cwd=source)
@@ -61,14 +71,17 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
                 "commit", "-m", "current", cwd=source)
         revision = checked(git, "rev-parse", "HEAD", cwd=source)
     blob = checked(git, "rev-parse", "HEAD:payload.txt", cwd=source)
-    bare = root / "repo.git"
+    bare = root / ("repo" if mode == "qa-main-no-dotgit" else "repo.git")
     checked(git, "clone", "--bare", str(source), str(bare))
     checked(git, "config", "uploadpack.allowFilter", "true", cwd=bare)
     checked(git, "config", "uploadpack.allowAnySHA1InWant", "true", cwd=bare)
+    if mode in ("qa-untrusted", "qa-pr", "qa-api-error"):
+        checked(git, "update-ref", "-d", "refs/heads/release/2026.9.1", cwd=bare)
     token = "synthetic-checkout-fixture"
     encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode()
     authorization = f"Basic {encoded}"
     requests = []
+    kova_methods = []
     redirect = False
 
     class Handler(BaseHTTPRequestHandler):
@@ -96,7 +109,10 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if not authenticated:
+            if mode == "kova":
+                kova_methods.append(self.command)
+            public_fetch = mode == "kova" and kova_methods.count("GET") == 1
+            if not authenticated and not public_fetch:
                 self.send_response(401)
                 self.send_header("WWW-Authenticate", 'Basic realm="checkout fixture"')
                 self.send_header("Content-Length", "0")
@@ -131,10 +147,84 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        remote = f"http://127.0.0.1:{server.server_port}/repo.git"
+        remote = f"http://127.0.0.1:{server.server_port}/{bare.name}"
         workspace = root / "workspace"
+        if mode == "kova":
+            # Keep the whole workflow body intact. Only unrelated OCM/npm tools
+            # are stubbed; Git talks to the real server for every object it needs.
+            workspace = root / "kova-src"
+            (root / "ocm-install").mkdir()
+            (root / "ocm-install/ocm").write_text("#!/bin/sh\nexit 0\n")
+            script = '''curl() { :; }
+sha256sum() { cat >/dev/null; }
+tar() { :; }
+npm() { test -s "$KOVA_SRC/payload.txt"; }
+node() { :; }
+''' + sys.argv[3]
+            config = home / ".gitconfig"
+            checked(git, "config", "--file", str(config), f"url.{remote}.insteadOf",
+                    "https://github.com/fixture/kova.git")
+            result = command("bash", "-e", "-o", "pipefail", "-c", script, extra={
+                "GIT_CONFIG_GLOBAL": str(config), "CI_GIT_OWNER": owner,
+                "RUNNER_TEMP": str(root), "KOVA_HOME": str(home / "kova"),
+                "GITHUB_ENV": str(root / "environment"), "GITHUB_PATH": str(root / "path"),
+                "OCM_VERSION": "fixture", "OCM_LINUX_X64_SHA256": "fixture",
+                "KOVA_REPOSITORY": "fixture/kova", "KOVA_REF": revision})
+            complete = result.returncode == 0 and (workspace / "payload.txt").read_text() == (source / "payload.txt").read_text()
+            local_config = (workspace / ".git/config").read_text()
+            assert token not in result.stdout + result.stderr + local_config
+            assert encoded not in result.stdout + result.stderr + local_config
+            print(json.dumps({"mode": mode, "exitCode": result.returncode, "stderr": result.stderr,
+                              "checkoutComplete": complete, "sessions": kova_methods.count("GET"),
+                              "credentialPersisted": "extraheader" in local_config.lower(), "requests": requests}))
+            raise SystemExit(0)
         checked(git, "init", str(workspace))
         checked(git, "remote", "add", "origin", remote, cwd=workspace)
+        if mode.startswith("qa-"):
+            # Reproduce checkout@v7's complete authenticated ref snapshot, then
+            # remove its credential scope before executing the actual validator.
+            seed_auth = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": f"http.{remote}.extraHeader",
+                         "GIT_CONFIG_VALUE_0": f"Authorization: Basic {encoded}"}
+            checked(git, "fetch", "--no-tags", "--prune", "origin",
+                    "+refs/heads/*:refs/remotes/origin/*", "+refs/tags/*:refs/tags/*", cwd=workspace, extra=seed_auth)
+            if mode in ("qa-untrusted", "qa-pr", "qa-api-error"):
+                checked(git, "fetch", "--no-tags", "origin", revision, cwd=workspace, extra=seed_auth)
+            checked(git, "checkout", "--detach", revision, cwd=workspace)
+            requests.clear()
+            if mode == "qa-foreign-origin":
+                checked(git, "remote", "set-url", "origin", remote.replace("/repo.git", "/other.git"), cwd=workspace)
+            output = root / "output"
+            summary = root / "summary"
+            fixture_bin = root / "bin"
+            fixture_bin.mkdir()
+            gh = fixture_bin / "gh"
+            gh.write_text(f'''#!{sys.executable}
+import os, sys
+assert os.environ["GH_TOKEN"] == {token!r}
+print("1")
+sys.exit({23 if mode == "qa-api-error" else 0})
+''')
+            gh.chmod(0o755)
+            expected = revision if mode in ("qa-exact", "qa-untrusted") else ""
+            if mode == "qa-mismatch":
+                expected = "f" * 40
+            result = command("bash", "-e", "-o", "pipefail", "-c", sys.argv[3], cwd=workspace, extra={
+                "PATH": str(fixture_bin) + os.pathsep + env["PATH"], "CI_GIT_OWNER": owner,
+                "GH_TOKEN": token, "GITHUB_REPOSITORY": "repo",
+                "GITHUB_SERVER_URL": f"http://127.0.0.1:{server.server_port}",
+                "GITHUB_OUTPUT": str(output), "GITHUB_STEP_SUMMARY": str(summary),
+                "EXPECTED_SHA": expected,
+                "INPUT_REF": "release/2026.9.1" if mode == "qa-branch" else revision})
+            outputs = dict(line.split("=", 1) for line in output.read_text().splitlines()) if output.exists() else {}
+            local_config = (workspace / ".git/config").read_text()
+            published = result.stdout + result.stderr + local_config + (output.read_text() if output.exists() else "")
+            assert token not in published and encoded not in published
+            print(json.dumps({"mode": mode, "exitCode": result.returncode, "stderr": result.stderr,
+                              "trustedReason": outputs.get("trusted_reason", ""),
+                              "selectedRevisionMatched": outputs.get("selected_revision") == revision,
+                              "fetchAuthenticated": all(item["authenticated"] for item in requests),
+                              "credentialPersisted": "extraheader" in local_config.lower(), "requests": requests}))
+            raise SystemExit(0)
         policy = root / "policy.py"
         policy.write_text('''from ci_git_owner import run_git, git_output
 import json, os, sys

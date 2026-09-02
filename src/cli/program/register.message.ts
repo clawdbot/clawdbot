@@ -52,7 +52,7 @@ ${formatHelpExamples([
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/message")}`,
     );
 
-  const helpers = createMessageCliHelpers(message, ctx.messageChannelOptions);
+  const helpers = createMessageCliHelpers(ctx.messageChannelOptions);
   registerMessageSendCommand(message, helpers);
   registerMessageBroadcastCommand(message, helpers);
   registerMessagePollCommand(message, helpers);
