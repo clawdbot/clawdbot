@@ -221,6 +221,27 @@ async function planWorkshopRelocation(
     movesBySource.set(source, { destination: target.skillDir, adopted: false });
   }
 
+  const movesByDestination = new Map<string, string[]>();
+  for (const [source, move] of movesBySource) {
+    const sources = movesByDestination.get(move.destination) ?? [];
+    sources.push(source);
+    movesByDestination.set(move.destination, sources);
+  }
+  for (const [destination, sources] of movesByDestination) {
+    if (sources.length < 2) {
+      continue;
+    }
+    const conflictReason = `Skill Workshop relocation conflict: sources ${sources.toSorted().join(", ")} map to the same destination ${destination}.`;
+    for (const record of external) {
+      if (sources.includes(path.resolve(record.target.skillDir))) {
+        staleReasons.set(record.id, conflictReason);
+      }
+    }
+    for (const source of sources) {
+      movesBySource.delete(source);
+    }
+  }
+
   const updates: SkillProposalRecord[] = [];
   const updatesBySource = new Map<string, SkillProposalRecord[]>();
   for (const record of external) {
