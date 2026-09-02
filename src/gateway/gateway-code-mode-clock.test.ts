@@ -364,8 +364,13 @@ describe("Gateway Code Mode clock rollback", () => {
           );
           expect(completedCodeModeOutput).toMatchObject({
             type: "function_call_output",
-            output: expect.stringContaining('"status":"completed"'),
+            output: expect.any(String),
           });
+          expect(
+            (JSON.parse(
+              String((completedCodeModeOutput as { output?: unknown }).output),
+            ) as { status?: unknown }).status,
+          ).toBe("completed");
         } finally {
           await disconnectGatewayClient(client);
           await server.close({ reason: "Code Mode clock rollback proof complete" });
