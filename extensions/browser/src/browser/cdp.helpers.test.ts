@@ -8,7 +8,7 @@ import {
   resolveCdpReachabilityPolicy,
 } from "./cdp-reachability-policy.js";
 import { resolveCdpReachabilityTimeouts } from "./cdp-timeouts.js";
-import type { ResolvedBrowserProfile } from "./config.js";
+import { resolveBrowserConfig, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
 
 const PROFILE_HTTP_REACHABILITY_TIMEOUT_MS = 300;
@@ -675,19 +675,22 @@ describe("CDP reachability policy", () => {
 
   it.each([
     ["cdpUrl", { cdpUrl: "http://127.0.0.1:9222" }],
-    ["--browserUrl", { cdpUrl: "", mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"] }],
-    ["-u", { cdpUrl: "", mcpArgs: ["-u", "http://127.0.0.1:9222"] }],
-    ["--u", { cdpUrl: "", mcpArgs: ["--u", "http://127.0.0.1:9222"] }],
-    ["--wsEndpoint", { cdpUrl: "", mcpArgs: ["--wsEndpoint=ws://127.0.0.1:9222"] }],
-    ["-w", { cdpUrl: "", mcpArgs: ["-w", "ws://127.0.0.1:9222"] }],
-    ["--w", { cdpUrl: "", mcpArgs: ["--w=ws://127.0.0.1:9222"] }],
+    ["--browserUrl", { mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"] }],
+    ["-u", { mcpArgs: ["-u", "http://127.0.0.1:9222"] }],
+    ["--u", { mcpArgs: ["--u", "http://127.0.0.1:9222"] }],
+    ["--wsEndpoint", { mcpArgs: ["--wsEndpoint=ws://127.0.0.1:9222"] }],
+    ["-w", { mcpArgs: ["-w", "ws://127.0.0.1:9222"] }],
+    ["--w", { mcpArgs: ["--w=ws://127.0.0.1:9222"] }],
   ])("rejects Chrome MCP explicit %s endpoints under the default policy", (_source, endpoint) => {
-    const profile = createProfile({
-      driver: "existing-session",
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
-      ...endpoint,
-    });
+    const profile = resolveProfile(
+      resolveBrowserConfig({
+        profiles: { chrome: { driver: "existing-session", ...endpoint } },
+      }),
+      "chrome",
+    );
+    if (!profile) {
+      throw new Error("Expected configured Chrome MCP profile");
+    }
 
     expect(() => assertChromeMcpCdpTransportAllowed(profile, {})).toThrow(
       /cannot carry that pinned transport/i,

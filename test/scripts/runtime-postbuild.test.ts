@@ -97,11 +97,13 @@ describe("runtime postbuild static assets", () => {
     const payload = expectNoNodeFsScans<{
       outputs: string[];
       sources: string[];
+      packageOutputs: string[];
     }>(`
       const assets = await import("./scripts/lib/static-extension-assets.mts");
       return {
         outputs: assets.listStaticExtensionAssetOutputs(),
         sources: assets.listStaticExtensionAssetSources(),
+        packageOutputs: assets.listStaticExtensionAssetOutputs({ includeExternalPlugins: true }),
       };
     `);
 
@@ -109,7 +111,6 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
-      "dist/extensions/discord/assets/embedded-app-sdk.mjs",
       "dist/extensions/onepassword/onepassword-op-path.js",
       "dist/extensions/onepassword/onepassword-secret-id.js",
       "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
@@ -120,7 +121,8 @@ describe("runtime postbuild static assets", () => {
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
     );
     expect(payload.sources).not.toContain("extensions/diffs/assets/viewer-runtime.js");
-    expect(payload.sources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
+    expect(payload.sources).not.toContain("extensions/discord/assets/embedded-app-sdk.mjs");
+    expect(payload.packageOutputs).toContain("dist/extensions/discord/assets/embedded-app-sdk.mjs");
     expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
   });
 

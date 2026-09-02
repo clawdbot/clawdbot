@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  GitHubPublicationPublisher,
   SessionGitHubPublicationResult,
   SessionGitHubPublishParams,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
@@ -25,7 +26,9 @@ import {
   ensureGitHubPublicationStore as ensureSchema,
   githubPublicationDatabase as publicationDb,
   hasGitHubPublicationStore as schemaExists,
+  listGitHubPublicationsForClaim,
   projectGitHubPublicationResult as publicationResult,
+  readGitHubPublicationRequest,
   type GitHubPublicationRow as PublicationRow,
 } from "./github-publication-store.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
@@ -34,7 +37,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./worker-environments/placement-store.js";
 
-type ClaimRequest = {
+export type GitHubPublicationClaimRequest = {
   claim: WorkerSessionTurnClaim;
   sessionKey: string;
   agentId: string;
@@ -42,7 +45,7 @@ type ClaimRequest = {
   title?: string;
   body?: string;
   assertCurrent?: () => void;
-  expectedPublisher?: import("../../packages/gateway-protocol/src/schema/session-github-publication.js").GitHubPublicationPublisher;
+  expectedPublisher?: GitHubPublicationPublisher;
 };
 
 function exactClaimForPlacement(
@@ -88,7 +91,9 @@ function exactClaimForPlacement(
 export function createGitHubPublicationCoordinatorMethods(params: {
   placements: WorkerSessionPlacementStore;
   readById: (requestId: string) => PublicationRow | undefined;
-  requestForClaim: (request: ClaimRequest) => Promise<SessionGitHubPublicationResult>;
+  requestForClaim: (
+    request: GitHubPublicationClaimRequest,
+  ) => Promise<SessionGitHubPublicationResult>;
   sameWorktree: (
     row: PublicationRow,
     worktree: ReturnType<typeof resolveGitHubPublicationWorktreeOwner>["worktree"],
@@ -195,14 +200,10 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         body: input.body,
       });
       const database = openOpenClawStateDatabase().db;
-      const existing = executeSqliteQuerySync(
-        database,
-        publicationDb(database)
-          .selectFrom("github_publication_requests")
-          .selectAll()
-          .where("session_id", "=", sessionId)
-          .where("idempotency_key", "=", input.idempotencyKey),
-      ).rows[0];
+      const existing = readGitHubPublicationRequest(database, {
+        sessionId,
+        idempotencyKey: input.idempotencyKey,
+      });
       if (existing) {
         if (existing.request_digest !== requestDigest || !sameWorktree(existing, worktree)) {
           throw new Error("GitHub publication idempotency key was reused.");
@@ -323,16 +324,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     async processClaim(claim: WorkerSessionTurnClaim): Promise<SessionGitHubPublicationResult[]> {
       ensureSchema();
       const db = openOpenClawStateDatabase().db;
-      const rows = executeSqliteQuerySync(
-        db,
-        publicationDb(db)
-          .selectFrom("github_publication_requests")
-          .selectAll()
-          .where("session_id", "=", claim.sessionId)
-          .where("claim_id", "=", claim.claimId)
-          .where("run_id", "=", claim.runId)
-          .orderBy("created_at_ms"),
-      ).rows;
+      const rows = listGitHubPublicationsForClaim(claim);
       const missingSnapshots = rows.filter(
         (row) => !row.source_head_commit || !row.source_index_tree || !row.workspace_tree,
       );

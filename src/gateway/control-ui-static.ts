@@ -226,14 +226,15 @@ function setControlUiFileHeaders(
   setControlUiEncodingHeaders(res, extension, options?.encoding ?? "identity");
 }
 
-/**
- * `no-cache` responses without a validator force a full re-download on every
- * revisit; fonts and theme CSS are the heavy unhashed assets that hit this.
- * HTTP-dates carry whole-second precision, so compare on floored seconds.
- */
+/** Revalidate no-cache static assets without generating entity tags. */
 export function isControlUiFileUnmodified(req: IncomingMessage, lastModifiedMs: number): boolean {
   if (req.method !== "GET" && req.method !== "HEAD") {
     return false;
+  }
+  // Entity-tag conditions supersede dates; only "*" matches these ETag-free files.
+  const ifNoneMatch = req.headers?.["if-none-match"];
+  if (ifNoneMatch !== undefined) {
+    return ifNoneMatch.trim() === "*";
   }
   const header = req.headers?.["if-modified-since"];
   const since = typeof header === "string" ? Date.parse(header) : Number.NaN;

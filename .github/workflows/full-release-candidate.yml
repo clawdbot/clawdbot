@@ -15,6 +15,10 @@ on:
         description: Canonical request digest
         required: true
         type: string
+      prepared_npm_bundle_json:
+        description: Immutable publishable npm package bundle for this source and tooling SHA
+        required: true
+        type: string
     outputs:
       state:
         description: Candidate acquisition state
@@ -70,15 +74,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-candidate-contract.mjs
-            scripts/full-release-candidate-reuse.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/lib/actions-artifact-archive.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/full-release-candidate-reuse.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -87,6 +83,7 @@ jobs:
         env:
           CANDIDATE_REQUEST_JSON: ${{ inputs.request_json }}
           EXPECTED_REQUEST_SHA256: ${{ inputs.request_sha256 }}
+          EXPECTED_PACKAGE_SHA256: ${{ fromJSON(inputs.prepared_npm_bundle_json).package.sha256 }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -94,7 +91,8 @@ jobs:
           printf '%s\n' "$CANDIDATE_REQUEST_JSON" > "$request_input"
           node scripts/full-release-candidate-reuse.mjs discover \
             --request-input "$request_input" \
-            --expected-request-sha256 "$EXPECTED_REQUEST_SHA256"
+            --expected-request-sha256 "$EXPECTED_REQUEST_SHA256" \
+            --expected-package-sha256 "$EXPECTED_PACKAGE_SHA256"
 
       - name: Summarize release candidate discovery
         env:
@@ -122,6 +120,7 @@ jobs:
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       ref: ${{ inputs.ref }}
+      prepared_npm_bundle_json: ${{ inputs.prepared_npm_bundle_json }}
       prepare_only: true
       emit_candidate_evidence: true
       release_soak: ${{ fromJSON(inputs.request_json).releaseSoak }}
@@ -154,15 +153,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-candidate-contract.mjs
-            scripts/full-release-candidate-reuse.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/lib/actions-artifact-archive.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/full-release-candidate-reuse.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -174,6 +165,7 @@ jobs:
           DISCOVERY_STATE: ${{ needs.discover.outputs.state }}
           FRESH_CANDIDATE_BINDING_JSON: ${{ needs.prepare.outputs.candidate_evidence_json }}
           REUSED_CANDIDATE_BINDING_JSON: ${{ needs.discover.outputs.binding_json }}
+          EXPECTED_PACKAGE_SHA256: ${{ fromJSON(inputs.prepared_npm_bundle_json).package.sha256 }}
         run: |
           set -euo pipefail
           input="${RUNNER_TEMP}/full-release-candidate-binding-input.json"
@@ -184,6 +176,11 @@ jobs:
             --argjson reusedBinding "${REUSED_CANDIDATE_BINDING_JSON:-null}" \
             '$ARGS.named' > "$input"
           result="$(node scripts/full-release-candidate-reuse.mjs resolve --input "$input")"
+          jq -e --arg sha "$EXPECTED_PACKAGE_SHA256" '.binding.package.packageSha256 == $sha' \
+            <<< "$result" >/dev/null || {
+              echo "Release candidate must consume the prepared publishable npm package bytes." >&2
+              exit 1
+            }
           {
             printf 'state=ready\n'
             if [[ "$DISCOVERY_STATE" == "hit" ]]; then

@@ -4,6 +4,7 @@ export const cliProcessTestFiles = [
   "src/cli/acp-cli-exit.process.test.ts",
   "src/cli/cli-process-child.test-helpers.test.ts",
   "src/cli/cron-output.process.test.ts",
+  "src/cli/gateway-backed-exit-health.process.test.ts",
   "src/cli/gateway-backed-exit.process.test.ts",
   "src/cli/gateway-cli/shutdown-hard-exit.process.test.ts",
   "src/cli/help-exit.process.test.ts",
@@ -20,6 +21,8 @@ export const cliProcessTestFiles = [
   "src/cli/mcp-cli.probe-exit.process.test.ts",
   "src/cli/claws-authoring-state.process.test.ts",
   "src/cli/program/subcli-descriptors.test.ts",
+  "src/cli/state-dir-gateway-check.process.test.ts",
+  "src/cli/state-dir-gateway-check.server.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);

@@ -6,6 +6,7 @@ import {
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
+  finalizeToolTerminalPresentation,
   getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
 } from "./agent-tools.before-tool-call.js";
@@ -14,6 +15,7 @@ import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import {
+  isToolResultError,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
@@ -670,22 +672,33 @@ export class ToolSearchRuntime {
         }
       }
     };
-    const result = validateInput
-      ? await runWithToolExecutionValidation(
-          toolCallId,
-          async (finalInput) => await assertCatalogInputMatchesSchema(entry, finalInput),
-          runExecution,
-        )
-      : await runExecution();
-    const acceptedResult = await acceptResultBeforeProjection(result);
-    if (options?.parentToolCallId) {
-      this.terminalTargetBatchByParent.set(
-        options.parentToolCallId,
-        this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
-          acceptedResult.terminate === true,
-      );
+    let acceptedResult: AgentToolResult<unknown> | undefined;
+    try {
+      const result = validateInput
+        ? await runWithToolExecutionValidation(
+            toolCallId,
+            async (finalInput) => await assertCatalogInputMatchesSchema(entry, finalInput),
+            runExecution,
+          )
+        : await runExecution();
+      acceptedResult = await acceptResultBeforeProjection(result);
+      if (options?.parentToolCallId) {
+        this.terminalTargetBatchByParent.set(
+          options.parentToolCallId,
+          this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
+            acceptedResult.terminate === true,
+        );
+      }
+      return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
+    } finally {
+      // Nested executors can reject after raw success; only outer acceptance owns the summary.
+      finalizeToolTerminalPresentation({
+        toolCallId,
+        runId: this.ctx.runId,
+        result: acceptedResult ?? { content: [], details: undefined },
+        isError: acceptedResult === undefined || isToolResultError(acceptedResult),
+      });
     }
-    return { tool: compactToolSearchCatalogEntry(entry), result: acceptedResult };
   };
 
   telemetry() {

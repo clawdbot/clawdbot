@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeReleaseCoveragePolicy } from "./full-release-validation-policy.mjs";
+import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
 const FULL_RELEASE_WORKFLOW = "Full Release Validation";
 const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
@@ -68,7 +69,7 @@ function displayValue(value) {
  * @property {unknown} [rerunGroup]
  * @property {unknown} [runReleaseSoak]
  * @property {{ package?: { version?: unknown } }} [candidateBinding]
- * @property {{ coveragePolicy?: unknown, targetVersion?: unknown }} [validationInputs]
+ * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown }} [validationInputs]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -192,13 +193,20 @@ export function validateFullReleaseValidationEvidence({
     rerunGroup: manifest.rerunGroup,
     runReleaseSoak: manifest.runReleaseSoak,
   });
+  const coveredReleaseTag =
+    coveragePolicy === "npm-stable-v1"
+      ? resolveReleaseContextIdentity(
+          scalarString(manifest.validationInputs?.targetContextRef) ||
+            scalarString(manifest.targetRef),
+          scalarString(manifest.validationInputs?.targetVersion),
+        )?.releaseTag
+      : `v${scalarString(manifest.validationInputs?.targetVersion)}`;
   if (
     coveragePolicy &&
-    (manifest.version !== 4 ||
-      expectedReleaseTag !== `v${scalarString(manifest.validationInputs?.targetVersion)}`)
+    (manifest.version !== 4 || !coveredReleaseTag || expectedReleaseTag !== coveredReleaseTag)
   ) {
     throw new Error(
-      "Release coverage policy requires version 4 evidence for the exact beta publication tag.",
+      "Release coverage policy requires version 4 evidence for the exact publication tag.",
     );
   }
   const manifestChecks = [

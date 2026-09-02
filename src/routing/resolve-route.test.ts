@@ -1545,6 +1545,97 @@ describe("resolved route cache keys", () => {
       { agentId: "hyphen-guild", matchedBy: "binding.guild" },
     );
   });
+
+  test("keeps peer presence, kind, and id distinct across cached route tiers", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "channel-wide" },
+          { id: "account-wide" },
+          { id: "any-direct" },
+          { id: "any-group" },
+          { id: "known-direct" },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "known-direct",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "direct", id: "known" },
+          },
+        },
+        {
+          agentId: "any-direct",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+        {
+          agentId: "any-group",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "*" },
+          },
+        },
+        {
+          agentId: "account-wide",
+          match: { channel: "telegram", accountId: "work" },
+        },
+        {
+          agentId: "channel-wide",
+          match: { channel: "telegram", accountId: "*" },
+        },
+      ],
+    };
+
+    expectResolvedRoute(resolveAgentRoute({ cfg, channel: "telegram", accountId: "default" }), {
+      agentId: "channel-wide",
+      matchedBy: "binding.channel",
+    });
+    expectResolvedRoute(
+      resolveUnknownDirectMessageRoute({ cfg, channel: "telegram", accountId: "default" }),
+      { agentId: "any-direct", matchedBy: "binding.peer.wildcard" },
+    );
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "group", id: "" },
+      }),
+      {
+        agentId: "any-group",
+        matchedBy: "binding.peer.wildcard",
+        sessionKey: "agent:any-group:telegram:group:unknown",
+      },
+    );
+    expectResolvedRoute(
+      resolveAgentRoute({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        peer: { kind: "direct", id: "known" },
+      }),
+      { agentId: "known-direct", matchedBy: "binding.peer" },
+    );
+    expectResolvedRoute(resolveAgentRoute({ cfg, channel: "telegram", accountId: "work" }), {
+      agentId: "account-wide",
+      matchedBy: "binding.account",
+    });
+    expectResolvedRoute(resolveAgentRoute({ cfg, channel: "telegram", accountId: "default" }), {
+      agentId: "channel-wide",
+      matchedBy: "binding.channel",
+    });
+    expectResolvedRoute(
+      resolveUnknownDirectMessageRoute({ cfg, channel: "telegram", accountId: "default" }),
+      { agentId: "any-direct", matchedBy: "binding.peer.wildcard" },
+    );
+  });
 });
 
 describe("binding evaluation cache scalability", () => {

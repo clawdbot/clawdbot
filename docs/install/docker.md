@@ -577,11 +577,13 @@ does not reveal the full token.
     keeps both dependency layers cacheable without omitting `packages/*`, selected
     `extensions/*`, or other required workspace metadata.
 
-    Runtime assembly replaces the build dependency trees with the fresh production
-    install while retaining compiled workspace packages and native addon outputs.
-    It does not run `pnpm prune` on dependencies inherited from an image layer;
-    pnpm 12 can fail that operation with `EXDEV` on OverlayFS. The `build` target
-    retains development dependencies for live-test containers.
+    The `runtime-assets` stage inherits `production-deps` and overlays `/app`
+    from `runtime-build-output`, a copy of `build` with dependency trees removed.
+    This reuses the fresh production install's layers while preserving compiled
+    workspace packages and native addon outputs. It does not run `pnpm prune`
+    on dependencies inherited from an image layer; pnpm 12 can fail that operation
+    with `EXDEV` on OverlayFS. The `build` target retains development dependencies
+    for live-test containers.
 
     The same Dockerfile preserves the production runtime contract: digest-pinned
     Node and Bun bases, non-root uid 1000, `tini`, the built-in health check, and

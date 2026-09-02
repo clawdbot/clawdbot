@@ -6,6 +6,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
 
 const nodeRequire = createRequire(import.meta.url);
+// Resolution and Jiti must accept the same source family, including typed JSX variants.
+export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".mtsx",
+  ".ctsx",
+];
+
+export function isPluginSourceModulePath(modulePath: string): boolean {
+  return PLUGIN_SOURCE_MODULE_EXTENSIONS.includes(path.extname(modulePath).toLowerCase());
+}
+
 // Failed ESM jobs survive require-cache eviction. Preserve an observed terminal error
 // if a retry hits that job, rather than transforming its rejected graph through Jiti.
 const nativeModuleLoadFailures = new Map<string, unknown>();
@@ -57,12 +71,26 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
     code === "ERR_REQUIRE_ESM_RACE_CONDITION" ||
+    code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" ||
+    code === "ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING" ||
+    code === "ERR_UNKNOWN_FILE_EXTENSION" ||
     isMissingTargetModuleError(candidate, modulePath)
   );
 }
 
 /** Attempts native require before falling back to source transform paths. */
 export function tryNativeRequireJavaScriptModule(
+  moduleSpecifier: string,
+  options: Parameters<typeof tryNativeRequireModule>[1] = {},
+): { ok: true; moduleExport: unknown } | { ok: false } {
+  if (!isJavaScriptModulePath(toNativeRequirePath(moduleSpecifier))) {
+    return { ok: false };
+  }
+  return tryNativeRequireModule(moduleSpecifier, options);
+}
+
+/** Loads prepared host aliases, including source SDK paths supported by the runtime. */
+export function tryNativeRequireModule(
   moduleSpecifier: string,
   options: {
     allowWindows?: boolean;
@@ -75,7 +103,11 @@ export function tryNativeRequireJavaScriptModule(
     return { ok: false };
   }
   const modulePath = toNativeRequirePath(moduleSpecifier);
-  if (!isJavaScriptModulePath(modulePath)) {
+  if (
+    isPluginSourceModulePath(modulePath) &&
+    !process.features.typescript &&
+    typeof nodeRequire.extensions?.[path.extname(modulePath)] !== "function"
+  ) {
     return { ok: false };
   }
   let resolvedPath = modulePath;

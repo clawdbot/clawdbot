@@ -112,10 +112,12 @@ explicit session mode, the equivalent configured exec approval policy applies.
 
 Enabled plugins can add their own named read-only feeds and actions to these capability lists; disabling the plugin removes those integrations.
 
-Grants are bound to the exact widget bytes and revision approved by your session
-policy. If the agent changes the widget and asks for _more_ than was approved,
-OpenClaw applies that policy again; refreshing content within the same
-permissions keeps the grant.
+Grants are bound to the exact widget bytes approved by your session policy.
+Changed HTML or registered-source bytes require a new decision even when the
+permissions stay the same or shrink. A grant is preserved only when the
+approved bytes still match and the requested permissions do not widen.
+The authoring result distinguishes pending, rejected, and granted access;
+saving a widget does not imply its capabilities were approved.
 Widget interactions the agent should know about (filters you clicked, views
 you switched) reach it quietly as session notices — it stays informed without
 being interrupted.

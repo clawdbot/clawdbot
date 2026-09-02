@@ -15,10 +15,9 @@ import {
   resolveCurrentAttemptAssistant,
 } from "./attempt-terminal-evidence.js";
 import {
+  classifyAssistantTurn,
   hasOnlySilentAssistantReply,
   hasPositiveOutputTokenUsage,
-  isEmptyResponseAssistantTurn,
-  isNonVisibleAssistantTurnEligibleForSilentReply,
   isOllamaIncompleteTurnProvider,
   isReasoningOnlyAssistantTurn,
   isUnsignedThinkingOnlyAssistantTurn,
@@ -90,7 +89,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
-  /** Reply-optional silent classification tolerates committed side effects; retries never can. */
+  /** Silent classification can tolerate completed effects, never unfinished work or replay. */
   tolerateSideEffects?: boolean;
 }): boolean {
   return Boolean(
@@ -102,6 +101,7 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    hasAsyncActivity(params.attempt.toolMetas) ||
     (params.tolerateSideEffects !== true && params.attempt.replayMetadata.hadPotentialSideEffects),
   );
 }
@@ -116,26 +116,27 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  // "optional" is the run consumer's declaration that no user-facing reply is
-  // owed (e.g. cron without a delivery route). Silence after side-effecting
-  // tools is intentional there; retry is replay-unsafe, so erroring would mark
-  // successful tool-only runs as failures.
+  // NO_REPLY is an authored outcome, not missing output: a successful reaction
+  // can be the entire reply. Agents: classify it before the side-effect retry
+  // guard, or it becomes a false missing-summary warning (or a repeated tool).
+  // Actual failures, aborts and pending work still pass through the guards below.
   const terminalReplyOptional = params.terminalReplyExpectation === "optional";
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
+  const explicitSilentReply =
+    params.payloadCount === 0 &&
+    assistant?.stopReason !== "error" &&
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts);
+  const tolerateSideEffects = terminalReplyOptional || explicitSilentReply;
   if (
     !params.allowEmptyAssistantReplyAsSilent ||
-    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: terminalReplyOptional })
+    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects })
   ) {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
-  const assistant = resolveCurrentAttemptAssistant(params.attempt);
-  if (
-    params.payloadCount === 0 &&
-    assistant?.stopReason !== "error" &&
-    hasOnlySilentAssistantReply(params.attempt.assistantTexts)
-  ) {
+  if (explicitSilentReply) {
     return true;
   }
   // A visible turn owes a reply unless the model explicitly chose NO_REPLY.
@@ -144,10 +145,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (params.onlyExplicitSilentReply || !terminalReplyOptional) {
     return false;
   }
-  return isNonVisibleAssistantTurnEligibleForSilentReply({
-    payloadCount: params.payloadCount,
-    attempt: params.attempt,
-  });
+  return classifyAssistantTurn(params).nonVisibleEligibleForSilentReply;
 }
 
 /**
@@ -338,10 +336,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0 &&
     !hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) &&
-    isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt,
-    }),
+    classifyAssistantTurn(params).emptyResponse,
   );
   if (
     params.payloadCount !== 0 ||
@@ -397,16 +392,12 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  if (
-    !isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt: params.attempt,
-    })
-  ) {
+  const assistantState = classifyAssistantTurn(params);
+  if (!assistantState.emptyResponse) {
     return null;
   }
 
-  const assistant = resolveCurrentAttemptAssistant(params.attempt) ?? null;
+  const assistant = assistantState.assistant ?? null;
   if (
     assistant?.stopReason === "stop" &&
     isOllamaIncompleteTurnProvider(params.provider) &&

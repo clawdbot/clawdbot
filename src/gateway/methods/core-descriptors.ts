@@ -192,6 +192,13 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["artifacts.get", "artifacts", "operator.read", "<=2026.7"],
   ["artifacts.download", "artifacts", "operator.read", "<=2026.7"],
   ["skills.status", "skills", "operator.read", "<=2026.7"],
+  ["skills.library.list", "skills", "operator.read", "2026.8"],
+  ["skills.library.read", "skills", "operator.read", "2026.8"],
+  ["skills.library.save", "skills", "operator.write", "2026.8"],
+  ["skills.library.mutate", "skills", "operator.write", "2026.8"],
+  ["skills.library.activate", "skills", "operator.write", "2026.8"],
+  ["skills.library.import", "skills", "operator.write", "2026.8"],
+  ["skills.library.upload", "skills", "operator.write", "2026.8"],
   ["skills.search", "skills", "operator.read", "<=2026.7"],
   ["skills.detail", "skills", "operator.read", "<=2026.7"],
   ["skills.securityVerdicts", "skills", "operator.read", "<=2026.7"],
@@ -642,33 +649,25 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     { startup: true, controlPlaneWrite: true },
   ],
+  [
+    "sessions.title.prepare",
+    "sessions-title",
+    "operator.write",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
 
+// Rows are `as const`, so a present policy flag is already the exact literal the spec allows.
 const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
   CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) => {
     const spec: CoreGatewayMethodSpec = { name, scope, since };
-    const normalizedPolicy: CoreGatewayMethodPolicy | undefined = policy;
     if (family) {
       spec.family = family;
     }
-    if (normalizedPolicy?.advertise === false) {
-      spec.advertise = false;
-    }
-    if (normalizedPolicy?.startup === true) {
-      spec.startup = true;
-    }
-    if (normalizedPolicy?.controlPlaneWrite === true) {
-      spec.controlPlaneWrite = true;
-    }
-    if (normalizedPolicy?.compatibilityRestored === true) {
-      spec.compatibilityRestored = true;
-    }
-    if (normalizedPolicy?.description) {
-      spec.description = normalizedPolicy.description;
-    }
-    return spec;
+    return Object.assign(spec, policy);
   });
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
@@ -689,7 +688,7 @@ export function listCoreAdvertisedGatewayMethodNames(): string[] {
 
 /** Returns all registered core method names, including hidden/internal compatibility methods. */
 export function listCoreGatewayMethodNames(): string[] {
-  return listCoreGatewayMethodMetadata().map((spec) => spec.name);
+  return CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => spec.name);
 }
 
 /** Returns the public metadata emitted for every core gateway method. */
@@ -748,9 +747,7 @@ export function createCoreGatewayMethodDescriptors(
   handlers: Record<string, GatewayMethodHandler>,
 ): GatewayMethodDescriptorInput[] {
   const descriptors: GatewayMethodDescriptorInput[] = [];
-  const specNames = new Set<string>();
   for (const spec of CORE_GATEWAY_METHOD_SPEC_LIST) {
-    specNames.add(spec.name);
     const handler = handlers[spec.name];
     if (!handler) {
       continue;
@@ -769,7 +766,7 @@ export function createCoreGatewayMethodDescriptors(
     });
   }
   for (const name of Object.keys(handlers)) {
-    if (!specNames.has(name)) {
+    if (!CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(name)) {
       // Unclassified core handlers would bypass scope/startup/write metadata, so fail before the
       // dispatcher can expose a method with missing policy.
       throw new Error(`gateway method handler is missing a descriptor: ${name}`);

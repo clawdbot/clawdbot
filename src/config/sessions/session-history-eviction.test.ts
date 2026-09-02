@@ -2,6 +2,11 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  prepareSystemAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
+} from "../../agents/admitted-run-context.js";
+import { replaceConfigFile } from "../config.js";
 
 const evictionWarnSpy = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async () => {
@@ -18,6 +23,7 @@ vi.mock("../../logging/subsystem.js", async () => {
     },
   };
 });
+import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
@@ -62,6 +68,7 @@ describe("SQLite historical session disk budget", () => {
   });
 
   afterEach(async () => {
+    resetAgentRunRegistryForTest();
     vi.restoreAllMocks();
     await enforceSqliteSessionHistoryDiskBudget({
       storePath,
@@ -71,6 +78,120 @@ describe("SQLite historical session disk budget", () => {
     closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
+
+  it.each([
+    { operation: "delete", phase: "closed", committed: false },
+    { operation: "delete", phase: "rollback", committed: false },
+    { operation: "delete", phase: "complete", committed: true },
+    { operation: "delete", phase: "partial", committed: true },
+    { operation: "reset", phase: "closed", committed: false },
+    { operation: "reset", phase: "post-commit failure", committed: true },
+  ] as const)(
+    "forces maintenance only after a commit: $operation / $phase",
+    async ({ operation, phase, committed }) => {
+      const sessionKey = "agent:main:target";
+      for (const name of ["target", "unrelated"]) {
+        await createHistoricalTranscript({
+          sessionKey: `agent:main:${name}`,
+          sessionId: `${name}-old`,
+          nextSessionId: `${name}-live`,
+          content: "retained history".repeat(4096),
+          updatedAt: Date.now(),
+        });
+      }
+      // Drain fixture writes before enabling pressure; only this lifecycle attempt may force it.
+      await enforceSqliteSessionHistoryDiskBudget({
+        storePath,
+        mode: "warn",
+        maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
+      });
+      const archive = path.join(tempDir, "retained.jsonl.deleted.2026-01-01T00-00-00.000Z");
+      fs.writeFileSync(archive, Buffer.alloc(64 * 1024));
+      await replaceConfigFile({
+        nextConfig: {
+          session: { maintenance: { mode: "enforce", maxDiskBytes: 1, highWaterBytes: 1 } },
+        },
+        afterWrite: { mode: "auto" },
+      });
+      const owner = database();
+      const checkpoint = vi.spyOn(owner.walMaintenance, "checkpoint");
+      const admission = prepareSystemAgentRunAdmission({}, "maintenance-lifetime", "main", "setup");
+      const assertActive = resolveAdmittedRunActiveAssertion(await admission.admit("embedded"))!;
+      const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
+      const exec = owner.db.exec.bind(owner.db);
+      if (phase === "rollback") {
+        let failed = false;
+        vi.spyOn(owner.db, "exec").mockImplementation((sql) => {
+          if (sql === "COMMIT" && !failed) {
+            failed = true;
+            throw new Error("injected commit failure");
+          }
+          return exec(sql);
+        });
+      }
+      try {
+        if (phase === "closed") {
+          admission.close();
+        }
+        const attempt =
+          operation === "delete"
+            ? deleteSessionEntryLifecycle({
+                storePath,
+                target,
+                archiveTranscript: true,
+                commitGuard: () => {
+                  if (phase === "partial" && !sessionExists("target-old")) {
+                    expect(readArchiveNames("target-old")).toHaveLength(1);
+                    expect(checkpoint).not.toHaveBeenCalled();
+                    admission.close();
+                  }
+                  assertActive();
+                },
+              })
+            : resetSessionEntryLifecycle({
+                storePath,
+                target,
+                buildNextEntry: () => {
+                  assertActive();
+                  return { sessionId: "target-next", updatedAt: 3 };
+                },
+                afterEntryMutation: () => {
+                  expect(checkpoint).not.toHaveBeenCalled();
+                  admission.close();
+                  assertActive();
+                },
+              });
+        if (phase === "complete") {
+          await expect(attempt).resolves.toMatchObject({ deleted: true });
+        } else {
+          await expect(attempt).rejects.toThrow(
+            phase === "rollback" ? "injected commit failure" : "authority is no longer active",
+          );
+        }
+        // Warn mode shares the real retention queue but performs no reclamation itself.
+        await enforceSqliteSessionHistoryDiskBudget({
+          storePath,
+          mode: "warn",
+          maintenance: { maxDiskBytes: 1, highWaterBytes: 1 },
+        });
+        expect.soft(checkpoint.mock.calls.length > 0).toBe(committed);
+        expect.soft(fs.existsSync(archive)).toBe(!committed);
+        expect.soft(sessionExists("unrelated-old")).toBe(!committed);
+        expect.soft(sessionExists("unrelated-live")).toBe(true);
+        expect
+          .soft(sessionExists("target-live"))
+          .toBe(phase !== "complete" && !(operation === "reset" && committed));
+        if (phase === "partial") {
+          expect.soft(sessionExists("target-old")).toBe(false);
+        }
+        if (operation === "reset" && committed) {
+          expect.soft(sessionExists("target-next")).toBe(true);
+        }
+      } finally {
+        admission.close();
+      }
+    },
+  );
 
   it("evicts the oldest historical session and stops after reaching high water", async () => {
     const sessionKey = "agent:main:history-order";

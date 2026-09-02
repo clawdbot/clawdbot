@@ -166,6 +166,16 @@ describe("worker placement session maintenance ownership", () => {
           replaceEntry: true,
           skipMaintenance: true,
         });
+        const sentinelKey = "agent:main:explicit:maintenance-sentinel";
+        const sentinelEntry = {
+          sessionId: "maintenance-sentinel",
+          updatedAt: now - 31 * 86_400_000,
+        };
+        await patchSessionEntryCore(sessionScope(sentinelKey), () => sentinelEntry, {
+          fallbackEntry: sentinelEntry,
+          replaceEntry: true,
+          skipMaintenance: true,
+        });
         const { forceDestroyEnvironment, runtime } = createMaintenanceRuntime({
           placements: [placement],
         });
@@ -191,6 +201,9 @@ describe("worker placement session maintenance ownership", () => {
 
         try {
           await triggerMaintenance();
+          await vi.waitFor(() => {
+            expect(loadSessionEntry(sessionScope(sentinelKey))).toBeUndefined();
+          });
           expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
             sessionId: placement.sessionId,
           });
@@ -202,11 +215,15 @@ describe("worker placement session maintenance ownership", () => {
           expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).not.toBe(true);
           await triggerMaintenance();
           if (maintenance === "dashboard archive") {
-            expect(loadSessionEntry(sessionScope(sessionKey))?.archivedAt).toEqual(
-              expect.any(Number),
-            );
+            await vi.waitFor(() => {
+              expect(loadSessionEntry(sessionScope(sessionKey))?.archivedAt).toEqual(
+                expect.any(Number),
+              );
+            });
           } else {
-            expect(loadSessionEntry(sessionScope(sessionKey))).toBeUndefined();
+            await vi.waitFor(() => {
+              expect(loadSessionEntry(sessionScope(sessionKey))).toBeUndefined();
+            });
           }
         } finally {
           await sidecar.stop();

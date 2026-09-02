@@ -8,8 +8,10 @@ import {
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
+  AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isDefinitiveRunLifecycle,
 } from "../agents/agent-run-terminal-outcome.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
@@ -218,11 +220,6 @@ function normalizeHeartbeatChatFinalText(params: {
   return { suppress: false, text: stripped.text };
 }
 
-/**
- * Keep this aligned with the agent.wait lifecycle-error grace so chat surfaces
- * do not finalize a run before fallback or retry reuses the same runId.
- */
-const AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const LIVE_TEXT_PACING_MS = 75;
 
 export type ChatEventBroadcast = GatewayBroadcastFn;
@@ -359,7 +356,6 @@ export type AgentEventHandlerOptions = {
     clientRunId: string;
     sessionKey: string;
     sessionId?: string;
-    observedAt: number;
     persistence: Promise<void>;
   }) => void;
   resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
@@ -448,7 +444,7 @@ export function createAgentEventHandler({
   sessionMessageSubscribers,
   loadGatewaySessionLifecycleSnapshotForEvent = loadGatewaySessionLifecycleSnapshot,
   persistGatewaySessionLifecycleEventForEvent = persistGatewaySessionLifecycleEvent,
-  lifecycleErrorRetryGraceMs = AGENT_LIFECYCLE_ERROR_RETRY_GRACE_MS,
+  lifecycleErrorRetryGraceMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   isChatSendRunActive = () => false,
   clearTrackedActiveRun,
   settleTrackedTerminal,
@@ -716,6 +712,7 @@ export function createAgentEventHandler({
     if (isSupersededRestartRecoveryEvent) {
       return;
     }
+    clearPendingTerminalLifecycleError(evt.runId, evt.lifecycleGeneration);
     let terminalPersistence: Promise<void> | undefined;
 
     if (
@@ -820,7 +817,6 @@ export function createAgentEventHandler({
           clientRunId,
           sessionKey,
           sessionId: evt.sessionId,
-          observedAt: evt.ts,
           persistence,
         });
         const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
@@ -1714,11 +1710,13 @@ export function createAgentEventHandler({
 
     if (lifecyclePhase === "error") {
       const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
-      const isFallbackExhaustedFailure = evt.data?.fallbackExhaustedFailure === true;
-      // Per-attempt provider errors keep the retry grace so fallback can reuse
-      // the runId. Once the runner marks fallback as exhausted, clear chat state
-      // immediately so webchat sessions do not stay in progress until the timer.
-      if (isAborted || isFallbackExhaustedFailure || lifecycleErrorRetryGraceMs <= 0) {
+      const definitiveTerminal = isDefinitiveRunLifecycle({
+        phase: lifecyclePhase,
+        data: evt.data,
+      });
+      // Only retryable failures get grace. Definitive cancellation and timeout
+      // must persist before dispatch closes the run and the sidebar reads its status.
+      if (isAborted || definitiveTerminal || lifecycleErrorRetryGraceMs <= 0) {
         // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
         // has flushed the throttled tail and resolved the terminal message.
         finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });

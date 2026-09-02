@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { build } from "esbuild";
+import packageJson from "../../package.json" with { type: "json" };
 import { appendTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -36,7 +37,9 @@ export async function probeTranscriptHealthMemory(
       ],
       format: "esm",
       outfile: childPath,
-      packages: "external",
+      external: Object.entries(packageJson.dependencies)
+        .filter(([, version]) => !version.startsWith("workspace:"))
+        .map(([name]) => name),
       platform: "node",
       target: "node22",
     });

@@ -34,7 +34,7 @@ export function createGatewayChatUserTurnController(params: {
   client: GatewayClient | null;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
-  display?: false;
+  transcript?: Pick<UserTurnInput, "display" | "excludeFromContext">;
   startedAt: number;
   warn: (message: string) => void;
   assertGoalCurrent?: () => void;
@@ -45,9 +45,8 @@ export function createGatewayChatUserTurnController(params: {
       ? undefined
       : gatewayClientSenderFields(params.client).sender;
   const baseInput: UserTurnInput = {
-    ...(params.display === false || request.goalOperation?.action === "resume"
-      ? { display: false }
-      : {}),
+    ...params.transcript,
+    ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
     text: request.rawMessage,
     timestamp: session.now,
     idempotencyKey: buildRunUserTurnIdempotencyKey(session.clientRunId),

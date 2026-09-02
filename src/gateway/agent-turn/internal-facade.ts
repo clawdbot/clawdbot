@@ -4,6 +4,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import {
   type GatewayMethodDispatchResponse,
@@ -79,6 +80,22 @@ export function createInternalAgentTurnFacade(
     let resolveFinal: ((response: GatewayMethodDispatchResponse) => void) | undefined;
     let rejectFinal: ((error: Error) => void) | undefined;
     let postAcceptanceError: Error | undefined;
+    // Acceptance publishes the abort owner before this callback runs. Retain that exact
+    // entry so a late deadline cannot cancel a same-run-id successor.
+    let acceptedAbortOwner: { entry: ChatAbortControllerEntry; runId: string } | undefined;
+    let pendingCancelReason: "rpc" | "timeout" | undefined;
+    const cancelAcceptedRun = (reason: "rpc" | "timeout") => {
+      pendingCancelReason ??= reason;
+      const owner = acceptedAbortOwner;
+      if (!owner || context.chatAbortControllers.get(owner.runId) !== owner.entry) {
+        return;
+      }
+      abortChatRunById(context, {
+        runId: owner.runId,
+        sessionKey: owner.entry.sessionKey,
+        stopReason: pendingCancelReason,
+      });
+    };
     const acceptancePromise = new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
       resolveAcceptance = resolve;
       rejectAcceptance = reject;
@@ -103,6 +120,15 @@ export function createInternalAgentTurnFacade(
           resolveAcceptance?.(acceptance);
           const acceptedRunId =
             typeof meta?.runId === "string" && meta.runId.trim() ? meta.runId.trim() : undefined;
+          const acceptedEntry = acceptedRunId
+            ? context.chatAbortControllers.get(acceptedRunId)
+            : undefined;
+          if (acceptedRunId && acceptedEntry) {
+            acceptedAbortOwner = { entry: acceptedEntry, runId: acceptedRunId };
+            if (pendingCancelReason) {
+              cancelAcceptedRun(pendingCancelReason);
+            }
+          }
           if (
             meta?.cached === true &&
             acceptedRunId &&
@@ -192,7 +218,15 @@ export function createInternalAgentTurnFacade(
       response,
       dispatchOptions.timeoutMs,
       dispatchOptions.signal,
-      dispatchOptions.onSignalAbort,
+      dispatchOptions.cancelOnDeadline || dispatchOptions.onSignalAbort
+        ? async () => {
+            if (dispatchOptions.cancelOnDeadline) {
+              cancelAcceptedRun("rpc");
+            }
+            await dispatchOptions.onSignalAbort?.();
+          }
+        : undefined,
+      dispatchOptions.cancelOnDeadline ? () => cancelAcceptedRun("timeout") : undefined,
     );
   };
 

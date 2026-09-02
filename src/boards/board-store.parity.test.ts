@@ -213,9 +213,9 @@ describe("SqliteBoardStore behavior", () => {
     expect(store.getSnapshot(boardSession).widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
   });
 
-  it("round-trips plugin kinds and props without serving document bytes", () => {
+  it("replaces omitted plugin props without changing unrelated layout state", () => {
     const store = createStore();
-    const put = store.putWidget({
+    const initial = store.putWidget({
       ...boardSession,
       name: "work-item",
       content: {
@@ -224,18 +224,62 @@ describe("SqliteBoardStore behavior", () => {
         props: { cardId: "card-123", compact: true },
       },
     });
+    store.putWidget({
+      ...boardSession,
+      name: "left",
+      content: { kind: "plugin", pluginKind: "workboard:card", props: { side: "left" } },
+    });
+    store.putWidget({
+      ...boardSession,
+      name: "right",
+      content: { kind: "plugin", pluginKind: "workboard:card", props: { side: "right" } },
+    });
 
-    expect(put.widgets[0]).toMatchObject({
+    expect(initial.widgets[0]).toMatchObject({
       name: "work-item",
       contentKind: "plugin",
       pluginKind: "workboard:card",
       props: { cardId: "card-123", compact: true },
       grantState: "none",
     });
-    expect(put.widgets[0]).not.toHaveProperty("instanceId");
-    expect(store.getSnapshot(boardSession).widgets[0]).toEqual(put.widgets[0]);
+    expect(initial.widgets[0]).not.toHaveProperty("instanceId");
     expect(store.readWidgetHtml(boardSession, "work-item")).toBeUndefined();
     expect(store.readWidgetMcpApp(boardSession, "work-item")).toBeUndefined();
+
+    const moved = store.applyOps(boardSession, [
+      { kind: "widget_move", name: "work-item", after: "right" },
+    ]);
+    expect(moved.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
+    expect(moved.widgets[2]?.props).toEqual({ cardId: "card-123", compact: true });
+    const [left, right] = moved.widgets;
+
+    const put = store.putWidget({
+      ...boardSession,
+      name: "work-item",
+      content: { kind: "plugin", pluginKind: "workboard:card" },
+    });
+
+    expect(put.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
+    expect(put.widgets[0]).toEqual(left);
+    expect(put.widgets[1]).toEqual(right);
+    expect(put.widgets[2]).not.toHaveProperty("props");
+    const { resolvedWidgetName: putName, ...putSnapshot } = put;
+    expect(putName).toBe("work-item");
+    expect(store.getSnapshot(boardSession)).toEqual(putSnapshot);
+
+    const placed = store.putWidget({
+      ...boardSession,
+      name: "work-item",
+      content: { kind: "plugin", pluginKind: "workboard:card" },
+      placement: { after: "left" },
+    });
+    expect(placed.widgets.map((widget) => widget.name)).toEqual(["left", "work-item", "right"]);
+    expect(placed.widgets[0]).toEqual(left);
+    expect(placed.widgets[1]).not.toHaveProperty("props");
+    expect(placed.widgets[2]).toEqual({ ...right, position: 2 });
+    const { resolvedWidgetName: placedName, ...placedSnapshot } = placed;
+    expect(placedName).toBe("work-item");
+    expect(store.getSnapshot(boardSession)).toEqual(placedSnapshot);
   });
 
   it("rejects oversized plugin props and capability declarations", () => {

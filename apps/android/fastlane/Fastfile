@@ -446,8 +446,16 @@ def prepare_android_release_signing!
 end
 
 def validate_android_release_signing!
+  build_commit = release_git_sha
+  build_timestamp = Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ")
   Dir.chdir(android_root) do
-    sh(shell_join(["./gradlew", ":app:bundlePlayRelease", ":wear:bundleRelease", "--dry-run"]))
+    sh(shell_join([
+      "./gradlew",
+      ":app:validateSigningPlayRelease",
+      ":wear:validateSigningRelease",
+      "-PopenclawBuildCommit=#{build_commit}",
+      "-PopenclawBuildTimestamp=#{build_timestamp}"
+    ]))
   end
 end
 

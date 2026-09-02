@@ -8,6 +8,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { resolveCronDeliveryPlan } from "../cron/delivery-plan.js";
 import { saveCronStore } from "../cron/store.js";
 import { loadedCronStoreFromRows, loadCronRows } from "../cron/store/row-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -2476,6 +2477,68 @@ describe("openclaw state database", () => {
       ).toEqual([]);
       expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
+    "preserves cron delivery when recovering v12 enabled state through %s",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+      const storeKey = path.join(stateDir, "cron", "jobs.json");
+      const cases: Array<{ enabled: boolean; delivery?: { mode: "none" } }> = [
+        { enabled: true },
+        { enabled: false },
+        { enabled: true, delivery: { mode: "none" } },
+      ];
+      const jobs: CronStoredJob[] = cases.map(({ enabled, delivery }, index) => ({
+        id: `legacy-main-${index}`,
+        name: "Legacy main job",
+        enabled,
+        createdAtMs: 100,
+        updatedAtMs: 250,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        delivery,
+        state: {},
+      }));
+      const insert = legacy.prepare(
+        `INSERT INTO cron_jobs (
+           store_key, job_id, name, enabled, created_at_ms, schedule_kind, every_ms,
+           session_target, wake_mode, payload_kind, payload_message, job_json, state_json,
+           sort_order, updated_at
+         ) VALUES (?, ?, ?, ?, 100, 'every', 60000, 'main', 'now', 'systemEvent',
+                   'tick', ?, ?, ?, 250)`,
+      );
+      for (const [index, job] of jobs.entries()) {
+        const { enabled, state, ...legacyJob } = job;
+        insert.run(
+          storeKey,
+          job.id,
+          job.name,
+          Number(enabled),
+          JSON.stringify(legacyJob),
+          JSON.stringify(state),
+          index,
+        );
+      }
+      legacy.close();
+
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      const loaded = loadedCronStoreFromRows(loadCronRows(migrated.db, storeKey)).store.jobs;
+      expect(loaded).toEqual(jobs);
+      for (const job of loaded) {
+        expect(resolveCronDeliveryPlan(job)).toMatchObject({ mode: "none", requested: false });
+      }
     },
   );
 

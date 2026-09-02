@@ -44,7 +44,12 @@ final class WatchMessageSendCompletion: @unchecked Sendable {
 func sendReachableWatchMessage(_ payload: [String: Any], with session: WCSession) async throws {
     // WatchConnectivity callbacks use their own executor and can race despite their
     // documented exactly-once contract; only the first callback owns this continuation.
-    try await withCheckedThrowingContinuation(isolation: nil) { continuation in
+    try await withCheckedThrowingContinuation(isolation: nil) { (continuation: CheckedContinuation<Void, any Error>) in
+        // An executor hop can retire the caller before this SDK enqueue begins.
+        guard !Task.isCancelled else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
         let completion = WatchMessageSendCompletion(continuation)
         session.sendMessage(
             payload,

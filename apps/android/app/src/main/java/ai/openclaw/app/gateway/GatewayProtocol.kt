@@ -626,6 +626,13 @@ enum class GatewayMethod(
   ArtifactsGet("artifacts.get"),
   ArtifactsDownload("artifacts.download"),
   SkillsStatus("skills.status"),
+  SkillsLibraryList("skills.library.list"),
+  SkillsLibraryRead("skills.library.read"),
+  SkillsLibrarySave("skills.library.save"),
+  SkillsLibraryMutate("skills.library.mutate"),
+  SkillsLibraryActivate("skills.library.activate"),
+  SkillsLibraryImport("skills.library.import"),
+  SkillsLibraryUpload("skills.library.upload"),
   SkillsSearch("skills.search"),
   SkillsDetail("skills.detail"),
   SkillsSecurityVerdicts("skills.securityVerdicts"),
@@ -887,6 +894,7 @@ enum class GatewayMethod(
   SessionsGithubOptions("sessions.github.options"),
   SessionsGithubStatus("sessions.github.status"),
   SessionsGithubConfirm("sessions.github.confirm"),
+  SessionsTitlePrepare("sessions.title.prepare"),
 }
 
 enum class GatewayEvent(

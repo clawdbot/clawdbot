@@ -28,6 +28,10 @@ export type CommandLaneSnapshot = {
  * Public enqueue knobs shared by command-lane callers and narrower injection
  * points that should not import the full queue implementation.
  */
+export type CommandQueueTaskDeadline =
+  | { kind: "bounded"; deadlineAtMs: number }
+  | { kind: "unlimited" };
+
 export type CommandQueueEnqueueOptions = {
   /** Called only when this entry remains queued after immediate lane admission. */
   onQueued?: () => void;
@@ -35,6 +39,10 @@ export type CommandQueueEnqueueOptions = {
   onWait?: (waitMs: number, queuedAhead: number) => void;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  /** Replaces idle timing with an owner deadline; undefined restores idle timing. */
+  taskTimeoutSubscribe?: (
+    onDeadline: (deadline: CommandQueueTaskDeadline | undefined) => void,
+  ) => () => void;
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   /** Ends the task after a caller-owned timeout cleanup grace has already elapsed. */

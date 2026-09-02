@@ -9,7 +9,10 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { installDesktopClientFake } from "./desktop-rfb-test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -26,7 +29,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 );
 
 type ColdOpenOutcome = {
-  outcome: "content" | "generic-empty";
+  outcome: "loading" | "content" | "generic-empty";
   emptyStateOffersAction: boolean;
 };
 
@@ -131,7 +134,9 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
         ],
       },
       "environments.list": {
-        environments: [{ id: "gateway", type: "local", status: "available", desktop: true }],
+        environments: [
+          { id: "worker-desktop-1", type: "worker", status: "available", desktop: true },
+        ],
       },
       "session.discussion.info": {
         embedUrl: "https://discussion.example/embed/thread/session",
@@ -351,6 +356,9 @@ async function readColdOpenOutcome(page: Page): Promise<ColdOpenOutcome> {
   const activePanel = page.locator(".side-panel__panel:not([hidden])");
   await activePanel.waitFor();
   await activePanel.locator(":scope > *").first().waitFor();
+  if ((await activePanel.locator("openclaw-panel-loading-skeleton").count()) > 0) {
+    return { outcome: "loading", emptyStateOffersAction: false };
+  }
   const emptyState = activePanel.locator("openclaw-panel-empty-state").first();
   const genericEmptyState = (await emptyState.count()) > 0;
   return {
@@ -374,18 +382,30 @@ async function readSlotColdOpenOutcome(
       await choices.locator(".side-panel-type-option__label").allTextContents(),
       `${label} cold-open offered slots`,
     ).toEqual(offeredSlotLabels);
-    await choices.filter({ hasText: label }).click();
+    const held =
+      label === "Discussion"
+        ? await holdModuleResponse(page, /\/assets\/session-discussion-panel-[^/]+\.js$/u)
+        : null;
+    try {
+      await choices.filter({ hasText: label }).click();
+      if (held) {
+        await held.request;
+        expect(await readColdOpenOutcome(page)).toEqual({
+          outcome: "loading",
+          emptyStateOffersAction: false,
+        });
+      }
+    } finally {
+      held?.release();
+    }
     if (expectedOutcome) {
       await expect
         .poll(() => readColdOpenOutcome(page), { message: `${label} cold-open outcome` })
         .toMatchObject({ outcome: expectedOutcome });
     } else {
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await expect
+        .poll(() => readColdOpenOutcome(page), { message: `${label} finished cold-open` })
+        .not.toMatchObject({ outcome: "loading" });
     }
     return await readColdOpenOutcome(page);
   } finally {

@@ -1,4 +1,5 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
+import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
 import {
   isAuditLedgerEnabled,
   isExecutionIdentityCollectionEnabled,
@@ -200,7 +201,6 @@ export function startGatewayEventSubscriptions(params: {
     runId: string;
     clientRunId: string;
     sessionId?: string;
-    observedAt: number;
     persistence: Promise<void>;
   }) => {
     let tracked = false;
@@ -217,6 +217,8 @@ export function startGatewayEventSubscriptions(params: {
       const lifecycleGeneration = entry.lifecycleGeneration?.trim();
       const sessionKey = entry.sessionKey.trim();
       const sessionId = run.sessionId?.trim() || entry.sessionId.trim();
+      // Lazy chat consumption must retain the terminal time stamped at ingress.
+      const observedAt = entry.projectSessionTerminalObservedAt;
       if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
         void run.persistence.catch(() => {
           params.restartRecoveryCandidates.set(candidateRunId, {
@@ -224,7 +226,7 @@ export function startGatewayEventSubscriptions(params: {
             lifecycleGeneration,
             sessionKey,
             sessionId,
-            observedAt: run.observedAt,
+            observedAt,
           });
         });
       }
@@ -379,7 +381,7 @@ export function startGatewayEventSubscriptions(params: {
         trackedEntry.lifecycleGeneration === eventLifecycleGeneration;
       const claimIsComplete = !evt.contextClaimId || terminalAuthority !== undefined;
       const canPersistTerminal =
-        lifecyclePhase === "end" &&
+        isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: evt.data }) &&
         evt.projectSessionLifecycle !== false &&
         trackedOwnerIsCurrent &&
         claimIsComplete;
@@ -409,7 +411,6 @@ export function startGatewayEventSubscriptions(params: {
           runId: evt.runId,
           clientRunId,
           sessionId: evt.sessionId,
-          observedAt,
           persistence,
         });
         if (!tracked) {

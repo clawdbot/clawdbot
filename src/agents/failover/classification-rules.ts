@@ -254,10 +254,11 @@ export function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("timeout");
   }
+  // Context payloads can use 5xx; preserve the compaction decision before generic status mapping.
+  if (messageClassification?.kind === "context_overflow") {
+    return messageClassification;
+  }
   if (status === 404) {
-    if (messageClassification?.kind === "context_overflow") {
-      return messageClassification;
-    }
     if (
       messageReason === "session_expired" ||
       messageReason === "billing" ||
@@ -269,13 +270,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     }
     return toReasonClassification("model_not_found");
   }
-  if (status === 503) {
-    if (messageReason === "overloaded") {
-      return messageClassification;
-    }
-    return toReasonClassification("timeout");
-  }
-  if (status === 499) {
+  if (status === 503 || status === 499) {
     if (messageReason === "overloaded") {
       return messageClassification;
     }
