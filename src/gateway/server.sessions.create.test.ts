@@ -7,7 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getContextWindowCaches } from "../agents/context-cache.js";
 import {
@@ -3217,7 +3219,9 @@ test.each([
         await expect(fs.readFile(dirtyFile, "utf8")).resolves.toBe("preserve my work\n");
         expect(warnSpy).toHaveBeenCalledOnce();
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(worktree.branch));
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(worktree.path));
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining(truncateUtf16Safe(sanitizeForLog(worktree.path), 256)),
+        );
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("retained-dirty"));
       } else if (outcome === "failed") {
         expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();

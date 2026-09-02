@@ -156,10 +156,6 @@ export function finalizeCapturedOutput(
   return trimmed;
 }
 
-function trimPreservedPendingLine(value: string, maxBytes: number): string {
-  return truncateUtf8Suffix(value, maxBytes);
-}
-
 export function appendPreservedOutputLines(params: {
   capture: CapturedOutputBuffers;
   chunk: Buffer | string;
@@ -168,26 +164,23 @@ export function appendPreservedOutputLines(params: {
   maxPreservedOutputLines: number;
   maxPendingLineBytes: number;
 }): void {
-  if (!params.preserveOutputLine || params.maxPreservedOutputLines <= 0) {
+  const { capture, maxPreservedOutputLines, preserveOutputLine } = params;
+  // The command's quota is fixed, so later text cannot reach a full preserved result.
+  if (!preserveOutputLine || capture.preservedLines.length >= maxPreservedOutputLines) {
     return;
   }
-  const text = Buffer.isBuffer(params.chunk)
-    ? params.capture.decoder.write(params.chunk)
-    : params.chunk;
+  const text = Buffer.isBuffer(params.chunk) ? capture.decoder.write(params.chunk) : params.chunk;
   if (!text) {
     return;
   }
-  const lines = (params.capture.pendingLine + text).split(/\r?\n/);
-  params.capture.pendingLine = trimPreservedPendingLine(
-    lines.pop() ?? "",
-    params.maxPendingLineBytes,
-  );
+  const lines = (capture.pendingLine + text).split(/\r?\n/);
+  capture.pendingLine = truncateUtf8Suffix(lines.pop() ?? "", params.maxPendingLineBytes);
   for (const line of lines) {
     if (
-      params.capture.preservedLines.length < params.maxPreservedOutputLines &&
-      params.preserveOutputLine(line, params.stream)
+      capture.preservedLines.length < maxPreservedOutputLines &&
+      preserveOutputLine(line, params.stream)
     ) {
-      params.capture.preservedLines.push(line);
+      capture.preservedLines.push(line);
     }
   }
 }
@@ -199,19 +192,20 @@ export function flushPreservedOutputLine(params: {
   maxPreservedOutputLines: number;
   maxPendingLineBytes: number;
 }): void {
-  if (!params.preserveOutputLine || params.maxPreservedOutputLines <= 0) {
+  const { capture, maxPreservedOutputLines, preserveOutputLine } = params;
+  if (!preserveOutputLine || maxPreservedOutputLines <= 0) {
     return;
   }
-  const trailing = trimPreservedPendingLine(
-    params.capture.pendingLine + params.capture.decoder.end(),
+  const trailing = truncateUtf8Suffix(
+    capture.pendingLine + capture.decoder.end(),
     params.maxPendingLineBytes,
   );
-  params.capture.pendingLine = "";
+  capture.pendingLine = "";
   if (
     trailing &&
-    params.capture.preservedLines.length < params.maxPreservedOutputLines &&
-    params.preserveOutputLine(trailing, params.stream)
+    capture.preservedLines.length < maxPreservedOutputLines &&
+    preserveOutputLine(trailing, params.stream)
   ) {
-    params.capture.preservedLines.push(trailing);
+    capture.preservedLines.push(trailing);
   }
 }
