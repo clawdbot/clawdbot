@@ -3,7 +3,6 @@ import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
-  appendTranscriptMessageSync,
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
@@ -231,7 +230,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       const leafBeforeAppend = manager.getLeafId();
       const appended = manager.appendMessageWithTranscriptAnchor({
         role: "assistant",
-        content: "recovery reply",
+        content: [{ type: "text", text: "recovery reply" }],
         timestamp: 2,
       });
       expect(manager.getEntry(appended.entryId)?.parentId).toBe(leafBeforeAppend);
@@ -676,8 +675,12 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
   it("excludes a preserved orphan from this turn's messages without branching", async () => {
     const contextMessages: AgentMessage[] = [
-      { role: "assistant", content: [{ type: "text", text: "prior" }], timestamp: 1 },
-      { role: "user", content: "old", timestamp: 2 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "prior" }],
+        timestamp: 1,
+      } as AgentMessage,
+      { role: "user", content: "old", timestamp: 2 } as AgentMessage,
     ];
     const { activeSession } = createActiveSession([...contextMessages]);
     const branch = vi.fn();

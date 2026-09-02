@@ -450,9 +450,11 @@ export function excludeOrphanedTrailingUserMessageFromModelContext(params: {
   }
   for (let index = params.messages.length - 1; index >= 0; index -= 1) {
     const message = params.messages[index];
+    // SAFETY: AgentMessage is a closed union; probe role before treating the row as user text.
     if ((message as { role?: unknown }).role !== "user") {
       continue;
     }
+    // SAFETY: user rows expose content as string | parts; extractor accepts unknown.
     const messageText = extractUserMessagePromptText((message as { content?: unknown }).content);
     if (messageText === orphanText) {
       return [...params.messages.slice(0, index), ...params.messages.slice(index + 1)];
