@@ -469,7 +469,6 @@ extensions/feishu/src/monitor.message-handler.ts	1
 extensions/feishu/src/monitor.state.ts	1
 extensions/feishu/src/monitor.transport.ts	1
 extensions/feishu/src/monitor.vc-meeting-invited-handler.ts	1
-extensions/feishu/src/outbound.ts	1
 extensions/feishu/src/perm.ts	8
 extensions/feishu/src/policy.ts	1
 extensions/feishu/src/presentation-card.ts	1

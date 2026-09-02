@@ -323,9 +323,14 @@ targets keep their required channel.
 
 `docker-release-prepare.yml` builds both native architectures, retains OCI
 indexes and their SBOM/provenance, and runs image smoke checks before approval.
-Its GitHub Actions cache exports final image layers with `mode=min`; intermediate
-build stages stay in the shared local builder for the browser variant. This
-avoids compressing and uploading build-only layers on the release critical path.
+OCI export uses gzip level 1 for new layers and reuses cached layers without
+forced recompression, preserving the image format used by smoke and promotion.
+
+Default and browser images share the builder's local cache. Preparation does not
+transfer a remote build cache: fresh provenance timestamps invalidate application
+layers, and measured transfers cost more than reusing runtime setup saves.
+Fresh runners rebuild that setup, including mutable Debian and npm updates;
+the sealed OCI artifacts remain the reusable inputs for publication.
 The final manifest records `publicationArtifacts.docker`. Preparation has no
 publication secrets or registry-write permission. After approval, `Docker
 Release` verifies the source/tag, producer, artifact hashes, and image digests,

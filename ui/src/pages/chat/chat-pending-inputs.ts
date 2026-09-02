@@ -44,16 +44,17 @@ export function buildPendingInputItems(
       continue;
     }
     items.push({ kind: "message", key: `pending-input:${input.id}`, message: input.message });
+    if (input.state === "queued") {
+      continue;
+    }
     items.push({
       kind: "notice",
       key: `pending-input:${input.id}:state`,
       timestamp: input.acceptedAt,
       text: t(
-        input.state === "queued"
-          ? "chat.pendingInputs.queued"
-          : input.state === "cancelled"
-            ? "chat.pendingInputs.cancelled"
-            : "chat.pendingInputs.interrupted",
+        input.state === "cancelled"
+          ? "chat.pendingInputs.cancelled"
+          : "chat.pendingInputs.interrupted",
       ),
     });
   }

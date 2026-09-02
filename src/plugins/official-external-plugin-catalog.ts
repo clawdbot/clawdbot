@@ -1274,6 +1274,17 @@ export function resolveOfficialExternalPluginLegacyIds(
   );
 }
 
+/** Returns former npm package names accepted only for trusted update migrations. */
+export function resolveOfficialExternalPluginLegacyNpmPackageNames(
+  entry: OfficialExternalPluginCatalogEntry,
+): string[] {
+  return uniqueStrings(
+    (getOfficialExternalPluginCatalogManifest(entry)?.legacyNpmPackageNames ?? [])
+      .map((packageName) => normalizeOptionalString(packageName))
+      .filter((packageName): packageName is string => Boolean(packageName)),
+  );
+}
+
 /** Returns the host-owned setup migration selected for an external channel cutover. */
 export function resolveOfficialExternalChannelCompatibilityMigration(
   channelId: string,

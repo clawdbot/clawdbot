@@ -292,7 +292,7 @@ struct OnboardingAISetupView: View {
                     Image(systemName: "info.circle")
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("\(candidate.label) — \(candidate.detail)")
+                        Text(verbatim: "\(candidate.label) — \(candidate.detail)")
                             .font(.caption.weight(.semibold))
                         Text(candidate.reason)
                             .font(.caption)

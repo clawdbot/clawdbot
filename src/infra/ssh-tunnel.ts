@@ -4,6 +4,7 @@ import net from "node:net";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
+import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
 import { resolveSshClient } from "./ssh-client.js";
@@ -111,29 +112,38 @@ async function pickEphemeralPort(): Promise<number> {
   });
 }
 
-async function canConnectLocal(port: number): Promise<boolean> {
+async function canConnectLocal(port: number, signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted();
   return await new Promise<boolean>((resolve) => {
     const socket = net.connect({ host: "127.0.0.1", port });
-    const done = (ok: boolean) => {
-      socket.removeAllListeners();
-      socket.destroy();
-      resolve(ok);
-    };
-    socket.once("connect", () => done(true));
-    socket.once("error", () => done(false));
-    socket.setTimeout(250, () => done(false));
+    let connected = false;
+    const destroy = () => socket.destroy();
+    signal.addEventListener("abort", destroy, { once: true });
+    socket.once("connect", () => {
+      connected = true;
+      destroy();
+    });
+    socket.once("error", destroy);
+    socket.setTimeout(250, destroy);
+    // Closing, not just requesting destruction, releases the probe's I/O and timer.
+    socket.once("close", () => {
+      signal.removeEventListener("abort", destroy);
+      resolve(connected);
+    });
   });
 }
 
-async function waitForLocalListener(port: number, timeoutMs: number): Promise<void> {
+async function waitForLocalListener(
+  port: number,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
-    if (await canConnectLocal(port)) {
+    if (await canConnectLocal(port, signal)) {
       return;
     }
-    await new Promise((r) => {
-      setTimeout(r, 50);
-    });
+    await sleepWithAbort(50, signal);
   }
   throw new Error(`ssh tunnel did not start listening on localhost:${port}`);
 }
@@ -238,19 +248,32 @@ export async function startSshPortForward(opts: {
       }
     })());
 
+  const readinessController = new AbortController();
+  const readiness = waitForLocalListener(
+    localPort,
+    Math.max(250, opts.timeoutMs),
+    readinessController.signal,
+  );
   try {
-    await racePromiseWithAbortSignal(
-      Promise.race([
-        waitForLocalListener(localPort, Math.max(250, opts.timeoutMs)),
-        new Promise<void>((_, reject) => {
-          child.once("error", (err) => reject(err));
-          child.once("exit", (code, signal) => {
-            reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
-          });
-        }),
-      ]),
-      opts.signal,
-    );
+    try {
+      await racePromiseWithAbortSignal(
+        Promise.race([
+          readiness,
+          new Promise<void>((_, reject) => {
+            child.once("error", (err) => reject(err));
+            child.once("exit", (code, signal) => {
+              reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
+            });
+          }),
+        ]),
+        opts.signal,
+      );
+    } finally {
+      // The race owns its losing readiness work; preserve the winner's error
+      // only after its socket or retry delay has stopped and joined.
+      readinessController.abort();
+      await readiness.catch(() => {});
+    }
   } catch (err) {
     await stop();
     if (isAbortError(err)) {

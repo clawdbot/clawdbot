@@ -5976,7 +5976,6 @@ export const en: TranslationMap & {
       noMatches: "No matching messages",
     },
     pendingInputs: {
-      queued: "Message received. Waiting for the agent to start it.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
