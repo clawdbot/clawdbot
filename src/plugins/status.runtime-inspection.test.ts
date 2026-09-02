@@ -15,7 +15,7 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
-import { buildPluginDiagnosticsReport } from "./status.js";
+import { buildPluginDiagnosticsReport, buildPluginInspectReport } from "./status.js";
 
 describe("plugin runtime inspection", () => {
   afterEach(() => {
@@ -99,6 +99,41 @@ describe("plugin runtime inspection", () => {
       const runtimeInspection = buildPluginDiagnosticsReport(runtimeInspectionParams);
       expect(runtimeInspection.plugins.find((entry) => entry.id === plugin.id)?.httpRoutes).toBe(1);
       expect(fs.readFileSync(registrationModePath, "utf8")).toBe("tool-discovery");
+    });
+  });
+
+  it("scopes refused hook registrations to the inspected plugin", () => {
+    // Two non-bundled plugins each register a conversation hook and neither has
+    // allowConversationAccess set, so the registry refuses both. `plugins inspect`
+    // must report only the inspected plugin's dead handler.
+    const hookBody = (id: string) => `module.exports = { id: ${JSON.stringify(id)}, register(api) {
+    api.on("before_prompt_build", () => undefined);
+  } };\n`;
+    useNoBundledPlugins();
+    const first = writePlugin({ id: "blocked-inspect-a", body: hookBody("blocked-inspect-a") });
+    const second = writePlugin({ id: "blocked-inspect-b", body: hookBody("blocked-inspect-b") });
+    const stateDir = makePluginLoaderTempDir();
+    const config = {
+      plugins: {
+        load: { paths: [first.file, second.file] },
+        allow: [first.id, second.id],
+      },
+    };
+
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const inspect = buildPluginInspectReport({
+        id: first.id,
+        config,
+        workspaceDir: first.dir,
+        env: process.env,
+      });
+
+      // Both refusals really happened, and inspect shows exactly one of them.
+      expect(getActivePluginRegistry()?.typedHooks ?? []).toStrictEqual([]);
+      expect(inspect?.blockedHooks.map((entry) => entry.pluginId)).toStrictEqual([first.id]);
+      expect(inspect?.blockedHooks[0]?.hookName).toBe("before_prompt_build");
+      expect(inspect?.blockedHooks[0]?.reason).toBe("conversation-access-missing");
+      expect(inspect?.blockedHooks[0]?.severity).toBe("error");
     });
   });
 });

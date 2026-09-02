@@ -317,6 +317,55 @@ describe("plugin health status formatting", () => {
     ]);
   });
 
+  it("keeps repeat registrations of one hook distinct through the merge", () => {
+    // A plugin may call api.on() for the same hook several times (distinct
+    // registrationId, priority or trigger eligibility). When the policy refuses
+    // them, every one of those handlers is dead, so plugin+hook+reason is not a
+    // unique key. Deduping on it made the merged detailed view under-count them
+    // while compact status read the raw runtime records and counted them all.
+    const message = 'typed hook "before_agent_reply" was NOT registered';
+    const blocked = {
+      pluginId: "repeat-hooks",
+      hookName: "before_agent_reply",
+      reason: "conversation-access-missing",
+      severity: "error",
+      message,
+    } as const;
+    const runtime: StatusPluginHealthSnapshot = {
+      ...emptySnapshot,
+      blockedHooks: [blocked, blocked],
+    };
+
+    const merged = mergeStatusPluginHealthSnapshots(emptySnapshot, runtime);
+
+    expect(merged.blockedHooks).toStrictEqual([blocked, blocked]);
+    // The two surfaces must report the same number of dead handlers.
+    expect(formatCompactPluginHealthLine(merged)).toBe("⚠️ Plugins: 2 blocked hooks");
+    expect(formatCompactPluginHealthLine(runtime)).toBe(formatCompactPluginHealthLine(merged));
+    expect(formatDetailedPluginHealth(merged)).toContain("Blocked plugin hooks: 2");
+  });
+
+  it("does not double-count a single blocked hook through the merge", () => {
+    // The merge concatenates both sides; the installed disk scan never attempts
+    // registration, so a lone runtime refusal must stay exactly one row.
+    const merged = mergeStatusPluginHealthSnapshots(emptySnapshot, {
+      ...emptySnapshot,
+      blockedHooks: [
+        {
+          pluginId: "single-hook",
+          hookName: "before_agent_reply",
+          reason: "conversation-access-missing",
+          severity: "error",
+          message: "was NOT registered",
+        },
+      ],
+    });
+
+    expect(merged.blockedHooks).toHaveLength(1);
+    expect(formatCompactPluginHealthLine(merged)).toBe("⚠️ Plugins: 1 blocked hook");
+    expect(formatDetailedPluginHealth(merged)).toContain("Blocked plugin hooks: 1");
+  });
+
   it("includes detailed plugin state without dumping the full plugin registry", () => {
     const text = formatDetailedPluginHealth({
       plugins: [

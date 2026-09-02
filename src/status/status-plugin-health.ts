@@ -129,14 +129,6 @@ export function dedupeChannelPluginFailures(
   );
 }
 
-function dedupeBlockedPluginHooks(
-  blockedHooks: readonly BlockedPluginHookRecord[],
-): BlockedPluginHookRecord[] {
-  return dedupeBy(blockedHooks, (entry) =>
-    JSON.stringify([entry.pluginId, entry.hookName, entry.reason]),
-  );
-}
-
 function dedupeCompatibilityNotices(
   notices: readonly PluginCompatibilityHealthNotice[],
 ): PluginCompatibilityHealthNotice[] {
@@ -192,10 +184,14 @@ export function mergeStatusPluginHealthSnapshots(
       ...(installed.compatibilityNotices ?? []),
       ...(runtime.compatibilityNotices ?? []),
     ]),
-    blockedHooks: dedupeBlockedPluginHooks([
-      ...(installed.blockedHooks ?? []),
-      ...(runtime.blockedHooks ?? []),
-    ]),
+    // Each entry is one refused registration, not one refused hook: a plugin may
+    // call `api.on()` for the same hook several times (distinct `registrationId`,
+    // priority or trigger eligibility) and every one of those handlers is dead.
+    // Concatenate like the quarantine lists above rather than deduping on
+    // plugin+hook+reason, which collapsed those repeats into a single row and made
+    // this the only consumer that under-counted them — compact status, `openclaw
+    // plugins inspect --runtime` and the startup summary all read the raw records.
+    blockedHooks: [...(installed.blockedHooks ?? []), ...(runtime.blockedHooks ?? [])],
     // Runtime-loaded provenance is a runtime-side fact; the installed disk scan
     // cannot confirm it, so it never contributes here.
     runtimeLoadedPluginIds: runtime.runtimeLoadedPluginIds,
