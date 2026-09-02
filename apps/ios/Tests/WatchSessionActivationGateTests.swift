@@ -140,6 +140,94 @@ struct WatchSessionActivationGateTests {
         .enabled(
             if: ProcessInfo.processInfo.environment["OPENCLAW_LIVE_TEST"] == "1",
             "Requires an isolated, unpaired iPhone Simulator; run with OPENCLAW_LIVE_TEST=1."),
+        .serialized,
+        arguments: [false, true])
+    func `native watch snapshot cancellation fences a contended context lock`(
+        cancelBeforeAdmission: Bool) async throws
+    {
+        let session = WCSession.default
+        try #require(!session.isPaired, "Do not probe a paired Watch session")
+        try #require(!session.isReachable, "Do not probe a reachable Watch session")
+        let marker = "openclaw.test.cancelled-snapshot-admission"
+        let originalContext = session.applicationContext
+        defer {
+            if session.applicationContext["type"] as? String == marker {
+                do {
+                    try session.updateApplicationContext(originalContext)
+                } catch {
+                    Issue.record("Could not remove an unexpectedly admitted snapshot probe")
+                }
+            }
+        }
+        let snapshotLock = NSLock()
+        let releaseLock = DispatchSemaphore(value: 0)
+        let holderEntered = XCTestExpectation(description: "snapshot lock held")
+        let holderFinished = XCTestExpectation(description: "snapshot lock released")
+        let holderWasSignalled = Mutex<Bool?>(nil)
+        DispatchQueue(label: "openclaw.test.snapshot-lock-holder").async {
+            snapshotLock.withLock {
+                holderEntered.fulfill()
+                let signalled = releaseLock.wait(timeout: .now() + 15) == .success
+                holderWasSignalled.withLock { $0 = signalled }
+            }
+            holderFinished.fulfill()
+        }
+        defer { releaseLock.signal() }
+        let held = await XCTWaiter.fulfillment(of: [holderEntered], timeout: 5)
+        try #require(held == .completed, "Infrastructure failure: lock holder did not start")
+
+        let senderEntered = XCTestExpectation(description: "outer cancellation fence passed")
+        let senderFinished = XCTestExpectation(description: "snapshot sender completed")
+        // A contended synchronous lock must not occupy the actor running the test driver.
+        let sender = Task.detached { () -> Result<Void, any Error> in
+            defer { senderFinished.fulfill() }
+            do {
+                let session = WCSession.default
+                try Task.checkCancellation()
+                senderEntered.fulfill()
+                try updateWatchSnapshotApplicationContext(
+                    ["type": marker],
+                    with: session,
+                    lock: snapshotLock)
+                return .success(())
+            } catch {
+                let nativeError = error as NSError
+                print("watch snapshot SDK admission: cancelled=\(cancelBeforeAdmission) "
+                    + "domain=\(nativeError.domain) code=\(nativeError.code)")
+                return .failure(error)
+            }
+        }
+        defer { sender.cancel() }
+        let entered = await XCTWaiter.fulfillment(of: [senderEntered], timeout: 5)
+        try #require(entered == .completed, "Infrastructure failure: sender did not reach the locked boundary")
+        try #require(holderWasSignalled.withLock { $0 } == nil, "Infrastructure failure: lock holder expired")
+        if cancelBeforeAdmission {
+            sender.cancel()
+        }
+        releaseLock.signal()
+        let finished = await XCTWaiter.fulfillment(of: [senderFinished, holderFinished], timeout: 5)
+        try #require(finished == .completed, "Infrastructure failure: local snapshot probe did not finish")
+        try #require(
+            holderWasSignalled.withLock { $0 } == true,
+            "Infrastructure failure: lock release was not signalled")
+        let outcome = await sender.value
+        guard case let .failure(error) = outcome else {
+            Issue.record("The unpaired/unreachable SDK snapshot probe unexpectedly succeeded")
+            return
+        }
+        if cancelBeforeAdmission {
+            #expect(error is CancellationError, "Cancellation must win after acquiring the context lock")
+        } else {
+            let nativeError = error as NSError
+            #expect(nativeError.domain == WCErrorDomain)
+            #expect([7002, 7003, 7004, 7005, 7006, 7007, 7016].contains(nativeError.code))
+        }
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["OPENCLAW_LIVE_TEST"] == "1",
+            "Requires an isolated, unpaired iPhone Simulator; run with OPENCLAW_LIVE_TEST=1."),
         arguments: [false, true])
     @MainActor
     func `native watch sender rejects cancellation before SDK admission`(cancelBeforeStart: Bool) async throws {

@@ -7,6 +7,17 @@ private struct WatchConnectivityTransportCallbacks {
     var inboundEventHandler: (@Sendable (WatchMessagingInboundEvent) -> Void)?
 }
 
+func updateWatchSnapshotApplicationContext(_ payload: [String: Any], with session: WCSession, lock: NSLock) throws {
+    try lock.withLock {
+        let context = WatchMessagingPayloadCodec.encodeSnapshotApplicationContext(
+            payload,
+            merging: session.applicationContext)
+        // The caller may retire while another snapshot holds this lock.
+        try Task.checkCancellation()
+        try session.updateApplicationContext(context)
+    }
+}
+
 final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     private nonisolated static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "watch.messaging")
 
@@ -87,12 +98,10 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
             enqueue: { session in
                 if isSnapshot {
                     do {
-                        try self.snapshotContextLock.withLock {
-                            let context = WatchMessagingPayloadCodec.encodeSnapshotApplicationContext(
-                                payload,
-                                merging: session.applicationContext)
-                            try session.updateApplicationContext(context)
-                        }
+                        try updateWatchSnapshotApplicationContext(
+                            payload,
+                            with: session,
+                            lock: self.snapshotContextLock)
                         return "applicationContext"
                     } catch {
                         Self.logger.error(
