@@ -312,7 +312,7 @@ suite.define(() => {
         const fullPrTitle =
           "Restore the session hovercard with compact interactive attribution details";
         await expect.poll(() => prTitle.textContent()).toBe(fullPrTitle);
-        expect(await prTitle.getAttribute("title")).toBe(fullPrTitle);
+        expect(await prTitle.getAttribute("title")).toBeNull();
         expect(await prRow.getAttribute("aria-label")).toContain(fullPrTitle);
         expect(await card.locator(".session-hovercard__more").textContent()).toBe("+2 more");
         expect(
@@ -325,7 +325,14 @@ suite.define(() => {
         await expect
           .poll(() => prRow.evaluate((node) => getComputedStyle(node).textDecorationLine))
           .toBe("none");
-        await captureProof(page, "sidebar-row-hovercard-maximum.png");
+        const restingBackground = await prRow.evaluate(
+          (node) => getComputedStyle(node).backgroundColor,
+        );
+        await prRow.hover();
+        await expect
+          .poll(() => prRow.evaluate((node) => getComputedStyle(node).backgroundColor))
+          .not.toBe(restingBackground);
+        await captureProof(page, "sidebar-row-hovercard-pr-hover.png");
         await expect
           .poll(async () =>
             (await card.locator(".session-hovercard__attribution-copy").textContent())
@@ -333,6 +340,25 @@ suite.define(() => {
               .trim(),
           )
           .toBe("Ada King & 4 others");
+        const attribution = card.locator(".session-hovercard__attribution");
+        const attributionName = attribution.locator("a.session-hovercard__attribution-name");
+        expect(await attributionName.getAttribute("href")).toBe("/activity?person=profile-ada");
+        const linkedAvatars = attribution.locator(".person-activity-avatar-link .viewer-avatar");
+        await expect.poll(() => linkedAvatars.count()).toBe(3);
+        const collapsedSpread = await linkedAvatars.evaluateAll((avatars) => {
+          const left = avatars.map((avatar) => avatar.getBoundingClientRect().left);
+          return left.at(-1)! - left[0]!;
+        });
+        await attributionName.hover();
+        await expect
+          .poll(async () => {
+            const left = await linkedAvatars.evaluateAll((avatars) =>
+              avatars.map((avatar) => avatar.getBoundingClientRect().left),
+            );
+            return left.at(-1)! - left[0]!;
+          })
+          .toBeGreaterThan(collapsedSpread + 5);
+        await captureProof(page, "sidebar-row-hovercard-attribution-expanded.png");
         expect(await card.locator(".session-hovercard__attribution").textContent()).not.toContain(
           "You",
         );
@@ -651,7 +677,7 @@ suite.define(() => {
 
   it("renders and dismisses synthetic catalog-session hovercards", async () => {
     const selectedSessionKey = "agent:main:catalog-selected";
-    const catalogSessionKey = "catalog:codex:gateway%3Acodex:thread-1";
+    const catalogSessionKey = "agent:main:catalog:codex:gateway%3Acodex:thread-1";
 
     await suite.withPage(
       {

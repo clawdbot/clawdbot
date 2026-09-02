@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
+  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -529,11 +530,31 @@ export async function findExtraGatewayServices(
     try {
       const home = resolveDaemonHomeDir(env);
       const userDir = path.join(home, ".config", "systemd", "user");
-      for (const svc of await scanSystemdDir({
+      const userServices = await scanSystemdDir({
         dir: userDir,
         scope: "user",
-      })) {
+      });
+      for (const svc of userServices) {
         push(svc);
+      }
+      for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
+        const label = `${name}.service`;
+        // The unit and its managed backup are one cleanup target. Report the
+        // backup separately only when it is the remaining orphaned artifact.
+        if (userServices.some((service) => service.label === label)) {
+          continue;
+        }
+        const backupPath = path.join(userDir, `${name}.service.bak`);
+        if ((await readUtf8File(backupPath)) !== null) {
+          push({
+            platform: "linux",
+            label,
+            detail: `unit backup: ${backupPath}`,
+            scope: "user",
+            marker: "clawdbot",
+            legacy: true,
+          });
+        }
       }
       if (opts.deep) {
         for (const dir of [

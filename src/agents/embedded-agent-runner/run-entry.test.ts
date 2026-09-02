@@ -301,6 +301,8 @@ describe("runEmbeddedAgentEntry", () => {
             classification: options.isFallbackRetry ? undefined : "empty",
             meta: options.isFallbackRetry
               ? {
+                  finalAssistantVisibleText: "fallback complete",
+                  finalAssistantRawText: "fallback complete",
                   executionTrace: {
                     winnerProvider: provider,
                     winnerModel: model,
@@ -325,7 +327,7 @@ describe("runEmbeddedAgentEntry", () => {
                       sessionId: "session-1",
                       turnId: "turn-1",
                       requested: { provider, model },
-                      effective: { provider, model, responseModel: model },
+                      effective: { provider, model, responseModel: "producer-model" },
                       successfulToolNames: [],
                       rerouted: false,
                     },
@@ -372,14 +374,28 @@ describe("runEmbeddedAgentEntry", () => {
     });
     expect(channel.result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
       requested: { provider: "primary-provider", model: "primary-model" },
-      effective: { provider: "fallback-provider", model: "fallback-model" },
+      effective: {
+        provider: "fallback-provider",
+        model: "fallback-model",
+        responseModel: "producer-model",
+      },
       rerouted: true,
     });
     expect(channel.result.terminal.metadata.terminalReceipt).toMatchObject({
       requested: { provider: "primary-provider", model: "primary-model" },
-      effective: { provider: "fallback-provider", model: "fallback-model" },
+      effective: {
+        provider: "fallback-provider",
+        model: "fallback-model",
+        responseModel: "producer-model",
+      },
       rerouted: true,
-      terminalDisposition: "not-visible",
+      terminalDisposition: "visible",
+    });
+    expect(channel.result.terminal.metadata.terminalReply).toEqual({
+      disposition: "visible",
+      text: "fallback complete",
+      modelRouteChange:
+        "Model route changed: primary-provider/primary-model → fallback-provider/producer-model.",
     });
     expect(channel.candidateLeases[0]).toBe(channel.candidateLeases[1]);
     expect(state.selectAgentHarness).toHaveBeenCalledWith(

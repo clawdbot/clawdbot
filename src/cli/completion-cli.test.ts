@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { Command, Option } from "commander";
 import { afterAll, describe, expect, it } from "vitest";
-import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
+import { getCompletionScript } from "./completion-cli.js";
 import {
   createAliasedCompletionProgram,
+  createCompletionProgram,
+  createDocumentedCompletionProgram,
   itWithFish,
   itWithPowerShell,
   PowerShellCompletionRunner,
@@ -21,39 +23,6 @@ const powerShellCompletion = new PowerShellCompletionRunner();
 afterAll(async () => {
   await powerShellCompletion.close();
 });
-
-function createCompletionProgram(): Command {
-  const program = new Command();
-  program.name("openclaw");
-  program.description("CLI root");
-  program.option("-v, --verbose", "Verbose output");
-  program.option(
-    "--status-json",
-    "Output JSON (alias for `models status --json`) in $OPENCLAW_STATE_DIR",
-  );
-
-  const gateway = program.command("gateway").description("Gateway commands");
-  gateway.option("--force", "Force the action");
-  gateway.option("-t, --token <token>", "Gateway token");
-
-  gateway.command("status").description("Show gateway status").option("--json", "JSON output");
-  gateway.command("restart").description("Restart gateway");
-  program
-    .command("agent")
-    .description("Agent commands")
-    .option("--verbose <on|off>", "Set verbosity");
-  const sessions = program.command("sessions").description("Session commands");
-  sessions.option("--verbose", "Verbose output");
-  sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
-
-  return program;
-}
-
-function createDocumentedCompletionProgram(): Command {
-  const program = createCompletionProgram();
-  registerCompletionCli(program);
-  return program;
-}
 
 function createOptionalChoiceCompletionProgram(): Command {
   const program = new Command().name("openclaw");
@@ -741,9 +710,9 @@ _openclaw_root_completion
       expected: ["--shell=fish"],
     },
     {
-      name: "an inline short shell flag",
+      name: "an unsupported equals prefix in a short option value",
       words: ["openclaw", "completion", "-s=f"],
-      expected: ["-s=fish"],
+      expected: [],
     },
   ])("completes validated values in real Bash after $name", ({ words, expected }) => {
     expect(runGeneratedBashCompletion(createDocumentedCompletionProgram(), words)).toEqual(
@@ -892,7 +861,9 @@ _openclaw_root_completion
         "--shell=fish",
       ]);
       expect(
-        runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell", "=", "f"]),
+        runGeneratedBashCompletion(program, ["openclaw", "completion", "--shell", "=", "f"], {
+          line: "openclaw completion --shell=f",
+        }),
       ).toEqual(["fish"]);
       expect(runGeneratedBashCompletion(program, ["openclaw", "completion", "-sf"])).toEqual([
         "-sfish",
@@ -909,6 +880,21 @@ _openclaw_root_completion
         "-yspowershell",
         "-ysfish",
       ]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves pending short-cluster choices that start with a hyphen in real Bash",
+    () => {
+      const program = new Command()
+        .name("openclaw")
+        .option("-v, --verbose", "Verbose output")
+        .addOption(new Option("-m, --mode <mode>").choices(["-legacy"]))
+        .exitOverride();
+
+      program.parse(["-vm", "-legacy"], { from: "user" });
+      expect(program.opts()).toEqual({ verbose: true, mode: "-legacy" });
+      expect(runGeneratedBashCompletion(program, ["openclaw", "-vm", "-le"])).toEqual(["-legacy"]);
     },
   );
 

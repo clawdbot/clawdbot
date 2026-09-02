@@ -1036,7 +1036,7 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 
 Surface different features that extend the above defaults.
 
-The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. Each visible Agent View root routes to its own OpenClaw thread session, and Slack's ordered active-view entities reach the agent only as untrusted context.
+The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. See [Agent View DMs](/channels/slack#agent-view-dms) for how OpenClaw detects the experience and routes each visible root to its own session.
 
 Existing apps that already use `features.assistant_view` can keep their current manifest. OpenClaw continues to handle `assistant_thread_started` and `assistant_thread_context_changed` for those installs. Slack makes migration from Assistant View to Agent View irreversible and requires users to hard refresh afterward, so do not replace `assistant_view` on an existing app until you intend to migrate the whole workspace.
 
@@ -1448,7 +1448,7 @@ Use `accountId` to select a configured Slack account and `teamId` for an explici
 
 - DMs route as `direct`; channels as `channel`; MPIMs as `group`.
 - Slack route bindings accept raw peer IDs plus Slack target forms such as `channel:C12345678`, `user:U12345678`, and `<@U12345678>`.
-- With default `session.dmScope=main`, ordinary Slack DMs collapse to the agent main session. Agent View roots and existing Assistant View threads remain isolated as `:thread:<threadTs>` sessions.
+- With default `session.dmScope=main`, ordinary Slack DMs collapse to the agent main session. Agent View roots and existing Assistant View threads remain isolated as `:thread:<threadTs>` sessions; see [Agent View DMs](/channels/slack#agent-view-dms).
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Ordinary top-level channel messages stay on the per-channel session, even when `replyToMode` is non-`off`.
 - Slack channel, MPIM, Agent View, and Assistant View thread replies use the parent Slack `thread_ts` for session suffixes (`:thread:<threadTs>`). Ordinary DM reply threads remain a UI affordance on the base DM session.
@@ -1478,6 +1478,19 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 <Note>
 `replyToMode="off"` disables optional outbound Slack reply threading, including explicit `[[reply_to_*]]` tags. Agent View and Assistant View are Slack-managed threaded experiences, so their replies and status remain on the visible root regardless of this setting. It does not flatten other inbound Slack thread sessions. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
 </Note>
+
+### Agent View DMs
+
+Slack Agent View (`features.agent_view`) is Slack's messaging experience for AI apps. Slack marks the app as an agent, and in the app's **Messages** tab each message typed in the top-level composer starts a new root that Slack threads on its own; follow-ups belong inside that root's thread. OpenClaw treats every root as a separate conversation:
+
+- Each root gets a `:thread:<rootTs>` suffix on top of whatever base session `session.dmScope` selects, so roots stay isolated even under the default `main` scope. With `per-channel-peer` a root looks like `agent:main:slack:direct:U12345678:thread:1777244748.777299`; with `main` it looks like `agent:main:main:thread:1777244748.777299`.
+- Follow-ups inside the root's thread stay on that root's session. A new top-level composer message starts a new session.
+- Replies and thread status stay on the visible root regardless of `replyToMode`, because Slack owns the threading.
+- Slack's active-view entities (`app_context`) reach the agent only as structured untrusted context in Slack's relevance order; a DM without `app_context` clears the entities for that turn rather than reusing stale ones.
+
+Slack never states which experience an app uses, so OpenClaw records Agent View from the first of these signals it sees: an `app_context_changed` event, a DM that carries `app_context`, or the threadless `assistant.threads.setSuggestedPrompts` call OpenClaw makes when a member opens the **Messages** tab. Slack answers that call with `ok` or `internal_error` for Agent View apps and with `not_agent_app` for Assistant View apps, so both `ok` and `internal_error` count as evidence; transport failures stay inconclusive and are retried on the next open. A DM whose `thread_ts` equals its own `ts` is recognized as a Slack-managed root on its own. Until one of these signals has been seen, a plain DM root follows ordinary DM routing.
+
+The marker is durable and keyed by account, workspace, and Slack app ID, so Agent View survives Gateway restarts once the app ID is known. Socket Mode reads the app ID from the app token at startup. HTTP mode learns it from the first signed event after startup and logs `slack app id <id> learned from signed event` once. Relay mode has no app ID source, so its marker lives only in the running process. Existing apps on `features.assistant_view` keep Assistant View threads instead; see [Additional manifest settings](/channels/slack#additional-manifest-settings).
 
 ## Ack reactions
 
@@ -1560,6 +1573,8 @@ Set `channels.slack.streaming.progress.nativeTaskCards` to `false` to fall back 
 
 Set `channels.slack.streaming.progress.style` to `"compact"` for one plain-text progress draft instead of either card surface. This is also the default when `progress.toolProgress` is `false` and no style is selected. With the other progress controls below, only authored commentary appears as italic text: plan checklists and tool-status lines never replace it. An eligible final text answer replaces that same Slack message. Set `style: "card"` explicitly to retain a card while hiding tool progress.
 
+For streamed preambles, Slack waits for the first complete preamble before creating the message, so its notification contains the full thought rather than a single token. Once that message exists, later preambles can stream as edits without another notification.
+
 ```json5
 {
   channels: {
@@ -1588,6 +1603,7 @@ Both surfaces link the session with **Open in OpenClaw**, but only when that lin
 - Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview or session card app-authored and delivers the customized final separately. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
+- Native streamed final answers wait for Slack's acknowledgement before delivery is marked successful. A later progress-card finalization failure does not discard an already acknowledged answer.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
 Use draft preview instead of Slack native text streaming:
@@ -2064,6 +2080,20 @@ openclaw doctor
 ```bash
 openclaw pairing list slack
 ```
+
+  </Accordion>
+
+  <Accordion title="Agent View DMs share one session">
+    Symptom: every top-level message in the app's **Messages** tab lands on the same session (the main session, or one `slack:direct:<userId>` session) instead of its own `:thread:<rootTs>` session, even though Slack shows each message as its own thread.
+
+    Check, in order:
+
+    - The manifest uses `features.agent_view` with `assistant:write` and subscribes to `app_context_changed`. Apps still on `features.assistant_view` get Assistant View threads instead, and Slack cannot move an app back once it switches to Agent View.
+    - OpenClaw has seen an Agent View signal since the app was installed: open the app's **Messages** tab once, or send a DM from the Agent View composer. In verbose logs, `slack suggested prompts update failed for channel D...: internal_error` on a Messages-tab open is expected for an Agent View app and counts as evidence.
+    - In HTTP mode, the Gateway has received at least one signed event since it started; `slack app id <id> learned from signed event` in the logs confirms the durable marker can be read. Socket Mode reads the app ID from the app token at startup, so no event is needed.
+    - A `Slack Agent View state failed to persist` warning means the signal was recorded for the running process but the marker was not stored, so it is forgotten on restart. `failed to open` or `failed to load` means a stored marker could not be read, so Agent View stays off until the next signal.
+
+    See [Agent View DMs](/channels/slack#agent-view-dms).
 
   </Accordion>
 

@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import crypto, { randomUUID } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
+import MarkdownIt from "markdown-it";
+import { describe, expect, it, vi } from "vitest";
 import { formatMSTeamsMarkdown } from "./format.js";
 
 describe("formatMSTeamsMarkdown", () => {
@@ -145,6 +148,17 @@ describe("formatMSTeamsMarkdown", () => {
       expect(formatMSTeamsMarkdown(fixture.before, "off")).toBe(fixture.after);
     });
   }
+
+  it.each([
+    ["`foo `", "<code>foo </code>"],
+    ["` `", "<code> </code>"],
+    ["before `  foo  ` after", "before <code> foo </code> after"],
+  ])("preserves rendered inline-code whitespace in %j", (markdown, html) => {
+    const parser = new MarkdownIt();
+    // Code-span padding is syntax; compare parsed content without trimming literal spaces.
+    expect(parser.renderInline(markdown)).toBe(html);
+    expect(parser.renderInline(formatMSTeamsMarkdown(markdown, "off"))).toBe(html);
+  });
 
   it("keeps raw tables when table conversion is disabled", () => {
     const table = ["| Name | State |", "|---|---|", "| deploy | ready |"].join("\n");
@@ -294,10 +308,32 @@ describe("formatMSTeamsMarkdown", () => {
     expect(formatMSTeamsMarkdown(table, "off")).toBe(table);
   });
 
-  it("does not restore forged placeholders decoded from character references", () => {
-    const source = "&#xE000;msteamsformat&#xE001;m0&#xE002; @[Alice](29:abc)";
-    const output = formatMSTeamsMarkdown(source, "off");
-    expect(output.match(/@\[Alice\]/gu)).toHaveLength(1);
-    expect(output).toContain("&#xE000;msteamsformat&#xE001;m0&#xE002;");
+  const collisionUuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const authoredToken = `\u{E000}msteamsformat-${collisionUuid}\u{E001}m0\u{E002}`;
+  const encodedToken = `&#xE000;msteamsformat-${collisionUuid}&#xE001;m0&#xE002;`;
+  const mention = "@[Alice](29:abc)";
+  it.each([
+    ["literal text", `${authoredToken} ${mention}`, `${authoredToken} ${mention}`],
+    [
+      "adjacent bold spans",
+      `**\u{E000}msteams**__format-${collisionUuid}\u{E001}m0\u{E002}__ ${mention}`,
+      `**${authoredToken}** ${mention}`,
+    ],
+    ["character references", `${encodedToken} ${mention}`, `${encodedToken} ${mention}`],
+  ])("preserves forged placeholders in %s", (_name, source, expected) => {
+    const entropy = vi.spyOn(crypto, "randomUUID").mockImplementation(() => {
+      throw new Error("unexpected extra entropy request");
+    });
+    entropy
+      .mockReturnValueOnce(collisionUuid)
+      .mockReturnValueOnce("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    try {
+      syncBuiltinESMExports();
+      expect(randomUUID).toBe(entropy);
+      expect(formatMSTeamsMarkdown(source, "off")).toBe(expected);
+    } finally {
+      entropy.mockRestore();
+      syncBuiltinESMExports();
+    }
   });
 });

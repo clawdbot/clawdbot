@@ -6,11 +6,20 @@ import type {
   CronRunsParams,
   SessionsFilesListResult as ProtocolSessionsFilesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type {
+  AgentsListResult as ProtocolAgentsListResult,
+  ModelChoice as ProtocolModelChoice,
+} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  SessionCompactionCheckpoint as ProtocolSessionCompactionCheckpoint,
+  SessionObserverDigest,
+  SessionsCompactionBranchResult as ProtocolSessionsCompactionBranchResult,
+  SessionsCompactionListResult as ProtocolSessionsCompactionListResult,
+  SessionsCompactionRestoreResult as ProtocolSessionsCompactionRestoreResult,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
@@ -20,6 +29,7 @@ import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   GatewayContextWindowOption,
+  GatewayThinkingLevelOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
@@ -32,6 +42,7 @@ export type {
   SessionsFilesSetResult as SessionWorkspaceSetResult,
   CronJob,
   CronRunLogEntry,
+  CronScratchGetResult,
   UpdateAvailable,
   UpdateHoldResult,
   UpdateScheduleState,
@@ -289,13 +300,8 @@ export type GatewaySessionsDefaults = {
   modelSelectionTarget?: "session" | "agent" | "global";
 };
 
-export type GatewayThinkingLevelOption = {
-  id: string;
-  label: string;
-};
-
 export type GatewayAgentRow = SharedGatewayAgentRow;
-export type { GatewayContextWindowOption };
+export type { GatewayContextWindowOption, GatewayThinkingLevelOption };
 
 export type AgentsListResult = ProtocolAgentsListResult;
 
@@ -337,32 +343,10 @@ export type ArtifactDownloadResult = {
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
-type SessionCompactionCheckpointReason =
-  | "manual"
-  | "auto-threshold"
-  | "overflow-retry"
-  | "timeout-retry";
-
-type SessionCompactionTranscriptReference = {
-  sessionId: string;
-  sessionFile?: string;
-  leafId?: string;
-  entryId?: string;
-};
-
-export type SessionCompactionCheckpoint = {
-  checkpointId: string;
-  sessionKey: string;
-  sessionId: string;
-  createdAt: number;
-  reason: SessionCompactionCheckpointReason;
-  tokensBefore?: number;
-  tokensAfter?: number;
-  summary?: string;
-  firstKeptEntryId?: string;
-  preCompaction: SessionCompactionTranscriptReference;
-  postCompaction: SessionCompactionTranscriptReference;
-};
+export type SessionCompactionCheckpoint = Omit<
+  ProtocolSessionCompactionCheckpoint,
+  "tokensVersion"
+>;
 
 type SessionCompactionCheckpointPreview = Pick<
   SessionCompactionCheckpoint,
@@ -424,17 +408,14 @@ export type GatewaySessionRow = SessionRow & {
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
-export type SessionsCompactionListResult = {
-  ok: true;
-  key: string;
+export type SessionsCompactionListResult = Omit<
+  ProtocolSessionsCompactionListResult,
+  "checkpoints"
+> & {
   checkpoints: SessionCompactionCheckpoint[];
 };
 
-export type SessionsCompactionBranchResult = {
-  ok: true;
-  sourceKey: string;
-  key: string;
-  sessionId: string;
+type SessionCompactionMutationResult<T> = Omit<T, "checkpoint" | "entry"> & {
   checkpoint: SessionCompactionCheckpoint;
   entry: {
     sessionId: string;
@@ -442,16 +423,11 @@ export type SessionsCompactionBranchResult = {
   } & Record<string, unknown>;
 };
 
-export type SessionsCompactionRestoreResult = {
-  ok: true;
-  key: string;
-  sessionId: string;
-  checkpoint: SessionCompactionCheckpoint;
-  entry: {
-    sessionId: string;
-    updatedAt: number;
-  } & Record<string, unknown>;
-};
+export type SessionsCompactionBranchResult =
+  SessionCompactionMutationResult<ProtocolSessionsCompactionBranchResult>;
+
+export type SessionsCompactionRestoreResult =
+  SessionCompactionMutationResult<ProtocolSessionsCompactionRestoreResult>;
 
 export type SessionsRewindResult =
   import("../../../packages/gateway-protocol/src/index.js").SessionsRewindResult;
@@ -466,6 +442,7 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  permissionMode?: GatewaySessionRow["permissionMode"];
   archivedAt?: number;
   contextWindow?: string;
   thinkingLevel?: string;
@@ -635,26 +612,8 @@ export type StatusSummary = Record<string, unknown>;
 export type HealthSnapshot = Record<string, unknown>;
 
 /** A model entry returned by the gateway model-catalog endpoint. */
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  alias?: string;
-  tags?: string[];
-  available?: boolean;
-  unavailableReason?: "missing-auth" | "auth-failed" | "cooldown";
-  unavailableUntil?: number;
-  contextWindow?: number;
-  contextWindows?: GatewayContextWindowOption[];
-  contextWindowDefault?: string;
-  reasoning?: boolean;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingDefault?: string;
-  effectiveFastMode?: FastMode;
-  supportsTools?: boolean;
-  agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
+export type ModelCatalogEntry = Omit<ProtocolModelChoice, "input"> & {
   input?: Array<"text" | "image" | "document">;
-  apiKeySupported?: boolean;
 };
 
 export type ModelCatalogProviderOutcome =

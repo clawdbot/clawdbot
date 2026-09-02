@@ -215,18 +215,19 @@ function withPatchMemoryWriteProvenance(params: {
   operations: PatchFileOps;
   observer: MemoryWriteProvenanceObserver | undefined;
 }): PatchFileOps {
-  const operations = withMemoryWriteProvenance(params.operations, params.observer);
-  if (!params.observer) {
+  const observer = params.observer;
+  const operations = withMemoryWriteProvenance(params.operations, observer);
+  if (!observer) {
     return operations;
   }
   return {
     ...operations,
     createFileExclusive: async (filePath, content) => {
-      if (!params.observer?.classifies(filePath)) {
+      if (!(await observer.classifies(filePath))) {
         return params.operations.createFileExclusive(filePath, content);
       }
       try {
-        await params.observer.write({
+        await observer.write({
           absolutePath: filePath,
           contentBefore: "",
           contentAfter: content,

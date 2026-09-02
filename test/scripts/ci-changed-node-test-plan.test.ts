@@ -46,10 +46,14 @@ function expectBoundedCodexFallback(
   expect(new Set(targets).size).toBe(targets.length);
 }
 
+function fallbackGroups(shards: ReturnType<typeof createChangedExtensionFallbackShards>) {
+  return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
+}
+
 function expectAllExtensionConfigs(
   shards: ReturnType<typeof createChangedExtensionFallbackShards>,
 ) {
-  const configs = new Set(shards.flatMap((shard) => shard.configs));
+  const configs = new Set(fallbackGroups(shards).flatMap((group) => group.configs));
   const expectedConfigs = new Set(
     listAvailableExtensionIds().map((extensionId) =>
       resolveExtensionTestConfig(`extensions/${extensionId}`),
@@ -189,6 +193,27 @@ describe("CI changed Node test plan", () => {
           "src/agents/live-target-matcher.test.ts",
           "src/agents/model-compat.test.ts",
         ],
+      },
+    ]);
+  });
+
+  it("keeps an exact default-unit change focused while retaining boundary coverage", () => {
+    const target = "src/node-host/node-worker-bundle-installer.test.ts";
+    expect(createChangedNodeTestShards([target])).toEqual([
+      {
+        checkName: "checks-node-changed",
+        configs: [],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed",
+        targets: [target],
+      },
+      {
+        checkName: "checks-node-changed-boundary",
+        configs: ["test/vitest/vitest.boundary.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed-boundary",
       },
     ]);
   });
@@ -457,15 +482,71 @@ describe("CI changed Node test plan", () => {
     );
   });
 
-  it("declares one-config extension jobs serial for the CI worker budget", () => {
+  it("keeps fallback config processes serial while packing bounded independent pairs", () => {
     const shards = createChangedExtensionFallbackShards([
       "scripts/lib/ci-changed-node-test-plan.mts",
     ]);
+    const groups = fallbackGroups(shards);
+    const bundles = shards.filter((shard) => shard.groups);
+    // The precise plugin-only path supplies the original uncompacted descriptors.
+    const precise = createChangedNodeTestShards(
+      listAvailableExtensionIds().map((id) => `extensions/${id}/package.json`),
+    );
+    expect(precise).not.toBeNull();
+    const original = precise!.filter((shard) => shard.configs.length > 0);
+    const executionDescriptors = (entries: typeof groups) =>
+      entries
+        .map(
+          ({
+            configs,
+            env,
+            includePatterns,
+            pretestBuildMode,
+            requiresDist,
+            runner,
+            shard_name,
+          }) => ({
+            configs,
+            env,
+            includePatterns,
+            pretestBuildMode,
+            requiresDist,
+            runner,
+            shard_name,
+          }),
+        )
+        .toSorted((left, right) => left.shard_name.localeCompare(right.shard_name));
 
+    expect(executionDescriptors(groups)).toEqual(executionDescriptors(fallbackGroups(original)));
+    for (const config of [
+      "test/vitest/vitest.extension-codex.config.ts",
+      "test/vitest/vitest.extension-matrix.config.ts",
+      "test/vitest/vitest.extension-telegram.config.ts",
+    ]) {
+      expect(shards.filter((shard) => shard.configs.includes(config))).toEqual(
+        original.filter((shard) => shard.configs.includes(config)),
+      );
+    }
+    expect(shards).toHaveLength(original.length - bundles.length);
     expect(shards.length).toBeGreaterThan(1);
-    expect(shards.every((shard) => shard.configs.length === 1 && !shard.targets)).toBe(true);
+    expect(shards.every((shard) => !shard.targets)).toBe(true);
+    expect(groups.every((group) => group.configs.length === 1)).toBe(true);
     expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
     expect(shards.every((shard) => Number.isInteger(shard.predictedSeconds))).toBe(true);
+    expect(new Set(groups.map((group) => group.shard_name)).size).toBe(groups.length);
+    expect(bundles.length).toBeGreaterThan(0);
+    for (const bundle of bundles) {
+      expect(bundle.groups).toHaveLength(2);
+      expect(new Set(bundle.groups!.flatMap((group) => group.configs)).size).toBe(2);
+      expect(bundle.predictedSeconds).toBeLessThanOrEqual(94);
+      expect(bundle.configs).toEqual([]);
+      expect(bundle.pretestBuildMode).toBeUndefined();
+      expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);
+      expect(bundle.groups!.every((group) => group.runner === bundle.runner)).toBe(true);
+      expect(bundle.groups!.every((group) => group.requiresDist === bundle.requiresDist)).toBe(
+        true,
+      );
+    }
   });
 
   it("covers every extension config when the extension inventory changes", () => {
@@ -577,24 +658,29 @@ describe("CI changed Node test plan", () => {
     ["test/vitest/vitest.extension-providers.config.ts", "extensions/anthropic/index.ts"],
   ])("partitions the whole %s for direct and core-driven plugin changes", (config, changedPath) => {
     const direct = createChangedExtensionFallbackShards([changedPath]);
-    const broad = createChangedExtensionFallbackShards([
-      "scripts/lib/ci-changed-node-test-plan.mts",
-    ]).filter((shard) => shard.configs.includes(config));
+    const broad = fallbackGroups(
+      createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]),
+    ).filter((group) => group.configs.includes(config));
 
     expect(direct.length).toBeGreaterThan(1);
     expect(direct.every((shard) => shard.configs.length === 1 && shard.configs[0] === config)).toBe(
       true,
     );
     expect(direct.every((shard) => !shard.includePatterns && !shard.targets)).toBe(true);
-    const shardArgs = (shards: typeof direct) => shards.map((shard) => shard.env);
-    expect(shardArgs(direct)).toEqual(
+    const directArgs = direct.map((shard) => shard.env);
+    expect(directArgs).toEqual(
       direct.map((_, index) => ({
         OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
           `--shard=${index + 1}/${direct.length}`,
         ]),
       })),
     );
-    expect(shardArgs(broad)).toEqual(shardArgs(direct));
+    // Packing changes job order, never a native shard's complete argument envelope.
+    const sortArgs = (args: Array<Record<string, string> | undefined>) =>
+      args.toSorted((left, right) =>
+        JSON.stringify(left ?? {}).localeCompare(JSON.stringify(right ?? {})),
+      );
+    expect(sortArgs(broad.map((group) => group.env))).toEqual(sortArgs(directArgs));
   });
 
   it("preserves Matrix process bounds in mixed package fallbacks", () => {

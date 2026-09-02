@@ -20,6 +20,34 @@ export const DURABLE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-durable-auth`;
 export const DURABLE_AUTH_KEY = "post-startup-durable-key-not-real";
 export const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
 export const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
+export const UNRELATED_PLUGIN_ID = "worker-catalog-unrelated";
+export const UNRELATED_PLUGIN_WORKER_MARKER_ENV = "OPENCLAW_WORKER_UNRELATED_PLUGIN_MARKER";
+
+export function writeUnrelatedFixturePlugin(root: string): string {
+  const pluginDir = path.join(root, "unrelated-plugin");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const pluginFile = path.join(pluginDir, "index.cjs");
+  fs.writeFileSync(
+    pluginFile,
+    `const fs = require("node:fs");
+const { isMainThread } = require("node:worker_threads");
+if (!isMainThread) {
+  fs.writeFileSync(process.env.${UNRELATED_PLUGIN_WORKER_MARKER_ENV}, "loaded", "utf8");
+}
+module.exports = { id: ${JSON.stringify(UNRELATED_PLUGIN_ID)}, register() {} };
+`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: UNRELATED_PLUGIN_ID,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+    "utf8",
+  );
+  return pluginFile;
+}
 
 export function createJwtWithExp(exp: number, marker?: string): string {
   const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(

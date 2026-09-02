@@ -1,13 +1,17 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { once } from "node:events";
+import { writeFile } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { type AddressInfo, createServer } from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { stopChildProcess } from "../../../test/helpers/stop-child-process.ts";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -44,19 +48,20 @@ async function reservePort(): Promise<number> {
   return port;
 }
 
-async function startFixtureServer(): Promise<FixtureServer> {
+async function startFixtureServer(fixture?: "attachments"): Promise<FixtureServer> {
   const port = await reservePort();
   const url = `http://127.0.0.1:${port}/__fixtures/board/`;
   const child = spawn(
     process.execPath,
     [
       "--import",
-      "tsx",
+      "./scripts/tsx.mjs",
       "scripts/control-ui-mock-dev.ts",
       "--host",
       "127.0.0.1",
       "--port",
       String(port),
+      ...(fixture ? ["--fixture", fixture] : []),
     ],
     {
       cwd: repoRoot,
@@ -73,6 +78,7 @@ async function startFixtureServer(): Promise<FixtureServer> {
   child.stderr.on("data", (chunk: string) => {
     output += chunk;
   });
+  const mockServer = { child, url, output: () => output };
 
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (child.exitCode !== null || child.signalCode !== null) {
@@ -81,26 +87,19 @@ async function startFixtureServer(): Promise<FixtureServer> {
     try {
       const response = await fetch(url);
       if (response.ok) {
-        return { child, url, output: () => output };
+        return mockServer;
       }
     } catch {}
     await delay(100);
   }
 
-  child.kill("SIGTERM");
+  await stopFixtureServer(mockServer);
   throw new Error(`timed out waiting for Control UI mock server\n${output}`);
 }
 
 async function stopFixtureServer(server: FixtureServer | undefined): Promise<void> {
-  if (!server || server.child.exitCode !== null || server.child.signalCode !== null) {
-    return;
-  }
-  const exited = once(server.child, "exit");
-  server.child.kill("SIGTERM");
-  await Promise.race([exited, delay(5_000)]);
-  if (server.child.exitCode === null && server.child.signalCode === null) {
-    server.child.kill("SIGKILL");
-    await exited;
+  if (server) {
+    await stopChildProcess(server.child, 5_000);
   }
 }
 
@@ -179,15 +178,19 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
   });
 
   afterAll(async () => {
-    await browser?.close();
-    await stopFixtureServer(fixtureServer);
+    await runQaGatewayFixture(
+      async () => {
+        await browser?.close();
+      },
+      () => stopFixtureServer(fixtureServer),
+    );
   });
 
   it("correlates concurrent caretaker replies with their original requests", async () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
       const replies = await requestPreviewGateway(page, [
         { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
         { method: "openclaw.chat", params: { sessionId: "welcome" } },
@@ -205,14 +208,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
       await requestPreviewGateway(page, [
         { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
       ]);
       for (const reload of [false, true]) {
         if (reload) {
           await page.reload();
-          await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
         }
         expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
           { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
@@ -223,44 +226,54 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     }
   });
 
-  it("serves background-task transcripts through both chat entry points", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
-      const sessionKey = "agent:openclaw-mock:subagent:mock-task-1";
-      const [description] = (await requestPreviewGateway(page, [
-        { method: "sessions.describe", params: { key: sessionKey } },
-      ])) as Array<{ session: { sessionId: string } }>;
-      const replies = await requestPreviewGateway(
-        page,
-        ["chat.history", "chat.startup"].map((method) => ({
-          method,
-          params: { sessionKey },
-        })),
-      );
-      for (const reply of replies) {
-        expect(reply).toMatchObject({
-          sessionId: description!.session.sessionId,
-          messages: [
-            { role: "user", content: [{ text: expect.stringContaining("Map the run-status") }] },
-            {
-              role: "assistant",
-              content: [{ text: expect.stringContaining("Tracing task events") }],
-            },
-          ],
+  it.each([
+    { task: 1, user: "Map the run-status", assistant: "Tracing task events" },
+    { task: 2, user: "Audit the gateway", assistant: "Comparing requester" },
+  ])(
+    "serves background task $task through both chat entry points",
+    async ({ task, user, assistant }) => {
+      const page = await browser.newPage();
+      try {
+        await page.goto(new URL("/chat", fixtureServer.url).toString());
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
+        const [description] = (await requestPreviewGateway(page, [
+          { method: "sessions.describe", params: { key: sessionKey } },
+        ])) as Array<{ session: { sessionId: string } }>;
+        expect(description).toMatchObject({
+          session: { key: sessionKey, sessionId: expect.any(String) },
         });
+        const replies = await requestPreviewGateway(
+          page,
+          ["chat.history", "chat.startup"].map((method) => ({
+            method,
+            params: { sessionKey },
+          })),
+        );
+        for (const reply of replies) {
+          expect(reply).toMatchObject({
+            sessionId: description!.session.sessionId,
+            sessionInfo: description!.session,
+            messages: [
+              { role: "user", content: [{ text: expect.stringContaining(user) }] },
+              {
+                role: "assistant",
+                content: [{ text: expect.stringContaining(assistant) }],
+              },
+            ],
+          });
+        }
+      } finally {
+        await page.close();
       }
-    } finally {
-      await page.close();
-    }
-  });
+    },
+  );
 
   it("keeps the main preview run active when hydrating canonical session metadata", async () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
       expect(
         await requestPreviewGateway(page, [
           { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
@@ -281,7 +294,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
       const replies = await requestPreviewGateway(
         page,
         ["telegram", "claude"].map((search) => ({
@@ -336,7 +349,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           avatarRequests.length = 0;
           await page.reload();
         }
-        await page.getByRole("textbox", { name: "Message Molty" }).waitFor();
+        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
         await expect.poll(() => avatarRequests.length).toBeGreaterThan(0);
         expect([...new Set(avatarRequests.map((url) => new URL(url).origin))]).toEqual([
           previewOrigin,
@@ -346,6 +359,346 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     } finally {
       await context.close();
     }
+  });
+
+  it("keeps profile and presence HTTP inside the standalone mock", async () => {
+    const artifacts = createControlUiE2eArtifactDir("standalone-network-isolation");
+    const origin = new URL(fixtureServer.url).origin;
+    const escaped: string[] = [];
+    const requests: string[] = [];
+    const context = await browser.newContext({
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 1000 },
+      recordVideo: { dir: artifacts },
+    });
+    await runQaGatewayFixture(
+      async () => {
+        // A pre-fix tripwire protects the operator, but every rejected escape still fails the test.
+        await context.route("**/*", (route) => {
+          const url = route.request().url();
+          requests.push(url);
+          if (new URL(url).origin !== origin) {
+            escaped.push(url);
+            return route.abort("blockedbyclient");
+          }
+          return route.continue();
+        });
+        const page = await context.newPage();
+        await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        await page.getByText("OpenClaw work checkout", { exact: true }).click();
+        await page.getByRole("button", { name: "Write a message to send." }).waitFor();
+        await page.screenshot({ path: path.join(artifacts, "chat.png") });
+        await page.goto(`${origin}/profile`, { waitUntil: "networkidle" });
+        await expect
+          .poll(() => page.getByRole("textbox", { name: "Display name", exact: true }).inputValue())
+          .toBe("Riley");
+        await page.screenshot({ path: path.join(artifacts, "profile.png") });
+        await page.goto(`${origin}/focus/terminal`, { waitUntil: "networkidle" });
+        const terminal = page.locator("openclaw-terminal-panel");
+        await terminal.locator(".tabstrip-tab.is-live").waitFor();
+        await terminal.locator(".tp-host canvas").waitFor({ state: "visible" });
+        await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        expect(
+          escaped,
+          "standalone mock must not attempt Gateway HTTP or external requests",
+        ).toEqual([]);
+      },
+      () =>
+        writeFile(
+          path.join(artifacts, "network.json"),
+          JSON.stringify({ origin, escaped, requests }, null, 2),
+        ),
+      () => context.close(),
+    );
+  });
+
+  it("blocks native egress before connecting while preserving local HMR and frame resources", async () => {
+    const artifacts = createControlUiE2eArtifactDir("standalone-network-probes");
+    const received: string[] = [];
+    let connections = 0;
+    const sink = createHttpServer((req, res) => {
+      received.push(req.url ?? "/");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.end("unexpected egress");
+    });
+    sink.on("connection", () => {
+      connections += 1;
+    });
+    await new Promise<void>((resolve) => {
+      sink.listen(0, "127.0.0.1", resolve);
+    });
+    const sinkUrl = `http://127.0.0.1:${(sink.address() as AddressInfo).port}`;
+    const origin = new URL(fixtureServer.url).origin;
+    let context: BrowserContext | undefined;
+    const escaped: string[] = [];
+    const outcomes: Record<string, unknown> = {};
+    await runQaGatewayFixture(
+      async () => {
+        context = await browser.newContext({ serviceWorkers: "block" });
+        // Allow the synthetic sink through: the browser/server boundary, not the
+        // test router, must prevent TCP connections. Still protect other origins.
+        await context.route("**/*", (route) => {
+          const target = new URL(route.request().url()).origin;
+          if (target === origin || target === sinkUrl) {
+            return route.continue();
+          }
+          escaped.push(route.request().url());
+          return route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        const hmr: string[] = [];
+        page.on("websocket", (socket) => {
+          socket.on("framereceived", ({ payload }) => {
+            if (String(payload).includes('"type":"connected"')) {
+              hmr.push(new URL(socket.url()).origin);
+            }
+          });
+        });
+        const response = await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+        expect(response?.headers()["content-security-policy"]).toContain("worker-src 'none'");
+        await expect.poll(() => hmr.length).toBeGreaterThan(0);
+        expect(hmr.every((url) => new URL(url).host === new URL(origin).host)).toBe(true);
+        outcomes.hmr = hmr;
+
+        outcomes.top = await page.evaluate(async (sinkOrigin) => {
+          const results: Record<string, string> = {};
+          const rejected = async (name: string, run: () => unknown) => {
+            try {
+              await run();
+              results[name] = "allowed";
+            } catch {
+              results[name] = "blocked";
+            }
+          };
+          await rejected("fetch", () => fetch(`${sinkOrigin}/fetch`));
+          await rejected("rtc", () => new RTCPeerConnection());
+          const workerUrl = URL.createObjectURL(
+            new Blob(["postMessage('escaped')"], { type: "text/javascript" }),
+          );
+          const worker = new Worker(workerUrl);
+          await rejected(
+            "worker",
+            () =>
+              new Promise((resolve, reject) => {
+                worker.addEventListener("message", resolve, { once: true });
+                worker.addEventListener("error", reject, { once: true });
+              }),
+          );
+          worker.terminate();
+          URL.revokeObjectURL(workerUrl);
+          results.popup = window.open(`${sinkOrigin}/popup`) === null ? "blocked" : "allowed";
+
+          // Each native attempt completes at the browser's policy event; no sleep
+          // or request interception can make a missing boundary pass this proof.
+          const policy = async (name: string, directive: string, run: () => void) => {
+            await new Promise<void>((resolve) => {
+              const listener = (event: SecurityPolicyViolationEvent) => {
+                if (
+                  event.effectiveDirective !== directive ||
+                  !event.blockedURI.startsWith(sinkOrigin)
+                ) {
+                  return;
+                }
+                document.removeEventListener("securitypolicyviolation", listener);
+                resolve();
+              };
+              document.addEventListener("securitypolicyviolation", listener);
+              run();
+            });
+            results[name] = "blocked";
+          };
+          await policy("xhr", "connect-src", () => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", `${sinkOrigin}/xhr`);
+            xhr.send();
+          });
+          let events: EventSource;
+          await policy("eventSource", "connect-src", () => {
+            events = new EventSource(`${sinkOrigin}/events`);
+          });
+          events!.close();
+          await policy("beacon", "connect-src", () => {
+            navigator.sendBeacon(`${sinkOrigin}/beacon`, "probe");
+          });
+          await policy("image", "img-src", () => {
+            const image = new Image();
+            image.src = `${sinkOrigin}/image`;
+            document.body.append(image);
+          });
+          await policy("media", "media-src", () => {
+            const audio = document.createElement("audio");
+            audio.preload = "auto";
+            audio.src = `${sinkOrigin}/media`;
+            document.body.append(audio);
+            audio.load();
+          });
+          for (const setter of [
+            "property",
+            "attribute",
+            "namespaced",
+            "empty-namespace",
+          ] as const) {
+            await rejected(`iframe:${setter}`, () => {
+              const frame = document.createElement("iframe");
+              const url = `${sinkOrigin}/frame`;
+              if (setter === "property") {
+                frame.src = url;
+              } else if (setter === "attribute") {
+                frame.setAttribute("src", url);
+              } else {
+                const namespace = setter === "namespaced" ? null : "";
+                frame.setAttributeNS(namespace, "src", url);
+              }
+              document.body.append(frame);
+            });
+          }
+          await policy("script", "script-src-elem", () => {
+            const script = document.createElement("script");
+            script.src = `${sinkOrigin}/script`;
+            document.head.append(script);
+          });
+          await policy("style", "style-src-elem", () => {
+            const link = document.createElement("link");
+            link.rel = "stylesheet";
+            link.href = `${sinkOrigin}/style`;
+            document.head.append(link);
+          });
+          await rejected("font", () =>
+            new FontFace("sink-probe", `url(${sinkOrigin}/font)`).load(),
+          );
+          const forgedHmr = new WebSocket(
+            `${sinkOrigin.replace("http:", "ws:")}/forged-hmr`,
+            "vite-hmr",
+          );
+          await new Promise<void>((resolve) => {
+            forgedHmr.addEventListener("error", () => resolve(), { once: true });
+          });
+          forgedHmr.close();
+          results.forgedHmr = "blocked";
+          const beforeNavigation = location.href;
+          location.assign(`${sinkOrigin}/navigation`);
+          results.navigation = location.href === beforeNavigation ? "blocked" : "allowed";
+          // Same-origin completion sentinel proves the document is still live.
+          const sentinel = await fetch("/control-ui-config.json");
+          results.sentinel = sentinel.ok ? "local" : "failed";
+          return results;
+        }, sinkUrl);
+        expect(outcomes.top).toEqual({
+          fetch: "blocked",
+          rtc: "blocked",
+          worker: "blocked",
+          popup: "blocked",
+          xhr: "blocked",
+          eventSource: "blocked",
+          beacon: "blocked",
+          image: "blocked",
+          media: "blocked",
+          "iframe:property": "blocked",
+          "iframe:attribute": "blocked",
+          "iframe:namespaced": "blocked",
+          "iframe:empty-namespace": "blocked",
+          script: "blocked",
+          style: "blocked",
+          font: "blocked",
+          forgedHmr: "blocked",
+          navigation: "blocked",
+          sentinel: "local",
+        });
+        expect(new URL(page.url()).origin).toBe(origin);
+
+        await expect
+          .poll(() => page.frames().some((frame) => frame.url().startsWith("data:text/html")))
+          .toBe(true);
+        const widgetFrame = page
+          .frames()
+          .find((frame) => frame.url().startsWith("data:text/html"))!;
+        outcomes.frame = await widgetFrame.evaluate(async (sinkOrigin) => {
+          try {
+            await fetch(`${sinkOrigin}/frame-native-fetch`);
+            return "allowed";
+          } catch {
+            return "blocked";
+          }
+        }, sinkUrl);
+        expect(outcomes.frame).toBe("blocked");
+        const missing = await page.evaluate(async () => {
+          const apiResponse = await fetch("/api/unimplemented-mock-probe");
+          return { status: apiResponse.status, body: await apiResponse.json() };
+        });
+        expect(missing).toEqual({
+          status: 404,
+          body: { error: "Standalone mock has no HTTP fixture for this route." },
+        });
+        outcomes.missing = missing;
+        await page.screenshot({ path: path.join(artifacts, "board.png") });
+        expect(escaped).toEqual([]);
+        expect(received).toEqual([]);
+        expect(connections).toBe(0);
+      },
+      () => context?.close(),
+      async () => {
+        sink.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          sink.close((error) => (error ? reject(error) : resolve()));
+        });
+      },
+      () =>
+        writeFile(
+          path.join(artifacts, "probes.json"),
+          JSON.stringify(
+            { origin, sinkOrigin: sinkUrl, connections, received, escaped, outcomes },
+            null,
+            2,
+          ),
+        ),
+    );
+  });
+
+  it("serves attachment fixtures and blob previews under the same isolation policy", async () => {
+    const attachments = await startFixtureServer("attachments");
+    let context: BrowserContext | undefined;
+    await runQaGatewayFixture(
+      async () => {
+        const artifacts = createControlUiE2eArtifactDir("standalone-isolated-attachments");
+        context = await browser.newContext({ serviceWorkers: "block" });
+        const origin = new URL(attachments.url).origin;
+        const escaped: string[] = [];
+        await context.route("**/*", (route) => {
+          if (new URL(route.request().url()).origin === origin) {
+            return route.continue();
+          }
+          escaped.push(route.request().url());
+          return route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        const result = await page.evaluate(async () => {
+          const response = await fetch("/__fixtures/chat-attachments/sample-image.svg");
+          const blob = await response.blob();
+          const image = new Image();
+          image.src = URL.createObjectURL(blob);
+          document.body.append(image);
+          await image.decode();
+          URL.revokeObjectURL(image.src);
+          return {
+            type: blob.type,
+            width: image.naturalWidth,
+            policy: response.headers.get("content-security-policy"),
+          };
+        });
+        expect(result.type).toBe("image/svg+xml");
+        expect(result.width).toBe(640);
+        expect(result.policy).toContain("worker-src 'none'");
+        await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        expect(escaped).toEqual([]);
+        await writeFile(
+          path.join(artifacts, "network.json"),
+          JSON.stringify({ origin, escaped, result }, null, 2),
+        );
+      },
+      () => context?.close(),
+      () => stopFixtureServer(attachments),
+    );
   });
 
   for (const mode of ["dark", "light"] as const) {
@@ -399,6 +752,40 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       }
     });
   }
+
+  it("renders the remove action with the menu font size and a leading trash icon", async () => {
+    const page = await browser.newPage();
+    try {
+      await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
+      await openWidgetMenu(page);
+      const presentation = await page
+        .locator(".board-widget__menu[open] .board-widget__menu-danger")
+        .evaluate((remove) => {
+          const preset = remove.parentElement?.querySelector(".board-widget__preset");
+          const icon = remove.querySelector('[slot="icon"]');
+          if (!(preset instanceof HTMLElement)) {
+            throw new Error("board fixture menu did not expose a resize preset");
+          }
+          return {
+            fontSize: getComputedStyle(remove).fontSize,
+            iconHidden: icon?.getAttribute("aria-hidden"),
+            iconSvg: Boolean(icon?.querySelector("svg")),
+            presetFontSize: getComputedStyle(preset).fontSize,
+          };
+        });
+      expect({
+        fontSizesMatch: presentation.fontSize === presentation.presetFontSize,
+        iconHidden: presentation.iconHidden,
+        iconSvg: presentation.iconSvg,
+      }).toEqual({
+        fontSizesMatch: true,
+        iconHidden: "true",
+        iconSvg: true,
+      });
+    } finally {
+      await page.close();
+    }
+  });
 
   it("follows live system color-scheme changes", async () => {
     const context = await browser.newContext({ colorScheme: "dark" });

@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
 import {
   buildReleaseCandidateState,
   buildPublishCommand,
@@ -23,7 +24,6 @@ import {
   preflightCorePackageTarballs,
   preflightDependencyTarballs,
   reconcileReleaseCandidateState,
-  releaseBranchForTag,
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
   run,
@@ -60,6 +60,68 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it("runs plugin planners from trusted tooling while retaining candidate inputs", () => {
+    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
+    const owner = source.match(/^function collectPluginPlan\([\s\S]*?^\}/mu)?.[0];
+    expect(owner).toBeDefined();
+    const runPlanner = vi.fn((_command, args, options) => JSON.stringify({ args, options }));
+    const result = runInNewContext(
+      stripTypeScriptTypes(`${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`),
+      {
+        TOOLING_ROOT: "/trusted/tooling",
+        join,
+        pluginPlanArgs: () => ["--selection-mode", "all-publishable"],
+        run: runPlanner,
+      },
+    );
+    expect(result.args).toEqual([
+      "--import",
+      "tsx",
+      "/trusted/tooling/scripts/plugin-npm-release-plan.ts",
+      "--selection-mode",
+      "all-publishable",
+    ]);
+    expect(result.options).not.toHaveProperty("cwd");
+  });
+
+  it("routes a repaired publisher independently from immutable preflight evidence", () => {
+    const publishWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
+    const options = parseArgs([
+      "--tag",
+      "v2026.8.2-beta.1",
+      "--publish-workflow-ref",
+      publishWorkflowRef,
+    ]);
+    const producer = {
+      status: "passed",
+      headSha: "a".repeat(40),
+      workflowRef: "release-publish/aaaaaaaaaaaa-122",
+    };
+    const command = buildPublishCommand(options, producer);
+    expect(command).toContain(`'--ref' '${publishWorkflowRef}'`);
+    expect(producer.headSha).toBe("a".repeat(40));
+    const saved = buildReleaseCandidateState(options, {
+      targetSha: "c".repeat(40),
+      toolingSha: "b".repeat(40),
+    });
+    expect(saved.publishWorkflowRef).toBe(publishWorkflowRef);
+    expect(() =>
+      reconcileReleaseCandidateState(saved, {
+        ...saved,
+        publishWorkflowRef: "release-publish/bbbbbbbbbbbb-124",
+      }),
+    ).toThrow("state mismatch for publishWorkflowRef");
+  });
+
+  it.each(["main", "refs/tags/release-publish/bbbbbbbbbbbb-123", "release-publish/bbbbbbbbbbbb-0"])(
+    "rejects an unprotected publisher selector %s",
+    (ref) => {
+      expect(() => parseArgs(["--tag", "v2026.8.2-beta.1", "--publish-workflow-ref", ref])).toThrow(
+        "protected release-publish tag",
+      );
+    },
+  );
+
   it("recognizes direct execution through a symlinked temporary root", () => {
     const realpath = vi.fn((value: string) => value.replace(/^\/tmp\//u, "/private/tmp/"));
 
@@ -953,8 +1015,12 @@ describe("release candidate checklist", () => {
     const api = (tag: unknown = tagRef, branches: unknown = []) => ({
       token: "",
       fetchImpl: vi.fn(async (url: string) => {
-        if (url.includes(`/repos/${repo}/git/ref/tags/`)) return jsonResponse(tag);
-        if (url.includes(`/repos/${repo}/git/matching-refs/heads/`)) return jsonResponse(branches);
+        if (url.includes(`/repos/${repo}/git/ref/tags/`)) {
+          return jsonResponse(tag);
+        }
+        if (url.includes(`/repos/${repo}/git/matching-refs/heads/`)) {
+          return jsonResponse(branches);
+        }
         throw new Error(`unexpected request: ${url}`);
       }),
     });
@@ -1090,7 +1156,7 @@ describe("release candidate checklist", () => {
 
   it("requires run ids when dispatch is disabled", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14-beta.3", "--skip-dispatch"])).toThrow(
-      "--skip-dispatch requires --full-release-run and --npm-preflight-run",
+      "--skip-dispatch requires --full-release-run",
     );
   });
 
@@ -1104,7 +1170,7 @@ describe("release candidate checklist", () => {
   it("keeps release validation context on the canonical release branch", () => {
     expect(releaseBranchForTag("v2026.7.1-beta.4")).toBe("release/2026.7.1");
     expect(releaseBranchForTag("v2026.7.1")).toBe("release/2026.7.1");
-    expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1-1");
     expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
 
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
@@ -1240,10 +1306,17 @@ describe("release candidate checklist", () => {
     { profile: "beta", coveragePolicy: "npm-beta-v1", skipTelegram: true, expected: "skipped" },
     { profile: "beta", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
     { profile: "stable", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
+    {
+      profile: "stable",
+      coveragePolicy: "npm-stable-v1",
+      skipTelegram: false,
+      expected: "passed",
+      producerRunId: 444,
+    },
     { profile: "full", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
   ])(
     "records candidate Telegram $expected for $profile qualification ($coveragePolicy)",
-    async ({ profile, coveragePolicy, skipTelegram, expected }) => {
+    async ({ profile, coveragePolicy, skipTelegram, expected, producerRunId = 222 }) => {
       const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
       const telegramOwner = source.match(/^async function runTelegramIfNeeded\([\s\S]*?^\}/mu)?.[0];
       const telegramCall = source.match(
@@ -1279,7 +1352,7 @@ describe("release candidate checklist", () => {
             id: 9,
             name: "npm-package",
             digest: `sha256:${"a".repeat(64)}`,
-            workflowRunId: 222,
+            workflowRunId: producerRunId,
           },
           npmManifest: {
             tarballName: "openclaw.tgz",
@@ -1308,7 +1381,7 @@ describe("release candidate checklist", () => {
           options.workflowRef,
           expect.objectContaining({
             package_artifact_id: 9,
-            package_artifact_run_id: "222",
+            package_artifact_run_id: String(producerRunId),
             package_source_sha: "c".repeat(40),
           }),
         );
@@ -1667,24 +1740,23 @@ ${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
   });
 
   it("builds the complete immutable Telegram artifact identity tuple", () => {
-    expect(
-      buildTelegramArtifactInputs({
-        artifact: {
-          digest: `sha256:${"a".repeat(64)}`,
-          id: 123,
-          name: "openclaw-npm-preflight-v2026.7.2-beta.1",
-          workflowRunId: 456,
-        },
-        manifest: {
-          packageVersion: "2026.7.2-beta.1",
-          tarballName: "openclaw-2026.7.2-beta.1.tgz",
-          tarballSha256: "b".repeat(64),
-        },
-        runAttempt: 2,
-        runId: "456",
-        sourceSha: "c".repeat(40),
-      }),
-    ).toEqual({
+    const input = {
+      artifact: {
+        digest: `sha256:${"a".repeat(64)}`,
+        id: 123,
+        name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+        workflowRunId: 456,
+      },
+      manifest: {
+        packageVersion: "2026.7.2-beta.1",
+        tarballName: "openclaw-2026.7.2-beta.1.tgz",
+        tarballSha256: "b".repeat(64),
+      },
+      runAttempt: 2,
+      runId: "456",
+      sourceSha: "c".repeat(40),
+    };
+    expect(buildTelegramArtifactInputs(input)).toEqual({
       package_artifact_digest: "a".repeat(64),
       package_artifact_id: 123,
       package_artifact_name: "openclaw-npm-preflight-v2026.7.2-beta.1",
@@ -1695,6 +1767,13 @@ ${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
       package_source_sha: "c".repeat(40),
       package_version: "2026.7.2-beta.1",
     });
+    expect(() =>
+      buildTelegramArtifactInputs({
+        ...input,
+        artifact: { ...input.artifact, workflowRunId: undefined },
+        runId: "undefined",
+      }),
+    ).toThrow("belongs to run");
   });
 
   it("bounds GitHub API requests with a timeout signal", async () => {

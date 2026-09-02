@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
+import { assertTestHomeSelection } from "../test/test-home-policy.mts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -14,7 +15,6 @@ import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
-import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
 import {
@@ -28,6 +28,7 @@ import {
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
 import { runVitestCli, type exitVitestBySignal } from "./lib/vitest-cli.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import {
@@ -49,7 +50,6 @@ type VitestFs = {
   symlinkSync?(target: string, path: string, type: "dir" | "junction"): void;
 };
 type VitestPathFs = Pick<typeof fs, "existsSync" | "statSync">;
-type VitestProcessHandle = Omit<ReturnType<typeof spawnWatchedVitestProcess>, "teardown">;
 type WatchdogStream = {
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   off(event: string, listener: (...args: unknown[]) => void): unknown;
@@ -1205,13 +1205,18 @@ export function spawnWatchedVitestProcess({
   env,
   onNoOutputTimeout,
   workerRun,
+  homeMode = resolveVitestHomeSelection(pnpmArgs, { cwd: spawnParams.cwd, env }),
 }: {
   pnpmArgs: string[];
   spawnParams: PnpmRunnerParams;
   env: NodeJS.ProcessEnv;
   onNoOutputTimeout?: () => void;
   workerRun?: VitestWorkerRun;
+  homeMode?: Parameters<typeof spawnOwnedVitestProcess>[0]["homeMode"];
 }) {
+  if (homeMode !== "tooling") {
+    assertTestHomeSelection(env, homeMode);
+  }
   let forwardedSignal: NodeSignal | null = null;
   let diagnosticsCompletion: Promise<void> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
@@ -1243,11 +1248,12 @@ export function spawnWatchedVitestProcess({
         ],
       }
     : spawnParams;
-  const { child, completion: childCompletion } = spawnOwnedVitestProcess(
-    directNodeArgs
+  const { child, completion: childCompletion } = spawnOwnedVitestProcess({
+    ...(directNodeArgs
       ? { command: process.execPath, args: directNodeArgs, options: childSpawnParams }
-      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams }),
-  );
+      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
+    homeMode,
+  });
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
@@ -1316,32 +1322,6 @@ export function spawnWatchedVitestProcess({
   };
 }
 
-async function finishVitestProcess({
-  completion,
-  getForwardedSignal,
-  beforeSignal,
-  exitBySignal,
-}: Pick<VitestProcessHandle, "completion" | "getForwardedSignal"> & {
-  beforeSignal?: () => void | Promise<void>;
-  exitBySignal: typeof exitVitestBySignal;
-}): Promise<number> {
-  const { code, signal } = await completion;
-  const exitSignal = getForwardedSignal() ?? signal;
-  if (exitSignal) {
-    try {
-      await beforeSignal?.();
-    } catch (error) {
-      console.error(error);
-    } finally {
-      await exitBySignal(exitSignal);
-    }
-    return signalExitCode(exitSignal);
-  }
-  const exitCode = code ?? 1;
-  process.exitCode = exitCode;
-  return exitCode;
-}
-
 export async function runVitest(
   exitBySignal: typeof exitVitestBySignal,
   argv: string[] = process.argv.slice(2),
@@ -1367,11 +1347,18 @@ export async function runVitest(
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    await finishVitestProcess({ ...spawnTestProjectsRunner(delegatedArgs, env), exitBySignal });
+    const handle = spawnTestProjectsRunner(delegatedArgs, env);
+    const { code, signal } = await handle.completion;
+    const exitSignal = handle.getForwardedSignal() ?? signal;
+    if (exitSignal) {
+      await exitBySignal(exitSignal);
+    }
+    process.exitCode = code ?? 1;
     return;
   }
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
+  assertTestHomeSelection(env, resolveVitestHomeSelection(vitestArgs, { env }));
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
   const config = resolveVitestConfigArg(vitestArgs);
   const repoRoot = resolveRepoRoot(import.meta.url);
@@ -1416,6 +1403,14 @@ export async function runVitest(
   const sourceMode =
     resolveExplicitVitestMode(vitestArgs) === "watch" || isVitestWorkerMetadataRequest(vitestArgs);
   const workers = sourceMode ? undefined : createVitestWorkerRun();
+  let interrupted: NodeJS.Signals | undefined;
+  const onSignal = (signal: NodeJS.Signals) => {
+    interrupted ??= signal;
+  };
+  // The invocation outlives child-scoped handlers when admission or final
+  // verification is still reading. Retain signal ownership through disposal.
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   try {
     let failedExitCode = 0;
     for (const [index, invocation] of invocations.entries()) {
@@ -1436,25 +1431,31 @@ export async function runVitest(
         spawnParams: resolveVitestSpawnParams(spawnEnv),
         env: spawnEnv,
       });
-      const exitCode = await finishVitestProcess({
-        ...handle,
-        exitBySignal,
-        beforeSignal: () => workers?.dispose(),
-      });
-      // Ordinary test failures must not hide later files. Signals are forwarded by
-      // finishVitestProcess and stop this owner before another child is admitted.
-      if (
-        handle.getForwardedSignal() ||
-        handle.child.signalCode ||
-        (exitCode !== 0 && exitCode !== 1)
-      ) {
+      const { code, signal } = await handle.completion;
+      interrupted ??= handle.getForwardedSignal() ?? signal ?? undefined;
+      const exitCode = code ?? 1;
+      // Ordinary test failures must not hide later files; interruptions stop
+      // admission and are re-raised only after the invocation has been disposed.
+      if (interrupted || (exitCode !== 0 && exitCode !== 1)) {
+        process.exitCode = exitCode;
         return;
       }
       failedExitCode ||= exitCode;
     }
     process.exitCode = failedExitCode;
   } finally {
-    await workers?.dispose();
+    try {
+      await workers?.dispose().catch((error: unknown) => {
+        process.exitCode ||= 1;
+        console.error(error);
+      });
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (interrupted) {
+        await exitBySignal(interrupted);
+      }
+    }
   }
 }
 

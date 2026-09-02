@@ -10,6 +10,7 @@ import {
   resolveAgentIdFromSessionKey,
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
 import {
   extractAssistantPhaseText,
   extractFirstTextBlock,
@@ -110,6 +111,7 @@ type InternalSessionTranscriptDeliveryMirror =
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
+  [ASSISTANT_DISPLAY_CONTENT_FIELD]?: Array<Record<string, unknown>>;
 };
 
 type AssistantTranscriptText = {
@@ -405,6 +407,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   text?: string;
   mediaUrls?: string[];
   content?: SessionTranscriptAssistantMessage["content"];
+  displayContent?: Array<Record<string, unknown>>;
   eventId?: string;
   idempotencyKey?: string;
   runId?: string;
@@ -429,7 +432,8 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       });
   const content =
     params.content ?? (mirrorText ? [{ type: "text" as const, text: mirrorText }] : []);
-  if (content.length === 0) {
+  const displayContent = params.displayContent?.map((block) => Object.assign({}, block));
+  if (content.length === 0 && !displayContent?.length) {
     return { ok: false, reason: "empty text" };
   }
 
@@ -456,6 +460,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     message: {
       role: "assistant" as const,
       content,
+      ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
       provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
       model: OPENCLAW_DELIVERY_MIRROR_MODEL,
@@ -476,7 +481,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       stopReason: "stop" as const,
       timestamp: Date.now(),
       ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
-    } as SessionTranscriptAssistantMessage,
+    },
   });
 }
 

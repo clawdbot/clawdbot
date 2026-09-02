@@ -290,7 +290,7 @@ internal fun OpenClawWearScreens(
           voicePagerState.currentPage == VOICE_THREAD_MODE,
     ) { page ->
       when (homePages.getOrNull(page)) {
-        WearHomePage.Chat ->
+        WearHomePage.Chat -> {
           ChatPage(
             snapshot = snapshot,
             interaction = interaction,
@@ -312,7 +312,9 @@ internal fun OpenClawWearScreens(
             onSpeakLatest = onSpeakLatest,
             onStopSpeaking = onStopSpeaking,
           )
-        WearHomePage.Voice ->
+        }
+
+        WearHomePage.Voice -> {
           VoicePage(
             voicePagerState = voicePagerState,
             showSwipeHint = showVoiceSwipeHint && homePages.getOrNull(pagerState.currentPage) == WearHomePage.Voice,
@@ -331,7 +333,9 @@ internal fun OpenClawWearScreens(
             onRealtimeTalk = onRealtimeTalk,
             onStopSpeaking = onStopSpeaking,
           )
-        WearHomePage.Controls ->
+        }
+
+        WearHomePage.Controls -> {
           ControlsPage(
             snapshot = snapshot,
             themeMode = themeMode,
@@ -346,7 +350,9 @@ internal fun OpenClawWearScreens(
             onRefresh = onRefresh,
             onGatewayEnabledChange = onGatewayEnabledChange,
           )
-        WearHomePage.Pulse ->
+        }
+
+        WearHomePage.Pulse -> {
           AgentPulsePage(
             snapshot = snapshot,
             onRefresh = {
@@ -357,7 +363,9 @@ internal fun OpenClawWearScreens(
               }
             },
           )
-        else -> Unit
+        }
+
+        else -> {}
       }
     }
   }
@@ -659,7 +667,7 @@ private fun VoicePage(
       rotaryScrollableBehavior = null,
     ) { mode ->
       when (mode) {
-        VOICE_HOME_MODE ->
+        VOICE_HOME_MODE -> {
           VoiceHomeMode(
             realtimeTalk = realtimeTalk,
             speaking = speaking,
@@ -676,7 +684,9 @@ private fun VoicePage(
             onStopSpeaking = onStopSpeaking,
             onOpenThread = { selectMode(VOICE_THREAD_MODE) },
           )
-        else ->
+        }
+
+        else -> {
           ThreadVoiceMode(
             conversation = realtimeTalk.conversation,
             thinking =
@@ -687,6 +697,7 @@ private fun VoicePage(
             onType = onType,
             onRealtimeTalk = onRealtimeTalk,
           )
+        }
       }
     }
     if (showSwipeHint) {
@@ -912,7 +923,7 @@ private fun VoiceGestureLabel(
 ) {
   val interactionModifier =
     when {
-      onDoubleClick != null ->
+      onDoubleClick != null -> {
         Modifier
           .pointerInput(onDoubleClick) {
             detectTapGestures(onDoubleTap = { onDoubleClick() })
@@ -923,13 +934,19 @@ private fun VoiceGestureLabel(
               true
             }
           }
-      onClick != null ->
+      }
+
+      onClick != null -> {
         Modifier.clickable(
           role = Role.Button,
           onClickLabel = onClickLabel,
           onClick = onClick,
         )
-      else -> Modifier
+      }
+
+      else -> {
+        Modifier
+      }
     }
   Column(
     modifier =
@@ -1359,21 +1376,35 @@ private fun realtimeVoiceButtonState(
   realtimeThinkingOverride: Boolean,
 ): RealtimeVoiceButtonState =
   when {
-    realtimePlaybackFailed || realtimeTalk.status == WearRealtimeTalkStatus.ERROR ->
+    realtimePlaybackFailed || realtimeTalk.status == WearRealtimeTalkStatus.ERROR -> {
       RealtimeVoiceButtonState.ERROR
-    realtimeThinkingOverride ->
+    }
+
+    realtimeThinkingOverride -> {
       RealtimeVoiceButtonState.THINKING
-    realtimePlaying || realtimeTalk.speaking || ttsOnly ->
+    }
+
+    realtimePlaying || realtimeTalk.speaking || ttsOnly -> {
       RealtimeVoiceButtonState.SPEAKING
-    realtimeTalk.status == WearRealtimeTalkStatus.THINKING ->
+    }
+
+    realtimeTalk.status == WearRealtimeTalkStatus.THINKING -> {
       RealtimeVoiceButtonState.THINKING
+    }
+
     realtimeCapturing ||
       realtimeTalk.listening ||
-      realtimeTalk.status == WearRealtimeTalkStatus.LISTENING ->
+      realtimeTalk.status == WearRealtimeTalkStatus.LISTENING -> {
       RealtimeVoiceButtonState.LISTENING
-    realtimeTalk.status == WearRealtimeTalkStatus.CONNECTING ->
+    }
+
+    realtimeTalk.status == WearRealtimeTalkStatus.CONNECTING -> {
       RealtimeVoiceButtonState.CONNECTING
-    else -> RealtimeVoiceButtonState.IDLE
+    }
+
+    else -> {
+      RealtimeVoiceButtonState.IDLE
+    }
   }
 
 private fun formatVoiceElapsedTime(totalSeconds: Long): String {
@@ -1550,21 +1581,25 @@ private fun AgentPulsePage(
   val pulse = snapshot.agentPulse
   WearPage(pageLabel = stringResource(R.string.pulse)) {
     when {
-      snapshot.gatewayState != WearGatewayState.CONNECTED ->
+      snapshot.gatewayState != WearGatewayState.CONNECTED -> {
         item {
           EmptyPanel(
             title = stringResource(R.string.pulse_unavailable),
             detail = stringResource(R.string.gateway_offline_detail),
           )
         }
-      !snapshot.agentPulseSupported ->
+      }
+
+      !snapshot.agentPulseSupported -> {
         item {
           EmptyPanel(
             title = stringResource(R.string.pulse_unavailable),
             detail = stringResource(R.string.update_required_detail),
           )
         }
-      pulse == null ->
+      }
+
+      pulse == null -> {
         item {
           EmptyPanel(
             title =
@@ -1581,6 +1616,8 @@ private fun AgentPulsePage(
               },
           )
         }
+      }
+
       else -> {
         item { AgentPulseTasksPanel(pulse.tasks) }
         item { AgentPulseSwarmPanel(pulse.swarm) }
@@ -2027,7 +2064,7 @@ private fun ContextPickerOverlay(
       }
     }
     when (picker) {
-      WearContextPicker.Agent ->
+      WearContextPicker.Agent -> {
         snapshot.agents.forEach { agent ->
           item(key = "agent:${agent.id}") {
             ContextPickerOption(
@@ -2040,6 +2077,8 @@ private fun ContextPickerOverlay(
             )
           }
         }
+      }
+
       WearContextPicker.Session -> {
         val sessions =
           if (snapshot.sessionSearchQuery == null) snapshot.sessions else snapshot.sessionSearchResults
@@ -2077,6 +2116,7 @@ private fun ContextPickerOverlay(
           }
         }
       }
+
       WearContextPicker.Model -> {
         val models =
           if (snapshot.modelSearchQuery == null) snapshot.models else snapshot.modelSearchResults
@@ -2237,19 +2277,37 @@ private fun ConversationStatus(
   val colors = OpenClawWearTheme.colors
   val (label, color) =
     when {
-      speaking -> stringResource(R.string.speaking) to colors.success
-      interaction == WearInteractionState.LISTENING ->
+      speaking -> {
+        stringResource(R.string.speaking) to colors.success
+      }
+
+      interaction == WearInteractionState.LISTENING -> {
         stringResource(R.string.listening) to colors.danger
-      interaction == WearInteractionState.TYPING ->
+      }
+
+      interaction == WearInteractionState.TYPING -> {
         stringResource(R.string.typing) to colors.warning
-      interaction == WearInteractionState.SENDING ->
+      }
+
+      interaction == WearInteractionState.SENDING -> {
         stringResource(R.string.sending) to colors.warning
-      interaction == WearInteractionState.AGENT_WORKING ->
+      }
+
+      interaction == WearInteractionState.AGENT_WORKING -> {
         stringResource(R.string.agent_working) to colors.warning
-      interaction == WearInteractionState.ERROR ->
+      }
+
+      interaction == WearInteractionState.ERROR -> {
         stringResource(R.string.error) to colors.danger
-      gatewayConnected -> stringResource(R.string.ready) to colors.success
-      else -> stringResource(R.string.gateway_offline) to colors.danger
+      }
+
+      gatewayConnected -> {
+        stringResource(R.string.ready) to colors.success
+      }
+
+      else -> {
+        stringResource(R.string.gateway_offline) to colors.danger
+      }
     }
   Row(
     modifier =
@@ -2703,41 +2761,69 @@ private fun Panel(content: @Composable ColumnScope.() -> Unit) {
 @Composable
 private fun failureTitle(failure: WearConversationFailure?): String =
   when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE ->
+    WearConversationFailure.PHONE_UNAVAILABLE -> {
       stringResource(R.string.phone_unavailable)
-    WearConversationFailure.PHONE_NOT_READY ->
+    }
+
+    WearConversationFailure.PHONE_NOT_READY -> {
       stringResource(R.string.open_phone_app)
-    WearConversationFailure.GATEWAY_OFFLINE ->
+    }
+
+    WearConversationFailure.GATEWAY_OFFLINE -> {
       stringResource(R.string.gateway_offline)
-    WearConversationFailure.NOT_FOUND ->
+    }
+
+    WearConversationFailure.NOT_FOUND -> {
       stringResource(R.string.selection_not_found)
-    WearConversationFailure.ACTION_REJECTED ->
+    }
+
+    WearConversationFailure.ACTION_REJECTED -> {
       stringResource(R.string.message_not_sent)
-    WearConversationFailure.INCOMPATIBLE ->
+    }
+
+    WearConversationFailure.INCOMPATIBLE -> {
       stringResource(R.string.update_required)
+    }
+
     WearConversationFailure.INTERNAL_ERROR,
     null,
-    -> stringResource(R.string.something_went_wrong)
+    -> {
+      stringResource(R.string.something_went_wrong)
+    }
   }
 
 @Composable
 private fun failureDetail(failure: WearConversationFailure?): String =
   when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE ->
+    WearConversationFailure.PHONE_UNAVAILABLE -> {
       stringResource(R.string.phone_unavailable_detail)
-    WearConversationFailure.PHONE_NOT_READY ->
+    }
+
+    WearConversationFailure.PHONE_NOT_READY -> {
       stringResource(R.string.phone_not_ready_detail)
-    WearConversationFailure.GATEWAY_OFFLINE ->
+    }
+
+    WearConversationFailure.GATEWAY_OFFLINE -> {
       stringResource(R.string.gateway_offline_detail)
-    WearConversationFailure.NOT_FOUND ->
+    }
+
+    WearConversationFailure.NOT_FOUND -> {
       stringResource(R.string.refresh_and_try_again)
-    WearConversationFailure.ACTION_REJECTED ->
+    }
+
+    WearConversationFailure.ACTION_REJECTED -> {
       stringResource(R.string.try_again)
-    WearConversationFailure.INCOMPATIBLE ->
+    }
+
+    WearConversationFailure.INCOMPATIBLE -> {
       stringResource(R.string.update_required_detail)
+    }
+
     WearConversationFailure.INTERNAL_ERROR,
     null,
-    -> stringResource(R.string.try_again)
+    -> {
+      stringResource(R.string.try_again)
+    }
   }
 
 private const val CHAT_FIXED_ITEM_COUNT = 2

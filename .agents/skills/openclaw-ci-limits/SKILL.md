@@ -186,10 +186,14 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   before build and transform warming. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- Hybrid first attempts route `preflight`, `security-fast`, and `ci-gate` to
-  the existing 4-vCPU Blacksmith runner after measured hosted queue delays.
-  Contributor trust, manual/non-canonical fallbacks, hosted retries, and the
-  `github` outage override remain intact. Budget all three registrations.
+- `ci-gate` follows `preflight` routing for every non-`github` value, including
+  the existing 4-vCPU Blacksmith runner, contributor-trust checks, hosted
+  dispatch/retry/fork fallbacks, and non-canonical fallbacks; `security-fast`
+  stays hosted outside eligible hybrid first attempts. This avoids a second
+  hosted assignment wave while keeping security scans off Blacksmith's flaky
+  pre-commit anonymous Git fetch path. The `github` outage override remains
+  intact. Budget two control-job registrations per eligible Blacksmith run and
+  three per eligible hybrid first attempt.
   The aggregate uses `!cancelled()` to report failed prerequisites without
   holding a superseded run open after workflow cancellation.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
@@ -203,10 +207,22 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   fixture memory and cleanup. This adds no runner registrations.
 - macOS Swift uses two mandatory matrix phases with `max-parallel: 2`:
   release compilation and the complete shared/app test workload. This adds one
-  registration per eligible Blacksmith native run, or at most four across the
-  two active and two pending main slots in one admission wave. Hosted manual
-  and retry paths add no Blacksmith registrations. Build caches are phase-owned;
-  only the release phase writes the shared SwiftPM dependency cache.
+  registration per eligible Blacksmith native run: up to four across the two
+  active and two pending main slots, plus one for each eligible trusted PR.
+  Build caches are phase-owned; only the release phase writes the shared
+  SwiftPM dependency cache.
+- iOS Release, Debug/simulator tests, and both screenshot shards always use
+  `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
+  hosted image; do not require a failed first attempt to select that capacity.
+  Their four fixed hosted rows are excluded from the 88-row non-Node inventory;
+  conservatively count the remaining 84 rows, including other hosted/skipped
+  jobs. This gives 180 rows per main run and 274 per broad PR, or
+  `4 × 180 + 19 × 274 = 5,926` registrations in the observed five-minute
+  arrival envelope. This is not organization-wide headroom: include queued
+  carryover, adjacent repositories, and release arrivals. A complete npm
+  qualification uses six Blacksmith jobs, three more than the former serial
+  layout; parent retries reuse the existing producer. Hosted manual/retry
+  CI paths add no Blacksmith registrations.
 - Canonical PR Node tests use one precise changed-target job when possible;
   broad, deleted, unknown, or planner-failed changes fall back to the compact
   full-suite plan. Targeted plans retain the full built-artifact
@@ -218,6 +234,13 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   config discovery, exclusions and process isolation. Count every appended
   plugin row, including the five added QA/provider rows, in the burst envelope.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+- CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
+  jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
+  [run 33538827388](https://github.com/openclaw/openclaw/actions/runs/33538827388)
+  measured requested 8/16/32 labels delivering 2/4/8 CPUs respectively. Treat
+  larger requests as a measured capacity workaround, never as worker counts.
+  Keep existing routing, fanout, and resource-based worker limits; reassess
+  sizing after provider allocation changes. See `docs/ci.md` for the full table.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.

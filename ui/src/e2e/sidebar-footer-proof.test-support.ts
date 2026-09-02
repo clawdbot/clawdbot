@@ -2,7 +2,11 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  startControlUiE2eServer,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const SIDEBAR_PROOF_USER = {
@@ -26,6 +30,7 @@ export function createSidebarFooterProofSuite(name: string, buildInfo?: ControlU
 
 export async function openSidebarFooterProofPage(
   suite: ReturnType<typeof createSidebarFooterProofSuite>,
+  scenario: ControlUiMockGatewayScenario = {},
 ) {
   const context = await suite.newBrowserContext({
     locale: "en-US",
@@ -33,7 +38,10 @@ export async function openSidebarFooterProofPage(
     viewport: { height: 900, width: 1440 },
   });
   const page = await context.newPage();
-  const gateway = await installMockGateway(page, { presenceUsers: [SIDEBAR_PROOF_USER] });
+  const gateway = await installMockGateway(page, {
+    presenceUsers: [SIDEBAR_PROOF_USER],
+    ...scenario,
+  });
   await page.goto(`${suite.server.baseUrl}chat`);
   const sidebar = page.locator("openclaw-app-sidebar");
   await sidebar.locator(".sidebar-identity-card").waitFor();

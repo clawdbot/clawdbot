@@ -265,9 +265,6 @@ type ResponsesTransportExecutorOptions = {
     metadata?: Record<string, string>,
     replayMode?: OpenAIResponsesReplayMode,
   ) => ReturnType<typeof buildOpenAIResponsesParams>;
-  createResponseStream: (
-    params: ResponsesStreamParams,
-  ) => ReturnType<typeof createResponsesStreamWithEncryptedContentRetry>;
   pricingOptions?: (
     options: OpenAIResponsesOptions | undefined,
     model: Model,
@@ -440,7 +437,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           initialAttemptKind: NonNullable<ResponsesStreamParams["initialAttemptKind"]> = "initial",
           initialRejectedCompaction?: ResponsesStreamParams["initialRejectedCompaction"],
         ): Promise<AsyncIterable<unknown>> => {
-          const { stream: responseStream } = await config.createResponseStream({
+          const { stream: responseStream } = await createResponsesStreamWithEncryptedContentRetry({
             client,
             request: initialRequest,
             requestOptions,
@@ -644,7 +641,6 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
     httpContinuation: true,
     createClient: createOpenAIResponsesClient,
     buildRequest: buildOpenAIResponsesParams,
-    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
     pricingOptions: (options, model) => ({
       serviceTier: options?.serviceTier,
       // One canonical service-tier pricing table; a transport-local copy drifted
@@ -669,7 +665,6 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         metadata,
         replayMode,
       ),
-    createResponseStream: createResponsesStreamWithEncryptedContentRetry,
   });
 }
 

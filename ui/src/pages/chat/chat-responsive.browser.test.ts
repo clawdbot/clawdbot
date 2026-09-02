@@ -10,6 +10,7 @@ import {
   type PlaybackMediaFixtureFormat,
 } from "../../../../test/fixtures/media-playback.js";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
+import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -275,12 +276,15 @@ function readUiCss(): string {
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/chat/composer-queue.css",
     "ui/src/styles/chat/progress-card.css",
     "ui/src/styles/chat/composer-progress.css",
     "ui/src/styles/chat/text.css",
     "ui/src/styles/chat/grouped.css",
     "ui/src/styles/chat/tool-cards.css",
+    "ui/src/styles/chat/working-indicator.css",
     "ui/src/styles/chat/question-card.css",
     "ui/src/styles/chat/sidebar.css",
   ];
@@ -1937,13 +1941,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
-    [1200, 800, "desktop"],
-    [320, 568, "mobile-320"],
-    [375, 812, "mobile-375"],
-    [430, 932, "mobile-430"],
+    [1200, 800, "desktop", false],
+    [900, 500, "mobile-landscape-900", false],
+    [640, 900, "mobile-responsive-640", false],
+    [320, 568, "mobile-320", false],
+    [375, 812, "mobile-375", false],
+    [430, 932, "mobile-430", false],
+    [1200, 800, "desktop-with-pull-request", true],
+    [375, 812, "mobile-with-pull-request", true],
   ] as const)(
-    "keeps floating notices clear of mobile chrome without shifting the %s transcript layout",
-    async (width, height, label) => {
+    "keeps floating notices clear of mobile chrome without shifting the %sx%s (%s) transcript layout",
+    async (width, height, label, withPullRequest) => {
       const page = await openBrowserPage(width, height);
       try {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
@@ -1957,6 +1965,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                     <div class="chat-main__conversation">
                       <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
                       <div class="chat-gutter-stack"><div class="task-suggestions">Task suggestion</div></div>
+                      ${withPullRequest ? '<div class="chat-prs"><article class="chat-pr" data-state="open"><a class="chat-pr__link" href="https://github.com/example/repo/pull/42">PR #42</a></article></div>' : ""}
                       <div class="agent-chat__composer-shell">
                         <div class="agent-chat__composer-overlay"></div>
                         <div class="agent-chat__input">Composer</div>
@@ -1987,15 +1996,32 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                 width: bounds.width,
               };
             };
+            const composer = document
+              .querySelector<HTMLElement>(".agent-chat__composer-shell")!
+              .getBoundingClientRect();
+            const thread = document
+              .querySelector<HTMLElement>(".chat-thread")!
+              .getBoundingClientRect();
+            const fade = getComputedStyle(
+              document.querySelector<HTMLElement>(".agent-chat__composer-shell")!,
+              "::before",
+            );
             return {
               composer: rect(".agent-chat__composer-shell"),
               conversation: rect(".chat-main__conversation"),
+              fadeInsetLeft: composer.left + Number.parseFloat(fade.left) - thread.left,
+              fadeInsetRight: thread.right - (composer.right - Number.parseFloat(fade.right)),
+              scrollbarSize: Number.parseFloat(
+                getComputedStyle(document.documentElement).getPropertyValue("--scrollbar-size"),
+              ),
               thread: rect(".chat-thread"),
             };
           });
         expect(await page.locator(".chat-topbar-notices").isVisible()).toBe(false);
         expect(await page.locator(".agent-chat__composer-overlay").isVisible()).toBe(false);
         const before = await geometry();
+        expect(before.fadeInsetLeft).toBeGreaterThanOrEqual(before.scrollbarSize);
+        expect(before.fadeInsetRight).toBeGreaterThanOrEqual(before.scrollbarSize);
         await page.locator(".chat-topbar-notices").evaluate((node) => {
           node.innerHTML =
             '<div class="chat-composer-neighbor-card chat-cloud-disk-space-notice">Disk space low</div>';
@@ -2356,8 +2382,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  // Concurrent siblings clear Vitest's ambient test when they finish. Bind polls
-  // to this test so an awaited hover cannot lose its assertion context.
+  // Bind polling to this concurrent test instead of Vitest's ambient current test.
   it("keeps managed image actions anchored around tiny rendered images", async (context) => {
     const page = await openBrowserPage(1280, 900);
     try {
@@ -2409,9 +2434,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       for (const [index, expectedWidth] of [160, 84].entries()) {
         const frame = frames.nth(index);
         await frame.hover();
-        await context.expect
-          .poll(() => frame.evaluate((element) => getComputedStyle(element, "::after").opacity))
-          .toBe("1");
+        await frame.evaluate(finishElementAnimations);
+        expect(
+          await frame.evaluate((element) => getComputedStyle(element, "::after").opacity),
+        ).toBe("1");
         const geometry = await frame.evaluate((element) => {
           const actions = element.querySelector<HTMLElement>(".chat-image-actions")!;
           const frameRect = element.getBoundingClientRect();
@@ -2439,19 +2465,27 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("places a five-image sent gallery above its separate text bubble", async () => {
-    const page = await openBrowserPage(1280, 900);
-    try {
-      const tile = (index: number) => `
+  it.each([
+    ["dark", false],
+    ["light", false],
+    ["dark", true],
+    ["light", true],
+  ])(
+    "keeps a sent gallery above its text bubble without hover changes in %s mode (sender tint: %s)",
+    async (theme, tinted) => {
+      const page = await openBrowserPage(1280, 900);
+      try {
+        const tile = (index: number) => `
         <span class="chat-image-frame" data-tile="${index}">
           <button class="chat-message-image-button" type="button">
             <img class="chat-message-image" width="640" height="640" alt="Image ${index}"
               src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='640'%3E%3Crect width='640' height='640' fill='%23865cff'/%3E%3C/svg%3E" />
           </button>
         </span>`;
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-group user">
+        await page.setContent(
+          `<!doctype html><html data-theme-mode="${theme}"><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-group user ${tinted ? "chat-group--sender-tint" : ""}"
+            style="--chat-sender-hue: 208">
             <div class="chat-bubble chat-bubble--with-images">
               <div
                 class="chat-message-images chat-message-images--gallery chat-message-images--five"
@@ -2462,45 +2496,64 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             </div>
           </div>
         </body></html>`,
-      );
-      await page.locator(".chat-message-image").first().waitFor();
-      const geometry = await page.locator(".chat-bubble").evaluate((bubble) => {
-        const gallery = bubble.querySelector<HTMLElement>(".chat-message-images")!;
-        const text = bubble.querySelector<HTMLElement>(".chat-text")!;
-        const frames = [...gallery.querySelectorAll<HTMLElement>(".chat-image-frame")];
-        const boxes = frames.map((frame) => frame.getBoundingClientRect());
-        const galleryBox = gallery.getBoundingClientRect();
-        const textBox = text.getBoundingClientRect();
-        return {
-          background: getComputedStyle(bubble).backgroundColor,
-          firstRow: boxes.filter((box) => Math.round(box.top) === Math.round(boxes[0]!.top)).length,
-          fourthAlignedWithSecond: Math.abs(boxes[3]!.left - boxes[1]!.left) <= 1,
-          lastRowRightAligned: Math.abs(boxes[4]!.right - galleryBox.right) <= 1,
-          textBelow: textBox.top >= galleryBox.bottom + 7,
-          textRightAligned: Math.abs(textBox.right - galleryBox.right) <= 1,
-          tileSize: boxes[0]!.width,
-        };
-      });
-      expect(geometry).toMatchObject({
-        background: "rgba(0, 0, 0, 0)",
-        firstRow: 3,
-        fourthAlignedWithSecond: true,
-        lastRowRightAligned: true,
-        textBelow: true,
-        textRightAligned: true,
-      });
-      expect(geometry.tileSize).toBeCloseTo(128, 0);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+        );
+        await page.locator(".chat-message-image").first().waitFor();
+        const geometry = await page.locator(".chat-bubble").evaluate((bubble) => {
+          const gallery = bubble.querySelector<HTMLElement>(".chat-message-images")!;
+          const text = bubble.querySelector<HTMLElement>(".chat-text")!;
+          const frames = [...gallery.querySelectorAll<HTMLElement>(".chat-image-frame")];
+          const boxes = frames.map((frame) => frame.getBoundingClientRect());
+          const galleryBox = gallery.getBoundingClientRect();
+          const textBox = text.getBoundingClientRect();
+          return {
+            background: getComputedStyle(bubble).backgroundColor,
+            firstRow: boxes.filter((box) => Math.round(box.top) === Math.round(boxes[0]!.top))
+              .length,
+            fourthAlignedWithSecond: Math.abs(boxes[3]!.left - boxes[1]!.left) <= 1,
+            lastRowRightAligned: Math.abs(boxes[4]!.right - galleryBox.right) <= 1,
+            textBelow: textBox.top >= galleryBox.bottom + 7,
+            textRightAligned: Math.abs(textBox.right - galleryBox.right) <= 1,
+            tileSize: boxes[0]!.width,
+          };
+        });
+        expect(geometry).toMatchObject({
+          background: "rgba(0, 0, 0, 0)",
+          firstRow: 3,
+          fourthAlignedWithSecond: true,
+          lastRowRightAligned: true,
+          textBelow: true,
+          textRightAligned: true,
+        });
+        expect(geometry.tileSize).toBeCloseTo(128, 0);
+        for (const hovered of [true, false]) {
+          if (hovered) {
+            await page.locator(".chat-message-image").first().hover();
+          } else {
+            await page.mouse.move(0, 0);
+          }
+          expect(
+            await page.locator(".chat-bubble").evaluate((bubble) => ({
+              background: getComputedStyle(bubble).backgroundColor,
+              shadow: getComputedStyle(bubble).boxShadow,
+            })),
+          ).toEqual({ background: "rgba(0, 0, 0, 0)", shadow: "none" });
+        }
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
-  it("keeps every sent-image text shape on the user bubble surface", async () => {
-    const page = await openBrowserPage(1280, 900);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-group user">
+  it.each([false, true])(
+    "keeps every sent-image text shape on the user bubble surface (sender tint: %s)",
+    async (tinted) => {
+      const page = await openBrowserPage(1280, 900);
+      try {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-group user ${tinted ? "chat-group--sender-tint" : ""}"
+            style="--chat-sender-hue: 208">
+            <div class="chat-bubble" data-reference>Text-only message</div>
             <div class="chat-bubble chat-bubble--with-images">
               <div class="chat-text" data-shape="text">Short text</div>
             </div>
@@ -2518,29 +2571,44 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             </div>
           </div>
         </body></html>`,
-      );
-      for (const theme of ["dark", "light"] as const) {
-        await page.evaluate(
-          (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
-          theme,
         );
-        const surfaces = await page.locator("[data-shape]").evaluateAll((elements) =>
-          elements.map((element) => {
-            const style = getComputedStyle(element);
-            return {
-              backgroundColor: style.backgroundColor,
-              padding: style.padding,
-            };
-          }),
-        );
-        expect(surfaces[0]).toMatchObject({ padding: "10px 14px" });
-        expect(surfaces[1]).toEqual(surfaces[0]);
-        expect(surfaces[2]).toEqual(surfaces[0]);
+        for (const theme of ["dark", "light"] as const) {
+          await page.evaluate(
+            (mode) => document.documentElement.setAttribute("data-theme-mode", mode),
+            theme,
+          );
+          const surfaces = await page.locator("[data-shape]").evaluateAll((elements) =>
+            elements.map((element) => {
+              const style = getComputedStyle(element);
+              return {
+                backgroundColor: style.backgroundColor,
+                color: style.color,
+                padding: style.padding,
+              };
+            }),
+          );
+          const reference = await page.locator("[data-reference]").evaluate((bubble) => ({
+            backgroundColor: getComputedStyle(bubble).backgroundColor,
+            color: getComputedStyle(bubble).color,
+          }));
+          expect(surfaces[0]).toEqual({ ...reference, padding: "10px 14px" });
+          expect(surfaces[1]).toEqual(surfaces[0]);
+          expect(surfaces[2]).toEqual(surfaces[0]);
+          expect(
+            await page
+              .locator(".chat-bubble--with-images")
+              .evaluateAll((bubbles) =>
+                bubbles.every(
+                  (bubble) => getComputedStyle(bubble).backgroundColor === "rgba(0, 0, 0, 0)",
+                ),
+              ),
+          ).toBe(true);
+        }
+      } finally {
+        await closeBrowserPage(page);
       }
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+    },
+  );
 
   it("wraps long question and approval metadata inside narrow cards", async () => {
     const page = await openBrowserPage(320, 568);
@@ -4040,7 +4108,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingTop));
 
         expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
-        expect(previewPaddingTop).toBe(10);
+        expect(previewPaddingTop).toBe(18);
         expect(preview.x).toBeGreaterThanOrEqual(input.x);
         expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
       } finally {

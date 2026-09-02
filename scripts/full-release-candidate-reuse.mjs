@@ -194,6 +194,10 @@ async function discover(args) {
     readJson(option(args, "--request-input"), "candidate request input"),
   );
   const expectedRequestSha256 = optionalOption(args, "--expected-request-sha256");
+  const expectedPackageSha256 = optionalOption(args, "--expected-package-sha256");
+  if (expectedPackageSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(expectedPackageSha256)) {
+    fail("expected package digest must be a lowercase SHA-256");
+  }
   if (expectedRequestSha256 !== undefined && expectedRequestSha256 !== contract.requestSha256) {
     fail("full release candidate request digest does not match the expected request digest");
   }
@@ -301,6 +305,15 @@ async function discover(args) {
     output("state", "unavailable");
     output("reused", "false");
     output("reuse_reason", error.message);
+    return;
+  }
+  if (
+    expectedPackageSha256 !== undefined &&
+    binding.package.packageSha256 !== expectedPackageSha256
+  ) {
+    output("state", "miss");
+    output("reused", "false");
+    output("reuse_reason", "candidate package differs from the prepared publication bytes");
     return;
   }
   output("state", "hit");

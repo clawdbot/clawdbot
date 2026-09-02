@@ -8,7 +8,10 @@ import {
 } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
@@ -97,10 +100,30 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
+  // Runtime catalog and harness owners declare their role in the prepared manifest snapshot.
+  // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
+  const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
+  const basePluginIds = metadata.plugins
+    .filter(
+      (plugin) =>
+        (manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ||
+          plugin.cliBackends.length > 0 ||
+          Boolean(plugin.setup?.cliBackends?.length) ||
+          Boolean(plugin.activation?.onAgentHarnesses?.length)) &&
+        isManifestPluginAvailableForControlPlane({
+          snapshot: metadata,
+          plugin,
+          config: value.input.config,
+          normalizedConfig,
+          ...(value.input.env ? { env: value.input.env } : {}),
+        }),
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
   const prepared = await prepareWorkspaceBuildGroup(
     [value.input],
     "live",
-    { preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts },
+    { preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts, basePluginIds },
     undefined,
     undefined,
     metadata,

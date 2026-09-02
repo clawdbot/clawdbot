@@ -109,10 +109,11 @@ does. If `openclaw.json` remains invalid after eligible startup migrations (incl
 plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
 the current runtime keeps the last accepted config. A rejected write is also saved as
 `<path>.rejected.<timestamp>` for inspection.
-The Gateway blocks writes that look like accidental clobbers - dropping `gateway.mode`,
-losing the `meta` block, or shrinking the file by more than half - unless the write
-explicitly allows destructive changes. Promotion to last-known-good is skipped when a
-candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+The Gateway blocks writes that look like accidental clobbers - dropping the effective
+`gateway.mode` or shrinking the file by more than half - unless the write explicitly
+allows destructive changes. Mode checks resolve `$include` and environment references
+first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
+skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
 ## Common tasks
 
@@ -535,6 +536,15 @@ If you see `config reload skipped (invalid config)` or startup reports `Invalid
 config`, inspect the config, run `openclaw config validate`, then run `openclaw
 doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)
 for the checklist.
+
+A live change that selects a workspace with retired setup state is also rejected,
+with an `openclaw doctor --fix` hint. The Gateway keeps its last-good runtime.
+Gateway-managed writes, including `config.set`, reject the candidate before
+persistence; hand edits and writes from a separate CLI process can remain on disk
+even though the watcher refuses to activate them. Stop the Gateway and, if the
+write was rejected before persistence, save the intended workspace path while
+it is stopped. Then run [`openclaw doctor --fix`](/cli/doctor) and restart.
+Reload never migrates workspace state.
 
 ### Reload modes
 

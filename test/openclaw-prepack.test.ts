@@ -4,9 +4,12 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readlinkSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -45,6 +48,22 @@ const standaloneBundledChannelSmokeFiles = [
   "scripts/process-warning-filter.mts",
 ];
 
+function linkFixtureParent(packageRoot: string) {
+  const nodeModulesRoot = path.join(packageRoot, "node_modules");
+  const parentRoot = path.join(
+    nodeModulesRoot,
+    ".pnpm",
+    "fixture-parent@1.0.0",
+    "node_modules",
+    "fixture-parent",
+  );
+  symlinkSync(
+    process.platform === "win32" ? parentRoot : path.relative(nodeModulesRoot, parentRoot),
+    path.join(nodeModulesRoot, "fixture-parent"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+}
+
 function createBundledChannelSmokeFixture(entrySource: string, prepared = false) {
   const rootDir = tempDirs.make("openclaw-prepack-standalone-smoke-");
   for (const relativePath of standaloneBundledChannelSmokeFiles) {
@@ -66,20 +85,171 @@ function createBundledChannelSmokeFixture(entrySource: string, prepared = false)
   );
   writeFileSync(path.join(extensionRoot, "index.js"), entrySource);
 
-  return { rootDir, packageRoot };
+  const nodeModulesRoot = path.join(packageRoot, "node_modules");
+  const parentStoreRoot = path.join(
+    nodeModulesRoot,
+    ".pnpm",
+    "fixture-parent@1.0.0",
+    "node_modules",
+  );
+  const parentRoot = path.join(parentStoreRoot, "fixture-parent");
+  const siblingRoot = path.join(parentStoreRoot, "fixture-sibling");
+  mkdirSync(parentRoot, { recursive: true });
+  mkdirSync(siblingRoot);
+  writeFileSync(
+    path.join(parentRoot, "package.json"),
+    '{"name":"fixture-parent","version":"1.0.0","type":"module","exports":"./index.js"}\n',
+  );
+  writeFileSync(
+    path.join(parentRoot, "index.js"),
+    'import { value } from "fixture-sibling"; export const fixtureValue = value;\n',
+  );
+  writeFileSync(
+    path.join(siblingRoot, "package.json"),
+    '{"name":"fixture-sibling","version":"1.0.0","type":"module","exports":"./index.js"}\n',
+  );
+  writeFileSync(path.join(siblingRoot, "index.js"), 'export const value = "fixture-channel";\n');
+  linkFixtureParent(packageRoot);
+
+  return {
+    rootDir,
+    packageRoot,
+    dependencyFiles: {
+      parent: readFileSync(path.join(parentRoot, "index.js"), "utf8"),
+      sibling: readFileSync(path.join(siblingRoot, "index.js"), "utf8"),
+    },
+  };
+}
+
+function createPreparedPrepackFixture(entrySource: string) {
+  const { rootDir } = createBundledChannelSmokeFixture(entrySource, true);
+  mkdirSync(path.join(rootDir, "node_modules"), { recursive: true });
+  symlinkSync(
+    path.dirname(fileURLToPath(import.meta.resolve("tsx/package.json"))),
+    path.join(rootDir, "node_modules/tsx"),
+    "junction",
+  );
+  mkdirSync(path.join(rootDir, "docs"));
+  mkdirSync(path.join(rootDir, "dist/control-ui/assets"), { recursive: true });
+  const sourceFiles = {
+    "package.json": '{"name":"openclaw","version":"2026.8.1","type":"module","files":["dist"]}\n',
+    "CHANGELOG.md": "# Changelog\n\n## 2026.8.1\n- Current release notes with enough detail.\n",
+    "docs/page.md": "# Package docs\n",
+    "dist/index.js": "export {};\n",
+    "dist/control-ui/index.html": "<!doctype html>\n",
+    "dist/control-ui/assets/fixture.js.br": "prepared asset fixture\n",
+    "dist/control-ui/assets/fixture.js.gz": "prepared asset fixture\n",
+  };
+  for (const [name, contents] of Object.entries(sourceFiles)) {
+    writeFileSync(path.join(rootDir, name), contents);
+  }
+  return { rootDir, sourceFiles };
+}
+
+function createPrepackLifecycleFixture() {
+  const { rootDir, sourceFiles } = createPreparedPrepackFixture(
+    'export default { kind: "bundled-channel-entry", loadChannelPlugin() { return { id: "fixture-channel" }; } };\n',
+  );
+  const packageJson = JSON.parse(sourceFiles["package.json"]);
+  Object.assign(packageJson, {
+    packageManager: rootPackageManager,
+    files: ["dist", "docs/docs_map.md", "CHANGELOG.md", ".openclaw-lifecycle-pending"],
+    devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
+    scripts: {
+      "build:package": "node rebuild.mjs",
+      prepack: "node lifecycle.mjs prepack",
+      postpack: "node lifecycle.mjs postpack",
+    },
+  });
+  sourceFiles["package.json"] = `${JSON.stringify(packageJson, null, 2)}\n`;
+  sourceFiles["CHANGELOG.md"] += "\n## 2026.7.1\n- Previous release notes with enough detail.\n";
+  writeFileSync(path.join(rootDir, "package.json"), sourceFiles["package.json"]);
+  writeFileSync(path.join(rootDir, "CHANGELOG.md"), sourceFiles["CHANGELOG.md"]);
+  writeFileSync(path.join(rootDir, "docs/docs_map.md"), "Source docs-map stub.\n");
+  writeFileSync(
+    path.join(rootDir, "rebuild.mjs"),
+    'import { writeFileSync } from "node:fs";\n' +
+      'writeFileSync("build-invoked", "build:package\\n");\n' +
+      'writeFileSync("dist/index.js", "export const rebuilt = true;\\n");\n',
+  );
+  writeFileSync(
+    path.join(rootDir, "lifecycle.mjs"),
+    `import { spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const owner = process.argv[2] === "prepack"
+  ? ${JSON.stringify(path.resolve("scripts/openclaw-prepack.ts"))}
+  : ${JSON.stringify(path.resolve("scripts/openclaw-postpack.mjs"))};
+const result = spawnSync(process.execPath, ["--import", ${JSON.stringify(import.meta.resolve("tsx"))}, owner], { encoding: "utf8" });
+writeFileSync(process.argv[2] + "-result.json", JSON.stringify({ status: result.status, signal: result.signal, stdout: result.stdout, stderr: result.stderr }));
+process.stdout.write(result.stdout ?? "");
+process.stderr.write(result.stderr ?? "");
+process.exit(result.status ?? 1);
+`,
+  );
+  // pnpm may suppress lifecycle output; observe the actual hook before its reporter.
+  const readLifecycleResult = (event: "prepack" | "postpack") =>
+    JSON.parse(readFileSync(path.join(rootDir, `${event}-result.json`), "utf8")) as {
+      status: number | null;
+      signal: NodeJS.Signals | null;
+      stdout: string;
+      stderr: string;
+    };
+  const packDir = path.join(rootDir, "pack");
+  mkdirSync(packDir);
+  const pack = (prepared: boolean) => {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
+    };
+    delete env.OPENCLAW_PREPACK_PREPARED;
+    if (prepared) {
+      env.OPENCLAW_PREPACK_PREPARED = "1";
+    }
+    return spawnSync("pnpm", ["pack", "--silent", "--pack-destination", packDir], {
+      cwd: rootDir,
+      encoding: "utf8",
+      env,
+      timeout: 30_000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  };
+  const expectRestored = () => {
+    for (const name of ["package.json", "CHANGELOG.md"] as const) {
+      expect(readFileSync(path.join(rootDir, name), "utf8")).toBe(sourceFiles[name]);
+    }
+    expect(readFileSync(path.join(rootDir, "docs/docs_map.md"), "utf8")).toBe(
+      "Source docs-map stub.\n",
+    );
+    for (const name of [
+      ".openclaw-lifecycle-pending",
+      ".artifacts/package-docs-map/receipt.json",
+      ".artifacts/package-manifest/package.json.prepack-backup",
+      ".artifacts/package-changelog/CHANGELOG.md.prepack-backup",
+    ]) {
+      expect(existsSync(path.join(rootDir, name)), name).toBe(false);
+    }
+  };
+  return { rootDir, sourceFiles, packDir, pack, readLifecycleResult, expectRestored };
 }
 
 type BundledChannelSmokeLayout = "source" | "installed-env" | "installed-path";
 
 function runStandaloneBundledChannelSmoke(entrySource: string, layout: BundledChannelSmokeLayout) {
   const fixture = createBundledChannelSmokeFixture(entrySource);
-  const { rootDir } = fixture;
+  const { dependencyFiles, rootDir } = fixture;
   let { packageRoot } = fixture;
   if (layout === "installed-path") {
     const installedRoot = path.join(rootDir, "node_modules", "openclaw");
     mkdirSync(path.dirname(installedRoot), { recursive: true });
     renameSync(packageRoot, installedRoot);
     packageRoot = installedRoot;
+    if (process.platform === "win32") {
+      rmSync(path.join(packageRoot, "node_modules/fixture-parent"), {
+        recursive: true,
+        force: true,
+      });
+      linkFixtureParent(packageRoot);
+    }
   }
   const temporaryRoot = path.join(rootDir, "smoke-temp");
   mkdirSync(temporaryRoot);
@@ -118,6 +288,27 @@ function runStandaloneBundledChannelSmoke(entrySource: string, layout: BundledCh
       path.join(packageRoot, "dist", "extensions", "fixture-channel", "index.js"),
       "utf8",
     ),
+    dependencyFiles: {
+      parent: readFileSync(
+        path.join(
+          packageRoot,
+          "node_modules/.pnpm/fixture-parent@1.0.0/node_modules/fixture-parent/index.js",
+        ),
+        "utf8",
+      ),
+      sibling: readFileSync(
+        path.join(
+          packageRoot,
+          "node_modules/.pnpm/fixture-parent@1.0.0/node_modules/fixture-sibling/index.js",
+        ),
+        "utf8",
+      ),
+    },
+    dependencyLink: {
+      target: readlinkSync(path.join(packageRoot, "node_modules/fixture-parent")),
+      resolved: realpathSync(path.join(packageRoot, "node_modules/fixture-parent")),
+    },
+    originalDependencyFiles: dependencyFiles,
   };
 }
 
@@ -132,10 +323,11 @@ describe("standalone bundled channel smoke", () => {
     "preserves the result and releases its layout for $layout with invalid=$invalid",
     ({ layout, invalid }) => {
       const entrySource = invalid
-        ? "export default [];\n"
-        : `export default {
+        ? 'import "fixture-parent"; export default [];\n'
+        : `import { fixtureValue } from "fixture-parent";
+          export default {
             kind: "bundled-channel-entry",
-            loadChannelPlugin() { return { id: "fixture-channel" }; },
+            loadChannelPlugin() { return { id: fixtureValue }; },
           };\n`;
       const observed = runStandaloneBundledChannelSmoke(entrySource, layout);
       const { result } = observed;
@@ -150,6 +342,11 @@ describe("standalone bundled channel smoke", () => {
         expect(result.stdout.match(/\[build-smoke\]/gu)).toHaveLength(1);
       }
       expect(observed.entrySource).toBe(entrySource);
+      expect(observed.dependencyFiles).toEqual(observed.originalDependencyFiles);
+      expect(observed.dependencyLink.target).toContain(".pnpm");
+      expect(observed.dependencyLink.resolved).toContain(
+        path.join(".pnpm", "fixture-parent@1.0.0", "node_modules", "fixture-parent"),
+      );
       expect(observed.sentinel).toBe("preserve caller-owned temporary sibling\n");
       expect(observed.temporaryEntries).toEqual(["unrelated.txt"]);
     },
@@ -164,33 +361,11 @@ describe("prepared prepack ownership", () => {
   ])(
     "does not mutate source when smoke is invalid=$invalid and incumbent=$incumbent",
     async ({ invalid, incumbent }) => {
-      const { rootDir } = createBundledChannelSmokeFixture(
+      const { rootDir, sourceFiles } = createPreparedPrepackFixture(
         invalid
           ? "export default [];\n"
           : 'export default { kind: "bundled-channel-entry", loadChannelPlugin() { return { id: "fixture-channel" }; } };\n',
-        true,
       );
-      mkdirSync(path.join(rootDir, "node_modules"));
-      symlinkSync(
-        path.dirname(fileURLToPath(import.meta.resolve("tsx/package.json"))),
-        path.join(rootDir, "node_modules/tsx"),
-        "junction",
-      );
-      mkdirSync(path.join(rootDir, "docs"));
-      mkdirSync(path.join(rootDir, "dist/control-ui/assets"), { recursive: true });
-      const sourceFiles = {
-        "package.json":
-          '{"name":"openclaw","version":"2026.8.1","type":"module","files":["dist"]}\n',
-        "CHANGELOG.md": "# Changelog\n\n## 2026.8.1\n- Current release notes with enough detail.\n",
-        "docs/page.md": "# Package docs\n",
-        "dist/index.js": "export {};\n",
-        "dist/control-ui/index.html": "<!doctype html>\n",
-        "dist/control-ui/assets/fixture.js.br": "prepared asset fixture\n",
-        "dist/control-ui/assets/fixture.js.gz": "prepared asset fixture\n",
-      };
-      for (const [name, contents] of Object.entries(sourceFiles)) {
-        writeFileSync(path.join(rootDir, name), contents);
-      }
       if (incumbent) {
         await preparePackageDocsMap(rootDir);
       }
@@ -233,6 +408,69 @@ describe("prepared prepack ownership", () => {
         await restorePrepackArtifacts(rootDir);
       }
       expect(existsSync(receiptPath)).toBe(false);
+    },
+  );
+});
+
+describe("prepack lifecycle", () => {
+  it.each([true, false])("packs and restores source artifacts with prepared=%s", (prepared) => {
+    const fixture = createPrepackLifecycleFixture();
+    const result = fixture.pack(prepared);
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(path.join(fixture.rootDir, "build-invoked"))).toBe(!prepared);
+    const prepack = fixture.readLifecycleResult("prepack");
+    expect(prepack).toMatchObject({ status: 0, signal: null });
+    expect(prepack.stdout).toContain("channel=1");
+    expect(fixture.readLifecycleResult("postpack")).toMatchObject({ status: 0, signal: null });
+    const extractDir = path.join(fixture.rootDir, "extract");
+    mkdirSync(extractDir);
+    const tarballs = readdirSync(fixture.packDir).filter((name) => name.endsWith(".tgz"));
+    expect(tarballs).toHaveLength(1);
+    tar.x({ cwd: extractDir, file: path.join(fixture.packDir, tarballs[0]!), sync: true });
+    const readPacked = (name: string) =>
+      readFileSync(path.join(extractDir, "package", name), "utf8");
+    expect(readPacked("dist/index.js")).toBe(
+      prepared ? fixture.sourceFiles["dist/index.js"] : "export const rebuilt = true;\n",
+    );
+    expect(JSON.parse(readPacked("dist/postinstall-inventory.json"))).toContain("dist/index.js");
+    expect(readPacked(".openclaw-lifecycle-pending")).toBe("pending\n");
+    expect(readPacked("docs/docs_map.md")).toContain("## page.md");
+    expect(JSON.parse(readPacked("package.json")).devDependencies).toBeUndefined();
+    expect(readPacked("CHANGELOG.md")).toContain("## 2026.8.1");
+    expect(readPacked("CHANGELOG.md")).not.toContain("## 2026.7.1");
+    fixture.expectRestored();
+  });
+
+  it.each(["missing asset", "invalid changelog"])(
+    "rejects prepared packages with %s without rebuilding or leaving source mutations",
+    (failure) => {
+      const fixture = createPrepackLifecycleFixture();
+      if (failure === "missing asset") {
+        rmSync(path.join(fixture.rootDir, "dist/control-ui/assets/fixture.js.gz"));
+      } else {
+        fixture.sourceFiles["CHANGELOG.md"] =
+          "# Changelog\n\n## 2026.7.1\n- Previous release notes.\n";
+        writeFileSync(
+          path.join(fixture.rootDir, "CHANGELOG.md"),
+          fixture.sourceFiles["CHANGELOG.md"],
+        );
+      }
+      const result = fixture.pack(true);
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      const prepack = fixture.readLifecycleResult("prepack");
+      expect(prepack).toMatchObject({ status: 1, signal: null });
+      expect(prepack.stderr).toContain(
+        failure === "missing asset"
+          ? "missing prepared Control UI .gz asset"
+          : "CHANGELOG.md does not contain a release section for 2026.8.1",
+      );
+      expect(existsSync(path.join(fixture.rootDir, "build-invoked"))).toBe(false);
+      expect(readdirSync(fixture.packDir)).toEqual([]);
+      fixture.expectRestored();
     },
   );
 });

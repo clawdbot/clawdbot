@@ -99,6 +99,7 @@
       "pluginApi": ">=2026.8.1"
     },
     "build": {
+      "bundledDist": false,
       "openclawVersion": "2026.8.1",
       "staticAssets": [
         {

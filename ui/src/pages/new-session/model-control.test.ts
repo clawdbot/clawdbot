@@ -31,7 +31,7 @@ describe("new-session model runtime", () => {
     );
     const container = renderControl(control, context);
     expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
-      "Selection target: This session only",
+      "This session",
     );
     container
       .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/claude-sonnet-4-6"]')
@@ -57,7 +57,7 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
-  it("lists create-capable CLI agents and selects the canonical catalog target", async () => {
+  it("lists terminal-capable CLI agents and selects the canonical catalog target", async () => {
     const { context, request } = contextWith(
       [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
       "openclaw",
@@ -70,7 +70,7 @@ describe("new-session model runtime", () => {
               {
                 id: "anthropic",
                 label: "Claude Code",
-                capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+                capabilities: { startTerminal: true },
                 hosts: [],
               },
               {

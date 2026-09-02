@@ -118,6 +118,7 @@ export const SsrFPolicyConfigSchema = z
     allowRfc2544BenchmarkRange: z.boolean().optional(),
     allowIpv6UniqueLocalRange: z.boolean().optional(),
     allowedHostnames: z.array(z.string()).optional(),
+    blockedHostnames: z.array(z.string()).optional(),
   })
   .strict();
 

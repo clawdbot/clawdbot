@@ -1,5 +1,5 @@
 // OpenClaw test instance helper spawns isolated OpenClaw processes.
-import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { type ChildProcess, type ChildProcessByStdio, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
@@ -10,12 +10,25 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata-paths.mts";
-import { terminateManagedChild } from "../../scripts/lib/managed-child-process.mts";
+import {
+  hasUnjoinedWork,
+  runManagedCommand,
+  terminateManagedChild,
+} from "../../scripts/lib/managed-child-process.mts";
+import { hasErrnoCode } from "../../src/infra/errno.js";
+import {
+  appendCapturedOutput,
+  createCapturedOutputBuffers,
+  finalizeCapturedOutput,
+  resolveMaxOutputBytes,
+} from "../../src/process/exec-output.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../src/test-utils/openclaw-test-state.js";
 import { sleep } from "../../src/utils.js";
+import { decodeUtf8Tail } from "./bounded-child-output.js";
+import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 type OpenClawTestStateOptions = NonNullable<Parameters<typeof createOpenClawTestState>[0]>;
 
@@ -80,11 +93,11 @@ const GATEWAY_MIGRATION_CONVERGENCE_RESTART_MARKER =
 const entrypointPromises = new Map<string, Promise<string[]>>();
 
 type BoundedStringLog = string[] & {
+  maxBytes?: number;
   byteLength?: number;
   truncated?: boolean;
 };
 
-type OpenClawTestChildProcess = Pick<OpenClawTestProcess, "kill" | "pid">;
 type OpenClawTestProcessReadiness = Pick<OpenClawTestProcess, "exitCode" | "signalCode"> & {
   once: (event: "exit", listener: () => void) => unknown;
   off: (event: "exit", listener: () => void) => unknown;
@@ -93,21 +106,22 @@ type GatewayProcessStopOptions = NonNullable<Parameters<typeof terminateManagedC
   forceWindowsTree?: boolean;
 };
 
-function createBoundedStringLog(): string[] {
+function createBoundedStringLog(maxBytes = LOG_TAIL_MAX_BYTES): string[] {
   const log = [] as BoundedStringLog;
+  log.maxBytes = Math.max(1, maxBytes);
   log.byteLength = 0;
   log.truncated = false;
   return log;
 }
 
-function appendLogChunk(log: string[], chunk: unknown, maxBytes = LOG_TAIL_MAX_BYTES): void {
+function appendLogChunk(log: string[], chunk: unknown): void {
   const chunks = log as BoundedStringLog;
-  const limit = Math.max(1, maxBytes);
+  const limit = chunks.maxBytes ?? LOG_TAIL_MAX_BYTES;
   const text = String(chunk);
   const textBytes = Buffer.byteLength(text);
-  if (textBytes >= limit) {
+  if (textBytes > limit) {
     const buffer = Buffer.from(text);
-    const tail = buffer.subarray(buffer.length - limit).toString("utf8");
+    const tail = decodeUtf8Tail(buffer.subarray(buffer.length - limit));
     chunks.splice(0, chunks.length, tail);
     chunks.byteLength = Buffer.byteLength(tail);
     chunks.truncated = true;
@@ -128,7 +142,8 @@ function appendLogChunk(log: string[], chunk: unknown, maxBytes = LOG_TAIL_MAX_B
     }
 
     const buffer = Buffer.from(first);
-    const tail = buffer.subarray(overflow).toString("utf8");
+    // Drop a split prefix instead of expanding it into replacement bytes that can stall trimming.
+    const tail = decodeUtf8Tail(buffer.subarray(overflow));
     chunks[0] = tail;
     chunks.byteLength = chunks.reduce((total, entry) => total + Buffer.byteLength(entry), 0);
     chunks.truncated = true;
@@ -138,7 +153,7 @@ function appendLogChunk(log: string[], chunk: unknown, maxBytes = LOG_TAIL_MAX_B
 function readLogBuffer(log: string[]): string {
   const text = log.join("");
   return (log as BoundedStringLog).truncated
-    ? `[output truncated to last ${LOG_TAIL_MAX_BYTES} bytes]\n${text}`
+    ? `[output truncated to last ${(log as BoundedStringLog).maxBytes ?? LOG_TAIL_MAX_BYTES} bytes]\n${text}`
     : text;
 }
 
@@ -333,7 +348,7 @@ async function stopGatewayProcess(
         Math.max(0, Math.floor((deadline - Date.now()) / Math.max(1, remainingSteps))),
       ),
     );
-  const terminate = (signal: NodeJS.Signals) => {
+  const terminate = (signal: NodeJS.Signals) =>
     terminateManagedChild(
       child,
       signal,
@@ -343,16 +358,33 @@ async function stopGatewayProcess(
             platform,
           },
     );
-  };
-  const forceWindowsTree = options.forceWindowsTree === true && platform === "win32";
-  const signals = forceWindowsTree ? (["SIGKILL"] as const) : (["SIGTERM", "SIGKILL"] as const);
 
   if (hasGatewayProcessClosed(child)) {
     return true;
   }
+  if (platform === "win32") {
+    if (hasChildExited(child) && (await waitForClose(2))) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return false;
+    }
+    // Taskkill owns its bounded synchronous TERM/force sequence. Node cannot observe
+    // exit or pipe closure until it returns, so charge the existing close allowance afterward.
+    try {
+      const termination = terminate(options.forceWindowsTree ? "SIGKILL" : "SIGTERM");
+      return (
+        termination?.processTreeState === "terminated" &&
+        (await waitForGatewayClose(child, stopTimeoutMs))
+      );
+    } catch {
+      return false;
+    }
+  }
+  const signals = ["SIGTERM", "SIGKILL"] as const;
   // An exited leader can leave inherited stdio open in descendants. Let it
   // settle briefly, then terminate the owned tree before releasing the slot.
-  if (!forceWindowsTree && hasChildExited(child) && (await waitForClose(signals.length + 1))) {
+  if (hasChildExited(child) && (await waitForClose(signals.length + 1))) {
     return true;
   }
   for (const [index, signal] of signals.entries()) {
@@ -394,7 +426,17 @@ function mergeConfig(
 }
 
 function formatLogs(stdout: string[], stderr: string[]): string {
-  return `--- stdout ---\n${readLogBuffer(stdout)}\n--- stderr ---\n${readLogBuffer(stderr)}`;
+  const diagnosticTail = (log: string[]): string => {
+    const tail = createBoundedStringLog(
+      Math.min((log as BoundedStringLog).maxBytes ?? LOG_TAIL_MAX_BYTES, LOG_TAIL_MAX_BYTES),
+    ) as BoundedStringLog;
+    for (const chunk of log) {
+      appendLogChunk(tail, chunk);
+    }
+    tail.truncated ||= (log as BoundedStringLog).truncated;
+    return readLogBuffer(tail);
+  };
+  return `--- stdout ---\n${diagnosticTail(stdout)}\n--- stderr ---\n${diagnosticTail(stderr)}`;
 }
 
 function createInstanceEnv(params: {
@@ -465,7 +507,9 @@ export async function createOpenClawTestInstance(
     extraEnv: options.env ?? {},
   });
   let child: { process: OpenClawTestProcess; ready: boolean } | undefined;
-  let cleaned = false;
+  const commands = new Set<Promise<OpenClawTestInstanceCommandResult>>();
+  let acceptingWork = true;
+  let cleanupPromise: Promise<void> | undefined;
   let operation: { kind: "start" | "stop" | "cleanup"; promise: Promise<void> } | undefined;
   const enqueue = (kind: NonNullable<typeof operation>["kind"], action: () => Promise<void>) => {
     if (operation?.kind === kind) {
@@ -552,20 +596,39 @@ export async function createOpenClawTestInstance(
     },
     env,
     entrypoint: () => resolveGatewayEntrypoint(cwd),
-    cli: async (args, commandOptions = {}) => {
-      const entrypoint = await resolveGatewayEntrypoint(cwd);
-      return await runCommand({
-        args: ["node", ...entrypoint, ...args],
-        cwd,
-        env,
-        timeoutMs: commandOptions.timeoutMs ?? COMMAND_TIMEOUT_MS,
+    cli: (args, commandOptions = {}) => {
+      if (!acceptingWork) {
+        return Promise.reject(new Error("test instance no longer accepts CLI commands"));
+      }
+      // Admit the whole operation before preparation yields. Failed process cleanup
+      // retains its completion and closes admission until the instance is retired.
+      const command = Promise.resolve().then(async () => {
+        const entrypoint = await resolveGatewayEntrypoint(cwd);
+        return await runCommand({
+          args: ["node", ...entrypoint, ...args],
+          cwd,
+          env,
+          timeoutMs: commandOptions.timeoutMs ?? COMMAND_TIMEOUT_MS,
+        });
       });
+      commands.add(command);
+      void command.then(
+        () => commands.delete(command),
+        (error: unknown) => {
+          if (hasUnjoinedWork(error)) {
+            acceptingWork = false;
+          } else {
+            commands.delete(command);
+          }
+        },
+      );
+      return command;
     },
-    startGateway: () =>
-      enqueue("start", async () => {
-        if (cleaned) {
-          throw new Error("cannot start a cleaned test instance");
-        }
+    startGateway: () => {
+      if (!acceptingWork) {
+        return Promise.reject(new Error("test instance no longer accepts Gateway starts"));
+      }
+      return enqueue("start", async () => {
         if (child?.ready && !hasChildExited(child.process)) {
           return;
         }
@@ -622,18 +685,40 @@ export async function createOpenClawTestInstance(
             throw err;
           }
         }
-      }),
+      });
+    },
     stopGateway: () => enqueue("stop", stopGatewayChild),
     logs: () => formatLogs(stdout, stderr),
-    cleanup: () =>
-      enqueue("cleanup", async () => {
-        if (cleaned) {
-          return;
-        }
-        await stopGatewayChild();
+    cleanup: () => {
+      acceptingWork = false;
+      // Commands may need the Gateway to finish. Drain them first, still attempt
+      // Gateway shutdown on failure, and never turn an unverified drain into a retry success.
+      return (cleanupPromise ??= enqueue("cleanup", async () => {
+        await runQaGatewayFixture(
+          async () => {
+            const results = await Promise.allSettled(commands);
+            const errors = results.flatMap((result) =>
+              result.status === "rejected" && hasUnjoinedWork(result.reason) ? [result.reason] : [],
+            );
+            if (errors.length === 1) {
+              throw errors[0];
+            }
+            if (errors.length > 1) {
+              throw new AggregateError(
+                errors,
+                "CLI cleanup unverified; test instance state retained",
+              );
+            }
+          },
+          () => {
+            // Terminal cleanup has no graceful-shutdown contract. Force the Windows
+            // tree so inherited pipes cannot outlive the completed test instance.
+            return stopGatewayChild({ forceWindowsTree: true });
+          },
+        );
         await state.cleanup();
-        cleaned = true;
-      }),
+      }));
+    },
   };
 
   return instance;
@@ -649,37 +734,51 @@ async function runCommand(params: {
   if (!command) {
     throw new Error("missing command");
   }
-  const stdout = createBoundedStringLog();
+  const stdout = createCapturedOutputBuffers();
+  const maxStdoutBytes = resolveMaxOutputBytes(undefined, "stdout");
+  const outputLimit = new AbortController();
+  const readStdout = () => finalizeCapturedOutput(stdout, "head", true).toString("utf8");
   const stderr = createBoundedStringLog();
-  const child = spawn(command, args, {
-    cwd: params.cwd,
-    env: params.env,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: shouldUseOpenClawTestProcessGroup(),
-  });
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (d) => appendLogChunk(stdout, d));
-  child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
-
-  const deadline = new AbortController();
-  const completed = await Promise.race([
-    new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    }),
-    sleep(params.timeoutMs, deadline.signal).then(() => null),
-  ]).finally(() => deadline.abort());
-  if (completed === null) {
-    signalOpenClawTestProcess(child, "SIGKILL");
-    await waitForGatewayClose(child, GATEWAY_STOP_TIMEOUT_MS);
-    throw new Error(
-      `command timed out after ${params.timeoutMs}ms: ${params.args.join(" ")}\n${formatLogs(stdout, stderr)}`,
-    );
+  let child!: ChildProcess;
+  try {
+    await runManagedCommand({
+      bin: command,
+      args,
+      cwd: params.cwd,
+      // The fixture environment is complete; never merge credentials from the parent.
+      env: params.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+      timeoutMs: params.timeoutMs,
+      timeoutKillGraceMs: 0,
+      signal: outputLimit.signal,
+      abortKillGraceMs: 0,
+      onReady: (process) => {
+        child = process;
+        child.stderr?.setEncoding("utf8");
+        child.stdout?.on("data", (chunk) => {
+          appendCapturedOutput(stdout, chunk, maxStdoutBytes, "head");
+          if (stdout.truncatedBytes > 0) {
+            outputLimit.abort();
+          }
+        });
+        child.stderr?.on("data", (chunk) => appendLogChunk(stderr, chunk));
+      },
+    });
+  } catch (error) {
+    const message = hasErrnoCode(error, "ETIMEDOUT")
+      ? `command timed out after ${params.timeoutMs}ms: ${params.args.join(" ")}`
+      : stdout.truncatedBytes > 0
+        ? "command stdout exceeded capture limit"
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    throw new Error(`${message}\n${formatLogs([readStdout()], stderr)}`, { cause: error });
   }
   return {
-    ...completed,
-    stdout: readLogBuffer(stdout),
+    code: child.exitCode,
+    signal: child.signalCode,
+    stdout: readStdout(),
     stderr: readLogBuffer(stderr),
   };
 }
@@ -688,29 +787,11 @@ function shouldUseOpenClawTestProcessGroup(): boolean {
   return process.platform !== "win32";
 }
 
-function signalOpenClawTestProcess(
-  child: OpenClawTestChildProcess,
-  signal: NodeJS.Signals,
-  killProcess: (pid: number, signal: NodeJS.Signals) => boolean = (pid, nextSignal) =>
-    process.kill(pid, nextSignal),
-): void {
-  if (shouldUseOpenClawTestProcessGroup() && typeof child.pid === "number") {
-    try {
-      killProcess(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child if the process group already exited.
-    }
-  }
-  child.kill(signal);
-}
-
 export const testing = {
   appendLogChunk,
   createBoundedStringLog,
   formatLogs,
   isGatewayMigrationConvergenceRefusal,
-  signalOpenClawTestProcess,
   stopGatewayProcess,
   waitForGatewayReady,
 };

@@ -1,4 +1,5 @@
 /** Converts loaded plugin registries into stable plugin records for status and diagnostics. */
+import { collectErrorGraphCandidates, extractErrorCode, readErrorCause } from "../infra/errors.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
@@ -145,6 +146,25 @@ export function formatAutoEnabledActivationReason(
   return reasons.join("; ");
 }
 
+// A plugin-thrown error may expose throwing `cause`/`code` accessors; diagnostics inside the
+// loader's catch handler must classify without rethrowing.
+function readCauseOrNothing(node: unknown): unknown[] {
+  try {
+    return [readErrorCause(node)];
+  } catch {
+    return [];
+  }
+}
+
+function isMissingModuleNode(node: unknown): boolean {
+  try {
+    const code = extractErrorCode(node);
+    return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
+  } catch {
+    return false;
+  }
+}
+
 /** Records a loader failure in the registry, diagnostics list, and operator log consistently. */
 export function recordPluginError(params: {
   logger: PluginLogger;
@@ -158,6 +178,8 @@ export function recordPluginError(params: {
   logPrefix: string;
   diagnosticMessagePrefix: string;
   diagnosticCode?: PluginDiagnosticCode;
+  /** Shown when the failure is a missing module so operators learn the install path. */
+  missingDependencyHint?: string;
 }) {
   const errorText =
     isPluginLifecycleTraceEnabled() &&
@@ -169,8 +191,15 @@ export function recordPluginError(params: {
     errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
       ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
       : null;
+  // Native-require failures rewrap the Node error, so the missing-module code can sit on a cause.
+  const missingDependencyHint =
+    params.missingDependencyHint &&
+    collectErrorGraphCandidates(params.error, readCauseOrNothing).some(isMissingModuleNode)
+      ? params.missingDependencyHint
+      : null;
   // Rewrite the common removed-API failure into an actionable migration hint while preserving detail.
-  const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
+  const hint = deprecatedApiHint ?? missingDependencyHint;
+  const displayError = hint ? `${hint} (${errorText})` : errorText;
   params.logger.error(`${params.logPrefix}${displayError}`);
   params.record.status = "error";
   params.record.error = displayError;

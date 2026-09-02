@@ -21,6 +21,7 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-catalog.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { retryChatHistoryLoad } from "./chat-history.ts";
 import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -124,16 +125,17 @@ export type ChatProps = Omit<
     onOpenSessionDiff?: () => void;
     onExpandPullRequests?: () => void;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
-    githubPublicationBusy?: boolean;
-    githubPublicationResult?:
-      | import("../../../../packages/gateway-protocol/src/index.js").SessionGitHubPublicationResult
-      | null;
-    githubPublicationError?: string | null;
-    githubPublicationGuidance?: string;
-    onPublishPullRequest?: () => void;
+    githubPublication?: import("./chat-github-publication.ts").GitHubPublicationView;
   };
 
 export function renderChat(props: ChatProps) {
+  // The request session hosts the card; only sourceSessionKey names the requester.
+  const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
+  const approvalSourceSession = approvalSourceSessionKey
+    ? props.sessions?.sessions.find((row) =>
+        areUiSessionKeysEquivalent(row.key, approvalSourceSessionKey),
+      )
+    : undefined;
   const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
@@ -350,6 +352,7 @@ export function renderChat(props: ChatProps) {
                     ? html`<div class="chat-inline-approval">
                         ${renderExecApprovalCard({
                           approval: props.inlineApproval,
+                          sourceSession: approvalSourceSession,
                           busy: props.approvalBusy === true,
                           canGrant: props.approvalCanGrant,
                           error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
@@ -367,11 +370,7 @@ export function renderChat(props: ChatProps) {
                     onExpand: () => props.onExpandPullRequests?.(),
                     onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
                     onOpenSessionDiff: props.onOpenSessionDiff,
-                    publicationBusy: props.githubPublicationBusy === true,
-                    publicationResult: props.githubPublicationResult,
-                    publicationError: props.githubPublicationError,
-                    publicationGuidance: props.githubPublicationGuidance,
-                    onPublish: props.onPublishPullRequest,
+                    publication: props.githubPublication,
                   })}
                   ${renderChatSessionSuggestions({
                     suggestions: props.sessionSuggestions ?? [],

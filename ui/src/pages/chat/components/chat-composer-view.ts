@@ -38,7 +38,6 @@ import {
 } from "./chat-composer-slash-menu.ts";
 import {
   renderChatRunStatusIndicator,
-  renderCompactionIndicator,
   renderFallbackIndicator,
   type ComposerRunStatus,
 } from "./chat-composer-status.ts";
@@ -201,8 +200,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? {
         text: props.disabledReason,
         tone: props.disabledReasonTone ?? ("danger" as const),
-        icon:
-          (props.disabledReasonTone ?? "danger") === "danger"
+        icon: props.disabledReasonBusy
+          ? html`<span class="btn__spinner" aria-hidden="true"></span>`
+          : (props.disabledReasonTone ?? "danger") === "danger"
             ? icons.alertTriangle
             : icons.shieldQuestion,
       }
@@ -219,6 +219,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             class="agent-chat__composer-status-band"
             role=${primaryComposerStatus.tone === "danger" ? "alert" : "status"}
             aria-live="polite"
+            aria-busy=${props.disabledReasonBusy ? "true" : "false"}
           >
             <span class="agent-chat__composer-status-icon" aria-hidden="true"
               >${primaryComposerStatus.icon}</span
@@ -242,7 +243,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? nothing
     : renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
-  const compactionStatus = renderCompactionIndicator(props.compactionStatus);
   const progressCard = props.progressCard
     ? html`<div class="agent-chat__progress-float">
         ${renderSessionProgressCard(
@@ -293,7 +293,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         : ""}"
     >
       <div class="agent-chat__composer-overlay">
-        ${props.anchoredNotices ?? nothing} ${composerAlerts} ${fallbackStatus} ${compactionStatus}
+        ${props.anchoredNotices ?? nothing} ${composerAlerts} ${fallbackStatus}
         ${interruptedStatus === nothing
           ? nothing
           : html`<div class="agent-chat__composer-run-status">${interruptedStatus}</div>`}
@@ -313,6 +313,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar ${props.offline
               ? "agent-chat__input--offline"
               : ""}${dictation?.active ? " agent-chat__input--dictating" : ""}"
+            aria-busy=${props.disabledReasonBusy ? "true" : "false"}
             @wa-show=${handleChatComposerDropdownShow}
             @wa-after-show=${restorePointerOpenedChatComposerTrigger}
             @openclaw-composer-dismiss-invocations=${() => {
@@ -443,7 +444,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       handleChatAttachmentPaste(event, props);
                     }
                   }}
-                  aria-label=${placeholder}
+                  aria-label=${t("chat.composer.composerInput")}
                   placeholder=${dictation?.active ? "" : placeholder}
                   rows="1"
                 ></textarea>

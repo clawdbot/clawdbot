@@ -234,6 +234,8 @@ The interval defaults to `24h` when `--every` is omitted. An explicitly empty or
 
 The default scope is every database. Use `--global-only` or `--agent <id>` to narrow it, and add `--exclude-secrets` for a redacted history. Pushed schedules (`--push`) redact credential-bearing tables and secret-prefixed machine-state rows by default because an unattended recurring push retains them durably in remote history; pass `--include-secrets` for explicit full-fidelity remote backups (restores from redacted history need device re-pairing and provider re-authentication). `--push` also requires the repository to already have an `origin` remote. Re-running `backup enable` updates the existing automation instead of creating a duplicate. `openclaw backup disable` removes it; disabling an already-missing job is a successful no-op. Backup scheduling currently requires a local Gateway because the command job runs on the Gateway host; for a remote Gateway, create the cron job manually with `openclaw cron add`.
 
+Disabling a schedule finds the managed automation across all list pages, even after renaming it. Unrelated automations with the same name are left in place.
+
 ## Recorded runs and freshness
 
 Every real archive, SQLite snapshot, and Git create attempt records a compact outcome in the existing shared state database. Dry runs are not recorded. The log retains the newest 200 attempts, so frequent schedules remain bounded.
@@ -282,6 +284,8 @@ During archive creation, OpenClaw excludes known live-mutation paths before `tar
 | `browser/<profile>/user-data/`               | `SingletonCookie`, `SingletonLock`, `SingletonSocket` |
 | `sandbox/skills-workspaces/**`               | All entries                                           |
 | Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`                               |
+
+The active config file remains included even when its name or location matches a rule above. This exception keeps only the selected config file; neighboring files under excluded directories stay out of the archive.
 
 These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports intentionally omitted volatile entries; regenerable agent temporary roots are listed separately in `skipped` and are not included in that count.
 

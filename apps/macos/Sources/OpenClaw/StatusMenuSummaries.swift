@@ -48,22 +48,25 @@ final class StatusMenuSummaries: NSObject {
     func refresh(onUpdate: @escaping @MainActor () -> Void) {
         self.updateHandler = onUpdate
         self.nodes.start()
-        self.cron.start()
+        self.cron.start(.statusMenu)
         guard self.refreshTask == nil else { return }
 
         self.refreshTask = Task { [weak self] in
-            guard let self else { return }
-            async let jobs: Void = self.refreshAutomations()
-            async let devices: Void = self.refreshDevices()
+            guard let self, !Task.isCancelled else { return }
             async let usage: Void = self.refreshUsage()
             async let cost: Void = self.refreshCost()
-            _ = await (jobs, devices, usage, cost)
+            _ = await (usage, cost)
+            guard !Task.isCancelled else { return }
             self.refreshTask = nil
         }
     }
 
     func menuDidClose() {
         self.updateHandler = nil
+        self.nodes.stop()
+        self.cron.stop(.statusMenu)
+        self.refreshTask?.cancel()
+        self.refreshTask = nil
         self.usageRetry?.cancel()
         self.usageRetry = nil
         self.usageRetryAttempts = 0
@@ -73,9 +76,9 @@ final class StatusMenuSummaries: NSObject {
     func configureAutomations(_ item: NSMenuItem) {
         let jobs = self.enabledJobs
         let detail = if let next = jobs.compactMap(\.nextRunDate).min() {
-            String(localized: "\(jobs.count) · \(Self.relativeRun(next))")
+            "\(jobs.count) · \(Self.relativeRun(next))"
         } else {
-            String(localized: "\(jobs.count)")
+            String(jobs.count)
         }
         item.title = String(localized: "Automations")
         item.image = nil
@@ -167,7 +170,7 @@ final class StatusMenuSummaries: NSObject {
             rootView: StatusSummaryCard(
                 symbolName: "laptopcomputer.and.iphone",
                 title: String(localized: "Devices"),
-                detail: String(localized: "\(count) connected")),
+                detail: String(format: String(localized: "%lld connected"), count)),
             highlights: true)
 
         var entries: [MenuEntry] = []
@@ -182,7 +185,7 @@ final class StatusMenuSummaries: NSObject {
             entries.append(.info(id: "devices.connecting", title: String(localized: "Connecting…")))
         } else if self.isConnected {
             if let error = self.nodes.lastError?.nonEmpty {
-                entries.append(.info(id: "devices.error", title: String(localized: "Error: \(error)")))
+                entries.append(.info(id: "devices.error", title: String(format: String(localized: "Error: %@"), error)))
             } else if let message = self.nodes.statusMessage?.nonEmpty {
                 entries.append(.info(id: "devices.status", title: message))
             }
@@ -214,7 +217,7 @@ final class StatusMenuSummaries: NSObject {
         item.target = self
         item.isAlternate = isAlternate
         if isAlternate {
-            item.title = String(localized: "Set \(gateway.name) as Primary…")
+            item.title = String(format: String(localized: "Set %@ as Primary…"), gateway.name)
             item.action = #selector(Self.setPrimary(_:))
             item.keyEquivalentModifierMask = [.option]
             item.image = nil
@@ -259,20 +262,8 @@ final class StatusMenuSummaries: NSObject {
         return false
     }
 
-    private func refreshAutomations() async {
-        guard self.isConnected else { return }
-        await self.cron.refreshJobs()
-        self.updateHandler?()
-    }
-
-    private func refreshDevices() async {
-        guard self.isConnected else { return }
-        await self.nodes.refresh()
-        self.updateHandler?()
-    }
-
     private func refreshUsage() async {
-        guard self.isConnected,
+        guard !Task.isCancelled, self.isConnected,
               self.usageUpdatedAt.map({ Date().timeIntervalSince($0) >= 30 }) ?? true
         else { return }
 
@@ -325,14 +316,17 @@ final class StatusMenuSummaries: NSObject {
     }
 
     private func refreshCost() async {
-        guard self.isConnected,
+        guard !Task.isCancelled, self.isConnected,
               self.costUpdatedAt.map({ Date().timeIntervalSince($0) >= 45 }) ?? true
         else { return }
 
         do {
-            self.cachedCost = try await CostUsageLoader.loadSummary()
+            let summary = try await CostUsageLoader.loadSummary()
+            guard !Task.isCancelled else { return }
+            self.cachedCost = summary
             self.costError = nil
         } catch {
+            guard !Task.isCancelled else { return }
             self.cachedCost = nil
             let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             self.costError = message.isEmpty
@@ -348,10 +342,10 @@ final class StatusMenuSummaries: NSObject {
         if delta <= 0 { return String(localized: "due") }
         if delta < 60 { return String(localized: "in <1m") }
         let minutes = Int(round(delta / 60))
-        if minutes < 60 { return String(localized: "in \(minutes)m") }
+        if minutes < 60 { return String(format: String(localized: "in %lldm"), minutes) }
         let hours = Int(round(Double(minutes) / 60))
-        if hours < 48 { return String(localized: "in \(hours)h") }
-        return String(localized: "in \(Int(round(Double(hours) / 24)))d")
+        if hours < 48 { return String(format: String(localized: "in %lldh"), hours) }
+        return String(format: String(localized: "in %lldd"), Int(round(Double(hours) / 24)))
     }
 
     @objc
@@ -374,11 +368,11 @@ final class StatusMenuSummaries: NSObject {
     private static func gatewayImage(health: DashboardGatewayHealth, name: String) -> NSImage? {
         let (symbol, color, accessibility): (String, NSColor, String) = switch health {
         case .ok:
-            ("circle.fill", .systemGreen, String(localized: "\(name), healthy"))
+            ("circle.fill", .systemGreen, String(format: String(localized: "%@, healthy"), name))
         case .error:
-            ("exclamationmark.circle.fill", .systemRed, String(localized: "\(name), health error"))
+            ("exclamationmark.circle.fill", .systemRed, String(format: String(localized: "%@, health error"), name))
         case .unknown:
-            ("circle", .tertiaryLabelColor, String(localized: "\(name), health unknown"))
+            ("circle", .tertiaryLabelColor, String(format: String(localized: "%@, health unknown"), name))
         }
         return NSImage(systemSymbolName: symbol, accessibilityDescription: accessibility)?
             .withSymbolConfiguration(.init(paletteColors: [color]))
@@ -482,10 +476,10 @@ extension StatusMenuSummaries {
         }
         entries.append(.info(
             id: "devices.node.\(node.nodeId).connected",
-            title: String(localized: "Connected: \(node.isConnected ? "Yes" : "No")")))
+            title: node.isConnected ? String(localized: "Connected: Yes") : String(localized: "Connected: No")))
         entries.append(.info(
             id: "devices.node.\(node.nodeId).paired",
-            title: String(localized: "Paired: \(node.isPaired ? "Yes" : "No")")))
+            title: node.isPaired ? String(localized: "Paired: Yes") : String(localized: "Paired: No")))
 
         if let capabilities = node.caps?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
            !capabilities.isEmpty

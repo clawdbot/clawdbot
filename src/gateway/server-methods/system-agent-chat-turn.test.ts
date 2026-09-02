@@ -159,10 +159,13 @@ describe("system-agent chat input", () => {
       60_000,
       "system-agent:disabled-ui",
     );
-    await manager.register(record, 60_000);
+    const decisionPromise = manager.register(record, 60_000);
+    try {
+      const snapshot = manager.getSnapshot(record.id);
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.resolvedAtMs).toBeUndefined();
 
-    expect(
-      buildDelegatedApprovalPendingReply({
+      const replyParams = {
         cfg: {
           gateway: {
             publicOrigin: "https://control.example.com",
@@ -171,7 +174,21 @@ describe("system-agent chat input", () => {
         },
         manager,
         approvalId: record.id,
-      }),
-    ).not.toContain("Review:");
+        nowMs: record.createdAtMs,
+      };
+      const reply = buildDelegatedApprovalPendingReply(replyParams);
+      expect(reply).toContain("OpenClaw change pending approval: restart the Gateway.");
+      expect(reply).toContain("No change has been made.");
+      expect(reply).toContain("Expires in 1m.");
+      expect(reply).not.toContain("Review:");
+
+      replyParams.cfg.gateway.controlUi.enabled = true;
+      expect(buildDelegatedApprovalPendingReply(replyParams)).toContain(
+        "Review: https://control.example.com/approve/system-agent%3Adisabled-ui.",
+      );
+    } finally {
+      manager.expire(record.id);
+      await decisionPromise;
+    }
   });
 });

@@ -352,7 +352,11 @@ export function terminalToggleIntent(
   }
   const agentId = detail.agentId?.trim() || fallbackAgentId;
   if (detail.terminalSessionId) {
-    return { kind: "attach", sessionId: detail.terminalSessionId, agentOwned: true };
+    return {
+      kind: "attach",
+      sessionId: detail.terminalSessionId,
+      agentOwned: detail.agentOwned ?? true,
+    };
   }
   if (detail.catalog) {
     return { kind: "catalog", agentId, catalog: detail.catalog };

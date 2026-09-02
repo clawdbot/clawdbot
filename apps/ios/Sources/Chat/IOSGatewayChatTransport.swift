@@ -29,8 +29,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         self.widgetGateway = widgetGateway
         let normalized = globalAgentId?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         self.globalAgentId = normalized?.isEmpty == false ? normalized : nil
-        let normalizedGatewayID = outboxGatewayID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.outboxGatewayID = normalizedGatewayID?.isEmpty == false ? normalizedGatewayID : nil
+        self.outboxGatewayID = GatewayStableIdentifier.exact(outboxGatewayID)
         self.sessionMutationRequest = sessionMutationRequest
         self.mediaArtifactLoader = mediaArtifactLoader
     }
@@ -334,6 +333,33 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice] {
         let response = try await gateway.request(OpenClawChatGatewayRequests.modelsList(agentID: agentID))
         return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(response)
+    }
+
+    func loadModelCatalog(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    {
+        guard let route = await self.currentSessionMutationRoute() else {
+            throw CancellationError()
+        }
+        let sessionScoped = await self.gateway.supportsServerCapability(
+            .sessionScopedChatMetadata,
+            ifCurrentRoute: route) == true
+        let request = if sessionScoped {
+            OpenClawChatGatewayRequests.chatMetadata(
+                sessionKey: sessionKey,
+                fallbackAgentID: agentID ?? self.globalAgentId,
+                includeSessionKey: true)
+        } else {
+            OpenClawChatGatewayRequests.modelsList(agentID: agentID)
+        }
+        let response = try await self.gateway.request(request, ifCurrentRoute: route)
+        let choices = try sessionScoped
+            ? OpenClawChatGatewayPayloadCodec.decodeChatMetadataModelChoices(response)
+            : OpenClawChatGatewayPayloadCodec.decodeModelChoices(response)
+        return OpenClawChatModelCatalogSnapshot(
+            choices: choices,
+            availabilityIsSessionScoped: sessionScoped)
     }
 
     func isSwarmEnabled(sessionKey: String) async throws -> Bool {
@@ -659,16 +685,29 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     func requestHistory(
         sessionKey: String,
         agentID: String? = nil,
+        inputRunIDs: [String]? = nil,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?) async throws -> OpenClawChatHistoryPayload
     {
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let request = OpenClawChatGatewayRequests.history(
             sessionKey: target.sessionKey,
-            agentID: target.agentID)
+            agentID: target.agentID,
+            inputRunIDs: inputRunIDs)
         let res = try await gateway.request(
             request,
             ifCurrentRoute: expectedRoute)
         return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: res)
+    }
+
+    static func isUnsupportedHistoryInputRunIDsError(_ error: any Error) -> Bool {
+        // Gateways through v2026.8.1 reject this optional field without a capability bit.
+        // Remove this wire-contract fallback once the minimum Gateway is v2026.8.2;
+        // local doctor cannot upgrade a remote Gateway.
+        guard let error = error as? GatewayResponseError,
+              error.method == "chat.history",
+              error.code == "INVALID_REQUEST"
+        else { return false }
+        return error.message == "invalid chat.history params: at root: unexpected property 'inputRunIds'"
     }
 
     var supportsSlashCommandCatalog: Bool {

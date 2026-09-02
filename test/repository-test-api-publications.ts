@@ -37,13 +37,7 @@ const publications: Record<string, string | symbol> = {
     "openclaw.contextEngineMaintenanceTestApi",
   ),
   "src/agents/embedded-agent-runner/extra-params.ts": Symbol.for("openclaw.extraParamsTestApi"),
-  "src/agents/embedded-agent-runner/run/auth-plan.ts": Symbol.for(
-    "openclaw.embeddedRunAuthPlanTestApi",
-  ),
   "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
-  "src/agents/embedded-agent-subscribe.handlers.messages.update.ts": Symbol.for(
-    "openclaw.embeddedSubscribeMessagesTestApi",
-  ),
   "src/agents/embedded-agent-tool-media.ts": Symbol.for("openclaw.embeddedSubscribeToolsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
   "src/agents/media-generation-task-status-shared.ts": Symbol.for(
@@ -75,7 +69,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/utils/tools-manager.ts": Symbol.for("openclaw.toolsManagerTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),
   "src/agents/worktrees/run-lease.ts": Symbol.for("openclaw.worktreeRunLeaseTestApi"),
-  "src/auto-reply/reply/agent-runner-memory.ts": Symbol.for("openclaw.agentRunnerMemoryTestApi"),
   "src/auto-reply/reply/agent-runner-session-reset.ts": Symbol.for(
     "openclaw.agentRunnerSessionResetTestApi",
   ),
@@ -121,12 +114,10 @@ const publications: Record<string, string | symbol> = {
   "src/cron/service/active-run-cancellation.ts": Symbol.for("openclaw.activeCronTaskRunTestApi"),
   "src/cron/service/timer.ts": Symbol.for("openclaw.cronTimerTestApi"),
   "src/cron/session-reaper.ts": Symbol.for("openclaw.cronSessionReaperTestApi"),
-  "src/entry.compile-cache.ts": Symbol.for("openclaw.entryCompileCacheTestApi"),
   "src/flows/doctor-health-contributions.ts": Symbol.for(
     "openclaw.doctorHealthContributionsTestApi",
   ),
   "src/infra/exec-approvals-store.ts": Symbol.for("openclaw.execApprovalsStoreTestApi"),
-  "src/infra/session-cost-usage-cache-runtime.ts": Symbol.for("openclaw.sessionCostUsageTestApi"),
   "src/infra/session-delivery-queue-runtime.ts": Symbol.for(
     "openclaw.sessionDeliveryQueueRuntimeTestApi",
   ),

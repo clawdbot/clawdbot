@@ -1,7 +1,6 @@
 // Chat-owned composer orchestration.
 import { nothing } from "lit";
 import {
-  loadSettings,
   normalizeChatSendShortcut,
   patchSettings,
   type ChatFollowUpMode,
@@ -456,7 +455,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
     startRealtimeTalk();
   };
-  const selectedMicrophoneId = loadSettings().realtimeTalkInputDeviceId?.trim() ?? "";
+  const selectedMicrophoneId = props.realtimeTalkInputDeviceId?.trim() ?? "";
   const microphonePicker = props.onToggleRealtimeTalk
     ? renderMicrophonePicker({
         devices: devicePicker.devices,
@@ -492,13 +491,20 @@ export function renderChatComposer(props: ChatComposerProps) {
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
-    onCommit: (transcript: string) => {
+    onCommit: (transcript: string, late?: true) => {
       const target = state.composerTextarea;
-      const selection = state.dictationSelection ?? {
-        start: target?.selectionStart ?? visibleDraft.length,
-        end: target?.selectionEnd ?? visibleDraft.length,
-        value: props.getDraft?.() ?? props.draft,
-      };
+      const captured = state.dictationSelection;
+      const liveValue = target?.value ?? props.getDraft?.() ?? props.draft;
+      // Stop unlocks the draft. Preserve later edits by using the live caret only
+      // when a delayed final finds that the captured draft has changed.
+      const selection =
+        captured && (!late || captured.value === liveValue)
+          ? captured
+          : {
+              start: target?.selectionStart ?? liveValue.length,
+              end: target?.selectionEnd ?? liveValue.length,
+              value: liveValue,
+            };
       const insertion = insertComposerDictation(
         selection.value,
         transcript,

@@ -181,6 +181,9 @@ jobs:
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
+      release_tag: ${{ steps.release_inputs.outputs.release_tag }}
+      npm_dist_tag: ${{ steps.release_inputs.outputs.npm_dist_tag }}
+      release_candidate_branch: ${{ steps.release_inputs.outputs.release_candidate_branch }}
       trusted_workflow_json: ${{ steps.tooling_identity.outputs.json }}
       live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
@@ -199,15 +202,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: workflow
-          sparse-checkout: |
-            scripts/release-tooling-identity.mjs
-            scripts/github/resolve-openclaw-ref.sh
-            scripts/github/validate-release-suite-filters.sh
-            scripts/full-release-candidate-contract.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -381,62 +376,46 @@ jobs:
           });
           NODE
           fi
+          release_context="$(TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
+          import { resolveReleaseContextIdentity } from './workflow/scripts/lib/release-context.mjs';
+          const env = process.env;
+          const identity = resolveReleaseContextIdentity(env.TARGET_CONTEXT_REF || env.TARGET_REF, env.TARGET_VERSION);
+          if (!identity && env.TARGET_CONTEXT_REF) throw new Error('target_context_ref must be a canonical OpenClaw release branch or tag.');
+          console.log(JSON.stringify(identity ?? { kind: '', releaseTag: `v${env.TARGET_VERSION}`, baseTag: null }));
+          NODE
+          )"
+          identity_kind="$(jq -r '.kind' <<< "$release_context")"
+          release_tag="$(jq -r '.releaseTag' <<< "$release_context")"
+          base_tag="$(jq -r '.baseTag // empty' <<< "$release_context")"
+          # The API uses this step's token and peels tags without persisting Git credentials.
+          resolve_release_ref() {
+            local encoded_ref
+            encoded_ref="$(jq -rn --arg value "$1" '$value | @uri')"
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha
+          }
+          if [[ -n "$base_tag" ]]; then
+            base_sha="$(resolve_release_ref "refs/tags/${base_tag}")"
+            if [[ "$base_sha" != "$TARGET_SHA" ]]; then
+              echo "Correction source ${TARGET_SHA} must match base release tag ${base_tag}." >&2
+              exit 1
+            fi
+          fi
           if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-            printf 'target_version=%s\n' "$target_version" >> "$GITHUB_OUTPUT"
-          fi
-          extended_stable_line=""
-          release_version_pattern=""
-          expected_version=""
-          identity_kind=""
-          if [[ "$context_ref" =~ ^release/([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*)$ ]]; then
-            expected_version="${BASH_REMATCH[1]}"
-            release_version_pattern="${expected_version//./\\.}"
-            identity_kind="release branch"
-            if [[ "$target_version" != "$expected_version" &&
-                  ! "$target_version" =~ ^${release_version_pattern}-beta\.[1-9][0-9]*$ ]]; then
-              echo "Target package version ${target_version} does not belong to release branch ${context_ref}; expected ${expected_version} or a beta prerelease of it." >&2
-              exit 1
-            fi
-          elif [[ "$context_ref" =~ ^extended-stable/([0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
-            extended_stable_line="${BASH_REMATCH[1]%.33}"
-            identity_kind="extended-stable branch"
-          elif [[ "$context_ref" =~ ^v([0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*(-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
-            expected_version="${BASH_REMATCH[1]}"
-            identity_kind="release tag"
-          elif [[ -n "$TARGET_CONTEXT_REF" ]]; then
-            echo "target_context_ref must be a canonical OpenClaw release branch or tag." >&2
-            exit 1
-          fi
-          if [[ "$identity_kind" == "extended-stable branch" ]]; then
-            if [[ ! "$target_version" =~ ^([0-9]{4}\.([1-9]|1[0-2]))\.([1-9][0-9]*)$ ]] ||
-               [[ "${BASH_REMATCH[1]}" != "$extended_stable_line" ]] ||
-               (( 10#${BASH_REMATCH[3]} < 33 )); then
-              echo "Target package version ${target_version} does not belong to extended-stable branch ${context_ref}; expected a final ${extended_stable_line}.PATCH version with PATCH >= 33." >&2
-              exit 1
-            fi
-          elif [[ -n "$expected_version" &&
-                "$identity_kind" != "release branch" &&
-                "$target_version" != "$expected_version" ]]; then
-            echo "Target package version ${target_version} does not match ${identity_kind} ${context_ref}; expected ${expected_version}." >&2
-            exit 1
+            printf 'target_version=%s\nrelease_tag=%s\n' "$target_version" "$release_tag" >> "$GITHUB_OUTPUT"
           fi
           if [[ -n "$TARGET_CONTEXT_REF" ]]; then
             if [[ ! "$TARGET_REF" =~ ^[a-f0-9]{40}$ || "$TARGET_REF" != "$TARGET_SHA" ]]; then
               echo "target_context_ref requires ref to be the resolved full Validation SHA." >&2
               exit 1
             fi
-            repository_url="https://github.com/${GITHUB_REPOSITORY}.git"
             if [[ "$identity_kind" == "release tag" ]]; then
-              remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}^{}" | awk 'NR == 1 { print $1 }')"
-              if [[ -z "$remote_sha" ]]; then
-                remote_sha="$(git ls-remote --tags "$repository_url" "refs/tags/${context_ref}" | awk 'NR == 1 { print $1 }')"
-              fi
+              remote_sha="$(resolve_release_ref "refs/tags/${context_ref}")"
               if [[ "$remote_sha" != "$TARGET_SHA" ]]; then
                 echo "Target SHA ${TARGET_SHA} does not match release tag ${context_ref} at ${remote_sha:-missing}." >&2
                 exit 1
               fi
             else
-              remote_sha="$(git ls-remote --heads "$repository_url" "refs/heads/${context_ref}" | awk 'NR == 1 { print $1 }')"
+              remote_sha="$(resolve_release_ref "refs/heads/${context_ref}")"
               if [[ -z "$remote_sha" ]]; then
                 echo "Release context branch ${context_ref} does not resolve." >&2
                 exit 1
@@ -449,22 +428,30 @@ jobs:
             fi
           fi
 
-          # Qualification scope is a resolved fact, shared by dispatch and evidence.
-          coverage_policy=""
-          ci_release_scope=full
-          if [[ "$RELEASE_PROFILE" == "beta" && "${RUN_RELEASE_SOAK:-false}" == "false" && "$RERUN_GROUP" == "all" ]]; then
-            SKIP_PACKAGE_TELEGRAM_E2E=true
-            if [[ "$target_version" =~ ^[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*-beta\.[1-9][0-9]*$ &&
-                  ( "$identity_kind" == "release branch" || "$identity_kind" == "release tag" ) ]]; then
-              coverage_policy=npm-beta-v1
-              ci_release_scope=npm-beta
-            fi
-          fi
-          {
-            printf 'coverage_policy=%s\n' "$coverage_policy"
-            printf 'ci_release_scope=%s\n' "$ci_release_scope"
-            printf 'skip_package_telegram_e2e=%s\n' "$SKIP_PACKAGE_TELEGRAM_E2E"
-          } >> "$GITHUB_OUTPUT"
+          TARGET_VERSION="$target_version" RELEASE_CONTEXT_KIND="$identity_kind" node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { normalizeReleaseCoveragePolicy } from './workflow/scripts/full-release-validation-policy.mjs';
+          import { classifyReleaseTrain, parseReleaseVersion } from './workflow/scripts/lib/release-version.mjs';
+          const env = process.env;
+          const version = parseReleaseVersion(env.TARGET_VERSION);
+          if (!version) throw new Error('Invalid release package version.');
+          const train = classifyReleaseTrain(version);
+          if (train === 'unsupported-extended-stable-correction') {
+            throw new Error('Extended-stable releases do not allow correction suffixes.');
+          }
+          const distTag = train === 'stable' ? 'beta' : train;
+          const branch = train === 'extended-stable' ? `extended-stable/${version.year}.${version.month}.33` : '';
+          const beta = env.RELEASE_PROFILE === 'beta' && env.RUN_RELEASE_SOAK === 'false' && env.RERUN_GROUP === 'all';
+          const stable = env.RELEASE_PROFILE === 'stable' && env.RUN_RELEASE_SOAK === 'true' && env.RERUN_GROUP === 'all';
+          const releaseContext = ['release branch', 'release tag'].includes(env.RELEASE_CONTEXT_KIND);
+          // Bind qualification scope once; dispatch and sealed evidence consume the same fact.
+          const policy = releaseContext && beta && train === 'beta' ? 'npm-beta-v1'
+            : releaseContext && stable && train === 'stable' ? 'npm-stable-v1' : undefined;
+          normalizeReleaseCoveragePolicy({ coveragePolicy: policy, releaseProfile: env.RELEASE_PROFILE,
+            rerunGroup: env.RERUN_GROUP, runReleaseSoak: env.RUN_RELEASE_SOAK, targetVersion: version.version });
+          const scope = policy === 'npm-beta-v1' ? 'npm-beta' : policy === 'npm-stable-v1' ? 'npm-stable' : 'full';
+          appendFileSync(env.GITHUB_OUTPUT, `npm_dist_tag=${distTag}\nrelease_candidate_branch=${branch}\ncoverage_policy=${policy ?? ''}\nci_release_scope=${scope}\nskip_package_telegram_e2e=${beta ? 'true' : env.SKIP_PACKAGE_TELEGRAM_E2E}\n`);
+          NODE
 
       - name: Summarize target
         env:
@@ -595,25 +582,8 @@ jobs:
           ref: ${{ github.sha }}
           path: workflow
           sparse-checkout: |
-            scripts/github/find-reusable-release-validation.sh
-            scripts/release-ci-summary.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/release-preflight.mjs
-            scripts/release-preflight.mts
-            scripts/windows-cmd-helpers.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/tsx-cli-shim.mjs
-            scripts/lib/local-check-runtime.mts
-            scripts/lib/failed-trailer.mts
-            scripts/lib/error-format.mts
-            scripts/lib/managed-child-process.mts
-            scripts/lib/windows-taskkill.mjs
-            scripts/lib/release-version.mjs
-            .github/actions/setup-pnpm-store-cache/ensure-node.sh
+            scripts
+            .github/actions/setup-pnpm-store-cache
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
@@ -746,7 +716,9 @@ jobs:
   docker_runtime_assets_preflight:
     name: Verify Docker runtime image assets
     needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}
+    # Release image preparation checks runtime-assets on both native architectures.
+    # Alpha has no release image producer, so it retains this standalone proof.
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -768,21 +740,6 @@ jobs:
             --target runtime-assets \
             --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .
-
-  candidate_acquisition:
-    name: Acquire full release candidate
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
-    permissions:
-      actions: read
-      contents: read
-      packages: read
-      pull-requests: read
-    uses: ./.github/workflows/full-release-candidate.yml
-    with:
-      ref: ${{ needs.resolve_target.outputs.sha }}
-      request_json: ${{ needs.resolve_target.outputs.candidate_request_json }}
-      request_sha256: ${{ needs.resolve_target.outputs.candidate_request_sha256 }}
 
   normal_ci:
     name: Run normal full CI
@@ -970,6 +927,7 @@ jobs:
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
             echo "run_attempt=${child_run_attempt}" >> "$GITHUB_OUTPUT"
             echo "url=${url}" >> "$GITHUB_OUTPUT"
+            echo "dispatch_id=${dispatch_id}" >> "$GITHUB_OUTPUT"
           }
 
           case "$CHILD_WORKFLOW_KIND" in
@@ -984,17 +942,28 @@ jobs:
               dispatch_run_name="CI ${dispatch_id}"
               ci_release_scope="${CI_RELEASE_SCOPE:-full}"
               include_android=true
-              if [[ "$ci_release_scope" == "npm-beta" ]]; then include_android=false; fi
+              if [[ "$ci_release_scope" == "npm-beta" || "$ci_release_scope" == "npm-stable" ]]; then include_android=false; fi
               args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f include_android="$include_android" -f dispatch_id="$dispatch_id")
               context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
               context_ref="${context_ref#refs/heads/}"
               context_ref="${context_ref#refs/tags/}"
-              if [[ "$context_ref" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+              if [[ "$context_ref" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+((-(alpha|beta)\.[0-9]+)|(-[1-9][0-9]*))?$ ]]; then
                 args+=(-f historical_target_tag="$context_ref")
-              elif [[ "$context_ref" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
+              elif [[ "$context_ref" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+(-[1-9][0-9]*)?|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
                 args+=(-f target_context_ref="$context_ref")
               fi
               dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"
+              ;;
+            artifact-npm|artifact-candidate|artifact-docker)
+              stage="${CHILD_WORKFLOW_KIND#artifact-}"
+              dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-artifacts-${stage}"
+              args=(-f stage="$stage" -f dispatch_id="$dispatch_id" -f source_sha="$TARGET_SHA" -f release_tag="$RELEASE_TAG" -f preflight_phase="$PREFLIGHT_PHASE")
+              if [[ "$stage" == "npm" ]]; then
+                args+=(-f npm_dist_tag="$NPM_DIST_TAG" -f release_candidate_branch="$RELEASE_CANDIDATE_BRANCH")
+              elif [[ "$stage" == "candidate" ]]; then
+                args+=(-f request_json="$CANDIDATE_REQUEST_JSON" -f prepared_npm_bundle_json="$PREPARED_NPM_BUNDLE_JSON")
+              fi
+              dispatch_child full-release-artifacts.yml "Full Release Artifacts ${dispatch_id}" "${args[@]}"
               ;;
             plugin-prerelease)
               case "$PHASE" in
@@ -1210,7 +1179,7 @@ jobs:
     name: Run release checks independent validation
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1249,7 +1218,7 @@ jobs:
     name: Run release checks candidate validation
     needs: [resolve_target, evidence_reuse, candidate_acquisition]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1313,7 +1282,7 @@ jobs:
     name: Run product performance evidence
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1330,6 +1299,156 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
         run: *full_release_child_dispatch
+
+  prepare_npm_package:
+    name: Prepare release npm artifacts
+    needs: resolve_target
+    if: ${{ needs.resolve_target.result == 'success' && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      run_id: ${{ steps.producer.outputs.run_id }}
+      run_attempt: ${{ steps.producer.outputs.run_attempt }}
+      dispatch_id: ${{ steps.producer.outputs.dispatch_id }}
+      prepared_bundle_json: ${{ steps.bundle.outputs.prepared_bundle_json }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHILD_WORKFLOW_KIND: artifact-npm
+      ARTIFACT_STAGE: npm
+      ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-npm
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
+      RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+      PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'all' && 'all' || 'prepare' }}
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - name: Dispatch immutable npm artifact producer
+        id: dispatch
+        if: github.run_attempt == 1
+        run: *full_release_child_dispatch
+      - &artifact_tooling_checkout
+        name: Checkout artifact receipt tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - &artifact_producer_resolution
+        name: Recover original artifact producer
+        id: producer
+        env:
+          ARTIFACT_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.dispatch.outputs.run_attempt }}
+        run: node scripts/full-release-artifacts.mjs resolve
+      # Raw bytes unblock package consumers while source/SDK/dependency proof continues.
+      - name: Wait for publishable npm package
+        id: bundle
+        env:
+          ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
+          ARTIFACT_OUTPUT: raw
+        run: node scripts/full-release-artifacts.mjs wait
+
+  qualify_npm_package:
+    name: Qualify release npm artifacts
+    needs: [resolve_target, prepare_npm_package]
+    if: ${{ inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      qualified_preflight_bundle_json: ${{ steps.bundle.outputs.qualified_preflight_bundle_json }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ARTIFACT_STAGE: npm
+      ARTIFACT_DISPATCH_ID: ${{ needs.prepare_npm_package.outputs.dispatch_id }}
+      ARTIFACT_RUN_ID: ${{ needs.prepare_npm_package.outputs.run_id }}
+      ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare_npm_package.outputs.run_attempt }}
+      ARTIFACT_OUTPUT: receipt
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      PREFLIGHT_PHASE: all
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - *artifact_tooling_checkout
+      - name: Wait for exact npm qualification
+        id: bundle
+        run: node scripts/full-release-artifacts.mjs wait
+
+  prepare_docker_release:
+    name: Prepare release Docker artifacts
+    needs: resolve_target
+    if: ${{ inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      prepared_run_id: ${{ steps.bundle.outputs.prepared_run_id }}
+      prepared_run_attempt: ${{ steps.bundle.outputs.prepared_run_attempt }}
+      prepared_artifact_name: ${{ steps.bundle.outputs.prepared_artifact_name }}
+      prepared_manifest_sha256: ${{ steps.bundle.outputs.prepared_manifest_sha256 }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHILD_WORKFLOW_KIND: artifact-docker
+      ARTIFACT_STAGE: docker
+      ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-docker
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      PREFLIGHT_PHASE: all
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+    steps:
+      - name: Dispatch immutable Docker artifact producer
+        id: dispatch
+        if: github.run_attempt == 1
+        run: *full_release_child_dispatch
+      - *artifact_tooling_checkout
+      - *artifact_producer_resolution
+      - name: Wait for exact Docker preparation
+        id: bundle
+        env:
+          ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
+          ARTIFACT_OUTPUT: receipt
+        run: node scripts/full-release-artifacts.mjs wait
+
+  candidate_acquisition:
+    name: Acquire full release candidate
+    needs: [resolve_target, evidence_reuse, prepare_npm_package]
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.prepare_npm_package.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && needs.resolve_target.outputs.candidate_required == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      state: ${{ steps.bundle.outputs.state }}
+      binding_json: ${{ steps.bundle.outputs.binding_json }}
+      candidate_artifact_json: ${{ steps.bundle.outputs.candidate_artifact_json }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHILD_WORKFLOW_KIND: artifact-candidate
+      ARTIFACT_STAGE: candidate
+      ARTIFACT_DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-artifacts-candidate
+      TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+      RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
+      PREFLIGHT_PHASE: all
+      CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+      PARENT_WORKFLOW_SHA: ${{ github.sha }}
+      CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
+      PREPARED_NPM_BUNDLE_JSON: ${{ needs.prepare_npm_package.outputs.prepared_bundle_json }}
+    steps:
+      - name: Dispatch immutable validation candidate producer
+        id: dispatch
+        if: github.run_attempt == 1
+        run: *full_release_child_dispatch
+      - *artifact_tooling_checkout
+      - *artifact_producer_resolution
+      - name: Wait for exact validation candidate
+        id: bundle
+        env:
+          ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
+          ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
+          ARTIFACT_OUTPUT: receipt
+        run: node scripts/full-release-artifacts.mjs wait
 
   release_execution_plan:
     name: Seal release execution plan
@@ -1348,7 +1467,7 @@ jobs:
         performance,
       ]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 15
     outputs:
       sha256: ${{ steps.plan.outputs.sha256 }}
@@ -1358,15 +1477,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-validation-state.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/release-ci-summary.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1589,7 +1700,7 @@ jobs:
     name: Release Decision
     needs: [resolve_target, release_execution_plan]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 720
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -1598,15 +1709,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-validation-state.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/release-ci-summary.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1656,7 +1759,7 @@ jobs:
     name: Diagnostic Drain
     needs: [resolve_target, release_execution_plan]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 720
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -1672,15 +1775,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-validation-state.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/release-ci-summary.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1735,6 +1830,9 @@ jobs:
         resolve_target,
         evidence_reuse,
         docker_runtime_assets_preflight,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_docker_release,
         candidate_acquisition,
         normal_ci,
         plugin_prerelease_independent,
@@ -1751,22 +1849,34 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: Require qualified publication artifacts
+        if: inputs.rerun_group == 'all'
+        env:
+          NPM_PREPARE_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_QUALIFY_RESULT: ${{ needs.qualify_npm_package.result }}
+          DOCKER_PREPARE_RESULT: ${{ needs.prepare_docker_release.result }}
+          QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
+          PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
+          TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
+        run: |
+          set -euo pipefail
+          [[ "$NPM_PREPARE_RESULT" == "success" && "$NPM_QUALIFY_RESULT" == "success" &&
+            -n "$QUALIFIED_NPM_BUNDLE_JSON" ]] || {
+              echo "Release package qualification and Docker preparation must both succeed." >&2
+              exit 1
+            }
+          if [[ "$TARGET_VERSION" != *-alpha.* ]]; then
+            [[ "$DOCKER_PREPARE_RESULT" == "success" && "$PREPARED_DOCKER_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "Release Docker preparation must succeed." >&2
+              exit 1
+            }
+          fi
+
       - name: Checkout release state verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: |
-            scripts/full-release-validation-state.mjs
-            scripts/full-release-validation-policy.mjs
-            scripts/full-release-candidate-contract.mjs
-            scripts/full-release-candidate-reuse.mjs
-            scripts/release-ci-summary.mjs
-            scripts/lib/actions-artifact-archive.mjs
-            scripts/lib/canonical-json.mjs
-            scripts/lib/full-release-candidate-reuse.mjs
-            scripts/lib/plain-gh.mjs
-            scripts/lib/record-shared.mjs
-            scripts/lib/upgrade-survivor-policy.mjs
+          sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -1937,6 +2047,11 @@ jobs:
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
+          QUALIFIED_NPM_BUNDLE_JSON: ${{ needs.qualify_npm_package.outputs.qualified_preflight_bundle_json }}
+          PREPARED_DOCKER_RUN_ID: ${{ needs.prepare_docker_release.outputs.prepared_run_id }}
+          PREPARED_DOCKER_RUN_ATTEMPT: ${{ needs.prepare_docker_release.outputs.prepared_run_attempt }}
+          PREPARED_DOCKER_ARTIFACT_NAME: ${{ needs.prepare_docker_release.outputs.prepared_artifact_name }}
+          PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
@@ -1972,6 +2087,11 @@ jobs:
             --arg targetVersion "$TARGET_VERSION" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
             --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
+            --argjson npmPreflight "${QUALIFIED_NPM_BUNDLE_JSON:-null}" \
+            --arg dockerRunId "$PREPARED_DOCKER_RUN_ID" \
+            --arg dockerRunAttempt "$PREPARED_DOCKER_RUN_ATTEMPT" \
+            --arg dockerArtifactName "$PREPARED_DOCKER_ARTIFACT_NAME" \
+            --arg dockerManifestSha256 "$PREPARED_DOCKER_MANIFEST_SHA256" \
             '$plan[0] as $plan
             | $drain[0] as $drain
             | ($drain.children | with_entries(.value = {
@@ -1998,6 +2118,15 @@ jobs:
                 targetRef: $targetRef,
                 targetSha: $plan.targetSha,
                 candidateBinding: $plan.candidate,
+                publicationArtifacts: {
+                  npmPreflight: $npmPreflight,
+                  docker: (if $dockerManifestSha256 == "" then null else {
+                    preparedRunId: $dockerRunId,
+                    preparedRunAttempt: $dockerRunAttempt,
+                    preparedArtifactName: $dockerArtifactName,
+                    preparedManifestSha256: $dockerManifestSha256
+                  } end)
+                },
                 childEvidence: $childEvidence,
                 executionPlanSha256: $plan.sha256,
                 sourceParentRunAttempt: ($plan.parentRunAttempt | tonumber)

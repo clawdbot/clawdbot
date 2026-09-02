@@ -576,6 +576,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
 
         inlineModel.tap()
+        let inlineModelSelectionTarget = app.buttons["chat-composer-model-selection-target"]
+        XCTAssertTrue(inlineModelSelectionTarget.waitForExistence(timeout: 3))
+        XCTAssertEqual(inlineModelSelectionTarget.label, "Changes the global default")
         let inlineSelectedModel = app.buttons["openai/gpt-5.6-sol"]
         XCTAssertTrue(inlineSelectedModel.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["Default: openai/gpt-5.6-sol"].exists)
@@ -587,6 +590,9 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(updatedInlineModel.waitForExistence(timeout: 3))
         self.waitForValue("claude-opus-4-1", of: updatedInlineModel)
         updatedInlineModel.tap()
+        let updatedInlineModelSelectionTarget = app.buttons["chat-composer-model-selection-target"]
+        XCTAssertTrue(updatedInlineModelSelectionTarget.waitForExistence(timeout: 3))
+        XCTAssertEqual(updatedInlineModelSelectionTarget.label, "Changes the global default")
         let selectedInlineModel = app.buttons["anthropic/claude-opus-4-1"]
         XCTAssertTrue(selectedInlineModel.waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["openai/gpt-5.6-sol"].exists)
@@ -781,6 +787,25 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
     }
 
+    func testExistingSessionRestoresLatestOutput() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "existing-session-latest-output"),
+            additionalArguments: ["--openclaw-long-chat-fixture"])
+        let app = try XCTUnwrap(self.app)
+
+        let latest = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
+        XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
+        self.attachScreenshot(named: "existing-session-latest-output")
+    }
+
     func testChatPresentationInLightAppearance() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
         self.launchApp(
@@ -808,6 +833,30 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         self.sendFixtureChatMessage("Check the release status and prepare the next steps.")
         self.attachScreenshot(named: "chat-dark-soft-bottom-edge")
+    }
+
+    func testAssistantLongPressKeepsTranscriptVisibleAndActionsReachable() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "assistant-message-actions"))
+        let app = try XCTUnwrap(self.app)
+
+        let assistant = app.staticTexts[
+            "Ready when you are. I can check a project, coordinate an agent, or prepare the next step."
+        ]
+        XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+        assistant.press(forDuration: 0.8)
+        XCTAssertTrue(assistant.exists)
+        XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
+        self.attachScreenshot(named: "assistant-message-selection")
+
+        let actions = app.buttons["chat-message-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 3))
+        actions.tap()
+        XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "assistant-message-actions")
     }
 
     func testEmptyChatStarterPromptSendsMessage() throws {
@@ -1192,6 +1241,115 @@ final class OpenClawSnapshotUITests: XCTestCase {
 }
 
 extension OpenClawSnapshotUITests {
+    func testUnavailableModelRejectsElementAndCoordinateActivationInInlinePicker() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-unavailable-model-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let inlineModel = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(inlineModel.waitForExistence(timeout: 8))
+        let originalValue = inlineModel.value as? String
+        inlineModel.tap()
+
+        let unavailable = app.buttons["anthropic/claude-opus-4-1 — Sign-in needed"]
+        XCTAssertTrue(unavailable.waitForExistence(timeout: 3))
+        unavailable.tap()
+        XCTAssertEqual(app.buttons["chat-composer-inline-model"].value as? String, originalValue)
+
+        if !unavailable.waitForExistence(timeout: 1) {
+            inlineModel.tap()
+            XCTAssertTrue(unavailable.waitForExistence(timeout: 3))
+        }
+        self.attachScreenshot(named: "chat-composer-model-unavailable")
+        unavailable.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertEqual(app.buttons["chat-composer-inline-model"].value as? String, originalValue)
+    }
+
+    func testUnavailableModelIsDisabledInChatActions() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-unavailable-model-fixture",
+                "-openclaw.chat.modelFavorites", "",
+                "-openclaw.chat.modelRecents", "",
+            ])
+        let app = try XCTUnwrap(self.app)
+        app.buttons["Chat actions"].tap()
+        let popover = app.descendants(matching: .any)["chat-actions-popover"]
+        XCTAssertTrue(popover.waitForExistence(timeout: 5))
+        let drawer = popover.buttons["chat-model-provider-drawer-anthropic"]
+        XCTAssertTrue(drawer.waitForExistence(timeout: 3))
+        drawer.tap()
+
+        let unavailable = popover.buttons["anthropic/claude-opus-4-1"]
+        XCTAssertTrue(unavailable.waitForExistence(timeout: 3))
+        XCTAssertFalse(unavailable.isEnabled)
+        XCTAssertTrue(popover.staticTexts["Sign-in needed"].exists)
+        unavailable.tap()
+        XCTAssertTrue(popover.exists)
+
+        unavailable.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(popover.exists)
+        self.attachScreenshot(named: "chat-actions-model-unavailable")
+    }
+
+    func testSelectedAuthFailedModelDisablesOnlineSend() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-selected-model-auth-failure-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("This send should stay local")
+
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 3))
+        XCTAssertFalse(send.isEnabled)
+        XCTAssertTrue(app.staticTexts[
+            "Authentication failed. Review the provider credential or sign-in, then retry."
+        ].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "chat-composer-model-auth-failed")
+    }
+
+    func testModelSelectionTargetVariantsPersistAcrossBothPickers() throws {
+        for (target, disclosure) in [
+            ("session", "Changes this session only"),
+            ("agent", "Changes this agent's default"),
+            ("global", "Changes the global default"),
+        ] {
+            self.launchApp(
+                for: Self.chatScreenshotTarget,
+                additionalArguments: [
+                    "--openclaw-model-selection-target", target,
+                    "-openclaw.chat.modelFavorites", "",
+                    "-openclaw.chat.modelRecents", "",
+                ])
+            let app = try XCTUnwrap(self.app)
+            let inlineModel = app.buttons["chat-composer-inline-model"]
+            XCTAssertTrue(inlineModel.waitForExistence(timeout: 8))
+            inlineModel.tap()
+            XCTAssertTrue(app.buttons[disclosure].waitForExistence(timeout: 3))
+
+            let alternateModel = app.buttons["anthropic/claude-opus-4-1"]
+            XCTAssertTrue(alternateModel.waitForExistence(timeout: 3))
+            alternateModel.tap()
+            self.waitForValue("claude-opus-4-1", of: inlineModel)
+
+            inlineModel.tap()
+            XCTAssertTrue(app.buttons[disclosure].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.buttons["anthropic/claude-opus-4-1"].waitForExistence(timeout: 3))
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
+
+            let actions = app.buttons["Chat actions"]
+            XCTAssertTrue(actions.waitForExistence(timeout: 3))
+            actions.tap()
+            XCTAssertTrue(app.staticTexts[disclosure].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.descendants(matching: .any)["chat-actions-popover"].exists)
+            self.attachScreenshot(named: "chat-model-selection-target-\(target)")
+        }
+    }
+
     func testChatActionsModelRowsScreenshot() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,

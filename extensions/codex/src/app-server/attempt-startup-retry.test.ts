@@ -571,7 +571,7 @@ describe("Codex app-server startup retry", () => {
     }
   });
 
-  it("preserves the shared client and binding after resume overload exhausts", async () => {
+  it("preserves the shared client and binding on an overloaded resume with a sibling lease", async () => {
     const fixture = await createStartupFailureFixture("overload");
     const sibling = await startFixtureAttempt(fixture);
     sibling.turnRoute.release();
@@ -586,6 +586,7 @@ describe("Codex app-server startup retry", () => {
       expect(binding?.threadId).toBe("thread-recovered");
       const requestsBeforeResume = await fs.readFile(fixture.requestLogPath, "utf8");
 
+      // An unrelated lease must not hide a native refusal or lose its healthy client.
       await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({
         name: "CodexAppServerRpcError",
         code: -32_001,
@@ -593,7 +594,7 @@ describe("Codex app-server startup retry", () => {
       });
       const requests = await fs.readFile(fixture.requestLogPath, "utf8");
       expect(new Set(requests.slice(requestsBeforeResume.length).trim().split("\n"))).toEqual(
-        new Set(["thread/resume"]),
+        new Set(["thread/read", "thread/resume"]),
       );
       await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(binding);
 
