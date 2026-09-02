@@ -136,7 +136,7 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
 ]);
 const SWIFT_BUILD_CACHE_METADATA_TEST_PATH = "test/scripts/swift-build-cache-metadata.test.ts";
 const MACOS_APP_CI_PATH_RE =
-  /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
+  /^(?:apps\/(?:macos\/(?!Tests\/.+\.swift$)|(?:macos-mlx-tts|shared|swabble)\/)|Swabble\/|src\/(?:agents\/github-exec-(?:launcher|credential)\.ts|shared\/worker-bundle-hash\.ts|worker\/workspace-rsync-receiver\.ts|gateway\/worker-environments\/workspace-(?:accepted-(?:remote-script|sync)|mutation-remote-script|rsync-path\.test|sync(?:-helpers)?)\.ts)$)/u;
 let corepackPnpmShimDir: string | undefined;
 let corepackPnpmShimCleanupRegistered = false;
 let cachedGeneratedExtensionAssetPaths: Set<string> | undefined;

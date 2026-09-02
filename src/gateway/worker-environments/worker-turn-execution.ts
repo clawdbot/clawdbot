@@ -16,7 +16,6 @@ import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcri
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
-import { prepareGitHubPublicationAvailability } from "../github-publication-availability.js";
 import {
   STALE_WORKER_BUILD_REASON,
   StaleWorkerBuildError,
@@ -24,6 +23,7 @@ import {
 } from "./admission.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
+import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
 import { registerWorkerSkillAuthoring } from "./worker-skill-authoring.js";
 import { waitForTurnOperation } from "./worker-turn-admission.js";
 import {
@@ -80,7 +80,7 @@ export async function executeWorkerTurn(
     );
   }
   await recoverWorkspaceBeforeTurn(params);
-  const githubPublicationAvailable = await prepareGitHubPublicationAvailability({
+  const github = await prepareWorkerGitHubBinding({
     sessionId: placement.sessionId,
     sessionKey: placement.sessionKey,
     agentId: placement.agentId,
@@ -147,7 +147,6 @@ export async function executeWorkerTurn(
       prepareComputer: () => params.environments.prepareComputer?.(params.turnClaim),
       modelRef,
       turn,
-      githubPublicationAvailable,
       portalAvailable,
     });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
@@ -320,6 +319,7 @@ export async function executeWorkerTurn(
             prompt: media.prompt,
             suppressPromptTranscript: true,
             workspaceDir: placement.remoteWorkspaceDir,
+            ...(github ? { github } : {}),
             ...(skillResources ? { skillResources } : {}),
             ...(turn.skillLibraryAuthoring &&
             toolAuthority.allowedToolNames.includes("skill_workshop")

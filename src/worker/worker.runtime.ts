@@ -215,6 +215,15 @@ export async function runWorkerDescriptor(
       modelRef: descriptor.assignment.modelRef,
       computerContextEpoch,
     });
+    const github = descriptor.assignment.github
+      ? await import("./github-binding.runtime.js").then(({ prepareWorkerGitHubEnvironment }) =>
+          prepareWorkerGitHubEnvironment({
+            binding: descriptor.assignment.github!,
+            stateDir,
+            cwd: workspaceDir,
+          }),
+        )
+      : undefined;
     try {
       turnStarted = true;
       await runWorkerEmbeddedTurn({
@@ -227,6 +236,7 @@ export async function runWorkerDescriptor(
           ? { permissionMode: descriptor.assignment.permissionMode }
           : {}),
         stateDir,
+        ...(github ? { github } : {}),
         sessionId: descriptor.admission.sessionId,
         sessionKey: `worker:${descriptor.admission.sessionId}`,
         runId: descriptor.assignment.runId,

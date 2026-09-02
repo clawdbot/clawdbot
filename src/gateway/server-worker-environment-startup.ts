@@ -15,7 +15,6 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
-import type { GitHubPublicationCoordinator } from "./github-publication.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
@@ -65,7 +64,6 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
-  bindGitHubPublication?: (coordinator: GitHubPublicationCoordinator) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
@@ -358,11 +356,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
-  let githubPublication: Pick<GitHubPublicationCoordinator, "requestForClaim"> = {
-    requestForClaim: async () => {
-      throw new Error("GitHub publication is unavailable");
-    },
-  };
   const computers = createWorkerComputerService({
     store: params.startup.store,
     placements: params.startup.placementStore,
@@ -502,10 +495,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
           placements: params.startup.placementStore,
           environments: workerEnvironmentService,
           dispatchChild: (...args) => dispatchChild(...args),
-          githubPublication: {
-            requestForClaim: (publicationRequest) =>
-              githubPublication.requestForClaim(publicationRequest),
-          },
           portals: {
             getService: () => params.getPortalRuntime()?.portalService,
             carrier: workerNodePortalCarrier,
@@ -530,9 +519,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     nodeWorkerGatewayNamespace,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
-    },
-    bindGitHubPublication: (coordinator) => {
-      githubPublication = coordinator;
     },
     bindDeviceNodeControl: (transport) => {
       deviceRuntime.bindNodeTransport(transport);

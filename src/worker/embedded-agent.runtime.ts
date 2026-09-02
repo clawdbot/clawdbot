@@ -17,6 +17,7 @@ import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
 import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
+import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
@@ -84,6 +85,7 @@ type RunWorkerEmbeddedTurnParams = {
   cwd: string;
   workerContainmentRoot: string;
   stateDir: string;
+  github?: PreparedGitHubToolEnvironment;
   sessionId: string;
   sessionKey: string;
   runId: string;
@@ -234,6 +236,7 @@ async function runWorkerEmbeddedTurnWithResources(
       ),
       approvalFollowupText: headlessApprovalText,
       config: WORKER_TOOL_CONFIG,
+      ...(params.github ? { preparedRunEnvironment: params.github } : {}),
       commandHighlighting: false,
       agentId: params.agentId,
       allowBackground: true,

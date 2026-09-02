@@ -407,7 +407,6 @@ export const validateSessionGitHubPublishParams = compile(S.SessionGitHubPublish
 export const validateSessionGitHubOptionsParams = compile(S.SessionGitHubOptionsParamsSchema);
 export const validateSessionGitHubStatusParams = compile(S.SessionGitHubStatusParamsSchema);
 export const validateSessionGitHubConfirmParams = compile(S.SessionGitHubConfirmParamsSchema);
-export const validateWorkerGitHubPublishParams = compile(S.WorkerGitHubPublishParamsSchema);
 export const validateToolsEffectiveParams = compile(S.ToolsEffectiveParamsSchema);
 export const validateToolsInvokeParams = compile(S.ToolsInvokeParamsSchema);
 export const validateSkillsBinsParams = compile(S.SkillsBinsParamsSchema);

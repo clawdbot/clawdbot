@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
@@ -59,12 +58,6 @@ const SESSION_TOOL_CASES = [
       sessionKey: "agent:main:dashboard:child",
       message: "status",
     },
-  },
-  {
-    name: "publish",
-    method: "worker.github.publish",
-    toolName: "github_publish",
-    request: { toolCallId: "call-publish", title: "Publish the fix" },
   },
   {
     name: "portal",
@@ -395,9 +388,7 @@ describe("dedicated worker websocket protocol", () => {
     const requiredFeature =
       testCase.toolName === "portal"
         ? WORKER_PORTAL_PROTOCOL_FEATURE
-        : testCase.toolName === "github_publish"
-          ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
-          : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+        : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
     const harness = attachHarness({
       identity: {
         ...ATTACHED_IDENTITY,
