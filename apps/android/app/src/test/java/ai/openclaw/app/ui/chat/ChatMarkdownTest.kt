@@ -496,6 +496,17 @@ class ChatMarkdownTest {
   }
 
   @Test
+  fun mermaidOnlyClaimsExplicitCompletedFences() {
+    for ((language, diagram) in listOf("mermaid" to true, "MeRmAiD title" to true, "mermaid\ttitle" to true, "bash" to false, "mermaidjs" to false, "" to false)) {
+      val open = parseChatMarkdown("```$language\nflowchart LR\nA --> B\n").firstChild as FencedCodeBlock
+      val closed = parseChatMarkdown("```$language\nflowchart LR\nA --> B\n```\n").firstChild as FencedCodeBlock
+      assertEquals(false, isChatMermaidFence(open, isStreaming = true))
+      assertEquals(diagram, isChatMermaidFence(open, isStreaming = false))
+      assertEquals(diagram, isChatMermaidFence(closed, isStreaming = true))
+    }
+  }
+
+  @Test
   fun blocksOverTheLineOrCharBoundSkipHighlighting() {
     val overLineBound = buildString { repeat(CODE_HIGHLIGHT_MAX_LINES + 1) { append("val v$it = $it\n") } }
     // Fenced literals keep a trailing newline; a block of exactly MAX lines must still highlight.

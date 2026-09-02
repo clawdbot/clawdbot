@@ -44,6 +44,11 @@ import {
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WorkerSkillWorkshopResponseFrameSchema,
+  type WorkerSkillWorkshopParams,
+  type WorkerSkillWorkshopResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { notifyListeners } from "../shared/listeners.js";
 import {
@@ -56,6 +61,10 @@ import {
 } from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
+  "skill-workshop": {
+    method: "worker.skill-workshop",
+    responseSchema: WorkerSkillWorkshopResponseFrameSchema,
+  },
   heartbeat: {
     method: "worker.heartbeat",
     responseSchema: WorkerHeartbeatResponseFrameSchema,
@@ -100,6 +109,7 @@ const WORKER_REQUEST_SPECS = {
 
 type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
 type WorkerRequestParams = {
+  "skill-workshop": WorkerSkillWorkshopParams;
   heartbeat: WorkerHeartbeatParams;
   transcript: WorkerTranscriptCommitParams;
   "live-event": WorkerLiveEventParams;
@@ -112,6 +122,7 @@ type WorkerRequestParams = {
   "inference-cancel": WorkerInferenceCancelParams;
 };
 type WorkerResponseFrames = {
+  "skill-workshop": WorkerSkillWorkshopResponseFrame;
   heartbeat: WorkerHeartbeatResponseFrame;
   transcript: WorkerTranscriptCommitResponseFrame;
   "live-event": WorkerLiveEventResponseFrame;

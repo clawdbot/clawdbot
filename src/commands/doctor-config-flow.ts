@@ -2,7 +2,11 @@ import { homedir } from "node:os";
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readAgentRosterProperty, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  readAgentRosterProperty,
+  tryResolveSoleAgentId,
+} from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
@@ -239,7 +243,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     .filter((source) => source !== undefined)
     .map((source) => migratePersistedImplicitMainRoster(source));
   const rosterMigrations = rawRosterMigrations.filter((migration) => migration.changed);
-  const rosterMigrationNeeded = rosterMigrations.length > 0;
+  const rosterMigrationNeeded =
+    rosterMigrations.length > 0 ||
+    (baseCfg.agents?.ownership === undefined && listAgentEntries(baseCfg).length > 1);
   const legacyDefaultAgentId = rawRosterMigrations
     .map((migration) => migration.retainedLegacyDefaultAgentId)
     .find((agentId) => agentId !== undefined);

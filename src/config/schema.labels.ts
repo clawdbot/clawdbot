@@ -6,6 +6,7 @@ import { DESKTOP_FIELD_LABELS } from "./zod-schema.desktop.js";
 import { projectTelemetryFieldMetadata } from "./zod-schema.telemetry.js";
 
 export const FIELD_LABELS: Record<string, string> = {
+  worktreeRoot: "Worktree Root",
   "channels.discord.activities": "Discord Activities",
   "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
   "channels.discord.activities.applicationId": "Discord Activities Application ID",
@@ -792,6 +793,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",
   cron: "Automations",
   "cron.enabled": "Automations Enabled",
+  "cron.skipMissedJobs": "Skip Missed Recurring Automations",
   "cron.webhookToken": "Automations Webhook Bearer Token",
   "cron.webhookSsrfPolicy": "Automations Webhook SSRF Policy",
   "cron.webhookSsrfPolicy.dangerouslyAllowPrivateNetwork":

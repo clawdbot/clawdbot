@@ -279,6 +279,24 @@ export const zh_CN = {
       websocketUrl: "Gateway WebSocket URL",
     },
     guided: {
+      quickstartSilentFailures: "{count} 个检测到的选项未响应；将继续使用已验证的访问方式。",
+      laneQuestion: "你想如何开始？",
+      laneSecurityLine:
+        "OpenClaw 运行的 AI 智能体拥有这台机器的实际访问权限。安全指南：https://docs.openclaw.ai/gateway/security",
+      laneQuickLabel: "快速开始（推荐）",
+      laneQuickHint: "查找此机器上的 AI 访问方式，验证后打开网页仪表板。",
+      laneCustomLabel: "自定义设置",
+      laneCustomHint: "逐项选择所有设置选项。",
+      quickstartRoute: "正在使用 {label}。你可以稍后在仪表板或设置向导中更改。",
+      quickstartManual:
+        '快速开始未找到可用的 AI 访问方式。将继续手动设置提供商；保留快速开始的默认设置（智能体 "main"、完全访问）。',
+      quickstartDashboard: "仪表板：{url}",
+      quickstartForeground: "网关正在前台运行。按 Ctrl+C 停止。",
+      quickstartBackground: "如需以后让网关在后台持续运行，请运行：openclaw gateway install",
+      quickstartReopen: "运行 openclaw 打开 TUI，或运行 openclaw dashboard 重新打开网页仪表板。",
+      quickstartBrowserUnavailable: "浏览器交接未完成。网关仍在运行；准备好后请打开仪表板。",
+      quickstartGatewayPending:
+        "网关尚不可达。请保持此终端打开，并运行 openclaw gateway status 检查启动状态。",
       accessFullHint: "推荐。我会查找这台机器上已有的 AI 应用和密钥并逐一测试。",
       accessFullLabel: "完全访问 — 自动发现一切",
       accessGuardedHint: "查找前我会先征求你的同意，你也可以手动配置。",

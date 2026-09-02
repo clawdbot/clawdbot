@@ -62,6 +62,8 @@ If the same people should be allowed across several channels, define the list on
 
 Each teammate opens the [Control UI](/web/control-ui) through the ingress from step 1 and gets a durable Gateway profile: display name, avatar, and per-person appearance preferences. With Cloudflare Access or Tailscale Serve, GitHub-backed sign-in verifies the account behind the profile - see [User model](/concepts/user-model).
 
+Teammates can also create and import [personal skills](/tools/skills#personal-skills-on-a-shared-gateway) under **Plugins → Skills** without permission to change shared Gateway configuration. Skills stay personal until explicitly shared with the team. A session retains its selected revisions when another teammate joins; changing its assignee does not replace its skills. Your existing workspace skills remain in place, and extra channel identities for one operator do not enable the team-specific guidance.
+
 ## Step 4: Work in shared sessions
 
 A conversation that starts in the team channel can continue as a session the whole team can open, steer, and take over. [Multi-user mode](/concepts/multi-user) gives every session three layers of attribution - an immutable creator, an assignable owner (assign sessions like GitHub issues from the session context menu), and the history of people who actually prompted - plus live [presence](/concepts/presence): who is viewing, and who is typing, with drafts that never reach the model or the transcript.

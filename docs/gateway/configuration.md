@@ -754,7 +754,7 @@ Rules:
 }
 ```
 
-SecretRef details (including `secrets.providers` for `env`/`file`/`exec`/`store`) are in [Secrets Management](/gateway/secrets).
+The `env` ref above uses the built-in `default` provider and needs no `secrets.providers.default` entry unless `secrets.defaults.env` selects another alias. The same rule applies to `store` refs and `secrets.defaults.store`. See [Secrets Management](/gateway/secrets#secretref-contract) for provider precedence and the required `file`/`exec` provider configuration.
 Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 

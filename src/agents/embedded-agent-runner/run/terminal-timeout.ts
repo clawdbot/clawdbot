@@ -1,13 +1,13 @@
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
+import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
 import { resolveRunLivenessState } from "./incomplete-turn-resolution.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalTimeout,
   type EmbeddedRunTerminalState,
 } from "./terminal-outcome.js";
-import { copyAttemptDeliveryState } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 // Carries the prepared terminal facts forward as one bundle instead of

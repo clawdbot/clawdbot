@@ -6,7 +6,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
-import { resolveSystemMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
@@ -448,8 +448,18 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const mainSessionKey = resolveSystemMainSessionKey(cfg);
-  const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  // Fleet status reads every main queue without selecting an ambient execution owner.
+  // Global session scope shares one queue, so include it only once.
+  const mainSessionKeys = new Set(
+    agentList.agents.map(({ id: agentId }) =>
+      resolveCanonicalMainSessionKey({
+        agentId,
+        mainKey: cfg.session?.mainKey,
+        sessionScope: cfg.session?.scope,
+      }),
+    ),
+  );
+  const queuedSystemEvents = [...mainSessionKeys].flatMap(peekSystemEvents);
   const taskMaintenanceModule = await taskRegistryMaintenanceModuleLoader.load();
   // Status may overlap a live Gateway, so task inspection must not initialize
   // the writable process registry or its schema-owning shared-state handle.

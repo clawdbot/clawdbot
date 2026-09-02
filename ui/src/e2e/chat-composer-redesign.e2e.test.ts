@@ -94,6 +94,45 @@ suite.define(() => {
       );
     },
   );
+
+  it("does not repeat an auth failure below the composer when the run error is visible", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const message =
+        "Your refresh token has already been used to generate a new access token. Please try signing in again.";
+      const gateway = await installMockGateway(page, {
+        inFlightRun: { runId: "auth-failed-run", text: "" },
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "openai",
+            available: false,
+            unavailableReason: "auth-failed",
+          },
+        ],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("chat", {
+        errorDetail: {
+          provider: "openai",
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType: "invalid_request_error",
+          httpStatus: 401,
+        },
+        errorMessage: `⚠️ ${message}`,
+        runId: "auth-failed-run",
+        sessionKey: "main",
+        state: "error",
+      });
+      await expect.poll(() => page.locator(".chat-error").textContent()).toContain(message);
+      await expect.poll(() => page.locator(".agent-chat__composer-status-band").count()).toBe(0);
+      await expect.poll(() => page.locator(".agent-chat__input textarea").isDisabled()).toBe(true);
+    });
+  });
+
   it("keeps the loading model picker beside the microphone", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
@@ -399,10 +438,35 @@ suite.define(() => {
       const pickerWidth = () =>
         microphonePicker.evaluate((node) => node.getBoundingClientRect().width);
       await expect.poll(pickerWidth).toBe(0);
+      await page.emulateMedia({ reducedMotion: "no-preference" });
       await voice.hover();
-      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(12);
-      const voiceBeforeHold = await voice.boundingBox();
+      await expect
+        .poll(() =>
+          microphonePickerShell.evaluate((node) => getComputedStyle(node).transitionDelay),
+        )
+        .toBe("0.75s");
+      await expect
+        .poll(() => microphonePicker.evaluate((node) => getComputedStyle(node).transitionDelay))
+        .toBe("0.75s, 0.75s, 0.82s, 0s, 0s");
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect(await pickerWidth()).toBe(0);
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
+      const [voiceBeforeHold, pickerBeforeHold] = await Promise.all([
+        voice.boundingBox(),
+        microphonePicker.boundingBox(),
+      ]);
       expect(voiceBeforeHold).not.toBeNull();
+      expect(pickerBeforeHold).not.toBeNull();
+      expect(
+        Math.abs(
+          (voiceBeforeHold?.x ?? 0) - ((pickerBeforeHold?.x ?? 0) + (pickerBeforeHold?.width ?? 0)),
+        ),
+      ).toBeLessThanOrEqual(0.5);
       await page.mouse.down();
       await expect
         .poll(() =>
@@ -418,6 +482,19 @@ suite.define(() => {
       );
       await page.mouse.up();
       await page.mouse.move(0, 0);
+      await expect.poll(pickerWidth).toBe(0);
+      await voice.hover();
+      await voice.press("Tab");
+      await expect
+        .poll(() => microphonePicker.evaluate((node) => node === document.activeElement))
+        .toBe(true);
+      await expect
+        .poll(() =>
+          microphonePickerShell.evaluate((node) => getComputedStyle(node).transitionDelay),
+        )
+        .toBe("0s, 0s");
+      await expect.poll(pickerWidth).toBeGreaterThanOrEqual(27.5);
+      await textarea.click();
       await expect.poll(pickerWidth).toBe(0);
       await expect
         .poll(() => model.evaluate((node) => node.closest(".agent-chat__composer-footer") != null))

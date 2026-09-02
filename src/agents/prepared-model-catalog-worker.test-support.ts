@@ -21,20 +21,46 @@ export const DURABLE_AUTH_KEY = "post-startup-durable-key-not-real";
 export const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
 export const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
 
+export function createJwtWithExp(exp: number, marker?: string): string {
+  const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
+    "base64url",
+  );
+  return `header.${payload}.signature`;
+}
+
+export function writeCodexAuth(codexHome: string, marker: string): void {
+  const authPath = path.join(codexHome, "auth.json");
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600, marker),
+        refresh_token: `refresh-${marker}-not-real`,
+      },
+    }),
+    "utf8",
+  );
+  const future = new Date(Date.now() + 2_000);
+  fs.utimesSync(authPath, future, future);
+}
+
 export function writeFixturePlugin(params: {
   root: string;
   spinMs: number;
   pluginVersion?: string;
+  builtPluginVersion?: string;
 }): string {
   const pluginDir = path.join(params.root, "plugin");
   fs.mkdirSync(pluginDir, { recursive: true });
-  const pluginFile = path.join(pluginDir, "index.cjs");
+  let pluginFile = path.join(pluginDir, "index.cjs");
   const syntheticAuthProbePath = path.join(params.root, "synthetic-auth-probes.txt");
   writeSyntheticAuthDiscoveryFixture({
     root: params.root,
     pluginDir,
     harnessId: HARNESS_ID,
     unrelatedId: UNRELATED_SYNTHETIC_AUTH_ID,
+    pluginVersion: params.pluginVersion ?? "v1",
   });
   fs.writeFileSync(
     pluginFile,
@@ -163,6 +189,27 @@ module.exports = {
 `,
     "utf8",
   );
+  if (params.builtPluginVersion) {
+    const sourceFile = path.join(pluginDir, "index.cts");
+    fs.renameSync(pluginFile, sourceFile);
+    fs.renameSync(
+      path.join(pluginDir, "provider-discovery.cjs"),
+      path.join(pluginDir, "provider-discovery.cts"),
+    );
+    const builtFile = writeFixturePlugin({
+      root: params.root,
+      spinMs: params.spinMs,
+      pluginVersion: params.builtPluginVersion,
+    });
+    const distDir = path.join(pluginDir, "dist");
+    fs.mkdirSync(distDir);
+    fs.renameSync(builtFile, path.join(distDir, "index.cjs"));
+    fs.renameSync(
+      path.join(pluginDir, "provider-discovery.cjs"),
+      path.join(distDir, "provider-discovery.cjs"),
+    );
+    pluginFile = sourceFile;
+  }
   fs.writeFileSync(
     path.join(pluginDir, "openclaw.plugin.json"),
     JSON.stringify({
@@ -180,7 +227,9 @@ module.exports = {
         MISSING_AUTH_HARNESS_ID,
         UNRELATED_SYNTHETIC_AUTH_ID,
       ],
-      providerCatalogEntry: "./provider-discovery.cjs",
+      providerCatalogEntry: params.builtPluginVersion
+        ? "./provider-discovery.cts"
+        : "./provider-discovery.cjs",
       configSchema: { type: "object", additionalProperties: false, properties: {} },
       contracts: { externalAuthProviders: [PROVIDER_ID] },
       modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },

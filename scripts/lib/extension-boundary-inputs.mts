@@ -25,7 +25,8 @@ export const BOUNDARY_PLUGIN_UNITS = [
 const GENERATOR_INPUTS = [
   "pnpm-lock.yaml",
   "package.json",
-  "node_modules/.modules.yaml",
+  // Pnpm's manifest carries machine-local store metadata. Native membership,
+  // installed topology, and input bytes own dependency invalidation here.
   "scripts/lib/extension-boundary-inputs.mts",
   "scripts/lib/compiler-input-snapshot.mts",
   "scripts/lib/build-artifact-cache.mts",

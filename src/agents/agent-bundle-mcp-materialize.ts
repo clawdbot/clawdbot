@@ -605,12 +605,18 @@ export async function materializeBundleMcpToolsForRun(params: {
 
 export async function createBundleMcpToolRuntime(params: {
   workspaceDir: string;
+  agentDir?: string;
   cfg?: OpenClawConfig;
+  excludeServerNames?: ReadonlySet<string>;
   reservedToolNames?: Iterable<string>;
+  safeServerNamesByServer?: ReadonlyMap<string, string>;
   createRuntime?: (params: {
     sessionId: string;
     workspaceDir: string;
+    agentDir?: string;
     cfg?: OpenClawConfig;
+    excludeServerNames?: ReadonlySet<string>;
+    safeServerNamesByServer?: ReadonlyMap<string, string>;
   }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
   const createRuntime =
@@ -619,6 +625,11 @@ export async function createBundleMcpToolRuntime(params: {
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.excludeServerNames ? { excludeServerNames: params.excludeServerNames } : {}),
+    ...(params.safeServerNamesByServer
+      ? { safeServerNamesByServer: params.safeServerNamesByServer }
+      : {}),
   });
   const materialized = await materializeBundleMcpToolsForRun({
     runtime,

@@ -213,15 +213,19 @@ export function readExactSessionEntryRowValidated(
 
 export function readSessionEntryStore(
   database: OpenClawAgentDatabase,
-  options: { allowCanonicalRepair?: boolean } = {},
+  options: { allowCanonicalRepair?: boolean; sessionKeys?: readonly string[] } = {},
 ): Record<string, SessionEntry> {
   if (options.allowCanonicalRepair !== true) {
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
+  if (options.sessionKeys?.length === 0) {
+    return {};
+  }
   const db = getSessionKysely(database.db);
+  const query = db.selectFrom("session_nodes").selectAll().orderBy("session_key");
   const rows = iterateSqliteQuerySync(
     database.db,
-    db.selectFrom("session_nodes").selectAll().orderBy("session_key"),
+    options.sessionKeys ? query.where("session_key", "in", options.sessionKeys) : query,
   );
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {
@@ -331,15 +335,15 @@ export function deleteSessionEntryRows(
     database.db,
     db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
   ).rows;
-  // Maintenance may have reclaimed every window already. Only scan surviving
-  // prompts when a retained window needs an owner; otherwise each deletion reads the whole store.
+  // Skip the survivor scan when maintenance reclaimed every window. Otherwise, project
+  // reference metadata before acquiring rows to avoid loading unrelated saved prompts.
   const survivingNodes =
     windows.length > 0
       ? executeSqliteQuerySync(
           database.db,
           db
             .selectFrom("session_nodes")
-            .select(["current_session_id", "entry_json", "session_key"])
+            .select(["current_session_id", sessionEntryMetadataJson, "session_key"])
             .where("session_key", "!=", sessionKey)
             .orderBy("session_key", "asc"),
         ).rows

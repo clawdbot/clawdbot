@@ -18,15 +18,18 @@ import {
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
+  normalizeReleaseCoveragePolicy,
   normalizeReleaseTelegramWaiver,
   releaseCompositeJobsSha256,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
+  validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
   validateReleaseTelegramWaiverBinding,
 } from "./full-release-validation-policy.mjs";
+import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import {
   execGhRead,
   execGhReadAsync,
@@ -34,6 +37,7 @@ import {
   resolvePlainGhBin,
 } from "./lib/plain-gh.mjs";
 
+const sortReleaseJsonValueKeys = /** @type {<T>(value: T) => T} */ (sortJsonValueKeys); // Validated release JSON preserves its structural type.
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
 const PHASED_RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v4";
@@ -420,11 +424,18 @@ function requiredChildKeysForManifest(manifest) {
   ) {
     return new Set(HISTORICAL_MANIFEST_RERUN_GROUP_CHILD_KEYS.get(manifest.rerunGroup));
   }
-  return requiredChildKeysForRerunGroup(
+  const selectedKeys = requiredChildKeysForRerunGroup(
     manifest.rerunGroup,
     manifest.validationInputs,
     manifest.version === 4 ? 3 : 2,
   );
+  // validateParentManifest authenticates the explicit policy before selection;
+  // an older beta receipt without this marker still requires its full child set.
+  if (manifest.validationInputs?.coveragePolicy === "npm-beta-v1") {
+    selectedKeys.delete("productPerformance");
+    selectedKeys.delete("npmTelegram");
+  }
+  return selectedKeys;
 }
 
 export function expectedSelectedChildDispatches(
@@ -674,20 +685,6 @@ function consumeExpectedRunAttempt(expectedRunAttempts, runId, runAttempt, label
   }
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) {
-    return value.map(canonicalJson);
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value)
-        .toSorted(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, canonicalJson(entry)]),
-    );
-  }
-  return value;
-}
-
 function normalizeManifestChildEvidence(value) {
   if (value === undefined) {
     return undefined;
@@ -791,7 +788,7 @@ function normalizeManifestChildEvidence(value) {
 }
 
 function manifestEvidenceIdentity(manifest) {
-  return canonicalJson({
+  return sortReleaseJsonValueKeys({
     childRunIds: manifest.childRunIds,
     controls: manifest.controls,
     releaseProfile: manifest.releaseProfile,
@@ -866,9 +863,9 @@ export function validateParentManifest(value, expected) {
   }
   if (
     Object.hasOwn(expected, "candidateBinding") &&
-    JSON.stringify(canonicalJson(candidateBinding)) !==
+    JSON.stringify(sortReleaseJsonValueKeys(candidateBinding)) !==
       JSON.stringify(
-        canonicalJson(
+        sortReleaseJsonValueKeys(
           expected.candidateBinding === null
             ? null
             : validateFullReleaseCandidateBinding(expected.candidateBinding),
@@ -897,6 +894,16 @@ export function validateParentManifest(value, expected) {
     candidateVersion: candidateBinding?.package.version,
     releaseProfile,
     rerunGroup: value.rerunGroup,
+  });
+  if (validationInputs?.coveragePolicy !== undefined && value.version !== 4) {
+    throw new Error("release coverage policy requires a version 4 manifest");
+  }
+  const coveragePolicy = normalizeReleaseCoveragePolicy({
+    ...validationInputs,
+    candidateVersion: candidateBinding?.package.version,
+    releaseProfile,
+    rerunGroup,
+    runReleaseSoak,
   });
   const childEvidence = normalizeManifestChildEvidence(value.childEvidence);
   const childRuns = value.childRuns;
@@ -942,6 +949,15 @@ export function validateParentManifest(value, expected) {
           ),
           releaseChecks: normalizeOptionalRunId(childRuns.releaseChecks, "release checks run ID"),
         };
+  if (
+    coveragePolicy &&
+    (childRunIds.productPerformance ||
+      childRunIds.npmTelegram ||
+      controls.performanceBlocking !== false ||
+      validationInputs.skipPackageTelegramE2e !== "true")
+  ) {
+    throw new Error("npm beta coverage policy requires deferred confidence children");
+  }
   let evidenceReuse;
   if (value.evidenceReuse !== undefined) {
     const reuse = normalizeJsonObject(
@@ -1198,7 +1214,7 @@ function childDispatchAttempt(displayTitle, child, parentRunId, parentRunAttempt
 }
 
 function parentJobExecutionFingerprint(job) {
-  return canonicalJson({
+  return sortReleaseJsonValueKeys({
     completedAt: job.completed_at,
     conclusion: job.conclusion,
     name: job.name,
@@ -1368,6 +1384,7 @@ export function validateManifestChildRun(
       runId,
     },
     log: selectedParentJobLog,
+    coveragePolicy: parentManifest.validationInputs?.coveragePolicy,
     plannedRunAttempt: plannedRunAttempt ?? run.run_attempt,
     repository: targetRepository,
     targetSha: parentManifest.targetSha,
@@ -1581,7 +1598,8 @@ function downloadParentManifestEvidence(runId, runAttempt, repository, manifestP
     if (manifestPath) {
       const providedManifest = JSON.parse(readFileSync(resolve(manifestPath), "utf8"));
       if (
-        JSON.stringify(canonicalJson(providedManifest)) !== JSON.stringify(canonicalJson(manifest))
+        JSON.stringify(sortReleaseJsonValueKeys(providedManifest)) !==
+        JSON.stringify(sortReleaseJsonValueKeys(manifest))
       ) {
         throw new Error("provided release validation manifest differs from the run artifact");
       }
@@ -1716,7 +1734,7 @@ async function loadValidatedParentEvidence({
   return {
     artifact: manifestEvidence.artifact,
     manifest,
-    manifestJson: canonicalJson(manifestEvidence.manifest),
+    manifestJson: sortReleaseJsonValueKeys(manifestEvidence.manifest),
     parentRun,
     parentView,
   };
@@ -2021,8 +2039,8 @@ async function validateStrictChildRun({
       ...evidence,
     };
     if (
-      JSON.stringify(canonicalJson(childEvidence)) !==
-      JSON.stringify(canonicalJson(expectedEvidence))
+      JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
+      JSON.stringify(sortReleaseJsonValueKeys(expectedEvidence))
     ) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
     }
@@ -2182,8 +2200,8 @@ export async function validateReleaseRunEvidence(
       manifest.rerunGroup !== "all" ||
       manifest.releaseProfile !== reuseRequest.releaseProfile ||
       manifest.runReleaseSoak !== reuseRequest.runReleaseSoak ||
-      JSON.stringify(canonicalJson(manifest.validationInputs)) !==
-        JSON.stringify(canonicalJson(reuseRequest.validationInputs))
+      JSON.stringify(sortReleaseJsonValueKeys(manifest.validationInputs)) !==
+        JSON.stringify(sortReleaseJsonValueKeys(reuseRequest.validationInputs))
     ) {
       throw new Error(
         "ineligible reuse candidate: requires a direct full run with matching profile, soak, and inputs",
@@ -2286,6 +2304,7 @@ export async function validateReleaseRunEvidence(
       })
     : undefined;
   validateReleaseTelegramWaiverBinding(executionPlan, rootEvidence.manifest.validationInputs);
+  validateReleaseCoveragePolicyBinding(executionPlan, rootEvidence.manifest.validationInputs);
   const plannedByKey = new Map(
     (executionPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
   );
@@ -2293,13 +2312,26 @@ export async function validateReleaseRunEvidence(
     if (
       rootEvidence.manifestJson.executionPlanSha256 !== executionPlan.sha256 ||
       Number(rootEvidence.manifestJson.sourceParentRunAttempt) !== executionPlan.parentRunAttempt ||
-      JSON.stringify(canonicalJson(rootEvidence.manifest.candidateBinding)) !==
-        JSON.stringify(canonicalJson(executionPlan.candidate))
+      JSON.stringify(sortReleaseJsonValueKeys(rootEvidence.manifest.candidateBinding)) !==
+        JSON.stringify(sortReleaseJsonValueKeys(executionPlan.candidate))
     ) {
       throw new Error("release validation manifest differs from its immutable execution plan");
     }
     if (!rootEvidence.manifest.childEvidence) {
       throw new Error("release validation manifest omitted composite child evidence");
+    }
+    if (
+      executionPlan.coveragePolicy &&
+      JSON.stringify(
+        executionPlan.children
+          .filter((child) => child.selected)
+          .map((child) => child.key)
+          .toSorted(),
+      ) !== JSON.stringify([...selectedKeys].toSorted())
+    ) {
+      throw new Error(
+        "release validation selected child set differs from its immutable execution plan",
+      );
     }
   }
   const expectedChildren = executionPlan
@@ -2387,7 +2419,7 @@ export async function validateReleaseRunEvidence(
   const childConclusions = Object.fromEntries(
     children.map((child) => [child.role, child.conclusion]),
   );
-  return canonicalJson({
+  return sortReleaseJsonValueKeys({
     children,
     conclusions: {
       allRequiredSucceeded: children.every((child) => child.policyPassed),

@@ -184,7 +184,7 @@ describe("process supervisor", () => {
               sessionId: "cancel-starting",
               backendId: "test",
               mode: "pty",
-              ptyCommand: "printf cancelled",
+              argv: ["/bin/sh", "-c", "printf cancelled"],
               scopeKey: "scope:cancel-starting",
             })
           : spawnChild(supervisor, {

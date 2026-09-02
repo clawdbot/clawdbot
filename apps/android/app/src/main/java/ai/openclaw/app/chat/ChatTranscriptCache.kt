@@ -455,9 +455,11 @@ class RoomChatTranscriptCache internal constructor(
           val content =
             message.content.mapNotNull { part ->
               when {
-                part.type == "text" && !part.text.isNullOrBlank() ->
+                part.type == "text" && !part.text.isNullOrBlank() -> {
                   CachedMessageContent(type = "text", text = part.text)
-                part.type == "image" && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank() ->
+                }
+
+                part.type == "image" && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank() -> {
                   CachedMessageContent(
                     type = "image",
                     mimeType = part.mimeType,
@@ -470,7 +472,9 @@ class RoomChatTranscriptCache internal constructor(
                     height = part.height,
                     sizeBytes = part.sizeBytes,
                   )
-                part.type == "audio" || part.type == "video" || part.type == "file" ->
+                }
+
+                part.type == "audio" || part.type == "video" || part.type == "file" -> {
                   CachedMessageContent(
                     type = part.type,
                     mimeType = part.mimeType,
@@ -485,7 +489,11 @@ class RoomChatTranscriptCache internal constructor(
                     durationMs = part.durationMs,
                     playback = part.playback,
                   )
-                else -> null
+                }
+
+                else -> {
+                  null
+                }
               }
             }
           if (content.isEmpty() && message.provenance == null && message.transcriptMarker == null) return@mapNotNull null

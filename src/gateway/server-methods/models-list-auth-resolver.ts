@@ -88,6 +88,9 @@ export function createModelsListEntryEvaluator(params: {
     const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
       const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
+        ...(normalizeProviderId(entry.provider) === "openai"
+          ? {}
+          : { api: entry.api, baseUrl: entry.baseUrl }),
         ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
         ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
         observedRoutes: routeVariants.map((variant) => ({

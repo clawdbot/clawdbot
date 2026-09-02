@@ -2,6 +2,7 @@
 // Control UI tests cover application-owned overlay races.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import {
   approval,
@@ -41,8 +42,6 @@ function installUpdateTranslations() {
     "updates.status": "Update {status}: {reason}. {guidance}",
     "updates.failureReasons.managedServiceHandoffAlreadyRunning":
       "Another managed update is already running. Wait for it to complete, then refresh update status.",
-    "updates.verificationFailedWithVersions":
-      "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     "updates.verificationFailedWithIdentity":
       "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
     "common.unknown": "Unknown",
@@ -60,6 +59,30 @@ afterEach(() => {
 });
 
 describe("Control UI refresh nudge", () => {
+  it("runs automatic connection refreshes through the bootstrap coordinator", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method === "exec.approval.list" ? [] : {}),
+    );
+    const coordinator = {
+      reset: vi.fn(),
+      run: vi.fn(async (_key: string, task: () => Promise<unknown>) => {
+        await task();
+      }),
+      synchronize: vi.fn(),
+    } satisfies ConnectionBootstrapCoordinator;
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway, {
+      connectionBootstrap: coordinator,
+    });
+
+    harness.update({ client: client(request), phase: "connected" });
+    await flushMicrotasks();
+
+    expect(coordinator.run).toHaveBeenCalledWith("approvals", expect.any(Function));
+    expect(coordinator.run).toHaveBeenCalledWith("update-status", expect.any(Function));
+    overlays.dispose();
+  });
+
   it("flags a terminal build rejection without requiring a hello", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);
@@ -888,33 +911,56 @@ describe("application update overlays", () => {
   it("promotes restart health polling to the managed handoff budget", async () => {
     vi.useFakeTimers();
     let statusRequests = 0;
+    let updateStarted = false;
     let updateFinished = false;
     const request = vi.fn<RequestFn>((method) => {
       if (method.endsWith(".list")) {
         return Promise.resolve([]);
       }
       if (method === "update.run") {
+        updateStarted = true;
         return Promise.resolve({
           ok: true,
           result: { status: "ok", after: { version: "2.0.0" } },
+          sentinel: {
+            payload: {
+              kind: "update",
+              status: "ok",
+              ts: 1_000,
+              stats: { after: { version: "2.0.0" } },
+            },
+          },
         });
       }
       if (method === "update.status") {
         statusRequests += 1;
+        if (!updateStarted) {
+          return Promise.resolve({ sentinel: null });
+        }
+        // A newer managed attempt can replace the restart being verified.
         return Promise.resolve(
           !updateFinished
             ? {
                 sentinel: {
                   kind: "update",
                   status: "skipped",
-                  stats: { reason: "restart-health-pending" },
+                  ts: 2_000,
+                  stats: {
+                    handoffId: "newer-managed-handoff",
+                    reason: "restart-health-pending",
+                    after: { version: "2.0.0" },
+                  },
                 },
               }
             : {
                 sentinel: {
                   kind: "update",
                   status: "ok",
-                  stats: { after: { version: "2.0.0" } },
+                  ts: 3_000,
+                  stats: {
+                    handoffId: "newer-managed-handoff",
+                    after: { version: "2.0.0" },
+                  },
                 },
               },
         );
@@ -956,11 +1002,13 @@ describe("application update overlays", () => {
   it("falls back to updateAvailable.latestVersion for post-handoff version verification", async () => {
     installUpdateTranslations();
     let statusRequests = 0;
+    let updateStarted = false;
     const request = vi.fn<RequestFn>((method) => {
       if (method.endsWith(".list")) {
         return Promise.resolve([]);
       }
       if (method === "update.run") {
+        updateStarted = true;
         return Promise.resolve({
           ok: true,
           handoff: { status: "started" },
@@ -968,15 +1016,33 @@ describe("application update overlays", () => {
             status: "skipped",
             reason: UPDATE_HANDOFF_STARTED_REASON,
           },
+          sentinel: {
+            payload: {
+              kind: "update",
+              status: "skipped",
+              ts: 1_000,
+              stats: {
+                handoffId: "version-verification-handoff",
+                reason: UPDATE_HANDOFF_STARTED_REASON,
+              },
+            },
+          },
         });
       }
       if (method === "update.status") {
         statusRequests += 1;
+        if (!updateStarted) {
+          return Promise.resolve({ sentinel: null });
+        }
         return Promise.resolve({
           sentinel: {
             kind: "update",
             status: "ok",
-            stats: { after: { version: "1.0.0" } },
+            ts: 2_000,
+            stats: {
+              handoffId: "version-verification-handoff",
+              after: { version: "1.0.0" },
+            },
           },
         });
       }

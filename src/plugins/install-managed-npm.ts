@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
@@ -577,6 +578,15 @@ export async function installPluginFromManagedNpmRoot(
       ...(policyMode === "update" ? { currentArtifactDir: installRoot } : {}),
       stagedArtifactDir: installRoot,
       mode: policyMode,
+      ...(params.installPolicyRequest.source?.kind === "npm"
+        ? {
+            sourceRecord: {
+              source: "npm" as const,
+              spec: params.displaySpec,
+              ...buildNpmResolutionFields(params.npmResolution),
+            },
+          }
+        : {}),
     });
     return {
       ...result,

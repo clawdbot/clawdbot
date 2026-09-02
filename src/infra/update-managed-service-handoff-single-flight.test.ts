@@ -740,7 +740,7 @@ describe("managed service update handoff single-flight", () => {
       .get() as { payload_json: string };
     sentinel.close();
     expect(JSON.parse(terminal.payload_json)).toMatchObject({
-      status: "error",
+      status: "skipped",
       stats: { reason: "managed-service-handoff-cancelled" },
     });
     if (joinedAfterExit) {

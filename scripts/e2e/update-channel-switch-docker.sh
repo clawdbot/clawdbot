@@ -46,7 +46,6 @@ export NPM_CONFIG_PREFIX=/tmp/npm-prefix
 export PNPM_HOME=/tmp/pnpm-home
 export PATH="/tmp/npm-prefix/bin:/tmp/pnpm-home:$PATH"
 export CI=true
-export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_NO_PROMPT=1
 

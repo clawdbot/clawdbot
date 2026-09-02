@@ -14,7 +14,6 @@ import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { createAgentHarnessCatalogEvaluator } from "../../agents/harness/model-catalog-readiness.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
-import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth-provider-config.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   loadPreparedModelCatalogSnapshotForBrowse,
@@ -337,16 +336,10 @@ function createPublicModelsListProjector(params: {
       };
       prepared.set(entry, preparedEntry);
     }
-    const syntheticLocalAvailable =
-      evaluation.availability === undefined &&
-      evaluation.routeResolution === null &&
-      normalizeProviderId(entry.provider) !== "openai" &&
-      hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider: entry.provider });
-    const available = evaluation.availability ?? (syntheticLocalAvailable ? true : undefined);
     // Legacy views require a boolean; inventory consumers preserve unknown state.
     const projectedAvailability = params.preserveUnknownAvailability
-      ? available
-      : (available ?? false);
+      ? evaluation.availability
+      : (evaluation.availability ?? false);
     return Object.assign(
       {},
       preparedEntry,
@@ -453,7 +446,7 @@ export async function prepareModelsListResult(
       loadedSnapshot = await loadDeferredCatalog(params.context, initialAgentId, {
         readOnly: loadedReadOnly,
         refreshAuth: refresh && loadedReadOnly,
-        refreshFullCatalog: loadParams.refresh === true,
+        ...(!preparedOnly ? { refreshFullCatalog: true } : {}),
       });
       return loadedSnapshot;
     },
@@ -481,7 +474,7 @@ export async function prepareModelsListResult(
         fullSnapshot = await loadDeferredCatalog(params.context, escalationAgentId, {
           readOnly,
           refreshAuth: refresh && readOnly,
-          refreshFullCatalog: refresh,
+          refreshFullCatalog: true,
         });
         return fullSnapshot;
       },

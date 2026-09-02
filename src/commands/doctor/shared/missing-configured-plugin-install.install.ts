@@ -459,6 +459,8 @@ async function adoptExistingNpmPackage(params: {
         params.candidate.pluginId,
         {
           source: "npm",
+          // Adoption discovers local bytes; only a registry reinstall can establish official trust.
+          sourcePath: params.packagePath,
           spec: resolveNpmInstallRecordSpec({
             requestedSpec: params.npmRecordSpec,
             resolution: npmResolution,

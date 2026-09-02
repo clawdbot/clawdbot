@@ -1168,6 +1168,12 @@ describe("refreshChat", () => {
         ...(workRefresh === "none" ? { contextTokens: 1500, label: "History Work label" } : {}),
       };
       pendingHistory.resolve({
+        defaults: {
+          contextTokens: null,
+          model: "model-old",
+          modelProvider: "test",
+          modelSelectionTarget: "agent",
+        },
         messages: [{ role: "assistant", content: "History really applied" }],
         sessionInfo: historyRow,
       });
@@ -1183,6 +1189,10 @@ describe("refreshChat", () => {
       expect(sessions.canonicalListRevision).toBeGreaterThan(issuedRevision);
       if (moveRoster) {
         expect(sessions.state.result?.sessions[0]).toEqual(mainRow);
+        expect(
+          expectDefined<SessionsListResult>(state.sessionsResult, "work session result").defaults
+            .modelSelectionTarget,
+        ).toBe("agent");
       }
       expect(afterResolution).toMatchObject(workRefresh === "updated" ? newerWork : historyRow);
     } finally {
@@ -6784,7 +6794,9 @@ describe("handleSendChat", () => {
     const reentry = handleSendChat(host, "same prompt", undefined, firstAction);
     const second = handleSendChat(host, "same prompt", undefined, secondAction);
 
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    await waitForFast(() =>
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1),
+    );
     expect(host.chatQueue).toHaveLength(2);
     expect(host.chatQueue.map((item) => item.text)).toEqual(["same prompt", "same prompt"]);
 

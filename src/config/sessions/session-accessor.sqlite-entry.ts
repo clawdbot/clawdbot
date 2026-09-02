@@ -27,10 +27,7 @@ import type {
   SessionEntryTargetPatchScope,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  readSessionEntryCache,
-  type SessionEntryCacheSnapshot,
-} from "./session-accessor.sqlite-entry-cache.js";
+import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import {
   assertLifecycleTargetSnapshotUnchanged,
   type SqliteLifecycleTargetSnapshot,
@@ -312,7 +309,16 @@ function listSqliteSessionEntriesFromDatabase(
   scope: SessionEntryListScope,
 ): SessionEntrySummary[] {
   assertCanonicalSqliteSessionKeysCurrent(database);
-  const snapshot = readSessionEntrySnapshot(database, resolved, scope);
+  const projection = scope.projection ?? "full";
+  const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
+    agentId: database.agentId,
+    env: resolved.env,
+  });
+  const snapshot = readSessionEntryCache(database, {
+    cache,
+    latest: scope.readConsistency === "latest",
+    projection,
+  });
   return snapshot.keys.flatMap((sessionKey) => {
     if (isInternalSessionEffectsKey(sessionKey)) {
       return [];
@@ -327,28 +333,13 @@ function listSqliteSessionEntriesFromDatabase(
         `non-canonical persisted row resolves to session key ${deliveryCanonicalKey}`,
       );
     }
+    // Full snapshots own their nested values; list snapshots may share cached entries.
     return [
       {
         sessionKey,
-        entry: scope.clone === false ? entry : cloneSessionEntry(entry),
+        entry: projection === "list" && scope.clone !== false ? cloneSessionEntry(entry) : entry,
       },
     ];
-  });
-}
-
-function readSessionEntrySnapshot(
-  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
-  resolved: ResolvedSqliteScope,
-  scope: SessionEntryListScope,
-): SessionEntryCacheSnapshot {
-  const cache = !isIncognitoOpenClawAgentSqlitePath(database.path, {
-    agentId: database.agentId,
-    env: resolved.env,
-  });
-  return readSessionEntryCache(database, {
-    cache,
-    latest: scope.readConsistency === "latest",
-    projection: scope.projection ?? "full",
   });
 }
 
@@ -400,8 +391,10 @@ export function readSessionUpdatedAtCore(scope: SessionAccessScope): number | un
 export async function upsertSessionEntryCore(
   scope: SessionAccessScope,
   patch: Partial<SessionEntry>,
+  options: Pick<SessionEntryPatchOptions, "assertCommitAllowed"> = {},
 ): Promise<SessionEntry | null> {
   return await patchSessionEntryCore(scope, () => patch, {
+    ...options,
     fallbackEntry: createFallbackSessionEntry(patch),
   });
 }

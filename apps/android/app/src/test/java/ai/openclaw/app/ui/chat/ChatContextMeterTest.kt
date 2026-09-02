@@ -95,17 +95,6 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun thinkingLabelsMapKnownLevelsAndPreserveGatewayIds() {
-    assertEquals("Off", contextMeterThinkingLabel("off"))
-    assertEquals("Low", contextMeterThinkingLabel("low"))
-    assertEquals("Medium", contextMeterThinkingLabel("medium"))
-    assertEquals("High", contextMeterThinkingLabel("high"))
-    assertEquals("xhigh", contextMeterThinkingLabel("xhigh"))
-    assertEquals("adaptive", contextMeterThinkingLabel("adaptive"))
-    assertEquals("ultra", contextMeterThinkingLabel("ultra"))
-  }
-
-  @Test
   fun gatewayThinkingOptionsAreAuthoritativeForSupport() {
     val offOnly =
       ChatThinkingLevelSelection(
@@ -133,17 +122,10 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun largeThinkingProfilesSplitIntoBalancedInlineRows() {
-    val options =
-      listOf("off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max")
-        .map { ChatThinkingLevelOption(id = it, label = it) }
-
-    val rows = chatThinkingOptionRows(options)
-
-    assertEquals(listOf(4, 4), rows.map { it.size })
-    assertEquals("Minimal", chatThinkingOptionLabel(options[1]))
-    assertEquals("Xhigh", chatThinkingOptionLabel(options[5]))
-    assertEquals("Adaptive", chatThinkingOptionLabel(options[6]))
-    assertEquals("Max", chatThinkingOptionLabel(options.last()))
+  fun thinkingOptionsKeepLocalizedKnownLevelsAndGatewayLabels() {
+    listOf("Off", "Minimal", "Low", "Medium", "High", "Xhigh", "Adaptive", "Max", "Ultra").forEach { label ->
+      assertEquals(label, chatThinkingOptionLabel(ChatThinkingLevelOption(id = label.lowercase(), label = label.lowercase())))
+    }
+    assertEquals("Custom effort", chatThinkingOptionLabel(ChatThinkingLevelOption(id = "custom", label = "Custom effort")))
   }
 }

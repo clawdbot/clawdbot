@@ -39,7 +39,7 @@ function readWindowsCiCoverageScript(): string {
   return readWindowsCiPartScripts().join(" ");
 }
 
-function readWindowsCiTargets(script: string): string[] {
+function readProjectTestTargets(script: string): string[] {
   const tokens = tokenizeCommand(script);
   const runnerIndex = tokens.indexOf("scripts/test-projects.mts");
   return runnerIndex < 0 ? [] : tokens.slice(runnerIndex + 1);
@@ -229,28 +229,40 @@ describe("package scripts", () => {
 
   it("routes every declared Windows CI test to its native lane", () => {
     const missedTargets = readWindowsCiPartScripts()
-      .flatMap(readWindowsCiTargets)
+      .flatMap(readProjectTestTargets)
       .filter((target) => !detectChangedScope([target]).runWindows);
     expect(missedTargets).toEqual([]);
   });
 
-  it("partitions Windows CI coverage into two disjoint explicit test lists", () => {
-    const scripts = readPackageJson().scripts;
-    const partScripts = readWindowsCiPartScripts();
-    const partTargets = partScripts.map(readWindowsCiTargets);
+  it.for([
+    { platform: "windows", parts: [1, 2] },
+    { platform: "macos", parts: [1, 2, 3] },
+  ])(
+    "partitions $platform CI coverage into disjoint explicit test lists",
+    ({ platform, parts }) => {
+      const scripts = readPackageJson().scripts;
+      const partScripts = parts.map((part) =>
+        expectDefined(scripts[`test:${platform}:ci:${part}`], `${platform} CI part ${part}`),
+      );
+      const partTargets = partScripts.map(readProjectTestTargets);
 
-    // Blacksmith's Windows class admits exactly 2 concurrent jobs, so the split
-    // width is pinned here: a 3rd part queues and a single lane serializes.
-    expect(scripts["test:windows:ci"]).toBe("pnpm test:windows:ci:1 && pnpm test:windows:ci:2");
-    expect(scripts["test:windows:ci:3"]).toBeUndefined();
-    for (const [partIndex, targets] of partTargets.entries()) {
-      const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
-      expect(
-        targets.filter((target) => laterTargets.has(target)),
-        `Windows CI part ${partIndex + 1} overlaps a later part`,
-      ).toEqual([]);
-    }
-  });
+      expect(scripts[`test:${platform}:ci`]).toBe(
+        parts.map((part) => `pnpm test:${platform}:ci:${part}`).join(" && "),
+      );
+      expect(scripts[`test:${platform}:ci:${parts.length + 1}`]).toBeUndefined();
+      for (const [partIndex, targets] of partTargets.entries()) {
+        expect(targets.length).toBeGreaterThan(0);
+        expect(
+          targets.every((target) => target.endsWith(".test.ts") && fs.existsSync(target)),
+        ).toBe(true);
+        const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
+        expect(
+          targets.filter((target) => laterTargets.has(target)),
+          `${platform} CI part ${partIndex + 1} overlaps a later part`,
+        ).toEqual([]);
+      }
+    },
+  );
 
   it("runs node workspace transfer coverage in Windows CI", () => {
     expect(readWindowsCiCoverageScript()).toContain(
@@ -267,7 +279,7 @@ describe("package scripts", () => {
   });
 
   it("runs compiled worker path, IPC, transform, and cleanup coverage in Windows CI", () => {
-    expect(readWindowsCiPartScripts().flatMap(readWindowsCiTargets)).toEqual(
+    expect(readWindowsCiPartScripts().flatMap(readProjectTestTargets)).toEqual(
       expect.arrayContaining([
         "test/scripts/vitest-worker-artifacts.test.ts",
         "test/scripts/vitest-worker-artifacts.transforms.test.ts",
@@ -364,7 +376,7 @@ describe("package scripts", () => {
     );
     expect(
       readWindowsCiPartScripts()
-        .flatMap(readWindowsCiTargets)
+        .flatMap(readProjectTestTargets)
         .filter((target) => target === "test/scripts/install-ps1.test.ts"),
     ).toHaveLength(1);
   });

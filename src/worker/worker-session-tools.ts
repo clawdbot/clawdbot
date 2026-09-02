@@ -16,6 +16,12 @@ import {
   type WorkerSessionsSpawnParams,
   type WorkerSessionsSpawnResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  SkillLibraryWorkshopSchema,
+  type WorkerSkillWorkshopBinding,
+  type WorkerSkillWorkshopParams,
+  type WorkerSkillWorkshopResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { AgentToolResult } from "../agents/runtime/index.js";
 import { SESSIONS_SEND_RESULT_GUIDANCE } from "../agents/tool-description-presets.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -24,8 +30,12 @@ import {
   PortalOutputSchema,
   PortalToolSchema,
 } from "../agents/tools/portal-tool-contract.js";
+import { createLibrarySkillWorkshopDescriptor } from "../agents/tools/skill-workshop-tool-library.js";
 
 type WorkerSessionRpcClient = {
+  requestSkillWorkshop?(
+    params: WorkerSkillWorkshopParams,
+  ): Promise<WorkerSkillWorkshopResponseFrame>;
   requestSessionsSpawn(
     params: WorkerSessionsSpawnParams,
   ): Promise<WorkerSessionsSpawnResponseFrame>;
@@ -56,8 +66,24 @@ function parseToolResult(frame: WorkerSessionsSpawnResponseFrame) {
   return parsed as AgentToolResult<unknown>;
 }
 
-export function createWorkerSessionTools(client: WorkerSessionRpcClient): AnyAgentTool[] {
+export function createWorkerSessionTools(
+  client: WorkerSessionRpcClient,
+  skillAuthoring?: WorkerSkillWorkshopBinding,
+): AnyAgentTool[] {
+  const workshop: AnyAgentTool | undefined = skillAuthoring
+    ? {
+        ...createLibrarySkillWorkshopDescriptor(skillAuthoring.multipleProfiles),
+        parameters: SkillLibraryWorkshopSchema,
+        execute: async (toolCallId, raw) => {
+          if (!Value.Check(SkillLibraryWorkshopSchema, raw) || !client.requestSkillWorkshop) {
+            throw new Error("Worker Workshop transport is unavailable or arguments are invalid.");
+          }
+          return parseToolResult(await client.requestSkillWorkshop({ toolCallId, arguments: raw }));
+        },
+      }
+    : undefined;
   return [
+    ...(workshop ? [workshop] : []),
     {
       label: "GitHub Publish",
       name: "github_publish",

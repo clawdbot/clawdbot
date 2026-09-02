@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const settleRequesterAfterSessionSpawns = vi.hoisted(() => vi.fn(() => true));
+vi.mock("./subagents/registry/subagent-registry.js", () => ({
+  settleRequesterAfterSessionSpawns,
+}));
+
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   captureSessionPlacementCompactionSuccessorAssertion,
   installSessionPlacementAdmissionProvider,
   type LocalTurnPlacementClaim,
   type SessionPlacementAdmissionProvider,
-  withLocalSessionPlacementTurnAdmission,
+  withLocalSessionPlacementTurnSettlement,
   withSessionPlacementTurnAdmission,
 } from "./session-placement-admission.js";
 
@@ -19,6 +25,8 @@ const executeLocalTurn: SessionPlacementAdmissionProvider["executeLocalTurn"] = 
 afterEach(() => {
   uninstallProvider?.();
   uninstallProvider = undefined;
+  settleRequesterAfterSessionSpawns.mockReset();
+  settleRequesterAfterSessionSpawns.mockReturnValue(true);
 });
 
 describe("captured compaction placement owner", () => {
@@ -101,6 +109,10 @@ describe("local turn placement admission", () => {
 
   it("delegates the final turn decision to the installed provider", async () => {
     const events: string[] = [];
+    settleRequesterAfterSessionSpawns.mockImplementation(() => {
+      events.push("settle");
+      return true;
+    });
     uninstallProvider = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed,
       executeLocalTurn,
@@ -127,13 +139,26 @@ describe("local turn placement admission", () => {
       turnParams,
       async () => {
         events.push("turn");
-        return { meta: { durationMs: 1 } };
+        return {
+          acceptedSessionSpawns: [
+            {
+              runId: "child-run",
+              childSessionKey: "agent:main:subagent:child",
+              expectsCompletionMessage: true,
+            },
+          ],
+          meta: {
+            durationMs: 1,
+            yielded: true,
+            executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
+          },
+        };
       },
       () => events.push("admitted"),
     );
 
     expect(result.meta.durationMs).toBe(1);
-    expect(events).toEqual(["claim", "admitted", "turn", "release"]);
+    expect(events).toEqual(["claim", "admitted", "turn", "release", "settle"]);
   });
 
   it("does not start a local turn when the provider routes remotely", async () => {
@@ -248,21 +273,19 @@ describe("local turn placement admission", () => {
     expect(secondClaim).toHaveBeenCalledOnce();
   });
 
-  it("delegates generic local execution through the placement gate", async () => {
+  it("settles CLI child ownership only after local placement releases", async () => {
     const events: string[] = [];
+    settleRequesterAfterSessionSpawns.mockImplementation(() => {
+      events.push("settle");
+      return true;
+    });
     uninstallProvider = installSessionPlacementAdmissionProvider({
       assertCompactionSuccessorAllowed,
       async executeLocalTurn<T>(
-        claim: LocalTurnPlacementClaim,
+        _claim: LocalTurnPlacementClaim,
         runLocal: () => Promise<T>,
       ): Promise<T> {
         events.push("claim");
-        expect(claim).toEqual({
-          sessionId: "session-cli",
-          sessionKey: "agent:main:cli",
-          agentId: "main",
-          runId: "run-cli",
-        });
         const result = await runLocal();
         events.push("release");
         return result;
@@ -270,7 +293,7 @@ describe("local turn placement admission", () => {
       executeTurn: async (_claim, _params, runLocal) => await runLocal(),
     });
 
-    const result = await withLocalSessionPlacementTurnAdmission(
+    await withLocalSessionPlacementTurnSettlement(
       {
         sessionId: "session-cli",
         sessionKey: "agent:main:cli",
@@ -279,11 +302,19 @@ describe("local turn placement admission", () => {
       },
       async () => {
         events.push("turn");
-        return { kind: "cli", code: 0 } as const;
+        return {
+          acceptedSessionSpawns: [
+            {
+              runId: "child-run",
+              childSessionKey: "agent:main:subagent:child",
+              expectsCompletionMessage: true,
+            },
+          ],
+          meta: { durationMs: 1, yielded: true },
+        };
       },
     );
 
-    expect(result).toEqual({ kind: "cli", code: 0 });
-    expect(events).toEqual(["claim", "turn", "release"]);
+    expect(events).toEqual(["claim", "turn", "release", "settle"]);
   });
 });

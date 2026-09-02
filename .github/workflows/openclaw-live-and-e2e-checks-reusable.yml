@@ -562,7 +562,7 @@ env:
 
 jobs:
   validate_selected_ref:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     outputs:
       package_artifact_present: ${{ steps.validate.outputs.package_artifact_present }}
@@ -1035,92 +1035,46 @@ jobs:
             sleep $((attempt * 15))
           done
 
-  validate_repo_e2e:
-    name: Repo E2E (${{ matrix.name }})
+  validate_repo_e2e_gateway:
+    name: Gateway E2E
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
-    continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 6
-      matrix:
-        include:
-          - name: Gateway 1/4
-            command: pnpm test:e2e:gateway --shard=1/4
-          - name: Gateway 2/4
-            command: pnpm test:e2e:gateway --shard=2/4
-          - name: Gateway 3/4
-            command: pnpm test:e2e:gateway --shard=3/4
-          - name: Gateway 4/4
-            command: pnpm test:e2e:gateway --shard=4/4
-          - name: UI 1/4
-            command: pnpm test:ui:e2e --shard=1/4
-            build_command: pnpm build:ci-artifacts
-          - name: UI 2/4
-            command: pnpm test:ui:e2e --shard=2/4
-            build_command: pnpm build:ci-artifacts
-          - name: UI 3/4
-            command: pnpm test:ui:e2e --shard=3/4
-            build_command: pnpm build:ci-artifacts
-          - name: UI 4/4
-            command: pnpm test:ui:e2e --shard=4/4
-            build_command: pnpm build:ci-artifacts
-          - name: Agent plugin Gateway
-            command: pnpm test:e2e:agent-plugin-gateway
-            target_script: test:e2e:agent-plugin-gateway
-            build_command: pnpm build:ci-artifacts
-    env:
-      OPENCLAW_BUILD_PRIVATE_QA: "1"
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-      OPENCLAW_VITEST_MAX_WORKERS: "2"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 1
+    uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
+    with:
+      ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+      workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+      workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+      build_profile: full
+      suites: >-
+        [{"name":"Gateway 1/4","command":"pnpm test:e2e:gateway --shard=1/4"},
+         {"name":"Gateway 2/4","command":"pnpm test:e2e:gateway --shard=2/4"},
+         {"name":"Gateway 3/4","command":"pnpm test:e2e:gateway --shard=3/4"},
+         {"name":"Gateway 4/4","command":"pnpm test:e2e:gateway --shard=4/4"}]
+      use_github_hosted_runners: ${{ inputs.use_github_hosted_runners }}
+      advisory: ${{ inputs.advisory }}
+      allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-          build-all-cache-scope: full
-
-      - name: Build dist for repo E2E
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        # Gateway shards pack and type-check packages; runtime-only suites keep SDK checks without global declarations.
-        run: ${{ matrix.build_command || 'pnpm build' }}
-
-      - name: Install Playwright Chromium
-        run: pnpm --dir ui exec playwright install --with-deps chromium
-
-      - name: Build sandbox image
-        run: scripts/sandbox-setup.sh
-
-      - name: Run repo E2E suite
-        env:
-          OPENCLAW_E2E_WORKERS: "2"
-          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
-          TARGET_REQUIRED_SCRIPT: ${{ matrix.target_script || '' }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$TARGET_REQUIRED_SCRIPT" ]] && ! node -e '
-            const packageJson = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
-            if (typeof packageJson.scripts?.[process.argv[1]] !== "string") process.exit(1);
-          ' "$TARGET_REQUIRED_SCRIPT"; then
-            if [[ "$OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS" != "1" ]]; then
-              echo "::error::Selected target does not provide required repo E2E capability: $TARGET_REQUIRED_SCRIPT."
-              exit 1
-            fi
-            echo "::notice::Skipping $TARGET_REQUIRED_SCRIPT: selected target does not provide this newer repo E2E capability."
-            exit 0
-          fi
-          ${{ matrix.command }}
+  validate_repo_e2e_runtime:
+    name: UI and plugin E2E
+    needs: validate_selected_ref
+    if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
+    uses: ./.github/workflows/openclaw-repo-e2e-reusable.yml
+    with:
+      ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+      workflow_repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
+      workflow_sha: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
+      build_profile: ciArtifacts
+      suites: >-
+        [{"name":"UI 1/4","command":"pnpm test:ui:e2e --shard=1/4"},
+         {"name":"UI 2/4","command":"pnpm test:ui:e2e --shard=2/4"},
+         {"name":"UI 3/4","command":"pnpm test:ui:e2e --shard=3/4"},
+         {"name":"UI 4/4","command":"pnpm test:ui:e2e --shard=4/4"},
+         {"name":"Agent plugin Gateway","command":"pnpm test:e2e:agent-plugin-gateway","target_script":"test:e2e:agent-plugin-gateway"}]
+      use_github_hosted_runners: ${{ inputs.use_github_hosted_runners }}
+      advisory: ${{ inputs.advisory }}
+      allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog }}
+      allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
 
   validate_special_e2e:
     needs: validate_selected_ref
@@ -3027,7 +2981,7 @@ jobs:
     name: Bind full release candidate evidence
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.emit_candidate_evidence && needs.prepare_docker_e2e_image.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ !inputs.use_github_hosted_runners && github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     permissions:
       actions: read
