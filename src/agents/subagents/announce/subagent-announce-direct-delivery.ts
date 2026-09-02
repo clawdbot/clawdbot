@@ -511,11 +511,6 @@ export async function sendSubagentAnnounceDirectly(params: {
       includeReasoningPayloads: false,
       requireTerminalContent: true,
     };
-    const hasVisibleGatewayPayload = Boolean(
-      directAnnounceResult &&
-      (hasVisibleAgentPayload(directAnnounceResult, completionPayloadVisibility) ||
-        hasMessagingToolDelivery),
-    );
     const hasVisibleNonSilentGatewayPayload = Boolean(
       directAnnounceResult &&
       hasVisibleAgentPayload(directAnnounceResult, {
@@ -523,6 +518,27 @@ export async function sendSubagentAnnounceDirectly(params: {
         includeSilentReplyPayloads: false,
       }),
     );
+    const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
+      directAnnounceResult?.deliveryStatus,
+    );
+    const automaticFinalDelivered =
+      terminalDelivery?.status === "sent" && terminalDelivery.resultCount > 0;
+    if (
+      shouldDeliverAgentFinal &&
+      (params.expectsCompletionMessage || params.requireVisibleReply) &&
+      !hasMessagingToolDelivery &&
+      terminalDelivery?.status === "suppressed"
+    ) {
+      const reason = directAnnounceResult?.deliveryStatus?.reason;
+      return {
+        delivered: false,
+        path: "direct",
+        reason: "delivery_suppressed",
+        error: typeof reason === "string" ? reason : "automatic completion delivery suppressed",
+        disposition: "intentional_non_delivery",
+        terminal: true,
+      };
+    }
     const hasIntentionalSilentCompletionReply = Boolean(
       directAnnounceResult && hasIntentionalSilentAgentPayload(directAnnounceResult),
     );
@@ -596,23 +612,16 @@ export async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
-    const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
-      directAnnounceResult?.deliveryStatus,
-    );
     const requesterVisibleFinalDelivered = Boolean(
       directAnnounceResult &&
       (hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
         requireFinalReply: true,
       }) ||
-        (shouldDeliverAgentFinal &&
-          ((hasVisibleNonSilentGatewayPayload &&
-            directAnnounceResult.deliveryStatus?.status !== "suppressed") ||
-            (terminalDelivery?.status === "sent" && terminalDelivery.resultCount > 0)))),
+        (shouldDeliverAgentFinal && automaticFinalDelivered)),
     );
     const hasVisibleCompletionReply =
       requesterVisibleFinalDelivered ||
-      (!params.requireVisibleReply &&
-        (hasMessagingToolDelivery || hasVisibleNonSilentGatewayPayload)) ||
+      (!shouldDeliverAgentFinal && !params.requireVisibleReply && hasMessagingToolDelivery) ||
       // Nested requesters and internal sessions observe the final in their transcript.
       // Unresolved external origins still require delivery evidence.
       (!requiresMessageToolDelivery &&
@@ -630,23 +639,10 @@ export async function sendSubagentAnnounceDirectly(params: {
       !hasVisibleCompletionReply &&
       (params.requireVisibleReply ||
         (params.expectsCompletionMessage &&
-          !shouldDeliverAgentFinal &&
-          !requiresMessageToolDelivery &&
-          !hasCompletionSideEffect &&
-          !acceptsIntentionalSilentCompletion))
-    ) {
-      return {
-        delivered: false,
-        path: "direct",
-        reason: "visible_reply_missing",
-        error: "completion agent did not produce a visible reply",
-      };
-    }
-    if (
-      params.expectsCompletionMessage &&
-      shouldDeliverAgentFinal &&
-      !isSubagentCompletion &&
-      !hasVisibleGatewayPayload
+          (shouldDeliverAgentFinal ||
+            (!requiresMessageToolDelivery &&
+              !hasCompletionSideEffect &&
+              !acceptsIntentionalSilentCompletion))))
     ) {
       return {
         delivered: false,

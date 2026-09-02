@@ -5015,6 +5015,50 @@ describe("requester settle wake trigger", () => {
     );
   });
 
+  it("records suppressed completion delivery without retrying or waking the requester", async () => {
+    const entry = createRunEntry({ endedAt: 4_000, expectsCompletionMessage: true });
+    const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "delivery_suppressed",
+          error: "cancelled_by_message_sending_hook",
+          terminal: true,
+          disposition: "intentional_non_delivery",
+        });
+        return "intentional_non_delivery" as const;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled,
+      runSubagentAnnounceFlow,
+    });
+
+    await completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: { disposition: "visible", text: "Generated completion" },
+    });
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeDefined());
+
+    expect(entry.delivery).toMatchObject({
+      status: "failed",
+      disposition: "intentional_non_delivery",
+      lastError: "cancelled_by_message_sending_hook; delivery_suppressed",
+    });
+    expect(entry.delivery?.deliveredAt).toBeUndefined();
+    expect(entry.delivery?.nextAttemptAt).toBeUndefined();
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryStatus: "failed",
+        error: "cancelled_by_message_sending_hook; delivery_suppressed",
+      }),
+    );
+    expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
+  });
+
   it("marks yielded intentional non-delivery blocked after requester-settle exhaustion", async () => {
     const entry = createRunEntry({
       endedAt: 4_000,

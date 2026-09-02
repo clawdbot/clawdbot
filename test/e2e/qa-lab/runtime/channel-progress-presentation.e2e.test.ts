@@ -21,6 +21,10 @@ import {
   loadSessionEntryReadOnly,
   updateSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+} from "../../../../src/gateway/test-helpers.e2e.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const MODEL = "mock-openai/progress-fixture";
@@ -388,6 +392,367 @@ describe("channel progress presentation through an isolated Gateway", () => {
       throw new AggregateError(errors, "progress fixture cleanup failed");
     }
   });
+
+  it("records suppressed Slack announcements without claiming delivery", async () => {
+    const directory = await fs.mkdtemp(
+      path.join(await fs.realpath(os.tmpdir()), "slack-announce-"),
+    );
+    cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+    const cancelledMarker = "QA-SUBAGENT-TERMINAL-VISIBLE-OK";
+    const deliveredMarker = "QA-SUBAGENT-TERMINAL-RESTART-OK";
+    const observerModel = "mock-openai/observer-failure-fixture";
+    const pluginId = "qa-announce-suppression";
+    const pluginDir = path.join(directory, pluginId);
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        activation: { onStartup: true },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "index.cjs"),
+      `module.exports = {
+      id: ${JSON.stringify(pluginId)},
+      register(api) {
+        api.on("message_sending", (event) => event.content.includes(${JSON.stringify(cancelledMarker)})
+          ? { cancel: true, cancelReason: "synthetic announcement policy" } : undefined);
+      }
+    };`,
+    );
+    const writes: WireWrite[] = [];
+    const adapter = await startOpenClawCrablineAdapter({
+      channel: "slack",
+      recorderPath: path.join(directory, "provider.jsonl"),
+    });
+    cleanups.push(() => adapter.close());
+    const api = await startPresentationApi(adapter, writes, directory);
+    cleanups.push(() => api.stop());
+    const provider = await startQaMockOpenAiServer({ modelRefs: [MODEL, observerModel] });
+    cleanups.push(() => provider.stop());
+    const completions: string[] = [];
+    const providerRequests: Array<{ model: unknown; requester: boolean; completion: boolean }> = [];
+    let observerRequests = 0;
+    let releaseRequester: (() => void) | undefined;
+    let requesterHeld = false;
+    const slowRequesterCases = new Set<string>();
+    // The shared terminal fixture intentionally requests a direct fallback.
+    // Supply a visible model final over HTTP to exercise automatic-final receipts.
+    const proxy = createServer((request, response) => {
+      void (async () => {
+        const buffers: Buffer[] = [];
+        for await (const chunk of request) buffers.push(Buffer.from(chunk));
+        const raw = Buffer.concat(buffers).toString("utf8");
+        providerRequests.push({
+          model: parseBody(raw).model,
+          requester: raw.includes("Subagent terminal reply QA check:"),
+          completion: raw.includes("Internal task completion event"),
+        });
+        if (String(parseBody(raw).model).endsWith("observer-failure-fixture")) {
+          observerRequests += 1;
+          response.writeHead(400, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              error: { type: "invalid_request_error", message: "synthetic observer failure" },
+            }),
+          );
+          return;
+        }
+        if (!requesterHeld && raw.includes("Subagent terminal reply QA check:")) {
+          requesterHeld = true;
+          await new Promise<void>((resolve) => {
+            releaseRequester = resolve;
+          });
+        }
+        const marker = raw.includes("Internal task completion event")
+          ? [deliveredMarker, cancelledMarker].find((candidate) => raw.includes(candidate))
+          : undefined;
+        if (marker) {
+          completions.push(marker);
+          const item = {
+            type: "message",
+            id: `announce-${completions.length}`,
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: marker, annotations: [] }],
+          };
+          const events = [
+            {
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { ...item, status: "in_progress", content: [] },
+            },
+            { type: "response.output_item.done", output_index: 0, item },
+            {
+              type: "response.completed",
+              response: {
+                id: `announce-response-${completions.length}`,
+                status: "completed",
+                output: [item],
+                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+              },
+            },
+          ];
+          response.writeHead(200, { "content-type": "text/event-stream" });
+          response.end(
+            events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") +
+              "data: [DONE]\n\n",
+          );
+          return;
+        }
+        const requesterCase = [
+          ...raw.matchAll(/Subagent terminal reply QA check: (visible|restart)/g),
+        ].at(-1)?.[1];
+        if (requesterCase && !slowRequesterCases.has(requesterCase)) {
+          slowRequesterCases.add(requesterCase);
+          // A deliberately slow provider crosses the observer's 30s final-digest
+          // threshold; this is scenario input, not a wait for eventual delivery.
+          await sleep(31_000);
+        }
+        const upstream = await fetch(new URL(request.url ?? "/", provider.baseUrl), {
+          method: request.method,
+          headers: { "content-type": "application/json" },
+          ...(request.method === "POST" ? { body: raw } : {}),
+        });
+        response.writeHead(upstream.status, {
+          "content-type": upstream.headers.get("content-type") ?? "application/json",
+        });
+        response.end(await upstream.text());
+      })().catch(() => response.writeHead(500).end("synthetic provider proxy failed"));
+    });
+    await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+    cleanups.push(async () => {
+      proxy.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        proxy.close((error) => (error ? reject(error) : resolve())),
+      );
+    });
+    const address = proxy.address();
+    if (!address || typeof address === "string") throw new Error("provider proxy did not bind");
+    const owner = createQaGatewayChild();
+    cleanups.push(() => stopQaGatewayFixture(owner));
+    const gateway = await owner.start({
+      repoRoot: process.cwd(),
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
+        cwd: process.cwd(),
+        usePackagedPlugins: true,
+      },
+      providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+      providerMode: "mock-openai",
+      primaryModel: MODEL,
+      alternateModel: observerModel,
+      controlUiEnabled: false,
+      transportBaseUrl: api.baseUrl,
+      transport: {
+        requiredPluginIds: adapter.requiredPluginIds,
+        createGatewayConfig: () => adapter.createGatewayConfig() as OpenClawConfig,
+      },
+      runtimeEnvPatch: {
+        ...adapter.createProviderReadinessEnv({}),
+        SLACK_API_URL: `${api.baseUrl}/api/`,
+      },
+      mutateConfig: (config) => ({
+        ...config,
+        logging: { ...config.logging, consoleStyle: "json" },
+        agents: {
+          ...config.agents,
+          defaults: { ...config.agents?.defaults, utilityModel: observerModel },
+          entries: {
+            ...config.agents?.entries,
+            qa: { ...config.agents?.entries?.qa, utilityModel: observerModel },
+          },
+        },
+        plugins: {
+          ...config.plugins,
+          allow: [...(config.plugins?.allow ?? []), pluginId],
+          load: {
+            ...config.plugins?.load,
+            paths: [...(config.plugins?.load?.paths ?? []), pluginDir],
+          },
+          entries: { ...config.plugins?.entries, [pluginId]: { enabled: true } },
+        },
+        channels: {
+          ...config.channels,
+          slack: { ...config.channels?.slack, replyToMode: "all", streaming: { mode: "off" } },
+        },
+      }),
+    });
+    cleanups.push(async () => {
+      const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
+      await fs.mkdir(evidenceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(evidenceDir, "slack-announcement-diagnostics.json"),
+        JSON.stringify(
+          {
+            providerRequests,
+            completions,
+            logs: gateway.logs().replaceAll(gateway.token, "[redacted]"),
+          },
+          null,
+          2,
+        ),
+      );
+    });
+    await waitForFact(async () => {
+      const status = asRecord(await gateway.call("channels.status", { probe: false }));
+      const accounts = asRecord(status.channelAccounts).slack;
+      return (
+        Array.isArray(accounts) && accounts.some((account) => asRecord(account).running === true)
+      );
+    }, "Slack ready");
+    const observerEvents: Array<Record<string, unknown>> = [];
+    const client = await connectGatewayClient({
+      url: gateway.wsUrl,
+      token: gateway.token,
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      onEvent: (event) => {
+        if (event.event === "session.observer") observerEvents.push(asRecord(event.payload));
+      },
+    });
+    cleanups.push(() => disconnectGatewayClient(client));
+    await client.request("sessions.observer.visibility", { visible: true });
+    const tasks: Array<Record<string, unknown>> = [];
+    for (const caseName of ["visible", "restart"]) {
+      const inbound = adapter.createInbound({
+        input: {
+          conversation: { id: "C12345678", kind: "group" },
+          senderId: "U12345678",
+          text: `Subagent terminal reply QA check: ${caseName}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`,
+        },
+      });
+      const injected = await fetch(inbound.providerUrl, {
+        method: "POST",
+        headers: inbound.providerHeaders,
+        body: JSON.stringify(inbound.providerBody),
+      });
+      expect(injected.ok).toBe(true);
+      if (adapter.manifest.provider !== "slack") throw new Error("expected Slack fixture");
+      const body = JSON.stringify(asRecord(await injected.json()).event);
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const signature = createHmac("sha256", adapter.manifest.signingSecret)
+        .update(`v0:${timestamp}:${body}`)
+        .digest("hex");
+      const delivered = await fetch(`${gateway.baseUrl}/slack/events`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-slack-request-timestamp": timestamp,
+          "x-slack-signature": `v0=${signature}`,
+        },
+        body,
+      });
+      expect(delivered.ok, await delivered.text()).toBe(true);
+      if (caseName === "visible") {
+        await waitForFact(() => Boolean(releaseRequester), "requester model admission").catch(
+          (error) => {
+            throw new Error(
+              `${String(error)}; requests=${JSON.stringify(providerRequests)}; logs=${gateway.logs().replaceAll(gateway.token, "[redacted]").slice(-8000)}`,
+            );
+          },
+        );
+        const listing = asRecord(await gateway.call("sessions.list", { agentId: "qa", limit: 20 }));
+        const session = Array.isArray(listing.sessions)
+          ? listing.sessions.map(asRecord).find((entry) => String(entry.key).includes(":slack:"))
+          : undefined;
+        expect(session?.key).toBeTypeOf("string");
+        await client.request("sessions.messages.subscribe", { key: session!.key, agentId: "qa" });
+        releaseRequester!();
+      }
+      let terminalTask: Record<string, unknown> | undefined;
+      try {
+        await waitForFact(async () => {
+          const listing = asRecord(await gateway.call("tasks.list", { agentId: "qa", limit: 100 }));
+          terminalTask = Array.isArray(listing.tasks)
+            ? listing.tasks.map(asRecord).find((task) => task.title === `qa-terminal-${caseName}`)
+            : undefined;
+          return (
+            terminalTask?.status === "completed" &&
+            ["failed", "delivered"].includes(String(terminalTask.deliveryStatus))
+          );
+        }, `settled ${caseName} task`);
+      } catch (error) {
+        throw new Error(
+          `${String(error)}; task=${JSON.stringify(terminalTask)}; completions=${JSON.stringify(completions)}; logs=${gateway.logs().slice(-6000)}`,
+        );
+      }
+      tasks.push(terminalTask!);
+      expect(terminalTask?.deliveryStatus).toBe(caseName === "visible" ? "failed" : "delivered");
+      if (caseName === "visible")
+        expect(terminalTask?.error, JSON.stringify(terminalTask)).toContain(
+          "cancelled_by_message_sending_hook",
+        );
+    }
+    expect(completions.filter((marker) => marker === cancelledMarker)).toHaveLength(1);
+    expect(
+      writes.filter((write) => JSON.stringify(write.body).includes(cancelledMarker)),
+    ).toHaveLength(0);
+    expect(
+      [...api.messages.values()].filter((message) =>
+        String(message.text ?? "").includes(deliveredMarker),
+      ),
+    ).toHaveLength(1);
+    const observerFailures = () =>
+      gateway
+        .logs()
+        .split("\n")
+        .flatMap((line) => {
+          try {
+            const value = asRecord(JSON.parse(line));
+            return value.message === "session observer disabled after consecutive failures"
+              ? [value]
+              : [];
+          } catch {
+            return [];
+          }
+        });
+    await waitForFact(
+      () => observerFailures().length >= 2,
+      "recorded observer failures in later runs",
+    );
+    expect(
+      observerFailures().every((failure) =>
+        String(failure.error).includes("synthetic observer failure"),
+      ),
+    ).toBe(true);
+    expect(new Set(observerFailures().map((failure) => failure.runId)).size).toBeGreaterThanOrEqual(
+      2,
+    );
+    expect(new Set(observerEvents.map((event) => event.runId)).size).toBeGreaterThanOrEqual(2);
+    const evidenceDir = path.join(process.cwd(), ".artifacts", "channel-progress-presentation");
+    await fs.mkdir(evidenceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(evidenceDir, "slack-announcement-receipts.json"),
+      JSON.stringify(
+        {
+          kind: "mock-gateway",
+          channel: "slack",
+          status: "pass",
+          completions,
+          tasks: tasks.map(({ title, status, deliveryStatus, error }) => ({
+            title,
+            status,
+            deliveryStatus,
+            error,
+          })),
+          suppressedSlackWrites: 0,
+          deliveredSlackMessages: 1,
+          observerRequests,
+          observerFailures: observerFailures().map(({ message, error, runId }) => ({
+            message,
+            error,
+            runId,
+          })),
+          observedRuns: new Set(observerEvents.map((event) => event.runId)).size,
+        },
+        null,
+        2,
+      ),
+    );
+  }, 240_000);
 
   it.each([
     { channel: "discord" as const, native: false, thread: "root", rejectStop: false },

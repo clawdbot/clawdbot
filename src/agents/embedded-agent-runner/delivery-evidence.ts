@@ -20,6 +20,7 @@ export type AgentDeliveryEvidence = {
   deliveryStatus?: {
     status?: unknown;
     errorMessage?: unknown;
+    reason?: unknown;
     payloadOutcomes?: unknown;
   };
   didSendViaMessagingTool?: unknown;
